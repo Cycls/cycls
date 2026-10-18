@@ -347,11 +347,14 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
   const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
+  // A workspace is managed in Settings: the navbar's members button opens it there, on that workspace.
+  const [settingsWs, setSettingsWs] = useState<string | null>(null);
   const setSettingsOpen = useCallback((v: boolean) => {
     _setSettingsOpen(v);
     if (v) sessionStorage.setItem("cycls_settings", "1");
-    else sessionStorage.removeItem("cycls_settings");
+    else { sessionStorage.removeItem("cycls_settings"); setSettingsWs(null); }
   }, []);
+  const wsNav = workspaces && { ...workspaces, onManage: (id: string) => { setSettingsWs(id); setSettingsOpen(true); } };
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[]>([]);
@@ -944,7 +947,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           </div>
           <div className="flex items-center gap-1">
             {/* Desktop only; on a phone it stays a row inside the user menu */}
-            {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
+            {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
             {messages.length > 0 && (
               <>
                 <button
@@ -1009,7 +1012,7 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : workspaces} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} /></div>}
           </div>
         </div>
       </header>
@@ -1281,7 +1284,7 @@ export function Chat({ chat, onShare, files, account, config }: {
         </Popover>
       )}
       {settingsOpen && account && (
-        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)}
+        <SettingsDialog account={account} workspace={settingsWs} onClose={() => setSettingsOpen(false)}
                         onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined}
                         onOpenSkills={() => { setSettingsOpen(false); openConnectors("settings", undefined, "skills"); }} />
       )}

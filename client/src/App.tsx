@@ -31,6 +31,7 @@ import { useFiles, useRefreshOnTurnEnd } from "./hooks/use-files";
 import { useWorkspaces } from "./hooks/use-workspaces";
 import { setActiveWorkspace } from "./hooks/use-auth-headers";
 import { useUrlParam } from "./hooks/use-url-param";
+import { ALL, complete, useAllPages } from "./hooks/use-all-pages";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics";
 import { initAffiliate } from "./lib/affiliate";
@@ -116,9 +117,9 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
   const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded, sessionClaims } = useAuth();
   const clerk = useClerk();
-  const { organization, membership, memberships } = useOrganization(
-    workspace ? { memberships: { infinite: true } } : {});
-  const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
+  const { organization, membership, memberships } = useOrganization(workspace ? { memberships: ALL } : {});
+  const { userMemberships, setActive } = useOrganizationList({ userMemberships: ALL });
+  useAllPages(memberships, userMemberships);
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
   const lang = useLang();
 
@@ -227,8 +228,10 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
           id: m.publicUserData?.userId || "",
           name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
             || m.publicUserData?.identifier || m.publicUserData?.userId || "",
+          email: m.publicUserData?.identifier,
         }))
         .filter((m) => m.id),
+      orgMembersComplete: complete(memberships),
       onSwitch: workspace.switch,
       onCreate: ws.create,
       onUpdate: ws.update,

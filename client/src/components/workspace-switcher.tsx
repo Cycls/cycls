@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { t } from "../lib/i18n";
 import { Icon } from "./icon";
-import { DropdownMenu } from "./files";
 import { EmojiPicker } from "./emoji-picker";
 import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
 
@@ -10,7 +9,9 @@ export interface WorkspacesMenu {
   items: WorkspaceInfo[];
   canCreate: boolean;
   isOrgAdmin: boolean;
-  orgMembers: { id: string; name: string }[];
+  orgMembers: OrgMember[];
+  orgMembersComplete?: boolean;   // every page is in: a member missing from it has left the org
+  onManage?: (id: string) => void;   // open Settings → Workspaces on this one
   onSwitch: (id: string | null) => void;
   onCreate: (name: string) => Promise<WorkspaceInfo>;
   onUpdate: (id: string, patch: { name?: string; icon?: string }) => Promise<WorkspaceInfo>;
@@ -19,6 +20,17 @@ export interface WorkspacesMenu {
   onSetMember: (id: string, userId: string, role: string) => Promise<void>;
   onRemoveMember: (id: string, userId: string) => Promise<void>;
 }
+
+export type OrgMember = { id: string; name: string; email?: string };
+
+// A workspace member's name: the org's record of them, "Former member" once they've left it, "…" until the list is in.
+export const nameIn = (ws: WorkspacesMenu, id: string) =>
+  ws.orgMembers.find((m) => m.id === id)?.name || (ws.orgMembersComplete ? t("formerMember") : "…");
+
+// The people a picker offers, narrowed by what was typed: a name or an email.
+export const findIn = (people: OrgMember[], q: string) =>
+  people.filter((m) => !q || `${m.name} ${m.email ?? ""}`.toLowerCase().includes(q.trim().toLowerCase()));
+export const SEARCH_FROM = 8;   // shorter lists don't need a search box
 
 // Notion-style workspace icon: the stored emoji, else the name's initial.
 export function WsIcon({ ws, className = "" }: { ws: { name: string; icon?: string } | null; className?: string }) {
@@ -30,164 +42,18 @@ export function WsIcon({ ws, className = "" }: { ws: { name: string; icon?: stri
   );
 }
 
-// Role dropdown for a workspace member (editor ↔ admin).
-function MemberRole({ role, onChange }: { role: string; onChange: (r: string) => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative">
-      <button
-        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-        className="flex cursor-pointer items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-foreground"
-      >
-        {role}
-        <Icon name="chevron-down" className="size-2.5" />
-      </button>
-      {open && (
-        <DropdownMenu
-          onClose={() => setOpen(false)}
-          items={[
-            { label: "editor", onClick: () => onChange("editor") },
-            { label: "admin", onClick: () => onChange("admin") },
-          ]}
-        />
-      )}
-    </div>
-  );
-}
-
-// Workspace list + management. `onClose` closes the menu after a switch.
-// `onBack` is only for the drill-in case; as its own dropdown there is nothing
-// to go back to, so the row is omitted.
+// The workspace list: it switches, and its members button opens Settings on that workspace, where it is managed.
+// `onClose` closes the menu after a switch. `onBack` is only for the drill-in case; as its own dropdown there is
+// nothing to go back to, so the row is omitted.
 export function WorkspacePanel({ workspaces, onBack, onClose }: {
   workspaces: WorkspacesMenu;
   onBack?: () => void;
   onClose: () => void;
 }) {
-  const [manageWs, setManageWs] = useState<WorkspaceInfo | null>(null);
-  const [wsMembers, setWsMembers] = useState<MemberInfo[] | null>(null);
   const [newWsName, setNewWsName] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
   const [pickerFor, setPickerFor] = useState<string | null>(null);
-
-  // id-keyed deps: the menu prop is rebuilt every parent render, object deps would refetch in a loop
-  const fetchRef = useRef(workspaces.fetchMembers);
-  fetchRef.current = workspaces.fetchMembers;
-  useEffect(() => {
-    if (!manageWs || manageWs.builtin) { setWsMembers(null); return; }
-    let alive = true;
-    setWsMembers(null);
-    fetchRef.current(manageWs.id).then((m) => alive && setWsMembers(m)).catch(() => alive && setWsMembers([]));
-    return () => { alive = false; };
-  }, [manageWs?.id, manageWs?.builtin]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  const refreshMembers = () => manageWs && fetchRef.current(manageWs.id).then(setWsMembers);
-  const memberName = (id: string) => workspaces.orgMembers.find((m) => m.id === id)?.name || id;
   const row = "flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer";
   const inactive = "text-muted-foreground hover:text-foreground hover:bg-secondary/80";
-
-  if (manageWs) return (
-    <div>
-      <button onClick={() => { setManageWs(null); setConfirmDelete(false); }} className={`${row} py-2.5 ${inactive}`}>
-        <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
-        <span className="truncate">{manageWs.name}</span>
-      </button>
-      <div className="border-t border-border" />
-      <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("members")}</p>
-      {manageWs.builtin ? (
-        <p className="px-3 py-1.5 text-sm text-muted-foreground">{t("everyoneInOrg")}</p>
-      ) : wsMembers === null ? (
-        <p className="px-3 py-1.5 text-sm text-muted-foreground">…</p>
-      ) : (
-        <div className="py-1">
-          {wsMembers.map((m) => (
-            <div key={m.user_id} className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground">
-              <span className="truncate flex-1">{memberName(m.user_id)}</span>
-              {m.role === "owner" ? (
-                <span className="text-[10px] text-muted-foreground/60">{m.role}</span>
-              ) : (
-                <>
-                  <MemberRole
-                    role={m.role}
-                    onChange={(r) => workspaces.onSetMember(manageWs.id, m.user_id, r).then(refreshMembers)}
-                  />
-                  <button
-                    onClick={() => workspaces.onRemoveMember(manageWs.id, m.user_id).then(refreshMembers)}
-                    className="text-muted-foreground/60 hover:text-foreground cursor-pointer"
-                    aria-label="Remove member"
-                  >
-                    <Icon name="x" className="w-3 h-3" />
-                  </button>
-                </>
-              )}
-            </div>
-          ))}
-          {(() => {
-            const outside = workspaces.orgMembers.filter((om) => !wsMembers.some((m) => m.user_id === om.id));
-            if (!outside.length) return null;
-            return (
-              <>
-                <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("addMembers")}</p>
-                {outside.map((om) => (
-                  <button key={om.id} onClick={() => workspaces.onSetMember(manageWs.id, om.id, "editor").then(refreshMembers)} className={`${row} ${inactive}`}>
-                    + {om.name}
-                  </button>
-                ))}
-              </>
-            );
-          })()}
-        </div>
-      )}
-      {(manageWs.role === "owner" || workspaces.isOrgAdmin) && (
-        <>
-          <div className="border-t border-border" />
-          {confirmDelete ? (
-            <div className="px-3 py-2.5">
-              <p className="text-sm text-foreground">{t("deleteWorkspaceConfirm")}</p>
-              <p className="text-xs text-muted-foreground mt-1">{t("typeNameToConfirm")}</p>
-              <input
-                autoFocus
-                value={confirmText}
-                onChange={(e) => setConfirmText(e.target.value)}
-                placeholder={manageWs.name}
-                className="w-full mt-1.5 px-2 py-1.5 text-sm rounded-md border border-border bg-transparent text-foreground outline-none placeholder:text-muted-foreground/40"
-              />
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={() => { setConfirmDelete(false); setConfirmText(""); }}
-                  className="flex-1 px-2 py-1.5 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  {t("cancel")}
-                </button>
-                <button
-                  disabled={confirmText.trim() !== manageWs.name}
-                  onClick={() => {
-                    const wasActive = workspaces.active?.id === manageWs.id;
-                    workspaces.onDelete(manageWs.id).then(() => {
-                      setManageWs(null);
-                      setConfirmDelete(false);
-                      setConfirmText("");
-                      if (wasActive) workspaces.onSwitch(null);
-                    });
-                  }}
-                  className="flex-1 px-2 py-1.5 text-xs rounded-md bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {t("delete")}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className={`${row} py-2.5 text-red-500/80 hover:text-red-500 hover:bg-secondary/80`}
-            >
-              {t("deleteWorkspace")}
-            </button>
-          )}
-        </>
-      )}
-    </div>
-  );
 
   return (
     <div>
@@ -235,9 +101,9 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
             <button onClick={() => { workspaces.onSwitch(w.id); onClose(); }} className="flex flex-1 items-center gap-2 truncate py-1.5 text-start cursor-pointer">
               <span className="truncate">{w.name}</span>
             </button>
-            {(w.role === "owner" || w.role === "admin") && (
+            {(w.role === "owner" || w.role === "admin") && workspaces.onManage && (
               <button
-                onClick={() => setManageWs(w)}
+                onClick={() => { workspaces.onManage?.(w.id); onClose(); }}
                 className="text-muted-foreground/60 hover:text-foreground cursor-pointer p-1"
                 aria-label={t("members")}
               >
