@@ -252,6 +252,16 @@ select something and **Ask Cycls** about it, or **Render**.
 - **Where it shows.** `Config.public()` says `video_editor: true` when `VIDEO_EDITOR_URL` and
   `VIDEO_URL` are set; whether an organisation has Video at all is `POST /video/editor`'s answer (503
   when not). Edit is hidden on a shared page, on touch-only devices and below 900 px.
+- **Aside is see-through, never `visibility: hidden`.** Chrome stops drawing a cross-origin frame
+  hidden that way, so an agent's change loaded into an aside editor never got its preview, and the
+  editor gave up after 45 s ("The preview did not reload"). Seen on production; fixed in `00df2208`.
+
+In production since 2026-10-18: the service from cycls-video `d6fdc9a` (the editor at
+`https://cycls--cycls-video-editor-serve.us-east.modal.run`), then super-dev revision
+`super-dev-00079-9cr` on SDK `f7b843c2` (production's `655170a3` plus the five video commits, the
+client rebuilt) with `VIDEO_EDITOR_URL` set. Checked with a real chat on the Cycls organisation's
+Personal workspace: made, rendered, Edit, a trim saved, Ask, the agent's change over it, the MP4 tab
+with the editor still open, Back, Done.
 
 ## The contract
 
