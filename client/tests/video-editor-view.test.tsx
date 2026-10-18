@@ -181,13 +181,17 @@ describe("VideoEditorView", () => {
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     const load = await ready(frame, post);
     const overlay = screen.getByTestId("video-editor");
-    expect(overlay.className).not.toContain("invisible");
+    const aside = () => overlay.className.includes("opacity-0") && overlay.hasAttribute("inert");
+    expect(aside()).toBe(false);
     fromEditor(frame, "selection", { doc: load.doc, path: PATH, time: 2, nodes: [{ name: "t1", type: "h1" }] });
     await flush();
-    expect(overlay.className).not.toContain("invisible");           // a plain selection keeps it in view
+    expect(aside()).toBe(false);                                        // a plain selection keeps it in view
     fromEditor(frame, "ask", { doc: load.doc, path: PATH, time: 2, nodes: [{ name: "t1", type: "h1" }] });
     await flush();
-    expect(overlay.className).toContain("invisible");
+    expect(aside()).toBe(true);
+    // never `visibility: hidden`: Chrome stops drawing the cross-origin editor, and an agent's change
+    // loaded meanwhile never got its preview (production, 2026-10-18)
+    expect(overlay.className).not.toContain("invisible");
     expect(document.querySelector("iframe")).toBe(frame);              // the same session, not reopened
     fireEvent.keyDown(window, { key: "Escape" });                       // Escape in the composer: not Done
     await flush();
@@ -195,7 +199,7 @@ describe("VideoEditorView", () => {
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("video-editor-back"));
     await flush();
-    expect(overlay.className).not.toContain("invisible");
+    expect(aside()).toBe(false);
     expect(screen.queryByTestId("video-editor-back")).toBeNull();
   });
 

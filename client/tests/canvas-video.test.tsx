@@ -55,7 +55,7 @@ async function openAside(a: VideoEditorApi) {
   say(frame, "loaded", { doc: load.doc });
   say(frame, "ask", { doc: load.doc, path: VIDEO.path, time: 2, nodes: [{ name: "#title", type: "text", text: "Hi" }] });
   await flush();
-  expect(editor()!.className).toContain("invisible");                       // stepped aside for the chat
+  expect(editor()!.className).toContain("opacity-0");                       // stepped aside for the chat
   return { ...view, frame, post };
 }
 
@@ -76,7 +76,7 @@ describe("a video's editor in the canvas", () => {
     expect(flushAsked(post)).toBeUndefined();
     fireEvent.click(screen.getByTestId("video-editor-back"));
     await flush();
-    expect(editor()!.className).not.toContain("invisible");
+    expect(editor()!.className).not.toContain("opacity-0");
     expect(editorFrame()).toBe(frame);
   });
 

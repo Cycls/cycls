@@ -333,63 +333,68 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
   const label = status === "opening" ? t("videoEditorOpening") : status === "saving" ? t("videoEditorSaving")
     : status === "saved" ? t("videoEditorSaved") : status === "saveerror" ? t("videoEditorSaveFailed") : "";
 
+  // Aside, the editor is see-through, not `visibility: hidden`: Chrome stops drawing a cross-origin
+  // frame hidden that way, so an agent's change loaded meanwhile never got its preview (the editor
+  // gives up after 45 s — seen on production). `inert` keeps clicks and focus out of it.
   return createPortal(
-    <div className={cn("fixed inset-0 z-[60] flex flex-col bg-background", aside && "invisible pointer-events-none")}
-         role="dialog" aria-label={name} aria-hidden={aside || undefined} data-testid="video-editor">
-      {aside && (
-        <button type="button" onClick={() => onBack?.()} data-testid="video-editor-back"
-                className="visible pointer-events-auto fixed left-1/2 top-3 -translate-x-1/2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-md transition-colors hover:bg-secondary cursor-pointer">
-          {t("videoEditorBack")}
-        </button>
-      )}
-      <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
-        <span className="truncate text-sm font-medium text-foreground" dir="auto">{name}</span>
-        <div className="flex items-center gap-3">
-          {label && <span className={cn("text-xs", status === "saveerror" ? "text-destructive" : "text-muted-foreground")}>{label}</span>}
-          <button type="button" onClick={() => void done()} data-testid="video-editor-done"
-                  className="rounded-md bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90 cursor-pointer">
-            {t("videoEditorDone")}
-          </button>
-        </div>
-      </div>
-      <div className="relative min-h-0 flex-1">
-        {session && (
-          <iframe ref={frameRef} key={session.sid} title={name} src={`${session.url}?theme=${dark ? "dark" : "light"}`}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
-                  allow="clipboard-read; clipboard-write; fullscreen" className="h-full w-full border-0" />
-        )}
-        {status === "opening" && !problem && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">{t("videoEditorOpening")}</div>
-        )}
-        {problem && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
-            <div className="max-w-md text-sm text-muted-foreground">{problem}</div>
-            <button type="button" onClick={onClose}
-                    className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary/80 cursor-pointer">
+    <>
+      <div className={cn("fixed inset-0 z-[60] flex flex-col bg-background", aside && "pointer-events-none opacity-0")}
+           role="dialog" aria-label={name} aria-hidden={aside || undefined} inert={aside || undefined} data-testid="video-editor">
+        <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
+          <span className="truncate text-sm font-medium text-foreground" dir="auto">{name}</span>
+          <div className="flex items-center gap-3">
+            {label && <span className={cn("text-xs", status === "saveerror" ? "text-destructive" : "text-muted-foreground")}>{label}</span>}
+            <button type="button" onClick={() => void done()} data-testid="video-editor-done"
+                    className="rounded-md bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90 cursor-pointer">
               {t("videoEditorDone")}
             </button>
           </div>
-        )}
-        {conflict && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/40 p-4" data-testid="video-conflict">
-            <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl">
-              <div className="text-sm font-semibold text-foreground">{t("videoConflictTitle")}</div>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("videoConflictBody")}</p>
-              <div className="mt-4 flex justify-end gap-2">
-                <button type="button" onClick={() => void resolve("latest")}
-                        className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary/80 cursor-pointer">
-                  {t("videoConflictLatest")}
-                </button>
-                <button type="button" onClick={() => void resolve("mine")}
-                        className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:opacity-90 cursor-pointer">
-                  {t("videoConflictMine")}
-                </button>
+        </div>
+        <div className="relative min-h-0 flex-1">
+          {session && (
+            <iframe ref={frameRef} key={session.sid} title={name} src={`${session.url}?theme=${dark ? "dark" : "light"}`}
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
+                    allow="clipboard-read; clipboard-write; fullscreen" className="h-full w-full border-0" />
+          )}
+          {status === "opening" && !problem && (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">{t("videoEditorOpening")}</div>
+          )}
+          {problem && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <div className="max-w-md text-sm text-muted-foreground">{problem}</div>
+              <button type="button" onClick={onClose}
+                      className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary/80 cursor-pointer">
+                {t("videoEditorDone")}
+              </button>
+            </div>
+          )}
+          {conflict && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/40 p-4" data-testid="video-conflict">
+              <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl">
+                <div className="text-sm font-semibold text-foreground">{t("videoConflictTitle")}</div>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("videoConflictBody")}</p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button type="button" onClick={() => void resolve("latest")}
+                          className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary/80 cursor-pointer">
+                    {t("videoConflictLatest")}
+                  </button>
+                  <button type="button" onClick={() => void resolve("mine")}
+                          className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:opacity-90 cursor-pointer">
+                    {t("videoConflictMine")}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>,
+      {aside && (
+        <button type="button" onClick={() => onBack?.()} data-testid="video-editor-back"
+                className="fixed left-1/2 top-3 z-[61] -translate-x-1/2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-md transition-colors hover:bg-secondary cursor-pointer">
+          {t("videoEditorBack")}
+        </button>
+      )}
+    </>,
     document.body,
   );
 }
