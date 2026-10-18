@@ -134,7 +134,9 @@ def _with_selection(content, sel):
     """The person's design selection as a text block for the model (the chat shows a chip)."""
     def node(n):
         return f'{n["name"]} ({n["type"]})' + (f' "{n["text"]}"' if n.get("text") else "")
+    # A design of several pages says which one they are on; a video, where its playhead was ("at 4.2 s").
     where = (sel["path"] + (f' page {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
+             + (f' at {sel["time"]:g} s' if sel.get("time") is not None else "")
              + (f' › {sel["frame"]}' if sel.get("frame") else ""))
     line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
     blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])

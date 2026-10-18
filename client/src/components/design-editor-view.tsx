@@ -115,10 +115,17 @@ type EditorMessage = {
   at?: { x: number; y: number } | null; box?: { w: number; h: number };
 };
 
-// The latest selection per design: what "Add selection" attaches to a message.
-export type DesignSelection = { path: string; frame: string | null; nodes: { name: string; type: string; text?: string }[]; page?: string };
+// The latest selection per design: what "Add selection" attaches to a message. A video's
+// (video-editor-view.tsx) has no frame, and `time`: where its playhead was.
+export type DesignSelection = { path: string; frame: string | null; nodes: { name: string; type: string; text?: string }[]; page?: string; time?: number };
 const selections = new Map<string, DesignSelection>();
 export const designSelection = (path: string) => selections.get(path) ?? null;
+/** The latest selection in an open design or video, for the composer's "Add selection". */
+export function publishSelection(sel: DesignSelection): void {
+  if (sel.nodes.length) selections.set(sel.path, sel);
+  else selections.delete(sel.path);
+  window.dispatchEvent(new CustomEvent("cycls:design-selection", { detail: sel }));
+}
 
 // A design's pages (its variants) and the one in view; null while no editor of it is open.
 export type DesignPages = { path: string; page: string; pages: string[] };
@@ -607,9 +614,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         const page = designPage(latest.current.path);
         const sel: DesignSelection = { path: latest.current.path, frame: typeof m.frame === "string" ? m.frame : null, nodes: m.nodes,
                                        ...(page ? { page } : {}) };
-        if (sel.nodes.length) selections.set(sel.path, sel);
-        else selections.delete(sel.path);
-        window.dispatchEvent(new CustomEvent("cycls:design-selection", { detail: sel }));
+        publishSelection(sel);
       } else if (m.type === "pages" && Array.isArray(m.pages) && typeof m.page === "string") {
         if (m.doc && m.doc !== doc.current) return;
         const now: DesignPages = { path: latest.current.path, page: m.page, pages: m.pages.filter((p) => typeof p === "string") };

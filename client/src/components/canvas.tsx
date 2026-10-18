@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
-import type { WriteFile } from "../hooks/use-files";
+import type { VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
 import { createPortal } from "react-dom";
@@ -16,6 +16,7 @@ import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
+import { VideoEditorView, canEditVideo } from "./video-editor-view";
 import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
@@ -330,7 +331,34 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onReload, onDownload, onShare }: {
+// A video on the canvas: the preview player, and Edit into the video editor (a full-page overlay)
+// where it is offered and there is room for it. Done brings the preview back, fetched again.
+function VideoComposition({ file, content, openFile, onDownload, onReload, videoEditor, writeFile }: {
+  file: CanvasFile;
+  content: string;
+  openFile?: (path: string, silent?: boolean) => Promise<string>;
+  onDownload?: () => void;
+  onReload?: () => void;
+  videoEditor?: VideoEditorApi;
+  writeFile?: WriteFile;
+}) {
+  const [editing, setEditing] = useState(false);
+  const canEdit = !!videoEditor && !!writeFile && canEditVideo();
+  return (
+    <>
+      <Suspense fallback={<LoadingBar />}>
+        <CompositionView data={content} name={file.name} openFile={openFile} onDownload={onDownload}
+                         onEdit={canEdit ? () => setEditing(true) : undefined} />
+      </Suspense>
+      {editing && videoEditor && writeFile && (
+        <VideoEditorView path={file.path} name={file.name} api={videoEditor} writeFile={writeFile}
+                         onClose={() => { setEditing(false); onReload?.(); }} />
+      )}
+    </>
+  );
+}
+
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, designHost, videoEditor, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -346,6 +374,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
   designHost?: DesignHost;
+  videoEditor?: VideoEditorApi;   // when set, a video has Edit (the video editor)
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onReload?: () => void;      // refetch this document (a deck whose slides changed)
   onDownload?: () => void;
@@ -375,9 +404,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isComposition(fileKind(file))) {
     if (shared) return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return content ? (
-      <Suspense fallback={<LoadingBar />}>
-        <CompositionView data={content} name={file.name} openFile={openFile} onDownload={onDownload} />
-      </Suspense>
+      <VideoComposition file={file} content={content} openFile={openFile} onDownload={onDownload} onReload={onReload}
+                        videoEditor={videoEditor} writeFile={writeFile} />
     ) : null;
   }
   if (isHtml(fileKind(file))) {
@@ -484,7 +512,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, onNewDesign }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, videoEditor, onNewDesign }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -516,6 +544,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
   designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
+  videoEditor?: VideoEditorApi;   // the video editor (config.video_editor): Edit on a video
   designHost?: DesignHost;
   onNewDesign?: (preset: string) => void;   // "New design" in the + menu
 }) {
@@ -631,6 +660,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   reloadKey={reloadKey}
                   designEditorUrl={designEditorUrl}
                   designHost={designHost}
+                  videoEditor={videoEditor}
                 />
               )}
             </div>
@@ -875,7 +905,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 }
 
 // Keyed by path from the parent, so per-file state resets on tab switch.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string, silent?: boolean) => Promise<string>;
@@ -891,6 +921,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   shareLinks?: ShareLinks;
   reloadKey?: number;
   designEditorUrl?: string;
+  videoEditor?: VideoEditorApi;
   designHost?: DesignHost;
 }) {
   const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
@@ -1139,7 +1170,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
                          fetchConnector={fetchConnector}
                          appData={appData}
-                         designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile} onReload={onReload}
+                         designEditorUrl={designEditorUrl} designHost={designHost} videoEditor={videoEditor} reloadFile={reloadFile} onReload={onReload}
                          onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
             </div>
             {previewing && (() => {

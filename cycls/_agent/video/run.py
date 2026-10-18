@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .. import trash, versions
 from ..design.deck import lock
-from ..design.store import write_fig
+from ..design.store import Stale, version_of, write_fig
 from ..paths import _resolve_path
 from . import contract as contract_mod
 from . import files, media, report
@@ -169,10 +169,20 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     return "\n".join(parts), blocks, True
 
 
-def _shown(rel, name, clean):
-    """What the canvas is told after a save: refresh the composition wherever it is open, and open
-    it once it lints clean (with errors it would only show why it cannot play)."""
-    ui = [{"type": "ui", "action": "refresh_canvas", "path": rel}]
+def _hand_edited(root, rel):
+    """When the file was last saved by the person (the editor), a failed match is said to be why."""
+    history = versions.listing(root, rel)
+    if history and history[0].get("by") == "user":
+        return (" The person changed this video in the editor since you last read it, and a save from the editor "
+                "writes the file afresh (attribute order, characters): read the file again before you edit it.")
+    return ""
+
+
+def _shown(rel, name, clean, version=None):
+    """What the canvas is told after a save: refresh the composition wherever it is open (an open
+    editor takes the new `version` in), and open it once it lints clean (with errors it would only
+    show why it cannot play)."""
+    ui = [{"type": "ui", "action": "refresh_canvas", "path": rel, **({"version": version} if version else {})}]
     if clean:
         ui.insert(0, {"type": "ui", "action": "open_canvas", "path": rel, "name": f"{name}.video.html"})
     return ui
@@ -555,19 +565,29 @@ async def _exec_video(inp, workspace, ctx=None):
                 return _err("edit needs changes: [{old, new, all?}], each old a non-empty exact text.")
             if not files.mine(root, chat, name) and not (root / rel).exists():
                 return _err(f"there is no {rel}; `write` it first.")
+            # Against the version read: the person may save from the editor at the same moment (its
+            # save takes the store's lock, not this one), so a stale write reads and applies once more.
             async with lock(root / rel):
-                try:
-                    html = (root / rel).read_text(encoding="utf-8")
-                except FileNotFoundError:
-                    return _err(f"there is no {rel}; `write` it first.")
-                new, why = apply_changes(html, changes)
-                if why:
-                    return _err(why)
-                await write_fig(root, rel, new.encode("utf-8"), by="agent", reason="video-edit")
+                for attempt in (1, 2):
+                    try:
+                        data = (root / rel).read_bytes()
+                    except FileNotFoundError:
+                        return _err(f"there is no {rel}; `write` it first.")
+                    new, why = apply_changes(data.decode("utf-8"), changes)
+                    if why:
+                        return _err(why + _hand_edited(root, rel))
+                    try:
+                        version = await write_fig(root, rel, new.encode("utf-8"), base=version_of(data), by="agent",
+                                                  reason="video-edit")
+                        break
+                    except Stale:
+                        if attempt == 2:
+                            return _err(f"{rel} changed while it was being edited (the person is editing it); read "
+                                        "it again, then edit.")
             files.remember(root, chat, name)
             text, blocks, clean = await _check(workspace, root, rel, new)
             return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}", blocks,
-                           note, _shown(rel, name, clean))
+                           note, _shown(rel, name, clean, version))
 
         if action == "look":
             try:
@@ -603,9 +623,9 @@ async def _exec_video(inp, workspace, ctx=None):
             if data is None:
                 return _err("that version could not be read.")
             async with lock(root / rel):
-                await write_fig(root, rel, data, by="agent", reason="restore")
+                version = await write_fig(root, rel, data, by="agent", reason="restore")
             return _result(f"Restored {rel} to the version from {history[0]['at'][:19]} UTC. Call `look` to see it.", [],
-                           note, [{"type": "ui", "action": "refresh_canvas", "path": rel}])
+                           note, [{"type": "ui", "action": "refresh_canvas", "path": rel, "version": version}])
     except video.Unavailable as e:
         return _err(f"Video is unavailable: {e}")
     except RuntimeError as e:

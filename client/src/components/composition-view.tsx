@@ -41,11 +41,12 @@ export function withCsp(html: string): string {
   return meta + html;
 }
 
-export default function CompositionView({ data, name, openFile, onDownload }: {
+export default function CompositionView({ data, name, openFile, onDownload, onEdit }: {
   data: string;
   name: string;
   openFile?: (path: string, silent?: boolean) => Promise<string>;
   onDownload?: () => void;
+  onEdit?: () => void;     // the video editor, where it is offered (canvas.tsx)
 }) {
   const m = useMemo(() => parseManifest(data), [data]);
   const rendered = !!m?.render?.exists && !!openFile;
@@ -68,6 +69,12 @@ export default function CompositionView({ data, name, openFile, onDownload }: {
 
   return (
     <div className="relative flex h-full w-full flex-col bg-black">
+      {onEdit && (
+        <button type="button" onClick={onEdit} title={t("videoEditHint")} data-testid="video-edit"
+                className="absolute start-3 top-3 z-10 rounded-full border border-white/15 bg-black/60 px-3 py-1 text-xs text-white/90 backdrop-blur transition-colors hover:text-white cursor-pointer">
+          {t("videoEdit")}
+        </button>
+      )}
       {page && rendered && (
         <div className="absolute end-3 top-3 z-10 flex rounded-full border border-white/15 bg-black/60 p-0.5 text-xs backdrop-blur"
              role="tablist">

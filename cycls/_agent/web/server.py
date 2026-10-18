@@ -58,6 +58,10 @@ class Config(BaseModel):
         # the .fig editor, a static app on its own origin; unset → .fig shows the download card
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
+        # The video editor runs on the video service (VIDEO_EDITOR_URL); whether an organisation has
+        # Video at all is answered per workspace by POST /video/editor.
+        if os.environ.get("VIDEO_EDITOR_URL") and os.environ.get("VIDEO_URL"):
+            data["video_editor"] = True
         return data
 
     @property
@@ -284,11 +288,12 @@ class Messages(list):
         return self._raw
 
 def _clean_selection(raw):
-    """A design selection {path: a workspace .fig, frame, nodes: [{name, type, text?}], page?}, capped; else None."""
+    """A selection in an open design or video {path: a .fig or .video.html in the workspace, frame,
+    nodes: [{name, type, text?}], page?, time?}, capped; else None."""
     if not isinstance(raw, dict):
         return None
     path = raw.get("path")
-    if (not isinstance(path, str) or not path.lower().endswith(".fig") or len(path) > 300
+    if (not isinstance(path, str) or not path.lower().endswith((".fig", ".video.html")) or len(path) > 300
             or path.startswith("/") or "\\" in path or ".." in path.split("/")):
         return None
     nodes = []
@@ -304,6 +309,9 @@ def _clean_selection(raw):
     sel = {"path": path, "frame": frame[:120] if isinstance(frame, str) and frame else None, "nodes": nodes}
     if isinstance(page, str) and page.strip():
         sel["page"] = page.strip()[:80]
+    t = raw.get("time")
+    if path.lower().endswith(".video.html") and isinstance(t, (int, float)) and not isinstance(t, bool) and 0 <= t < 36000:
+        sel["time"] = round(float(t), 1)
     return sel
 
 

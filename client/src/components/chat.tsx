@@ -25,8 +25,9 @@ import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
-import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
+import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -95,6 +96,7 @@ export interface FilesPanelProps {
   exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;   // a PDF / PNG beside the design
   brand?: () => Promise<BrandKit | null>;                        // for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
+  videoEditor?: VideoEditorApi;                                  // the video editor's routes (sessions, renders)
   designLive?: (path: string) => Promise<DesignLive | null>;     // a design's live room + this person's pass (null: it opens alone)
   listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
@@ -293,6 +295,18 @@ export function Chat({ chat, onShare, files, account, config }: {
     window.addEventListener("cycls:design-selection", onSelection);
     return () => window.removeEventListener("cycls:design-selection", onSelection);
   }, [activeDesign]);
+  // "Ask Cycls" in the video editor: the selection is attached to the message, and the composer is
+  // the next thing typed into.
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const sel = (e as CustomEvent).detail as DesignSelection;
+      if (!sel?.nodes?.length) return;
+      setAttachedSel(sel);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener("cycls:ask-selection", onAsk);
+    return () => window.removeEventListener("cycls:ask-selection", onAsk);
+  }, []);
   const [rightExpanded, setRightExpanded] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
@@ -326,10 +340,10 @@ export function Chat({ chat, onShare, files, account, config }: {
     setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
     setCanvasActive((a) => (a === path ? null : a));
   }, []);
-  // Hiding or closing the canvas unmounts its design editors: flush them first.
-  const hideCanvas = useCallback(() => { void flushAllDesignEditors(1500).then(() => setCanvasHidden(true)); }, []);
+  // Hiding or closing the canvas unmounts its design and video editors: flush them first.
+  const hideCanvas = useCallback(() => { void Promise.all([flushAllDesignEditors(1500), flushAllVideoEditors(1500)]).then(() => setCanvasHidden(true)); }, []);
   const closeAllCanvas = useCallback(() => {
-    void flushAllDesignEditors(1500).then(() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); });
+    void Promise.all([flushAllDesignEditors(1500), flushAllVideoEditors(1500)]).then(() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); });
   }, []);
   const { apps, loading: appsLoading, refresh: refreshApps } = useApps();
   // The UI handler resolves an app by path without re-subscribing on every load.
@@ -399,6 +413,8 @@ export function Chat({ chat, onShare, files, account, config }: {
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        // An editor open on that video takes the new file in, after what is unsaved there went out.
+        reloadVideoEditors(ev.path, typeof ev.version === "string" ? ev.version : undefined);
         track("ui_action", { action: "refresh_canvas" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
@@ -728,7 +744,8 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, [files, trashed]);
   // Detach editors before a delete (a late save would bring the file back); flush before a rename.
   const deleteFromFiles = useCallback(async (path: string) => {
-    const reattach = detachDesignEditorsUnder(path);
+    const reattachDesigns = detachDesignEditorsUnder(path), reattachVideos = detachVideoEditorsUnder(path);
+    const reattach = () => { reattachDesigns(); reattachVideos(); };
     try {
       const r = await deleteWithUndo(path);
       setCanvasTabs((tabs) => tabs.filter((f) => !isUnder(f.path, path)));
@@ -740,7 +757,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     }
   }, [deleteWithUndo]);
   const renameFromFiles = useCallback(async (from: string, to: string) => {
-    await flushDesignEditorsUnder(from, 3000);
+    await Promise.all([flushDesignEditorsUnder(from, 3000), flushVideoEditorsUnder(from, 3000)]);
     await files!.onRename(from, to);
     const moved = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
     setCanvasTabs((tabs) => tabs.map((f) => (isUnder(f.path, from)
@@ -1324,6 +1341,7 @@ export function Chat({ chat, onShare, files, account, config }: {
           reloadKey={reloadKey}
           designEditorUrl={config?.design_editor_url}
           designHost={designHost}
+          videoEditor={config?.video_editor ? files?.videoEditor : undefined}
           onNewDesign={(preset) => void createDesign(preset, "canvas")}
         />
         </CommentsContext.Provider>

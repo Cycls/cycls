@@ -479,6 +479,11 @@ browser check and one sheet of frames labelled with their times; the composition
 the canvas in a sandboxed player and refreshes as the agent edits it; `render` writes
 `videos/<name>.mp4` and opens it. See `docs/notes/video.md`.
 
+With `VIDEO_EDITOR_URL` set too (the service's editor), a video on the canvas has **Edit**: the
+person retimes and trims scenes and clips, moves and restyles titles, fixes a caption word, swaps or
+lowers the music, renders — or selects something and asks the agent about it. Their saves are
+versions of the file, like a design's; the agent reads the file again before it edits after them.
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`

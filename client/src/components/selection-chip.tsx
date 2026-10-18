@@ -6,7 +6,8 @@ import { t } from "../lib/i18n";
 export function selectionLabel(sel: DesignSelection): string {
   const file = sel.path.split("/").pop() ?? sel.path;
   const names = sel.nodes.map((n) => n.name);
-  const where = sel.page ? `${file} › ${sel.page}` : file;   // which page, on a design of several
+  // which page, on a design of several; where the playhead was, in a video
+  const where = sel.page ? `${file} › ${sel.page}` : typeof sel.time === "number" ? `${file} · ${sel.time.toFixed(1)} s` : file;
   return `${where}: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3}` : ""}`;
 }
 

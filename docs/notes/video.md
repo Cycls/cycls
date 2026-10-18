@@ -198,6 +198,50 @@ the MP4 shows, or a card says why.
   origin, never sent through the service for someone else. To share a video, share its MP4.
 - The loop's keep-alive `ping` used to end a live tool row after 15 s; the client now skips it.
 
+## The editor (protocol 4)
+
+A person changes a video by hand inside the canvas: **Edit** on a composition opens the Cycls video
+editor (HyperFrames' own editor, pinned, trimmed and made Cycls's — `cycls-video/editor/`) as a
+full-page overlay; **Done** (or Escape) saves what is unsaved and brings the preview back. They can
+retime and trim scenes and pieces of footage, drag and restyle titles (colours, size, the catalogue's
+fonts), fix text, fix a word of the captions (the Transcript, which writes the words file the
+captions come from), swap the library music and set its level, remove or split media clips, then
+select something and **Ask Cycls** about it, or **Render**.
+
+- **The session.** `POST /video/editor?path=` (`web/video_routes.py` → `video/editor.py`) sends the
+  composition and what it names — the images, audio, words files and clips a check sends — to the
+  service's Editor (`VIDEO_EDITOR_URL`), which answers `{sid, url}`; the canvas embeds `url`
+  (`/s/<sid>/`, the session's random id is the capability). The reply's `versions` are the versions
+  of the files the editor may write back: the composition and its words files.
+- **Saves.** The editor's page (`video-editor-view.tsx`) writes each `saved` with `PUT /files?base=`
+  only to the composition it opened and to the words files the session was given (checked for shape
+  and size). `.video.html` and `.words.json` are versioned files like a design's `.fig`: `GET`
+  serves `X-Version`, a write goes through `design.store.write_fig` (what it replaces is kept as a
+  version), a stale base is a 412 and the conflict dialog (Load the latest / Keep mine); a
+  composition is at most 400,000 bytes.
+- **What the editor may change** is decided on the service, at every write (the guard,
+  `cycls-video/node/editor-source.mjs`): timing, level, position, size, colour, catalogue type, text,
+  media clips — never scripts, styles or the page's head, never what the preview adds.
+- **The agent and the person.** The agent's `edit` writes against the version it read and, on a
+  412, reads and applies once more; a match that fails after a save from the editor says to read the
+  file again (a save from the editor writes the file afresh). After the agent's save,
+  `refresh_canvas {path, version}` reaches an open editor (`reloadVideoEditors`): what is unsaved
+  goes first, then the new file is loaded. Restoring a version does the same.
+- **Older videos.** A video made before protocol 4 is upgraded by the service when the editor opens
+  it (animations made relative to their scene, cutaways onto their own track; `cycls-video/node/
+  upgrade.mjs`), and `editor.open` keeps that upgrade as a version of its own (reason `upgrade`)
+  before the session opens.
+- **Selection.** `selection` and `ask` are the design editor's selection with a `time`: the
+  composer's chip reads `launch.video.html · 4.2 s: title`, and the model reads
+  `[Selected in videos/launch.video.html at 4.2 s: title (h1) "…"]` (`_clean_selection`,
+  `_with_selection`). Ask also attaches it and focuses the composer.
+- **Render.** `POST /video/render?path=&quality=` starts a render of the saved file (the editor
+  waits for its saves first); `GET /video/render?path=` is its state; the MP4 replaces the one beside
+  the composition (the old one to the Trash).
+- **Where it shows.** `Config.public()` says `video_editor: true` when `VIDEO_EDITOR_URL` and
+  `VIDEO_URL` are set; whether an organisation has Video at all is `POST /video/editor`'s answer (503
+  when not). Edit is hidden on a shared page, on touch-only devices and below 900 px.
+
 ## The contract
 
 The text the model learns from lives with the service (`cycls-video/contract/v1.md`) and ships
@@ -215,6 +259,7 @@ means signing it again (`scripts/contract.py sign`) and deploying the service; n
 | `VIDEO_URL` | The service's door. Unset: the tool is not offered. |
 | `VIDEO_SECRET` | The key every request carries (`X-Video-Key`). |
 | `VIDEO_ORGS` | Who may use it, comma separated: organisation ids, a person's id, a workspace id, or `*`. Empty: nobody. |
+| `VIDEO_EDITOR_URL` | The service's Editor (`https://<workspace>--cycls-video-editor-serve.<region>.modal.run`). Unset: no Edit on a video. |
 
 ## The service
 
@@ -271,7 +316,10 @@ checklist) and its README.
 | `cycls/_agent/video/run.py` | The executor. |
 | `cycls/_agent/video/files.py`, `media.py`, `report.py` | Names and the sidecar; the images sent; the reply. |
 | `cycls/_agent/tools/ondemand.py` | The seam: a tool short until a chat uses it, swapped in by the loop; its start warms the GPU. |
-| `cycls/_agent/web/video_routes.py` | `?as=player`. |
-| `client/src/components/composition-view.tsx` | The sandboxed player. |
-| `tests/agent/video_test.py`, `scenarios/test_video_live.py` | Mocked and live tests. |
+| `cycls/_agent/video/editor.py` | The editor's sessions (open, replace, close) and the render it asks for. |
+| `cycls/_agent/web/video_routes.py` | `?as=player`; `/video/editor`, `/video/render`; which files are versioned. |
+| `client/src/components/composition-view.tsx` | The sandboxed player, and Edit. |
+| `client/src/components/video-editor-view.tsx` | The editor overlay: the bridge's host side, saves, conflicts, flushes. |
+| `tests/agent/video_test.py`, `video_editor_test.py`, `scenarios/test_video_live.py` | Mocked and live tests. |
+| `client/tests/video-editor-view.test.tsx` | The editor overlay (vitest). |
 | `examples/agents/video_dev.py` | The agent it is built against. |

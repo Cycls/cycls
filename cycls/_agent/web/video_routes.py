@@ -26,10 +26,18 @@ from pathlib import Path
 
 _VIDEO_CACHE = ".cache/video"
 _SUFFIX = ".video.html"
+_VIDEO_HTML_LIMIT = 400_000     # the service's own limit on a composition
 
 
 def _composition(name):
     return str(name).lower().endswith(_SUFFIX)
+
+
+def _versioned(name):
+    """Files written only through design.store.write_fig (a version kept, a stale base refused): a
+    design, a video, and a video's words — the files the editors write back."""
+    name = str(name).lower()
+    return name.endswith((".fig", _SUFFIX, ".words.json"))
 
 
 def _render_of(rel):
@@ -133,3 +141,80 @@ def _store(cache, key, payload):
         total += page.stat().st_size
         if i >= _CACHE_PAGES or (total > _CACHE_BYTES and i > 0):
             page.unlink(missing_ok=True)
+
+
+def video_router(ws_dep, changed):
+    """The routes the video editor's page uses (video/editor.py). `changed(root)` tells the files
+    catalog something was written.
+
+        POST   /video/editor?path=        a session for the composition → {url, sid, versions, notice?}
+        PUT    /video/editor?path=&sid=   the session takes the workspace's file again (an agent edit)
+        DELETE /video/editor?sid=         the session closes
+        POST   /video/render?path=&quality=   the MP4 beside the composition, started → its state
+        GET    /video/render?path=        {state: idle | rendering | done | failed, progress?, path?, message?}
+    """
+    from fastapi import APIRouter, HTTPException, Request
+
+    from cycls._agent.web.shared import _safe_path
+    from cycls._app.db import Workspace
+
+    r = APIRouter()
+
+    def _rel(ws, path):
+        if not path or not _composition(path):
+            raise HTTPException(400, "path: a videos/<name>.video.html")
+        file_path = _safe_path(ws.root, path)
+        if not file_path.is_file():
+            raise HTTPException(404, "There is no such video.")
+        return file_path.relative_to(Path(ws.root).resolve()).as_posix()
+
+    @r.post("/video/editor")
+    async def open_editor(path: str, request: Request, ws: Workspace = ws_dep):
+        from cycls._agent.video import editor
+        rel = _rel(ws, path)
+        origin = request.headers.get("origin") or f"{request.url.scheme}://{request.url.netloc}"
+        try:
+            opened = await editor.open(ws, ws.root, rel, origin)
+        except editor.Unavailable as e:
+            raise HTTPException(503, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        changed(ws.root)
+        return opened
+
+    @r.put("/video/editor")
+    async def replace_editor(path: str, sid: str, ws: Workspace = ws_dep):
+        from cycls._agent.video import editor
+        rel = _rel(ws, path)
+        try:
+            await editor.replace(ws, ws.root, sid, rel)
+        except LookupError as e:
+            raise HTTPException(410, str(e))
+        except editor.Unavailable as e:
+            raise HTTPException(503, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"ok": True}
+
+    @r.delete("/video/editor")
+    async def close_editor(sid: str, ws: Workspace = ws_dep):
+        from cycls._agent.video import editor
+        await editor.close(ws, sid)
+        return {"ok": True}
+
+    @r.post("/video/render")
+    async def render(path: str, quality: str = "standard", ws: Workspace = ws_dep):
+        from cycls._agent.video import editor
+        if quality not in ("draft", "standard", "final"):
+            raise HTTPException(400, "quality: draft, standard or final")
+        rel = _rel(ws, path)
+        if not editor.offered(ws):
+            raise HTTPException(503, "Video is not available here.")
+        return editor.render(ws, ws.root, rel, quality)
+
+    @r.get("/video/render")
+    async def render_state(path: str, ws: Workspace = ws_dep):
+        from cycls._agent.video import editor
+        return editor.render_state(ws.root, _rel(ws, path))
+
+    return r

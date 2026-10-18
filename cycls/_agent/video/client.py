@@ -27,7 +27,8 @@ from pathlib import Path
 
 import httpx
 
-PROTO = 3          # 2: sound (audio files with word timings, voice-overs, the sound map); 3: footage
+PROTO = 4          # 2: sound (audio files with word timings, voice-overs, the sound map); 3: footage;
+                   # 4: the editor (at() given to the page, offsets within the scene, tracks)
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 # A clip goes to the door in pieces of this size (the door takes up to 40 MiB). Small enough that a
 # slow link finishes one well inside its timeout and a call that runs out of time has lost little.

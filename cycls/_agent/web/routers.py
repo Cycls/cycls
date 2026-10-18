@@ -21,7 +21,7 @@ from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
-from cycls._agent.web.video_routes import _composition, _video_response
+from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -758,12 +758,13 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
-        if file_path.suffix.lower() == ".fig":
-            # X-Version of the very bytes served: what a save names as its `base` (design/store.py)
+        if _versioned(file_path.name):
+            # X-Version of the very bytes served (a design, a video or its words): what a save names as its `base`
             from cycls._agent.design.store import version_of
             data = await asyncio.to_thread(file_path.read_bytes)
-            return Response(data, media_type="application/octet-stream",
-                            headers={**_NO_CACHE, "X-Version": version_of(data)})
+            kind = ("application/octet-stream" if file_path.suffix.lower() == ".fig"
+                    else "text/html; charset=utf-8" if _composition(file_path.name) else "application/json")
+            return Response(data, media_type=kind, headers={**_NO_CACHE, "X-Version": version_of(data)})
         return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")
@@ -771,14 +772,15 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         """Streams the raw body to a .part temp, then renames. No File(...)
         param — that reads the whole body before auth runs, so uploads longer
         than the JWT lifetime 401 at the end. Multipart kept for old clients.
-        `?dedupe=1` writes to the next free name (the reply's `path`). A `.fig` goes through
-        `write_fig`: `?base=<X-Version>` must be current, else 412; `?force=1` overrides."""
+        `?dedupe=1` writes to the next free name (the reply's `path`). A `.fig`, a `.video.html` (at most
+        400,000 bytes) and a `.words.json` go through `write_fig`: `?base=<X-Version>` must be current, else
+        412; `?force=1` overrides; what it replaces is kept as a version."""
         dedupe = request.query_params.get("dedupe") is not None
         if dedupe:
             _safe_path(ws.root, path)
             path = _free_rel(ws.root, unicodedata.normalize("NFC", path))
         file_path = _safe_path(ws.root, path)
-        design_file = file_path.suffix.lower() == ".fig" and not dedupe
+        design_file = _versioned(file_path.name) and not dedupe
         limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
         if int(request.headers.get("content-length") or 0) > max_bytes:
             raise HTTPException(413, limit_msg)
@@ -817,13 +819,17 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             from cycls._agent.design.store import Stale, write_fig
             data = await asyncio.to_thread(tmp.read_bytes)
             tmp.unlink(missing_ok=True)
+            video_file = _composition(file_path.name)
+            if video_file and len(data) > _VIDEO_HTML_LIMIT:
+                raise HTTPException(413, f"A video is at most {_VIDEO_HTML_LIMIT:,} bytes")
             force = request.query_params.get("force") is not None
             try:
                 reply["version"] = await write_fig(ws.root, rel, data, base=request.query_params.get("base") or None,
                                                    by="user", reason="keep" if force else "save", force=force)
             except Stale as e:
+                what = "video" if video_file else "file" if file_path.name.endswith(".words.json") else "design"
                 return JSONResponse(status_code=412, content={
-                    "detail": "This design changed since it was opened.", "version": e.current})
+                    "detail": f"This {what} changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
         # re-export the images beside an edited design; a new one (`dedupe`) gets its .png
         design_refresh.schedule(ws.root, rel, ws.subject, ensure=dedupe)
@@ -2115,6 +2121,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(tools_router(ws_dep, required_auth))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
+    app.include_router(video_router(ws_dep, _catalog_drop))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:

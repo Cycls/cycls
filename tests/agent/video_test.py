@@ -76,7 +76,7 @@ def test_headers_carry_the_key_and_hashes_never_the_names(monkeypatch, tmp_path)
     seen = _transport(monkeypatch, lambda r: httpx.Response(200, json={"started": True}))
     asyncio.run(video.warm(_ws(tmp_path)))
     h = seen[0].headers
-    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "3"
+    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "4"
     assert "org1" not in h["x-video-tenant"] and len(h["x-video-tenant"]) == 32
     assert h["x-video-user"] != h["x-video-tenant"]
     assert str(seen[0].url) == "https://video.test/v1/warm"
@@ -505,7 +505,8 @@ def test_restore_puts_back_the_version_before_the_last_save(monkeypatch, tmp_pat
     _run({"action": "write", "name": "v", "html": COMP.replace("Hi", "Bye")}, _ws(tmp_path))
     out = _run({"action": "restore", "name": "v"}, _ws(tmp_path))
     assert out["_model"].startswith("Restored") and "Hi" in (tmp_path / "videos" / "v.video.html").read_text()
-    assert out["_ui"] == [{"type": "ui", "action": "refresh_canvas", "path": "videos/v.video.html"}]
+    version = hashlib.sha256((tmp_path / "videos" / "v.video.html").read_bytes()).hexdigest()[:16]
+    assert out["_ui"] == [{"type": "ui", "action": "refresh_canvas", "path": "videos/v.video.html", "version": version}]
 
 
 def test_bad_calls(monkeypatch, tmp_path):
@@ -961,7 +962,7 @@ def test_the_client_sends_a_clip_in_pieces_and_goes_on_from_where_the_door_says(
     at, whole = asyncio.run(video.send_clip(_ws(tmp_path), tmp_path / "uploads" / "interview.mp4", sha))
     assert whole and at == len(data) and bytes(got) == data
     assert calls == [(0, False), (1000, False), (1000, False), (2000, True)]
-    assert seen[0].url.path == f"/v1/assets/{sha}" and seen[0].headers["x-video-proto"] == "3"
+    assert seen[0].url.path == f"/v1/assets/{sha}" and seen[0].headers["x-video-proto"] == "4"
 
     seen = _transport(monkeypatch, lambda request: httpx.Response(200, json={"token": "t", "eta_s": 5}))
     asyncio.run(video.submit(_ws(tmp_path), "render", "<html>", footage={"uploads/a.mp4": {"sha": sha, "words": SAID},

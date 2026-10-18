@@ -46,6 +46,17 @@ export type WriteFile = (path: string, data: BlobPart, opts?: boolean | WriteOpt
 // A design's live room and one person's pass for it (the server's /design/live).
 export type DesignLive = { room: string; url: string; ticket: string; epoch: string };
 export type FetchVersioned = (path: string) => Promise<{ url: string; version: string }>;
+// The video editor's server side (web/video_routes.py).
+export type VideoEditorSession = { url: string; sid: string; versions: Record<string, string>; notice?: string };
+export type VideoRenderState = { state: "idle" | "rendering" | "done" | "failed"; progress?: number; path?: string; message?: string };
+export type VideoEditorApi = {
+  open: (path: string) => Promise<VideoEditorSession>;
+  replace: (path: string, sid: string) => Promise<void>;
+  close: (sid: string) => Promise<void>;
+  render: (path: string, quality: "draft" | "standard" | "final") => Promise<VideoRenderState>;
+  renderState: (path: string) => Promise<VideoRenderState>;
+  readText: (path: string) => Promise<{ text: string; version: string }>;
+};
 
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -215,6 +226,27 @@ export function useFiles(baseUrl: string = "") {
     return { url: URL.createObjectURL(await res.blob()), version: res.headers.get("X-Version") ?? "" };
   }, [api]);
 
+  // The video editor's routes (web/video_routes.py): a session for a composition, the agent's edit
+  // handed to it, its close, and a render it asks for; and a composition's text with its version.
+  const videoEditor = useMemo<VideoEditorApi>(() => ({
+    open: async (filePath) =>
+      (await api(`/video/editor?path=${encodeURIComponent(filePath)}`, { method: "POST", silent: true })).json(),
+    replace: async (filePath, sid) => {
+      await api(`/video/editor?path=${encodeURIComponent(filePath)}&sid=${encodeURIComponent(sid)}`, { method: "PUT", silent: true });
+    },
+    close: async (sid) => {
+      await api(`/video/editor?sid=${encodeURIComponent(sid)}`, { method: "DELETE", silent: true }).catch(() => {});
+    },
+    render: async (filePath, quality) =>
+      (await api(`/video/render?path=${encodeURIComponent(filePath)}&quality=${quality}`, { method: "POST", silent: true })).json(),
+    renderState: async (filePath) =>
+      (await api(`/video/render?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
+    readText: async (filePath) => {
+      const res = await api(`/files/${encPath(filePath)}`, { silent: true });
+      return { text: await res.text(), version: res.headers.get("X-Version") ?? "" };
+    },
+  }), [api]);
+
   // null where a design opens alone, or on a server without the route.
   const designLive = useCallback(async (filePath: string) => {
     try {
@@ -333,7 +365,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

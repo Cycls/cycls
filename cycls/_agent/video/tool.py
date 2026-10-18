@@ -43,7 +43,10 @@ _ACTIONS_TEXT = """ACTIONS
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
 - footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, and the <video> line to use. Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path.
 
-A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, the pieces of footage as you placed them, and the sound map when there is sound. Look at the sheet before you render."""
+A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, the pieces of footage as you placed them, and the sound map when there is sound. Look at the sheet before you render.
+
+THE PERSON'S EDITS
+The person can open a video in the editor (Edit on the canvas) and change it by hand; their saves are kept as versions. When they select something there and ask you, their message carries a line such as [Selected in videos/launch.video.html at 4.2 s: title (h1) "Ready when you are"]: the video, where the playhead was, and each selected element by its id or name, its tag and its text. Change that element (find it by its id in the file) and keep what they did by hand. After they edit, read the file before you `edit` it: a save from the editor writes the file afresh, so text you remember may no longer match exactly."""
 
 
 def _schema():

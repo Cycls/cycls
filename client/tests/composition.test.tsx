@@ -117,3 +117,16 @@ describe("a long tool call stays live", () => {
     expect(result.current.messages[1].parts!.map((p: any) => p.type)).toEqual(["step", "text"]);
   });
 });
+
+describe("Edit, into the video editor", () => {
+  const page = JSON.stringify({ html: "<html><head></head><body>P</body></html>", reason: null, version: "v1" });
+  it("is offered only where the canvas says the editor is", () => {
+    const { unmount } = render(<CompositionView data={page} name="launch.video.html" />);
+    expect(screen.queryByTestId("video-edit")).toBeNull();
+    unmount();
+    const onEdit = vi.fn();
+    render(<CompositionView data={page} name="launch.video.html" onEdit={onEdit} />);
+    fireEvent.click(screen.getByTestId("video-edit"));
+    expect(onEdit).toHaveBeenCalledOnce();
+  });
+});

@@ -165,6 +165,10 @@ Identified users also carry **person properties** (via identify): `email`,
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |
 | `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `change` / `restore` / `keep`) — do people undo the agent? |
 | `design_version_previewed` | "Preview" on a row of Version history: that version's picture, shown before restoring | `reason` (as above) — previews ÷ restores is how often people look before going back |
+| `video_editor_opened` | Edit on a video: a video editor session opened | — do people change videos by hand, not only by asking? |
+| `video_edited` | a change from the video editor written into the workspace | `kind` (`composition` / `words`) — timing, text and music, or a caption word? |
+| `video_save_conflict` | a video save refused because the file changed elsewhere (an agent edit, another tab), then the choice made | `choice` (`shown` / `latest` / `mine`) — how often do the person and the agent collide? |
+| `video_rendered_from_editor` | Render in the video editor finished, the MP4 beside the video | `quality` — do people render their own edits? |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
 | `design_comment_added` | a comment pinned on a design — a click on a slide in comment mode, then its words posted | — do people review designs here? |
 | `design_comment_replied` | a reply posted under a comment | — replies ÷ comments is how much of a conversation a pin becomes |
