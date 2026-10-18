@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cycls._agent.harness import providers as _providers
-from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES,
+from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES, MAX_DROPPED, _dropped, _stream_with_retry,
                                       REPEAT_WARN, REPEAT_STOP, STREAK_WARN, STREAK_STOP,
                                       _is_retryable, _ingest, DEFAULT_WINDOW, DEFAULT_MAX_TOKENS)
 
@@ -1296,6 +1296,81 @@ def test_auto_retry_on_overloaded(agent_env):
     notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "retrying" in i.get("step", "")]
     assert ["attempt 1/" in notices[0]["step"], "attempt 2/" in notices[1]["step"]] == [True, True]
     assert notices[0]["id"] == notices[1]["id"] and notices[0]["id"].startswith("retry-")
+
+
+def test_a_dropped_connection_is_told_apart_from_a_refusal():
+    class APIConnectionError(Exception): pass
+    class RemoteProtocolError(Exception): pass
+    class ReadTimeout(Exception): pass
+    try:
+        try:
+            raise RemoteProtocolError("peer closed connection without sending complete message body")
+        except RemoteProtocolError as inner:
+            raise APIConnectionError("Connection error.") from inner
+    except APIConnectionError as e:
+        wrapped = e
+    assert _dropped(wrapped)
+    assert _dropped(Exception("Decode transfer failed for request rank=0 ... KVTransferError timed out after 300.0s"))
+    assert _dropped(ReadTimeout())
+    assert not _dropped(Exception("invalid api key"))
+    assert not _dropped(Exception("Error code: 400 - Could not decode image"))
+
+
+class _Flaky:
+    """A provider whose stream goes as `plan` says, call after call: (events to yield, error to raise or None)."""
+    def __init__(self, plan):
+        self.plan, self.calls = list(plan), 0
+
+    async def stream(self, **kw):
+        evs, err = self.plan[min(self.calls, len(self.plan) - 1)]
+        self.calls += 1
+        for ev in evs:
+            yield ev
+        if err:
+            raise err
+
+
+def _through_retry(provider):
+    async def go():
+        return [ev async for ev in _stream_with_retry(provider)]
+    with patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
+        return asyncio.run(go())
+
+
+def test_a_connection_dropped_before_the_answer_is_tried_again():
+    """Production super's "Connection error." turns: nothing had reached the person, so it tries again."""
+    class APIConnectionError(Exception): pass
+    done = Turn(content=[{"type": "text", "text": "hi"}], stop_reason="end_turn")
+    p = _Flaky([([], APIConnectionError("Connection error.")), (["hi", done], None)])
+    out = _through_retry(p)
+    assert p.calls == 2 and out[-1] is done and "hi" in out
+    assert any(isinstance(e, dict) and "Lost the connection" in e.get("step", "") for e in out)
+
+
+def test_a_connection_dropped_mid_answer_is_not_tried_again():
+    """Text had reached the person: another attempt would show it twice, so the turn fails as before."""
+    class APIConnectionError(Exception): pass
+    p = _Flaky([(["Hel"], APIConnectionError("Connection error.")), (["Hello"], None)])
+    with pytest.raises(APIConnectionError):
+        _through_retry(p)
+    assert p.calls == 1
+
+
+def test_an_attempt_that_hung_before_dropping_is_not_tried_again():
+    """SGLang's decode hand-off gives up after 300 s: a person who waited that long is not made to wait again."""
+    class APIConnectionError(Exception): pass
+    p = _Flaky([([], APIConnectionError("Connection error.")), (["hi"], None)])
+    with patch("cycls._agent.harness.main.DROPPED_WITHIN", -1), pytest.raises(APIConnectionError):
+        _through_retry(p)
+    assert p.calls == 1
+
+
+def test_a_connection_that_keeps_dropping_gives_up_after_max_dropped():
+    class APIConnectionError(Exception): pass
+    p = _Flaky([([], APIConnectionError("Connection error."))])
+    with pytest.raises(APIConnectionError):
+        _through_retry(p)
+    assert p.calls == MAX_DROPPED + 1
 
 
 def test_auto_retry_exhausted_shows_error(agent_env):

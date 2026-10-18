@@ -33,6 +33,19 @@ MAX_DELAY_MS = 32_000
 # 500 included: model servers surface transient capacity failures (CUDA OOM
 # on a saturated GPU) as plain 500s that clear within seconds.
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
+# The connection to the model failing — refused, cut, timed out — rather than the model refusing the
+# request: transport errors by class name along the cause chain (the vendor SDKs wrap httpx's), and
+# SGLang's prefill/decode hand-off timing out. Production `super` lost ~30 turns in five days to
+# these (2026-10-13..18), each a failed turn — after the vendor client's own two quick retries. Tried
+# again a few times, 2/4/8 s apart, only while nothing of the answer has reached the person (no text
+# shown twice) and only when the attempt failed fast: one that hung (SGLang's decode hand-off gives up
+# after 300 s) is not made to wait again.
+MAX_DROPPED = 3
+DROPPED_WITHIN = 60   # seconds an attempt may take and still be tried again
+_DROPPED_TYPES = {"APIConnectionError", "APITimeoutError", "ConnectError", "ConnectTimeout", "ReadTimeout",
+                  "ReadError", "WriteError", "RemoteProtocolError", "PoolTimeout", "ServerDisconnectedError"}
+_DROPPED_SAID = ("connection error", "peer closed connection", "incomplete chunked read",
+                 "server disconnected", "decode transfer failed", "kvtransfererror")
 _FAILED = ("Error:", "Build failed:")   # how a tool says it failed — it returns, it does not raise
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
@@ -261,21 +274,42 @@ def _retry_delay(attempt, error=None):
     return (base + random.random() * 0.25 * base) / 1000
 
 
+def _dropped(e):
+    """The connection to the model failed (MAX_DROPPED) — not a refusal of the request."""
+    for _ in range(6):
+        if e is None:
+            return False
+        if type(e).__name__ in _DROPPED_TYPES or any(s in str(e).lower() for s in _DROPPED_SAID):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
 async def _stream_with_retry(provider, **kw):
     """`provider.stream` with exponential backoff on overload / rate-limit.
     A stream that fails after some deltas re-emits them on retry — accepted;
-    stored history isn't touched until the turn completes. Attempts share one step id."""
-    attempt, notice = 0, f"retry-{uuid.uuid4().hex[:8]}"
+    stored history isn't touched until the turn completes. A dropped connection
+    is tried again only while nothing of the attempt was shown. Attempts share one step id."""
+    attempt, dropped, notice = 0, 0, f"retry-{uuid.uuid4().hex[:8]}"
     while True:
+        shown, began = False, time.monotonic()
         try:
             async for ev in provider.stream(**kw):
+                shown = shown or not isinstance(ev, Turn)
                 yield ev
             return
         except Exception as e:
-            attempt += 1
-            if not (_is_retryable(e) and attempt <= MAX_RETRIES): raise
-            delay = _retry_delay(attempt, e)
-            yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+                attempt += 1
+                delay = _retry_delay(attempt, e)
+                yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
+            elif _dropped(e) and not shown and dropped < MAX_DROPPED and time.monotonic() - began < DROPPED_WITHIN:
+                dropped += 1
+                delay = _retry_delay(dropped + 2)
+                log("warn", message=f"model connection dropped, trying again ({dropped}/{MAX_DROPPED}): {_cause(e)}")
+                yield events.step(f"Lost the connection to the model, trying again... ({dropped}/{MAX_DROPPED})", id=notice)
+            else:
+                raise
             await asyncio.sleep(delay)
 
 
