@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { useState } from "react";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
-import { VideoEditorView, detachVideoEditorsUnder, flushVideoEditor, reloadVideoEditors } from "../src/components/video-editor-view";
+import { VideoEditorView, detachVideoEditorsUnder, flushVideoEditor, refreshVideoEditors, reloadVideoEditors } from "../src/components/video-editor-view";
 import { designSelection } from "../src/components/design-editor-view";
 import { selectionLabel } from "../src/components/selection-chip";
 import type { VideoEditorApi } from "../src/hooks/use-files";
@@ -129,6 +130,25 @@ describe("VideoEditorView", () => {
     expect(sent(post, "load").at(-1)).toMatchObject({ html: "<html>agent</html>" });
   });
 
+  it("at a turn's end an open editor takes its file in again only if a file tool changed it", async () => {
+    const a = api();
+    const { frame, post } = await mount({ api: a });
+    await ready(frame, post);
+    const loads = sent(post, "load").length;
+    await act(() => refreshVideoEditors());                              // unchanged: left alone
+    await flush();
+    expect(sent(post, "flush")).toEqual([]);
+    expect(sent(post, "load")).toHaveLength(loads);
+    a.readText.mockResolvedValue({ text: "<html>by edit</html>", version: "v7" });
+    await act(() => refreshVideoEditors());                              // changed: flush, then load
+    await flush();
+    const f = sent(post, "flush").at(-1)!;
+    fromEditor(frame, "flushed", { id: f.id });
+    await flush();
+    await flush();
+    expect(sent(post, "load").at(-1)).toMatchObject({ html: "<html>by edit</html>" });
+  });
+
   it("selection and ask go to the composer, with the time", async () => {
     const asked: unknown[] = [];
     const onAsk = (e: Event) => asked.push((e as CustomEvent).detail);
@@ -144,6 +164,38 @@ describe("VideoEditorView", () => {
     await flush();
     expect(asked).toHaveLength(1);
     window.removeEventListener("cycls:ask-selection", onAsk);
+  });
+
+  it("ask steps the editor aside, still open, so the composer under it can be typed into; Back returns", async () => {
+    const onClose = vi.fn();
+    function Host() {
+      const [aside, setAside] = useState(false);
+      return <VideoEditorView path={PATH} name="launch.video.html" api={api()} writeFile={vi.fn() as never} onClose={onClose}
+                              aside={aside} onAside={() => setAside(true)} onBack={() => setAside(false)} />;
+    }
+    render(<ToastProvider><Host /></ToastProvider>);
+    await flush();
+    await flush();
+    const frame = document.querySelector("iframe") as HTMLIFrameElement;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const load = await ready(frame, post);
+    const overlay = screen.getByTestId("video-editor");
+    expect(overlay.className).not.toContain("invisible");
+    fromEditor(frame, "selection", { doc: load.doc, path: PATH, time: 2, nodes: [{ name: "t1", type: "h1" }] });
+    await flush();
+    expect(overlay.className).not.toContain("invisible");           // a plain selection keeps it in view
+    fromEditor(frame, "ask", { doc: load.doc, path: PATH, time: 2, nodes: [{ name: "t1", type: "h1" }] });
+    await flush();
+    expect(overlay.className).toContain("invisible");
+    expect(document.querySelector("iframe")).toBe(frame);              // the same session, not reopened
+    fireEvent.keyDown(window, { key: "Escape" });                       // Escape in the composer: not Done
+    await flush();
+    expect(sent(post, "flush")).toEqual([]);                            // Done would flush first
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("video-editor-back"));
+    await flush();
+    expect(overlay.className).not.toContain("invisible");
+    expect(screen.queryByTestId("video-editor-back")).toBeNull();
   });
 
   it("a render waits for the saves before it, and reports its progress to the editor", async () => {

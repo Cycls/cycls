@@ -30,7 +30,8 @@ const HTML_LIMIT = 400_000;           // the service's own limit on a compositio
 const WORDS_LIMIT = 2_000_000;
 
 // ── open editors, for Cycls's flushes (tab switch, close, rename, delete) and agent edits ──────────
-type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void; reload: (version?: string) => void };
+type Handle = { flush: (ms: number) => Promise<boolean>; detach: () => () => void; reload: (version?: string) => void;
+                refresh: () => Promise<void> };
 const editors = new Map<string, Set<Handle>>();
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
 const handlesUnder = (prefix: string | null) =>
@@ -49,6 +50,11 @@ export function detachVideoEditorsUnder(prefix: string): () => void {
 export function reloadVideoEditors(path: string, version?: string): void {
   for (const h of editors.get(path) ?? []) h.reload(version);
 }
+/** A turn ended: any file tool may have changed an open video (not only the Video tool, which
+ *  says so with refresh_canvas). Each open editor takes its file in again only if it changed. */
+export function refreshVideoEditors(): Promise<void> {
+  return Promise.all(handlesUnder(null).map((h) => h.refresh().catch(() => {}))).then(() => {});
+}
 export const videoEditorOpen = (path: string) => (editors.get(path)?.size ?? 0) > 0;
 
 // Where the editor makes sense: a pointer, and room for a timeline beside a preview.
@@ -60,13 +66,18 @@ export function canEditVideo(): boolean {
 type Status = "opening" | "ready" | "saving" | "saved" | "saveerror" | "error";
 type Pending = { doc: string; id: unknown; composition?: string; words?: { path: string; text: string }[] };
 
-export function VideoEditorView({ path, name, api, writeFile, onClose, onRendered }: {
+export function VideoEditorView({ path, name, api, writeFile, onClose, onRendered, aside = false, onAside, onBack }: {
   path: string;                 // the composition: videos/<name>.video.html
   name: string;
   api: VideoEditorApi;
   writeFile: WriteFile;
   onClose: () => void;
   onRendered?: (mp4: string) => void;
+  // Ask Cycls steps the editor aside so the chat can be typed into: still open and loaded (an agent
+  // edit reaches it), but out of sight until Back (or Edit) brings it back.
+  aside?: boolean;
+  onAside?: () => void;
+  onBack?: () => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [session, setSession] = useState<VideoEditorSession | null>(null);
@@ -84,8 +95,8 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
   const detached = useRef(false);
   const conflictRef = useRef(conflict);
   conflictRef.current = conflict;
-  const latest = useRef({ path, api, writeFile, onRendered, toast });
-  latest.current = { path, api, writeFile, onRendered, toast };
+  const latest = useRef({ path, api, writeFile, onRendered, toast, aside, onAside, onBack });
+  latest.current = { path, api, writeFile, onRendered, toast, aside, onAside, onBack };
   const origin = (() => { try { return session ? new URL(session.url).origin : ""; } catch { return ""; } })();
 
   const post = useCallback((msg: Record<string, unknown>) => {
@@ -164,6 +175,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
         reply(false);
         if ((err as { status?: number }).status === 412) {
           setConflict({ pending: m });
+          latest.current.onBack?.();                       // the person decides, so they must see it
           track("video_save_conflict", { choice: "shown" });
         } else {
           setStatus("saveerror");
@@ -240,7 +252,10 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
           const sel: DesignSelection = { path: latest.current.path, frame: null, nodes,
                                          ...(typeof m.time === "number" ? { time: m.time } : {}) };
           publishSelection(sel);
-          if (m.type === "ask" && nodes.length) window.dispatchEvent(new CustomEvent("cycls:ask-selection", { detail: sel }));
+          if (m.type === "ask" && nodes.length) {
+            latest.current.onAside?.();                     // the composer is under the editor otherwise
+            window.dispatchEvent(new CustomEvent("cycls:ask-selection", { detail: sel }));
+          }
           break;
         }
         case "render":
@@ -275,6 +290,12 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
         if (version && versions.current[latest.current.path] === version) return;   // its own save
         void handle.flush(5000).then(() => { if (!conflictRef.current) void load(); });
       },
+      refresh: async () => {
+        if (!session || detached.current || !doc.current) return;
+        await queue.current;                                   // its own saves have their versions
+        const { version } = await latest.current.api.readText(latest.current.path);
+        if (version !== versions.current[latest.current.path]) handle.reload(version);
+      },
     };
     const set = editors.get(path) ?? new Set<Handle>();
     set.add(handle);
@@ -288,7 +309,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
     publishSelection({ path, frame: null, nodes: [] });
     onClose();
   }, [path, onClose]);
-  useEscape(() => { if (!conflictRef.current) void done(); });
+  useEscape(() => { if (!conflictRef.current && !latest.current.aside) void done(); });
 
   useEffect(() => {
     // The browser's own full screen where there is one; the overlay covers the page either way.
@@ -303,8 +324,14 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
     : status === "saved" ? t("videoEditorSaved") : status === "saveerror" ? t("videoEditorSaveFailed") : "";
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex flex-col bg-background" role="dialog" aria-label={name}
-         data-testid="video-editor">
+    <div className={cn("fixed inset-0 z-[60] flex flex-col bg-background", aside && "invisible pointer-events-none")}
+         role="dialog" aria-label={name} aria-hidden={aside || undefined} data-testid="video-editor">
+      {aside && (
+        <button type="button" onClick={() => onBack?.()} data-testid="video-editor-back"
+                className="visible pointer-events-auto fixed left-1/2 top-3 -translate-x-1/2 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-md transition-colors hover:bg-secondary cursor-pointer">
+          {t("videoEditorBack")}
+        </button>
+      )}
       <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
         <span className="truncate text-sm font-medium text-foreground" dir="auto">{name}</span>
         <div className="flex items-center gap-3">

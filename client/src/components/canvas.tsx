@@ -343,16 +343,19 @@ function VideoComposition({ file, content, openFile, onDownload, onReload, video
   writeFile?: WriteFile;
 }) {
   const [editing, setEditing] = useState(false);
+  const [aside, setAside] = useState(false);     // stepped aside for Ask Cycls, still open
   const canEdit = !!videoEditor && !!writeFile && canEditVideo();
   return (
     <>
       <Suspense fallback={<LoadingBar />}>
         <CompositionView data={content} name={file.name} openFile={openFile} onDownload={onDownload}
-                         onEdit={canEdit ? () => setEditing(true) : undefined} />
+                         editOpen={editing && aside}
+                         onEdit={canEdit ? () => { setEditing(true); setAside(false); } : undefined} />
       </Suspense>
       {editing && videoEditor && writeFile && (
         <VideoEditorView path={file.path} name={file.name} api={videoEditor} writeFile={writeFile}
-                         onClose={() => { setEditing(false); onReload?.(); }} />
+                         aside={aside} onAside={() => setAside(true)} onBack={() => setAside(false)}
+                         onClose={() => { setEditing(false); setAside(false); onReload?.(); }} />
       )}
     </>
   );

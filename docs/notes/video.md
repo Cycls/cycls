@@ -226,7 +226,11 @@ select something and **Ask Cycls** about it, or **Render**.
   412, reads and applies once more; a match that fails after a save from the editor says to read the
   file again (a save from the editor writes the file afresh). After the agent's save,
   `refresh_canvas {path, version}` reaches an open editor (`reloadVideoEditors`): what is unsaved
-  goes first, then the new file is loaded. Restoring a version does the same.
+  goes first, then the new file is loaded. Restoring a version does the same. A video changed by
+  any other file tool (the model sometimes reaches for the generic `edit`) is caught when the turn
+  ends: each open editor reads its file's version and reloads only if it changed
+  (`refreshVideoEditors`, beside the canvas's own refetch), so a turn that left the video alone
+  keeps the person's undo history.
 - **Older videos.** A video made before protocol 4 is upgraded by the service when the editor opens
   it (animations made relative to their scene, cutaways onto their own track; `cycls-video/node/
   upgrade.mjs`), and `editor.open` keeps that upgrade as a version of its own (reason `upgrade`)
@@ -234,7 +238,10 @@ select something and **Ask Cycls** about it, or **Render**.
 - **Selection.** `selection` and `ask` are the design editor's selection with a `time`: the
   composer's chip reads `launch.video.html · 4.2 s: title`, and the model reads
   `[Selected in videos/launch.video.html at 4.2 s: title (h1) "…"]` (`_clean_selection`,
-  `_with_selection`). Ask also attaches it and focuses the composer.
+  `_with_selection`). Ask also attaches it and focuses the composer — which the full-page editor
+  covers, so Ask steps the editor aside: still open and loaded (saves kept, an agent edit reaches
+  it), out of sight and click-through, with **Back to the editor** at the top of the page and on the
+  video's Edit button. Escape does not close it while aside; a save conflict brings it back.
 - **Render.** `POST /video/render?path=&quality=` starts a render of the saved file (the editor
   waits for its saves first); `GET /video/render?path=` is its state; the MP4 replaces the one beside
   the composition (the old one to the Trash).

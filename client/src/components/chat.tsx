@@ -27,7 +27,7 @@ import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
-import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, reloadVideoEditors } from "./video-editor-view";
+import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -860,7 +860,11 @@ export function Chat({ chat, onShare, files, account, config }: {
   );
   const [railIcons, setRailIcons] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
+  useEffect(() => {
+    if (isStreaming) return;
+    setReloadKey((k) => k + 1);
+    void refreshVideoEditors();              // an open video editor, if a file tool changed its video
+  }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
   const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
