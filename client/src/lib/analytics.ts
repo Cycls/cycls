@@ -141,15 +141,6 @@ export type ClerkUser = {
   emailAddresses?: { emailAddress?: string }[];
 };
 
-export type SubscriptionSummary = {
-  planName?: string;
-  status?: string;
-  amount?: unknown;
-  planPeriod?: string;
-  periodEnd?: Date | string | null;
-  canceledAt?: Date | string | null;
-};
-
 export type OrgSummary = {
   id?: string;
   name?: string;
@@ -157,10 +148,12 @@ export type OrgSummary = {
 };
 
 export type IdentifyExtras = {
-  subscription?: SubscriptionSummary;
   organization?: OrgSummary;
   language?: string;
+  plan?: string | null;   // the token's plan claim: "u:…" personal, "o:…" the active org's
 };
+
+const FREE_PLANS = ["u:free_user", "o:free_org"];
 
 export function identifyUser(user: ClerkUser, extras: IdentifyExtras = {}) {
   if (!user) return;
@@ -181,17 +174,11 @@ export function identifyUser(user: ClerkUser, extras: IdentifyExtras = {}) {
     created_at: user.createdAt,
   };
 
-  if (extras.subscription) {
-    const s = extras.subscription;
-    props.plan_name = s.planName;
-    props.plan_status = s.status;
-    props.plan_amount = s.amount;
-    props.plan_period = s.planPeriod;
-    props.plan_period_end = s.periodEnd;
-    props.plan_canceled_at = s.canceledAt;
-    props.is_paid = !!s.planName && s.planName.toLowerCase() !== "free";
-  } else {
-    props.is_paid = false;
+  // Kept per scope, so switching between personal and an org never overwrites the other.
+  if (extras.plan) {
+    const scope = extras.plan.startsWith("o:") ? "org" : "user";
+    props[`${scope}_plan`] = extras.plan;
+    props[`${scope}_is_paid`] = !FREE_PLANS.includes(extras.plan);
   }
 
   if (extras.organization) {

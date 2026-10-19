@@ -12,7 +12,7 @@ from ..connectors import approval_key
 from ..logs import log
 from ..state import _exec_database, app_shelf, apps_db
 from .. import credentials, spill, trash
-from ..paths import _TMP_ERROR, _resolve_path, _safe_filename
+from ..paths import _TMP_ERROR, MANAGED, _resolve_path, _safe_filename
 # the Design tool lives in cycls/_agent/design; its names are re-exported here
 from ..design.tool import (DESIGN_LOADED, _DESIGN_SHORT, _DESIGN_TOOL, _DESIGN_TOOL_SHORT, _DESIGN_WORDS,
     _DESIGN_WORDS_AR, _GUIDE_LOADED, _GUIDE_NOT_RUN, _design_short, design_called, design_tool, design_wanted)
@@ -104,11 +104,15 @@ _DATABASE_TOOL = {
     "type": "custom",
     "name": "database",
     "description": (
-        "Persistent key-value store, PER USER — no other member of the workspace can see it, "
-        "and neither can an app. Your own memory across turns and chats: notes, preferences, "
-        "task progress. Atomic per-key writes, prefix scans.\n"
-        "Anything a teammate or an app must read goes in `apps/<slug>/data/` or a workspace "
-        "file instead.\n\n"
+        "Persistent key-value store with two shelves, picked by the key:\n"
+        "- Your own memory: any key not under `apps/`. PER USER — no other member and no app sees "
+        "it. Notes, preferences, task progress across turns and chats.\n"
+        "- An app's data: `apps/<slug>/<key>` is exactly what the app at apps/<slug>/ reads and "
+        "writes with `cycls.get`/`cycls.set`, shared by the workspace. This tool is the only way to "
+        "it — it is not a file, so bash and the file tools cannot reach it. "
+        "`scan` with prefix `apps/<slug>/` lists an app's keys.\n"
+        "Atomic per-key writes, prefix scans. Anything a teammate must read goes in a workspace "
+        "file or an app's data, not your memory.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
         "- put:    write `value` (any JSON-serializable type) at `key`.\n"
@@ -288,8 +292,9 @@ _BUILD_APP_TOOL = {
         "React 19.2.8 (`createRoot`), Tailwind v4 via `@import \"tailwindcss\"`, and: "
         "@base-ui/react, @dnd-kit/core, @dnd-kit/modifiers, @dnd-kit/sortable, @dnd-kit/utilities, @hookform/resolvers, @radix-ui/react-slot, @tanstack/react-table, @tanstack/react-virtual, class-variance-authority, clsx, cmdk, date-fns, embla-carousel-react, input-otp, lucide-react, motion, radix-ui, react-day-picker, react-dom, react-hook-form, recharts, sonner, tailwind-merge, tailwind-variants, tw-animate-css, vaul, zod. "
         "Nothing else — you cannot add a dependency.\n"
-        "In the app: `cycls.read`/`write` reach `data/` in its own folder, `cycls.get`/`set` are a "
-        "key-value store there, `cycls.save(name, content)` asks where to put a file anywhere, and "
+        "In the app: `cycls.read`/`write` reach files in `data/` in its own folder, `cycls.get`/`set` "
+        "a key-value store the workspace shares (you read and write it with `database` at "
+        "`apps/<slug>/<key>`), `cycls.save(name, content)` asks where to put a file anywhere, and "
         "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
         "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
         "an API key in app source.\n"
@@ -425,7 +430,7 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
 
 # ---- Tool execution ----
 
-async def _exec_bash(command, cwd, timeout=600, network=False):
+async def _exec_bash(command, cwd, timeout=600, network=False, catalog=None):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
@@ -437,25 +442,19 @@ async def _exec_bash(command, cwd, timeout=600, network=False):
     shims = str(pathlib.Path(__file__).parent / "shims")
     env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
            "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
-    sb = (Sandbox()
-          .bind(cwd, "/workspace")
-          .tmpfs("/workspace/.db")        # cycls state (chat, shares); editor blocks via _resolve_path
-          .tmpfs("/workspace/.database")  # agent KV store; same blocking
-          .tmpfs("/workspace/.trash")
-          .tmpfs("/workspace/.versions")   # design versions
-          .tmpfs("/workspace/.comments")   # design comments
-          .tmpfs(f"/workspace/{credentials.USER}")
-          .tmpfs(f"/workspace/{credentials.SHARED}")
-          .tmpfs("/workspace/.settings")  # the person's tool settings: bash must not grant itself "allow"
+    sb = Sandbox().bind(cwd, "/workspace")
+    for name in MANAGED:   # chats, memory, app data, secrets, settings…: each reached only by its own tool
+        sb = sb.tmpfs(f"/workspace/{name}")
+    sb = (sb
           .bind(trash_dir, TRASH_MOUNT)
           .ro_bind(shims, SHIMS_MOUNT)
           .tmpfs("/app")
           .chdir("/workspace")
           .setenv(**env)
           .network(network).timeout(timeout))
-    for src, dst in skills.dev_mounts():   # dev skill scripts/templates, read-only
-        # a missing mount point would fail every bash command — skip it instead
-        if os.path.isdir(dst):
+    if (binds := skills.mounts(catalog)) and os.path.isdir(skills.MOUNT):   # a missing mount point fails every command
+        sb = sb.tmpfs(skills.MOUNT)   # each skill's files, read-only, wherever it is kept
+        for src, dst in binds:
             sb = sb.ro_bind(src, dst)
     # bwrap's own environ stays PATH/LANG; the trash vars reach only the inner shell (--setenv).
     result = await sb.run(["bash", "-c", command], env={"PATH": env["PATH"], "LANG": lang})
@@ -581,8 +580,8 @@ async def _exec_web_fetch(inp):
     return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
 
 
-async def _exec_read(inp, workspace):
-    try: path = skills.resolve_dev_path(inp["path"]) or _resolve_path(inp["path"], workspace)
+async def _exec_read(inp, workspace, catalog=None):
+    try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {inp['path']} does not exist"
     if path.is_dir(): return f"Error: {inp['path']} is a directory"
@@ -770,7 +769,9 @@ def app_catalog(root):
     except OSError:
         pass
     text = ("## Apps in this workspace\n"
-            "Their data is in apps/<slug>/data/. Read apps/<slug>/README.md before changing it.\n"
+            "Read apps/<slug>/README.md before changing one. What an app keeps with `cycls.get`/`set` "
+            "is reached only with `database` at `apps/<slug>/<key>` (scan `apps/<slug>/`); "
+            "its files are in apps/<slug>/data/.\n"
             + "\n".join(lines)) if lines else ""
     _apps_cache[root] = (time.monotonic() + _APPS_TTL, text)
     return text
@@ -846,9 +847,10 @@ async def _exec_build_app(inp, ws):
 
     kb = (result.get("bytes") or len(result["html"].encode())) / 1024
     out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab.\n"
-           f"Now write apps/{slug}/README.md describing each file the app reads under "
-           f"apps/{slug}/data/ and its shape. A later session updates that data without "
-           f"you — and without it, the only way to learn the schema is to read the bundle.")
+           f"Now write apps/{slug}/README.md describing each `cycls.get`/`set` key (reached with "
+           f"`database` at apps/{slug}/<key>) and each file under apps/{slug}/data/, and their shape. "
+           f"A later session updates that data without you — and without it, the only way to learn "
+           f"the schema is to read the bundle.")
     if result.get("stray"):
         out += ("\nWARNING: these assets could not be inlined and will be blocked "
                 f"when the app runs: {', '.join(result['stray'])}")
@@ -911,9 +913,10 @@ class Tool(NamedTuple):
     interrupted: str = ""
 
 
-def _run_bash(inp, workspace, *, timeout, network, **_):
+def _run_bash(inp, workspace, *, timeout, network, ctx=None, **_):
     t = inp.get("timeout")
-    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network)
+    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
+                      catalog=getattr(ctx, "skills", None))
 
 
 def _ask_step(inp):
@@ -1042,11 +1045,11 @@ _TOOLS = {
                                    "on the service: call render again with the same name to collect it."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       Tool(lambda inp, ws, **_: _exec_read(inp, ws.root),
+    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None)),
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
-    "database":   Tool(lambda inp, ws, **_: _exec_database(inp, ws),
+    "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None)),
                        lambda inp: {"tool_name": "Database",
                                     "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),
@@ -1058,8 +1061,8 @@ _TOOLS = {
                        once=True, terminal=True, prompt=ASK_GUIDANCE),
     "build_app":  Tool(lambda inp, ws, **_: _exec_build_app(inp, ws),
                        lambda inp: {"tool_name": "Building app", "step": inp.get("slug", "")}),
-    "skill":      Tool(lambda inp, ws, **_: skills._exec_skill(inp, ws.root),
-                       lambda inp: {"tool_name": "Skill", "step": inp.get("name", "")}),
+    "skill":      Tool(lambda inp, ws, ctx=None, **_: skills._exec_skill(inp, ws, ctx),
+                       lambda inp: {"tool_name": "Skill", "step": " ".join(x for x in (inp.get("action"), inp.get("name")) if x and x != "load")}),
     "web_search": Tool(lambda inp, ws, **_: _exec_web_search(inp),
                        lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
     "web_fetch":  Tool(lambda inp, ws, **_: _exec_web_fetch(inp),
@@ -1179,7 +1182,7 @@ def risk(name, inp):
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
     if name == "database":
         return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
-    return "write" if name in ("edit", "build_app") else None
+    return "write" if name in ("edit", "build_app") or (name == "skill" and inp.get("action") == "publish") else None
 
 
 def _gate(name, inp, ctx, step):
@@ -1210,6 +1213,7 @@ class ToolContext:
     approvals: frozenset = frozenset()   # approval keys from the confirm card, this turn only
     auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
     modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
+    skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)

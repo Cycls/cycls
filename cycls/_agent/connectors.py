@@ -315,9 +315,9 @@ def api_tool(o):
     name = f"{o.name}_request"
 
     async def call(inp, ctx):
-        method = str((inp or {}).get("method") or "GET").upper()
-        status, body, _ = await relay(o, ctx.workspace, (inp or {}).get("path") or "",
-                                      method=method, body=(inp or {}).get("body"))
+        method, sent = str((inp or {}).get("method") or "GET").upper(), (inp or {}).get("body")
+        status, body, _ = await relay(o, ctx.workspace, (inp or {}).get("path") or "", method=method, body=sent,
+                                      headers={"content-type": "application/json"} if sent else None)   # Graph refuses a body that does not say it is JSON
         if status == 401:
             return not_connected(o.name)
         text = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)

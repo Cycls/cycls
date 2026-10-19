@@ -48,6 +48,14 @@ class LLM:
         new.__dict__ = {**self.__dict__, **updates}
         return new
 
+    def __setstate__(self, state):
+        """Unpickled where the agent runs, at boot: the skills it ships are known before its first turn, so the
+        Skills tab lists them on a fresh instance too."""
+        self.__dict__.update(state)
+        if state.get("_skills"):
+            from ..tools import skills
+            skills.configure(state["_skills"])
+
     # ---- Fluent builders ----
 
     def model(self, name):          return self._copy(_model=name)
@@ -100,9 +108,10 @@ class LLM:
         """Ship skills with the agent: each source is a directory of skill
         folders (<name>/SKILL.md + support files), or a single skill folder.
         Shipped skills are read-only — their dirs mount at /skills/<name> in
-        the bash sandbox. User workspace skills (skills/<name>/SKILL.md) are
-        always discovered and win name collisions. `.skills(None)` disables
-        skills entirely. `skill` is a reserved tool name."""
+        the bash sandbox. A team workspace's own skills and each person's own
+        (published with the `skill` tool, docs/notes/skills.md) join them and
+        win name collisions. `.skills(None)` disables skills entirely. `skill`
+        is a reserved tool name."""
         if sources == (None,): return self._copy(_skills=None)
         return self._copy(_skills=[*(self._skills or []), *sources])
 

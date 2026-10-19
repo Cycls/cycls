@@ -56,6 +56,16 @@ def test_bash_sandbox_hides_credentials_and_settings(tmp_path):
     assert {"/workspace/.secrets", "/workspace/.connectors", "/workspace/.settings"} <= masked
 
 
+def test_bash_cannot_reach_any_slot_cycls_manages(tmp_path):
+    """App data among them: an agent that found .apps/ rewrote two apps' rows with json.dump,
+    around the `database` tool and every rule it keeps (2026-10-12)."""
+    from cycls._agent.paths import MANAGED
+    argv = _capture_bash_argv(tmp_path)
+    masked = {argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs"}
+    assert "/workspace/.apps" in masked
+    assert {f"/workspace/{name}" for name in MANAGED} <= masked
+
+
 def test_bash_touches_nothing_on_the_workspace_for_scratch(tmp_path):
     """The workspace is gcsfuse in production. TMPDIR stays on the sandbox
     tmpfs so pip, tar and tempfile never write there, and a bash call creates

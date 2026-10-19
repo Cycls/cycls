@@ -26,7 +26,7 @@ def _clear_client_cache():
     _providers._clients.clear()
 from cycls._agent.harness.compact import COMPACT_AT, COMPACT_BUFFER, compact
 from cycls._agent.harness.events import Turn, to_ui
-from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path
+from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, skills
 from cycls._agent.state import load_messages, load_tail
 from cycls._app.db import workspace
 
@@ -1485,9 +1485,7 @@ def test_agent_md_binary_ignored_loop_completes(agent_env):
 
 def test_user_skill_adds_catalog_and_tool(agent_env):
     ws, ctx = agent_env
-    d = Path(ws) / "skills" / "haiku"
-    d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: haiku\ndescription: Writes haikus.\n---\n5-7-5 always.")
+    skills.store(ws, "haiku", {"SKILL.md": b"---\nname: haiku\ndescription: Writes haikus.\n---\n5-7-5 always."})
     captured, stream = _capture_stream(_make_response([_text_block()]))
     mock_client = MagicMock()
     mock_client.messages.stream = stream
@@ -1499,7 +1497,7 @@ def test_user_skill_adds_catalog_and_tool(agent_env):
     assert any(t.get("name") == "skill" for t in captured["tools"])
 
 
-def test_no_skills_no_catalog_no_tool(agent_env):
+def test_no_skills_no_catalog_but_the_tool_that_makes_one(agent_env):
     ws, ctx = agent_env
     captured, stream = _capture_stream(_make_response([_text_block()]))
     mock_client = MagicMock()
@@ -1507,16 +1505,17 @@ def test_no_skills_no_catalog_no_tool(agent_env):
 
     with _mock_anthropic(mock_client):
         asyncio.run(_drain(_run(context=ctx)))
-
     assert "<skills>" not in _system_text(captured)
+    assert any(t.get("name") == "skill" for t in captured["tools"])
+
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=_make_context(ws), skills=None)))
     assert not any(t.get("name") == "skill" for t in (captured.get("tools") or []))
 
 
 def test_skill_tool_call_returns_body_in_history(agent_env):
     ws, ctx = agent_env
-    d = Path(ws) / "skills" / "haiku"
-    d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: haiku\ndescription: Writes haikus.\n---\n5-7-5 always.")
+    skills.store(ws, "haiku", {"SKILL.md": b"---\nname: haiku\ndescription: Writes haikus.\n---\n5-7-5 always."})
 
     round1 = _make_response([_tool_use_block("s1", name="skill", inp={"name": "haiku"})],
                             stop_reason="tool_use")
@@ -1533,7 +1532,7 @@ def test_skill_tool_call_returns_body_in_history(agent_env):
                if isinstance(b, dict) and b.get("tool_use_id") == "s1"]
     assert len(results) == 1
     assert "5-7-5 always." in results[0]["content"]
-    assert "files in skills/haiku/" in results[0]["content"]
+    assert "files in /skills/haiku/" in results[0]["content"]
 
 
 

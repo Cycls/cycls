@@ -4,6 +4,7 @@ import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
 import { isHtml, isComposition, isRenderable, saveBlob, extTint } from "./canvas-utils";
+import { AppBanner } from "./app-banner";
 import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { t } from "../lib/i18n";
@@ -194,6 +195,7 @@ function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Pr
     <div className="h-dvh flex flex-col bg-background">
       <ShareHeader />
       <div className="shrink-0 h-12" />
+      <AppBanner />
 
       <div className="flex min-h-0 flex-1">
         <div className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -389,6 +391,7 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
     <div className="h-dvh flex flex-col bg-background">
       <ShareHeader />
       <div className="shrink-0 h-12" />
+      <AppBanner />
 
       <div className="flex-1 min-h-0 flex flex-col px-2 pb-2 sm:px-3 sm:pb-3">
         <div className="flex-1 min-h-0 flex flex-col rounded-xl border border-border overflow-hidden">
@@ -482,7 +485,7 @@ function ShareChrome({
     if (!title) return null;
     return (
       <div className="w-full max-w-3xl px-6 py-10 text-center">
-        <h1 className="text-xl font-medium tracking-tight text-foreground">{title}</h1>
+        <h1 className="font-display text-xl font-medium tracking-tight text-foreground">{title}</h1>
       </div>
     );
   }
@@ -490,7 +493,7 @@ function ShareChrome({
   if (!title && !hasAuthor && !sharedAt) return null;
   return (
     <div className="w-full max-w-3xl px-6 py-10 text-center">
-      {title && <h1 className="text-xl font-medium tracking-tight text-foreground">{title}</h1>}
+      {title && <h1 className="font-display text-xl font-medium tracking-tight text-foreground">{title}</h1>}
       <div className="flex items-center justify-center gap-2 mt-3">
         {hasAuthor && (
           <div className="flex items-center -space-x-3">

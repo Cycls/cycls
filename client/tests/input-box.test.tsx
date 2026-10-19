@@ -53,3 +53,28 @@ describe("the @ picker after a deletion", () => {
     expect((await search("goo")).length).toBe(1);      // deleted → offered again
   });
 });
+
+describe("the composer while recording", () => {
+  afterEach(cleanup);
+  it("shows the waveform with discard and done in place of the mic and send", () => {
+    const stopMic = vi.fn(), cancelMic = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);   // jsdom has no canvas
+    const analyser = { frequencyBinCount: 128, getByteFrequencyData: () => {} } as unknown as AnalyserNode;
+    function Recording() {
+      const ref = useRef<HTMLTextAreaElement>(null);
+      return (
+        <InputBox textareaRef={ref} input="" setInput={() => {}} handleKeyDown={() => {}} handleSubmit={() => {}}
+                  isStreaming={false} onStop={() => {}} voice listening transcribing={false} micAnalyser={analyser}
+                  startMic={() => {}} stopMic={stopMic} cancelMic={cancelMic} />
+      );
+    }
+    render(<Recording />);
+    expect(screen.getByTestId("live-waveform")).toBeTruthy();
+    expect(screen.queryByLabelText("Stop recording")).toBeNull();
+    expect(screen.queryByLabelText("Send")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Done recording"));
+    expect(stopMic).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByLabelText("Discard recording"));
+    expect(cancelMic).toHaveBeenCalledOnce();
+  });
+});

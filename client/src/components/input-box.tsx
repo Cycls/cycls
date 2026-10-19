@@ -8,6 +8,7 @@ import { ConnectorIcon, Switch, connectorLabel, type Connector } from "./connect
 
 export type MentionHit = { name: string; path: string; connector?: Connector };
 import { AttachmentBody } from "./attachment-body";
+import { LiveWaveform } from "./live-waveform";
 import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
 import type { DesignSelection } from "./design-editor-view";
@@ -61,6 +62,7 @@ export function InputBox({
   onRemoveFile,
   listening,
   transcribing,
+  micAnalyser,
   startMic,
   stopMic,
   cancelMic,
@@ -69,6 +71,7 @@ export function InputBox({
   onMentionSearch,
   connectors,
   onOpenConnectors,
+  onOpenSkills,
   onToggleConnector,
   approveSwitch,
   onAddConnector,
@@ -94,6 +97,7 @@ export function InputBox({
   onRemoveSelection?: () => void;
   listening: boolean;
   transcribing: boolean;
+  micAnalyser?: AnalyserNode | null;   // the mic's live level while recording
   startMic: () => void;
   stopMic: () => void;
   cancelMic: () => void;
@@ -102,6 +106,7 @@ export function InputBox({
   onMentionSearch?: (query: string) => Promise<MentionHit[]>;
   connectors?: Connector[];
   onOpenConnectors?: () => void;
+  onOpenSkills?: () => void;
   onToggleConnector?: (c: Connector, on: boolean) => void;   // the person's own on/off, kept across chats
   approveSwitch?: boolean;   // the deployment has connectors: show Auto / Manual
   onAddConnector?: (c: Connector) => void;
@@ -366,7 +371,7 @@ export function InputBox({
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
         <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onToggleConnector={onToggleConnector} disabled={isStreaming} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} onToggleConnector={onToggleConnector} disabled={isStreaming} />
           )}
           {approveSwitch && <ApproveMode disabled={isStreaming} />}
           <button
@@ -384,6 +389,19 @@ export function InputBox({
             {getLang() === "en" ? "عربي" : "En"}
           </button>
         </div>
+        {voice && listening ? (
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-2 ps-3">
+            {micAnalyser && <LiveWaveform analyser={micAnalyser} className="h-8 min-w-0 max-w-56 flex-1 text-foreground" />}
+            <button type="button" onClick={(e) => { e.stopPropagation(); cancelMic(); }} aria-label="Discard recording"
+                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-foreground transition hover:bg-secondary">
+              <Icon name="x" />
+            </button>
+            <button type="button" onClick={(e) => { e.stopPropagation(); stopMic(); }} aria-label="Done recording"
+                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border bg-secondary text-foreground transition hover:opacity-80">
+              <Icon name="check" />
+            </button>
+          </div>
+        ) : (
         <div className="flex items-center gap-1">
           {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
           {/* A filled composer stays sendable mid-run — the message queues and
@@ -414,6 +432,7 @@ export function InputBox({
             </button>
           )}
         </div>
+        )}
       </div>
     </motion.div>
   );
@@ -469,8 +488,8 @@ function ApproveMode({ disabled }: { disabled?: boolean }) {
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onToggleConnector, disabled }: {
-  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void;
+function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onOpenSkills, onToggleConnector, disabled }: {
+  onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void; onOpenSkills?: () => void;
   onToggleConnector?: (c: Connector, on: boolean) => void; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -478,7 +497,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
   const item = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
   const pick = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); setOpen(false); fn?.(); };
 
-  if (!onOpenFiles && !onOpenConnectors) {
+  if (!onOpenFiles && !onOpenConnectors && !onOpenSkills) {
     return onOpenFilePicker ? (
       <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} disabled={disabled} className={btnClass} aria-label="Attach file">
         <Icon name="paperclip" className="size-5" />
@@ -512,6 +531,11 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
                   <Icon name="link" className="size-4" />{t("manageConnectors")}<Icon name="chevron-right" className="ms-auto size-3.5" />
                 </button>
               </>
+            )}
+            {onOpenSkills && (
+              <button onClick={pick(onOpenSkills)} className={item}>
+                <Icon name="star" className="size-4" />{t("skills")}<Icon name="chevron-right" className="ms-auto size-3.5" />
+              </button>
             )}
           </div>
         </>

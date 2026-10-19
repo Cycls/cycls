@@ -94,7 +94,9 @@ describe("a video's editor in the canvas", () => {
     await flush();
     expect(editor()).toBeNull();
     expect(a.close).toHaveBeenCalledWith("abc");
-    expect(container.querySelectorAll("[inert]").length).toBe(0);            // nothing left mounted behind
+    // The editor is gone; the video's tab stays mounted, hidden, as every open tab now does (main's
+    // canvas: going back to a tab finds it as it was).
+    expect(container.querySelectorAll("[inert]").length).toBe(1);
   });
 
   it("its tab closed meanwhile saves what is unsaved, then the editor goes", async () => {

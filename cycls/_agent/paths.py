@@ -3,6 +3,12 @@ import os, pathlib
 from . import credentials
 
 
+# The slots cycls keeps in a workspace. Each has its own way in — app data is the `database` tool
+# at apps/<slug>/<key>, skills the `skill` tool — so no file tool, no bash command and no /files
+# request reaches one.
+MANAGED = (".db", ".database", ".apps", ".skills", ".trash", ".versions", ".comments", ".settings",
+           credentials.USER, credentials.SHARED)
+
 _TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "
               "exits, and the file tools cannot see it. Use .tmp/ for scratch and the workspace "
               "root for files the user keeps")
@@ -18,7 +24,7 @@ def _resolve_path(raw_path, workspace):
     rel = raw_path.removeprefix("~/").removeprefix("/workspace/").lstrip("/")
     path = (ws / rel).resolve()
     if not path.is_relative_to(ws): raise ValueError("path escapes workspace")
-    for name in (".db", ".database", ".trash", ".versions", ".comments", ".settings", credentials.USER, credentials.SHARED):
+    for name in MANAGED:
         reserved = ws / name
         if path == reserved or path.is_relative_to(reserved):
             raise ValueError(f"{name}/ is managed by cycls")

@@ -77,6 +77,7 @@ class Web:
         self._on_run = None
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
+        self._mobile_app: Optional[dict] = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
         self._workspaces: Optional[str] = None
@@ -272,6 +273,16 @@ class Web:
         a Rewardful key). Injected into the page config; the FE loads the tracker
         and reports conversions on checkout. Off when unset."""
         return self._copy(_affiliate=api_key)
+
+    def mobile_app(self, *, ios: Optional[str] = None, android: Optional[str] = None):
+        """Point phone visitors to the Cycls app, each browser's own way first: Safari's
+        banner (App Store link), Chrome's install sheet (Play link, via a web manifest),
+        and a bar under the header everywhere else. Store URLs."""
+        links = {k: v for k, v in (("ios", ios), ("android", android)) if v}
+        for v in links.values():
+            if not v.startswith("https://"):
+                raise ValueError(f"not a store link: {v!r}")
+        return self._copy(_mobile_app=links or None)
 
     def workspaces(self, create: str = "member"):
         """Enable multi-workspace mode (docs/workspaces.md): every user gets a

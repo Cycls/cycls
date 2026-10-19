@@ -7,6 +7,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import { useChat } from "../src/hooks/use-chat";
+import { track } from "../src/lib/analytics";
 
 // send() fires posthog events; stub them so tests don't touch analytics.
 vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
@@ -643,5 +644,64 @@ describe("a run writes only to the view it started in (docs/notes/runs.md)", () 
     const last = result.current.messages[result.current.messages.length - 1];
     expect(last.content).toBe("old answer");   // the final write stayed in chat A
     expect(last.parts).toEqual([]);            // and so did every streamed part
+  });
+});
+
+
+describe("a run's ending is reported once, and only a real failure is an error", () => {
+  const events = () => (track as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+  const stream = (chunks: string[]) => ({ ok: true, body: { getReader: () => {
+    let i = 0;
+    return { read: async () => i < chunks.length
+      ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+      : { done: true, value: undefined } };
+  } } }) as any;
+  const chat = (run: string | null, extra = {}) => ({ ok: true, status: 200, json: async () => ({
+    messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "ok", parts: [] }],
+    next: 2, open: "assistant", run, ...extra }) }) as any;
+  beforeEach(() => (track as unknown as ReturnType<typeof vi.fn>).mockClear());
+
+  test("refocusing a chat whose run finished long ago reports nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => chat("done")));
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.loadChat("c1"); });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(events()).not.toContain("turn_completed");
+    expect(events()).not.toContain("run_failed");
+  });
+
+  test("a dropped stream is not an error; the run failing is — with its reason and reference", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/chats/")
+      ? chat("failed", { run_reason: "error", run_error: "abc123" })
+      : stream(['data: {"type":"chat_id","chat_id":"c1"}\n\n', 'data: {"type":"text","text":"half"}\n\n'])));
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("hi"); await new Promise((r) => setTimeout(r, 50)); });
+    expect(events()).not.toContain("stream_broken");
+    expect(track).toHaveBeenCalledWith("run_failed", { chat_id: "c1", status: "failed", reason: "error", error_id: "abc123", via: "poll" });
+    expect(events().filter((e) => e === "turn_completed")).toHaveLength(1);
+  });
+
+  test("a dropped stream whose run finished is one completed turn, and no error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).includes("/chats/")
+      ? chat("done")
+      : stream(['data: {"type":"chat_id","chat_id":"c1"}\n\n', 'data: {"type":"text","text":"half"}\n\n'])));
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("hi"); await new Promise((r) => setTimeout(r, 50)); });
+    expect(events().filter((e) => e === "turn_completed")).toHaveLength(1);
+    expect(events()).not.toContain("run_failed");
+    expect(events()).not.toContain("stream_broken");
+  });
+
+  test("a crash seen live is run_failed with the reference the person was shown", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => stream([
+      'data: {"type":"chat_id","chat_id":"c1"}\n\n',
+      'data: {"type":"callout","callout":"Something went wrong. Reference: `abc123`","style":"error","error_id":"abc123"}\n\n',
+      'data: [DONE]\n\n'])));
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("hi"); });
+    expect(track).toHaveBeenCalledWith("run_failed", { chat_id: "c1", status: "failed", reason: "error", error_id: "abc123", via: "stream" });
   });
 });

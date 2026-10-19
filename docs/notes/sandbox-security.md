@@ -34,7 +34,7 @@ bwrap --ro-bind / /
       --ro-bind <pkg>/_blockmeta.so /tmp/.blockmeta.so   # LD_PRELOAD shim
       --setenv LD_PRELOAD /tmp/.blockmeta.so
       --bind <cwd> /workspace
-      --tmpfs /workspace/.db                              # hide the chat store
+      --tmpfs /workspace/<slot>                           # one per MANAGED slot: chats, memory, app data, …
       --tmpfs /app                                        # mask provider .env file
       --chdir /workspace
       [--unshare-net]                                     # only when network=False
@@ -47,7 +47,7 @@ Key properties:
 
 - **Network**: the LLM bash tool defaults to `network=True` (curl/pip/git for the model). When `network=False`, `--unshare-net` + `--unshare-user` gives a fresh netns owned by a fresh userns, so bwrap has caps to bring up `lo` even though Docker drops `CAP_NET_ADMIN` on the outer container. Without `--unshare-user`, loopback setup fails with `RTM_NEWADDR: No child processes`.
 - **Workspace is the only writable path** (`<cwd>` bound at `/workspace`). Root is read-only; `/app` and `/tmp` are ephemeral tmpfs.
-- **`.db/` is hidden** (`--tmpfs /workspace/.db`) so the sandboxed shell can't read the chat store from the workspace volume. Editor tools (`read`, `edit`) also reject `.db/` paths via `_resolve_path`; tmpfs is defense in depth.
+- **cycls's own slots are hidden.** `MANAGED` (`cycls/_agent/paths.py`) lists them — `.db` (chats), `.database` (the agent's memory), `.apps` (app data), `.skills` (published skills), `.trash`, `.versions`, `.comments`, `.settings`, `.secrets`, `.connectors` — and that one list masks each with a tmpfs here, makes the editor tools refuse it (`_resolve_path`) and makes `/files` answer 403 (`resolve_path`). Each slot has its own way in: app data is the `database` tool at `apps/<slug>/<key>`, skills the `skill` tool's `publish` and a read-only mount at `/skills/<name>`. There were three copies of the list until `.apps` was missing from all of them, and an agent rewrote two apps' rows with `json.dump` (2026-10-12).
 - **Metadata server is blocked** via the LD_PRELOAD shim (`_blockmeta.so`), which intercepts libc `connect()` and rejects `169.254.0.0/16` + IPv6 link-local. See "Cloud credential exposure" below for the threat boundary.
 
 ### Why not `--unshare-all`?
@@ -140,7 +140,7 @@ For the realistic cycls product shape (developer ships an agent for their custom
 
 - **Process env / provider keys** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) — live in Python's env, unreadable via `/proc/<python_pid>/environ` due to user-NS boundary. `/app/.env` is masked by tmpfs. ✅
 - **CLI/publish secrets** (`CYCLS_API_KEY`, `UV_PUBLISH_TOKEN`) — not shipped into the runtime container at all, thanks to the `.providers.env` split (`Image.copy(".providers.env", ".env")`). Can't leak from a place they never existed. ✅
-- **The chat store** — `--tmpfs /workspace/.db` masks the workspace's `.db/` so the sandboxed shell can't read it. Editor tools also reject `.db/` paths. ✅
+- **Chats, memory, app data and secrets** — every `MANAGED` slot is masked from the shell, refused by the editor tools and by `/files`. ✅
 - **Cross-tenant filesystem access via `/proc` or mount tricks** — blocked at both layers (user-NS + bind mount). ✅
 - **Cross-tenant GCS access via metadata-minted tokens** — mitigated for libc-using code via the LD_PRELOAD shim. ⚠️ Bypassable by static binaries / direct syscall / `unset LD_PRELOAD`; see threat boundary above. Fully closing requires per-tenant deploys.
 

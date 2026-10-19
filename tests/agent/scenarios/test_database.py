@@ -216,3 +216,25 @@ def test_a_bare_slug_cannot_be_deleted_from_the_tool(tmp_path):
 def test_app_key_needs_a_slug(tmp_path):
     ws = _ws_user(tmp_path)
     assert _run(_exec_database({"command": "get", "key": "apps/"}, ws)).startswith("Error:")
+
+
+def test_an_admin_only_app_takes_the_tools_writes_from_admins_only(tmp_path):
+    """The /apps route's `write: admin` rule holds for the tool too, now that it is the only way in."""
+    from types import SimpleNamespace
+    from cycls._agent import state
+    orgdb = state.org_db("tenant", tmp_path, f"file://{tmp_path}")
+    _run(orgdb.put("workspaces/t-eng", {"id": "t-eng", "type": "team"}))
+    _run(orgdb.put("members/t-eng/alice", {"role": "editor"}))
+    _run(orgdb.put("members/t-eng/bob", {"role": "admin"}))
+    ws = _ws_user(tmp_path)
+    (ws.root / "apps" / "standup").mkdir(parents=True)
+    (ws.root / "apps" / "standup" / "app.json").write_text('{"write": "admin"}')
+    alice, bob = (SimpleNamespace(id=u, org_id="tenant", org_role="member") for u in ("alice", "bob"))
+    put = {"command": "put", "key": "apps/standup/config", "value": 1}
+    assert "only workspace admins" in _run(_exec_database(put, ws, alice))
+    assert "only workspace admins" in _run(_exec_database({"command": "delete", "key": "apps/standup/config"}, ws, alice))
+    assert "only workspace admins" in _run(_exec_database(put, ws))   # no person, no admin
+    assert _run(_exec_database(put, ws, bob)).startswith("Stored")
+    assert json.loads(_run(_exec_database({"command": "get", "key": "apps/standup/config"}, ws, alice))) == 1
+    assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws, alice)).startswith("Stored")
+

@@ -21,6 +21,7 @@ import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
 import { IconButton } from "./components/icon";
+import { Star } from "./components/message";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { PublicHome } from "./components/public-home";
 import { SharedView } from "./components/shared-view";
@@ -30,6 +31,7 @@ import { useFiles, useRefreshOnTurnEnd } from "./hooks/use-files";
 import { useWorkspaces } from "./hooks/use-workspaces";
 import { setActiveWorkspace } from "./hooks/use-auth-headers";
 import { useUrlParam } from "./hooks/use-url-param";
+import { ALL, complete, useAllPages } from "./hooks/use-all-pages";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics";
 import { initAffiliate } from "./lib/affiliate";
@@ -115,23 +117,15 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
   const files = useFiles();
   useRefreshOnTurnEnd(files, chat.isStreaming);
   const ws = useWorkspaces();
-  const { getToken, signOut, isLoaded: authLoaded } = useAuth();
+  const { getToken, signOut, isLoaded: authLoaded, sessionClaims } = useAuth();
   const clerk = useClerk();
-  const { organization, membership, memberships } = useOrganization(
-    workspace ? { memberships: { infinite: true } } : {});
-  const { userMemberships, setActive } = useOrganizationList({ userMemberships: true });
+  const { organization, membership, memberships } = useOrganization(workspace ? { memberships: ALL } : {});
+  const { userMemberships, setActive } = useOrganizationList({ userMemberships: ALL });
+  useAllPages(memberships, userMemberships);
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
   const lang = useLang();
 
   const subItem = subscription?.subscriptionItems?.[0];
-  const subSummary = subItem ? {
-    planName: subItem.plan.name,
-    status: subItem.status,
-    amount: subItem.amount,
-    planPeriod: subItem.planPeriod,
-    periodEnd: subItem.periodEnd,
-    canceledAt: subItem.canceledAt,
-  } : undefined;
   const orgSummary = organization ? {
     id: organization.id,
     name: organization.name,
@@ -142,9 +136,9 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
   usePostHogIdentify(
     !!config?.analytics?.length,
     user,
-    subSummary,
     orgSummary,
     lang,
+    sessionClaims?.pla as string | undefined,   // the token's plan claim
   );
 
   // Render-time, not an effect — child mount-effects fire requests before
@@ -210,6 +204,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
       id: m.publicUserData?.userId || "",
       name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
         || m.publicUserData?.identifier || m.publicUserData?.userId || "",
+      email: m.publicUserData?.identifier,
     }))
     .filter((m) => m.id);
   setPeople(orgMembers);
@@ -243,6 +238,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
       canCreate: config?.workspaces === "member" || membership?.role === "org:admin",
       isOrgAdmin: membership?.role === "org:admin",
       orgMembers,
+      orgMembersComplete: complete(memberships),
       onSwitch: workspace.switch,
       onCreate: ws.create,
       onUpdate: ws.update,
@@ -345,6 +341,8 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
   const { client } = useClerk();
   const lang = useLang();
   const isAr = lang === "ar";
+  const isDark = useDarkMode();
+  useLiquidGlass("#signin-card", "#satin", isDark);
   const lastStrategy = client?.lastAuthenticationStrategy;
   const [isLoading, setIsLoading] = useState<string | false>(false);
   const [error, setError] = useState("");
@@ -467,8 +465,8 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     if (result.status === "complete") await setActive!({ session: result.createdSessionId });
   });
 
-  const inputClass = "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
-  const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";
+  const inputClass = "w-full rounded-xl border border-border bg-background/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+  const submitClass = "flex w-full items-center justify-center rounded-xl border border-border bg-background/40 px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors disabled:opacity-50 cursor-pointer";
 
   type Field = { type: string; placeholder: string; value: string; set: (v: string) => void; autoComplete: string };
   const fields: Record<string, Field> = {
@@ -500,8 +498,9 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
   );
 
   return (
-    <div className="flex h-dvh w-full flex-col bg-background">
-      <div className="fixed top-0 right-0 p-4 flex items-center gap-1" dir="ltr">
+    <div className="relative flex h-dvh w-full flex-col overflow-hidden bg-background">
+      <Satin tone={isDark ? "" : "-light"} />
+      <div className="fixed top-0 right-0 z-10 p-4 flex items-center gap-1" dir="ltr">
         <button
           onClick={() => {
             const next = isAr ? "en" : "ar";
@@ -515,22 +514,18 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
         </button>
         <IconButton name="moon" onClick={() => toggleDark("sign_in")} label="Toggle theme" />
       </div>
-      <main className="flex flex-1 flex-col items-center justify-center px-4 py-16">
+      <main className="relative flex flex-1 flex-col items-center justify-center px-4 py-16">
         <div className="w-full max-w-sm">
-          {/* Logo — two stars */}
-          <div className="hidden sm:flex justify-center mb-8">
-            <svg viewBox="-1 -1 25 23" className="h-12 text-foreground">
-              {/* Big star — filled */}
-              <path fill="currentColor" d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z" />
-              {/* Small star — stroke */}
-              <path fill="none" stroke="currentColor" strokeWidth={0.6} d="M 17.359 13.159 C 17.493 13.671 18.909 15.02 19.38 15.192 C 18.909 15.31 17.516 16.704 17.359 17.226 C 17.225 16.714 15.89 15.308 15.338 15.192 C 15.89 14.962 17.211 13.671 17.359 13.159 Z" />
-            </svg>
+          {/* The three Cycls stars, still: the backdrop is what moves */}
+          <div className="mb-8 flex justify-center gap-1 text-foreground" dir="ltr">
+            <Star size={26} /><Star size={26} /><Star size={26} hollow />
           </div>
 
           {/* Card */}
-          <div className="rounded-2xl border border-border bg-card p-8">
+          {/* `!` where liquidGL writes inline styles: the edge and the shadow stay ours, and the form stays clickable */}
+          <div id="signin-card" className="relative z-10 rounded-2xl border border-foreground/10! bg-background/12 p-8 shadow-[0_4px_16px_rgb(0_0_0/0.07)]! backdrop-blur-sm pointer-events-auto!">
             <div className="text-center mb-6">
-              <h1 className="text-foreground text-xl font-semibold tracking-tight">
+              <h1 className="font-display text-foreground text-xl font-semibold tracking-tight">
                 {t("welcomeTo")}
               </h1>
               <p className="text-muted-foreground text-sm mt-1.5">
@@ -561,7 +556,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
                 <button
                   onClick={() => handleOAuth("oauth_google")}
                   disabled={!!isLoading}
-                  className={`flex w-full items-center justify-center gap-3 rounded-xl border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer ${lastStrategy === "oauth_google" ? "border-foreground/30" : "border-border"}`}
+                  className={`flex w-full items-center justify-center gap-3 rounded-xl border bg-background/40 px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer ${lastStrategy === "oauth_google" ? "border-foreground/30" : "border-border"}`}
                 >
                   <svg className="size-4" viewBox="0 0 24 24">
                     <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
@@ -582,7 +577,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
                 <button
                   onClick={() => handleOAuth("oauth_apple")}
                   disabled={!!isLoading}
-                  className={`flex w-full items-center justify-center gap-3 rounded-xl border bg-background px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer ${lastStrategy === "oauth_apple" ? "border-foreground/30" : "border-border"}`}
+                  className={`flex w-full items-center justify-center gap-3 rounded-xl border bg-background/40 px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer ${lastStrategy === "oauth_apple" ? "border-foreground/30" : "border-border"}`}
                 >
                   <svg className="size-4" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
@@ -629,12 +624,51 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
           </div>
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            {t("termsOfService")}
+            {t("termsOfService").split(/\[(.+?)\]/).map((s, i) => i % 2 ? (
+              <a key={i} href={`https://cycls.com/${isAr ? "ar/" : ""}legal/${i === 1 ? "terms-of-use" : "privacy-policy"}`}
+                 target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-foreground underline underline-offset-2 hover:opacity-80">{s}</a>
+            ) : s)}
           </p>
         </div>
       </main>
     </div>
   );
+}
+
+// The sign-in page's backdrop, Cycls's satin: a seamless loop played at three quarters of its speed, WebM with an MP4
+// for older Safari, and its own light files rather than a filter, since the glass reads the raw video. The still is the
+// loop's first frame; it shows first and stays when motion is reduced, data is saved or the video can't play.
+function Satin({ tone }: { tone: string }) {
+  const [playing, setPlaying] = useState(false);
+  const still = useMemo(() => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    || (navigator as { connection?: { saveData?: boolean } }).connection?.saveData, []);
+  return (
+    <div id="satin" aria-hidden className="pointer-events-none absolute inset-0">
+      <img src={`/signin/satin${tone}.jpg`} alt="" className="absolute inset-0 size-full object-cover" />
+      {!still && (
+        <video key={tone} autoPlay muted loop playsInline onPlaying={() => setPlaying(true)}
+               onLoadedMetadata={(e) => { e.currentTarget.playbackRate = 0.75; }}
+               className={`absolute inset-0 size-full object-cover transition-opacity duration-1000 ${playing ? "opacity-100" : "opacity-0"}`}>
+          <source src={`/signin/satin${tone}.webm`} type="video/webm" />
+          <source src={`/signin/satin${tone}.mp4`} type="video/mp4" />
+        </video>
+      )}
+    </div>
+  );
+}
+
+// The sign-in card is liquid glass: liquidGL (no dependencies, loaded only here) refracts the satin beneath it. Until
+// it runs, or where it can't, the card's own classes are frosted glass. It reads the backdrop once, so a new theme
+// makes a new lens.
+function useLiquidGlass(target: string, backdrop: string, theme: unknown) {
+  useEffect(() => {
+    let lens: unknown, gone = false;
+    import("liquid-gl").then(({ default: liquidGL }) => {
+      if (!gone) lens = liquidGL({ target, snapshot: backdrop, resolution: 2, refraction: 0.01, bevelDepth: 0.08,
+                                   bevelWidth: 0.15, frost: 0, shadow: false, specular: true, reveal: "none" });
+    }).catch(() => {});
+    return () => { gone = true; ([] as { destroy?: () => void }[]).concat(lens as never ?? []).forEach((l) => l?.destroy?.()); };
+  }, [target, backdrop, theme]);
 }
 
 export default function App() {

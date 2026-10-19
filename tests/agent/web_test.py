@@ -784,6 +784,23 @@ def test_validator_rejects_query_token(tmp_path):
     assert r.status_code == 401
 
 
+def test_transcribe_keeps_the_recording_format(monkeypatch):
+    """Firefox records webm: forwarded as voice.m4a it was named for a format it isn't."""
+    import httpx
+    from fastapi.testclient import TestClient
+    sent = []
+
+    async def post(self, url, **kw):
+        sent.append(kw["files"]["file"][0])
+        return httpx.Response(200, json={"text": "hi"})
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False)))
+    for upload in ("voice.webm", "voice.ogg", "audio.m4a", "voice.exe", "blob"):
+        assert client.post("/transcribe", files={"file": (upload, b"x" * 2000, "audio/webm")}).json() == {"text": "hi"}
+    assert sent == ["voice.webm", "voice.ogg", "voice.m4a", "voice.m4a", "voice.m4a"]
+
+
 def test_sync_agent_function():
     """Tests that sync generator functions work with web app."""
     print("\n--- Running test: test_sync_agent_function ---")
@@ -1535,6 +1552,41 @@ def test_web_builder_brand_and_explore():
 
     with pytest.raises(ValueError):
         Web().brand(logo="missing/logo.svg")
+
+
+def test_mobile_app_links_reach_the_page(tmp_path):
+    import cycls
+    from fastapi.testclient import TestClient
+
+    ios = "https://apps.apple.com/app/cycls/id6802279454"
+    play = "https://play.google.com/store/apps/details?id=com.cycls.app"
+
+    def page(**links):
+        @cycls.agent(web=cycls.Web().mobile_app(**links), volumes={"/workspace": cycls.Volume("test-chats")})
+        async def my_agent(context):
+            yield "hi"
+        my_agent.config.public_path = _seo_theme(tmp_path)
+        return TestClient(web(lambda context: iter(()), my_agent.config))
+
+    both = page(ios=ios, android=play)
+    html = both.get("/").text
+    assert f'"mobile_app": {{"ios": "{ios}", "android": "{play}"}}' in html
+    # each platform's own way first: Safari's banner, and Chrome's install sheet from the manifest
+    assert '<meta name="apple-itunes-app" content="app-id=6802279454" />' in html
+    assert '<link rel="manifest" href="/manifest.webmanifest" />' in html
+    m = both.get("/manifest.webmanifest")
+    assert m.headers["content-type"].startswith("application/manifest+json")
+    assert m.json()["prefer_related_applications"] is True
+    assert m.json()["related_applications"] == [{"platform": "play", "id": "com.cycls.app", "url": play}]
+    assert [i["sizes"] for i in m.json()["icons"]] == ["192x192", "512x512"]
+
+    ios_only = page(ios=ios)
+    assert "manifest" not in ios_only.get("/").text
+    assert ios_only.get("/manifest.webmanifest").status_code == 404
+
+    assert cycls.Web().mobile_app()._mobile_app is None
+    with pytest.raises(ValueError, match="store link"):
+        cycls.Web().mobile_app(android="com.cycls.app")
 
 
 # ---- Files: catalog cache, @-search, kind, sort ----
@@ -2713,6 +2765,65 @@ def test_a_finished_run_stamps_its_record_and_fires_the_hook(tmp_path):
     assert asyncio.run(go(boom=True)) == "failed"
     assert [f["status"] for f in fired] == ["done", "failed"]
     assert fired[0]["chat_id"] == "c1" and "ms" in fired[0]
+
+
+def test_a_crash_carries_one_reference_from_the_person_to_the_error_log(tmp_path, capsys):
+    """The reference the person sees is the key to the stack trace: on the callout,
+    the run record, the run log line and the hook — and a failed run says why."""
+    from cycls._agent.web.server import Run, _supervise, encoder
+    from cycls._app.db import workspace as mkws
+    from cycls._agent import state
+
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+    fired, shown = [], []
+
+    async def go():
+        async def boom():
+            yield {"type": "text", "text": "partial"}
+            raise RuntimeError("provider went away")
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=ws, chat_id="c1", user=None)
+        runs[key] = run
+
+        async def watch():
+            async for chunk in encoder(boom(), chat_id="c1", run=run):
+                if "error_id" in chunk: shown.append(json.loads(chunk[6:]))
+                yield chunk
+        run.task = asyncio.create_task(_supervise(run, watch(), runs, key, fired.append))
+        await asyncio.wait({run.task}, timeout=2)
+        return await state.get_run(ws, "c1")
+
+    row = asyncio.run(go())
+    ref = shown[0]["error_id"]
+    assert shown[0]["type"] == "callout" and f"`{ref}`" in shown[0]["callout"]
+    assert row["status"] == "failed" and row["reason"] == "error" and row["error_id"] == ref
+    assert fired[0]["error_id"] == ref
+    runs_logged = [json.loads(l) for l in capsys.readouterr().out.splitlines() if '"level": "run"' in l]
+    assert runs_logged[-1]["error_id"] == ref and runs_logged[-1]["reason"] == "error"
+
+
+def test_the_poll_says_why_a_run_did_not_finish(tmp_path):
+    import asyncio
+    from datetime import datetime, timezone
+    from cycls._agent import state
+    from cycls._app.db import workspace
+    from cycls._app.auth import User
+
+    client = _ws_routers_client(tmp_path)
+    ws = workspace(User(id="user_1", org_id="org_1"), tmp_path, base=f"file://{tmp_path}", ws="u-user_1")
+    now = datetime.now(timezone.utc).isoformat()
+    long_ago = "2026-01-01T00:00:00+00:00"
+    for chat, row in (("failed", {"status": "failed", "reason": "error", "error_id": "abc123", "heartbeat": now}),
+                      ("budget", {"status": "interrupted", "reason": "budget", "heartbeat": now}),
+                      ("lost", {"status": "running", "heartbeat": long_ago}),
+                      ("done", {"status": "done", "heartbeat": now})):
+        client.put(f"/chats/{chat}", json={"title": chat})
+        asyncio.run(state.put_run(ws, chat, row))
+    got = lambda chat: {k: v for k, v in client.get(f"/chats/{chat}").json().items() if k.startswith("run")}
+    assert got("failed") == {"run": "failed", "run_reason": "error", "run_error": "abc123"}
+    assert got("budget") == {"run": "interrupted", "run_reason": "budget", "run_error": None}
+    assert got("lost") == {"run": "interrupted", "run_reason": "lost", "run_error": None}   # the container died
+    assert got("done") == {"run": "done"}
 
 
 def test_a_hook_that_raises_never_reaches_the_run(tmp_path):

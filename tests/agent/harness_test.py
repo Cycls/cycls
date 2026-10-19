@@ -1147,6 +1147,7 @@ def test_a_builtin_follows_the_composer_switch_and_always_stops_for_the_destruct
     assert (risk("database", {"command": "get"}), risk("database", {"command": "put"}),
             risk("database", {"command": "delete"})) == (None, "write", "destructive")
     assert risk("edit", {"path": "a.md"}) == "write" and risk("read", {"path": "a.md"}) is None
+    assert (risk("skill", {"name": "brief"}), risk("skill", {"name": "brief", "action": "publish"})) == (None, "write")
 
     def card(cmd, ctx):
         return tools._gate("bash", {"command": cmd}, ctx, {"tool_name": "Bash", "step": cmd})

@@ -106,9 +106,10 @@ event filters by them):
 | `language` | `"en"` \| `"ar"` — updates on toggle |
 
 Identified users also carry **person properties** (via identify): `email`,
-`name`, `first_name`, `last_name`, `avatar_url`, `created_at`, `plan_name`,
-`plan_status`, `plan_amount`, `plan_period`, `plan_period_end`,
-`plan_canceled_at`, `is_paid`, `org_id`, `org_name`, `language`.
+`name`, `first_name`, `last_name`, `avatar_url`, `created_at`, `user_plan`, `user_is_paid`,
+`org_plan`, `org_is_paid`, `org_id`, `org_name`, `language`. The plans are the token's plan claim,
+which is the active workspace's: `u:…` sets the `user_` pair, `o:…` the `org_` pair, so each keeps
+its last value while the other is active. Paid is any plan but `u:free_user` / `o:free_org`.
 
 ---
 
@@ -131,11 +132,11 @@ Identified users also carry **person properties** (via identify): `email`,
 
 | event | fires when | key props / question |
 |---|---|---|
-| `turn_completed` | the run ends — from the stream when it carried the turn to the end, otherwise from the poll (`detached: true`, `status`) | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume |
+| `turn_completed` | the run ends — from the stream when it carried the turn to the end (`detached: false`), otherwise from the poll (`detached: true`, `status`). Once per run: the poll reports only a run it saw running or one whose stream just dropped | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume. **2026-09-21 → 2026-10-12, web:** the poll re-reported the last run on every refocus of a finished chat (detached `done` ran ~10 per chat), so turn counts in that window are ~2.7× high — use `detached = false` there |
 | `context_compacted` | the loop compacted the chat's context — its `ui` event `compacted` ([compaction.md](compaction.md)) | `tier` (1 old tool results stubbed, 2 summarized), `reason` (`trigger` / `cold` / `overflow`), `tokens` (the prompt that set it off), `ok` (false when the summary failed and old turns were dropped). The server logs the same as a `compaction` row, which also covers runs no client watched |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
-| `stream_broken` | the stream ended without the server's end marker | `reason`, `visibility`, `online`, `seconds_since_byte`, `run_seconds` — why connections drop, per user. The run itself is unaffected; the client polls |
+| `run_failed` | a run ended `failed` or `interrupted` — seen live (`via: stream`) or found by the poll after the stream dropped (`via: poll`); once per run | `status`, `reason` (`error`; `budget` — the 45-minute cap; `shutdown`; `lost` — its heartbeat stopped, the container died), `error_id` — the reference the person was shown, and the `error_id` of the server's `error` log row with the stack. The real error rate; a dropped connection is not one (below) |
 | `run_busy` | send refused with 409 — the chat already has a run | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
@@ -194,11 +195,13 @@ Identified users also carry **person properties** (via identify): `email`,
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
 | `confirm_approved` / `confirm_dismissed` / `connector_permissions_changed` | the confirm card was approved or waved off (+ `tool`); a tool's mode changed on a connector's page or from the card's Always allow (`scope` = `tool`, `group` or `card`, `to`) | approved ÷ `ui_action{confirm}` says whether *ask* is a safety net or a nag |
 | `client_crashed` | a render error was caught by the boundary (`message`) | should be zero; each one is a bug with its message attached |
-| `connector_connect_clicked` / `connector_dismissed` / `connector_disconnected` / `connector_directory_opened` / `connector_prompt_used` / `connector_toggled` / `connector_mentioned` | a connector was opened for connecting (`source` = `card` or `directory`; `kind` = `key` when a key was saved), declined from the card, or disconnected (+ `connector`); a connector was switched on or off (`level` = `org` for the admin's switch or `user` for the person's own, `to` = `on` or `off`); the directory was opened (`source` = `plus` or `settings`) or one of a connector's example prompts taken; an org admin switched one on or off (`to`, `level` = `org`); an @-pill was added (`source` = `picker` or `prompt`) | clicked ÷ `ui_action{connect}` is the connect rate; a high dismiss rate on one connector says its card isn't earning trust |
+| `connector_connect_clicked` / `connector_dismissed` / `connector_disconnected` / `connector_directory_opened` / `connector_prompt_used` / `connector_toggled` / `connector_mentioned` | a connector was opened for connecting (`source` = `card` or `directory`; `kind` = `key` when a key was saved), declined from the card, or disconnected (+ `connector`); a connector was switched on or off (`level` = `org` for the admin's switch or `user` for the person's own, `to` = `on` or `off`); the directory was opened (`source` = `plus` or `settings`, `tab` = `connectors` or `skills`) or one of a connector's example prompts taken; an org admin switched one on or off (`to`, `level` = `org`); an @-pill was added (`source` = `picker` or `prompt`) | clicked ÷ `ui_action{connect}` is the connect rate; a high dismiss rate on one connector says its card isn't earning trust |
+| `skill_uploaded` / `skill_written` / `skill_create_chat` | a skill was uploaded from the Skills tab (`scope`), written or edited in its form (`edit`), or a chat to create one was started | how teams bring their own skills, beside the agent's `skill` publishes in the logs |
 | `followup_accepted` | follow-up chip taken | `method` (click/arrow) |
 | `ask_toggled` / `followups_toggled` / `web_search_toggled` / `approve_mode_changed` | settings switches and the composer's Auto / Manual pill (`to`, `source`) | opt-out rate = annoyance meter; web search off rides the request as `disabled_tools` |
 | `notification_prompt_shown` / `notification_prompt_answered` | our push-permission card (docs/notes/engagement.md) | `placement` (`corner`, or `settings` from the Turn on row), `result` (`allowed` / `denied` / `dismissed`). When it shows is the `notification_prompt` flag's call |
 | `announcement_shown` / `announcement_clicked` / `announcement_dismissed` | a What's new modal or a corner tip from the `announcements` flag payload | `id`, `type` (`modal` / `corner`). Seen ids also land on the person as `announcement_seen/<id>` so a flag condition can exclude them |
+| `app_banner_shown` / `app_banner_clicked` / `app_banner_dismissed` | a phone visitor sees the glass "Cycls App" bar (`Web().mobile_app`), taps Open, or waves it off. iPhone Safari never shows the bar (Apple's own banner is there, and reports nothing), so these count every other browser | `platform` (`ios` / `android`); on `clicked`, `via` = `prompt` (Google's install sheet on Android Chrome) or `store` (the store link). Shown once per page load; clicked ÷ shown is how many the web hands to the app. Either answer rests it for two weeks |
 | *(PostHog-native)* `survey shown` / `survey sent` / `survey dismissed` | a PostHog survey answered in our strip above the composer | PostHog's own names and `$survey_*` props, sent to the PostHog plugin only — not on the pipe |
 
 ### Monetization
@@ -211,7 +214,15 @@ Identified users also carry **person properties** (via identify): `email`,
 | `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans |
 | `purchase` | Clerk confirms a **paid** checkout — a free plan is not revenue and never purchases | same, + `transaction_id` |
 | `plan_manage_clicked` | manage-subscription | |
-| `subscription_cancelled` / `subscription_resumed` | `canceledAt` appears or clears on the Clerk subscription while the page is open (the Manage drawer); baseline is the first loaded subscription, so an old cancellation never re-fires. Clerk webhooks would be the complete source — a cancellation from Clerk's hosted pages or support is invisible here | `plan_name`, `plan_period` |
+
+**A dropped connection is not an error.** A run outlives its request ([runs.md](runs.md)): a
+parked tab, a locked phone or a network switch ends the stream, the server finishes the run, and
+the poll catches up — a `turn_completed` with `detached: true`, not a failure. `stream_broken`
+(web 2026-09-15 → 2026-10-12) fired on every stream end without the end marker, so it counted
+Stop, requests that failed before a byte (already `message_failed` / `run_busy`) and background
+tabs; of its mid-run cases, 85% were runs that finished `done`. Retired on the web; the app
+still sends it until it moves to `run_failed`. Every run's outcome, watched or not, is the
+server's `run` log row — `status`, `reason`, `error_id`, `ms` — and that is the complete count.
 
 ### Voice, settings, misc
 
@@ -219,6 +230,10 @@ Identified users also carry **person properties** (via identify): `email`,
 `mic_transcription_failed` / `mic_permission_denied` · `settings_opened` ·
 `theme_changed` · `language_changed` · `explore_opened` /
 `explore_agent_clicked` · `source_opened` · `user_signed_out`
+
+`mic_permission_denied` is any mic that couldn't start; `reason` says which — `NotAllowedError`
+(refused), `NotFoundError` (no mic), `NotSupportedError` (no format it can record). The recording
+format is whichever the browser has: mp4 on Safari and Chrome, webm on Firefox.
 
 ---
 
@@ -230,14 +245,14 @@ of these today against the web's ~88 — the gap is surfaces it does not have
 yet (shares, trash, examples, surveys, announcements), not a second vocabulary.
 
 **Same name, same fact.** `message_sent` (with `origin` and `is_new_chat`),
-`turn_completed`, `stream_broken`, `run_busy`, `generation_stopped`,
+`turn_completed`, `run_busy`, `generation_stopped`,
 `ui_action`, `ask_answered` / `ask_dismissed`, `confirm_approved` /
 `confirm_dismissed`, `connector_*`, `artifact_completed`, `paywall_shown`,
 `purchase`, `client_crashed`, `notification_prompt_shown` / `_answered`,
 `file_uploaded` / `file_upload_failed`, `chat_deleted` / `chat_renamed` /
 `chat_favorited`, `theme_changed`, `language_changed`, `approve_mode_changed`,
 `mic_started` / `mic_permission_denied` / `mic_transcription_failed`,
-`user_signed_out`.
+`user_signed_out`. The app still sends `stream_broken`, retired on the web for `run_failed` (above).
 
 **Deviations, and why.**
 
@@ -702,7 +717,7 @@ ORDER BY 3 DESC
 A useful starter dashboard per agent:
 
 - Trend: DAU (unique `message_sent` senders)
-- Trend: messages per day, broken down by `is_paid` person property
+- Trend: messages per day, broken down by `user_is_paid` and `org_is_paid`
 - Funnel: `sign_up_start` → `sign_up` → `first_agent_use` → `artifact_completed` (first time for user)
 - Funnel: `plan_modal_opened` → `checkout_start` → `purchase`
 - Rates: `followup_accepted`/`ui_action{suggest}`, `ask_answered`/`ui_action{ask}`

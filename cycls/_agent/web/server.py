@@ -33,6 +33,7 @@ class Config(BaseModel):
     pk: Optional[str] = None
     one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
+    mobile_app: Optional[dict] = None # {ios, android} store links — the phone banner
     max_upload: int = 512             # per-file upload cap in MB
     workspaces: Optional[str] = None  # multi-workspace mode: None off, else team-create policy ("member"|"admin")
     volume: str = "/workspace"
@@ -114,6 +115,7 @@ class Run:
         self.queue = asyncio.Queue(QUEUE_MAX)
         self.detach, self.attached, self.reason = detach, True, None
         self.failed = False   # the encoder handles the error itself
+        self.error_id = None  # the reference the person was shown, and the key to the error log
         self.task = self.inner = None
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
@@ -124,7 +126,8 @@ class Run:
                 "started": self.started_at,
                 "heartbeat": datetime.now(timezone.utc).isoformat(),
                 "user": getattr(self.user, "id", None), "reason": self.reason,
-                "ms": int((time.monotonic() - self.started) * 1000)}
+                "ms": int((time.monotonic() - self.started) * 1000),
+                **({"error_id": self.error_id} if self.error_id else {})}
 
     def outcome(self):
         if self.inner.cancelled():
@@ -172,6 +175,7 @@ async def _supervise(run, stream, runs, key, on_run):
         try: await asyncio.wait_for(stream.aclose(), RUN_DRAIN)
         except BaseException: pass
         status = run.outcome() if run.inner.done() else "interrupted"
+        if status == "failed": run.reason = run.reason or "error"
         # Shielded: this is the only place that knows the run ended, and it runs
         # while the process may already be shutting down.
         await asyncio.shield(asyncio.ensure_future(_finish(run, status, on_run)))
@@ -205,8 +209,8 @@ async def _finish(run, status, on_run):
     """The status transition, and the only moment that knows a run ended. The
     hook is the deployment's — push, email, a webhook, nothing."""
     await _record(run, status)
-    log("run", user=run.user, chat_id=run.chat_id, status=status,
-        reason=run.reason, ms=int((time.monotonic() - run.started) * 1000))
+    log("run", user=run.user, chat_id=run.chat_id, status=status, reason=run.reason,
+        error_id=run.error_id, ms=int((time.monotonic() - run.started) * 1000))
     if on_run is None: return
     try:
         row = {**run.row(status), "chat_id": run.chat_id}
@@ -262,10 +266,10 @@ async def encoder(stream, *, chat_id=None, user=None, first=False, run=None):
         error_id = uuid.uuid4().hex[:8]
         log("error", user=user, chat_id=chat_id,
             error_id=error_id, message=str(e), stack=traceback.format_exc())
-        if run is not None: run.failed = True   # the callout would read as `done`
+        if run is not None: run.failed, run.error_id = True, error_id   # the callout would read as `done`
         yield sse({"type": "callout",
                    "callout": f"Something went wrong. Reference: `{error_id}`",
-                   "style": "error"})
+                   "style": "error", "error_id": error_id})
     yield "data: [DONE]\n\n"
 
 class Messages(list):
@@ -476,11 +480,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
         audio_bytes = await file.read()
+        # OpenAI reads the format off the name: Firefox records webm, Safari and Chrome m4a.
+        ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+        name = f"voice.{ext}" if ext in ("m4a", "mp4", "webm", "ogg", "mp3", "wav") else "voice.m4a"
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 "https://api.openai.com/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
-                files={"file": ("voice.m4a", audio_bytes, file.content_type or "audio/mp4")},
+                files={"file": (name, audio_bytes, file.content_type or "audio/mp4")},
                 data={"model": "gpt-4o-transcribe"},
                 timeout=30,
             )
@@ -541,6 +548,11 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                        (("accent", c.get("primary_dark") or c.get("primary")),
                         ("secondary", c.get("secondary_dark") or c.get("secondary"))) if v)
         _head += f"<style>:root{{{light}}}.dark{{{dark}}}</style>"
+    if m := re.search(r"/id(\d+)", (config.mobile_app or {}).get("ios", "")):
+        _head += f'<meta name="apple-itunes-app" content="app-id={m.group(1)}" />'   # Safari's own banner
+    _android = (config.mobile_app or {}).get("android", "")
+    if _play := re.search(r"[?&]id=([\w.]+)", _android):
+        _head += '<link rel="manifest" href="/manifest.webmanifest" />'   # Chrome's install sheet for the Play app
     if config.head:
         _head += config.head
 
@@ -624,6 +636,16 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             f'<url><loc>{request.base_url}</loc></url></urlset>',
             media_type="application/xml")
+
+    if _play:
+        @app.get("/manifest.webmanifest")
+        async def manifest():
+            icons = [{"src": f"/app-icon-{n}.png", "sizes": f"{n}x{n}", "type": "image/png"} for n in (192, 512)]
+            return FastAPIResponse(json.dumps({
+                "name": V["og_title"], "short_name": V["og_title"], "start_url": "/", "icons": icons,
+                "prefer_related_applications": True,
+                "related_applications": [{"platform": "play", "id": _play.group(1), "url": _android}],
+            }), media_type="application/manifest+json")
 
     if config.favicon and not config.favicon.startswith(("http", "data:")):
         @app.get("/favicon.svg")

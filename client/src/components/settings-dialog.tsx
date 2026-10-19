@@ -7,7 +7,8 @@ import { InlineInput, DropdownMenu } from "./files";
 import { LoadingBar } from "./loading-bar";
 import { PricingCards } from "./pricing-cards";
 import type { AccountInfo } from "./chat";
-import { WsIcon, type WorkspacesMenu } from "./workspace-switcher";
+import { WsIcon, nameIn, findIn, SEARCH_FROM, type WorkspacesMenu } from "./workspace-switcher";
+import { ALL, useAllPages } from "../hooks/use-all-pages";
 import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
@@ -41,12 +42,15 @@ const dateLocale = () => (getLang() === "ar" ? "ar" : "en");
 const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(dateLocale(), { month: "short", day: "numeric", year: "numeric" });
 const fmtDateTime = (d: string | Date) => new Date(d).toLocaleString(dateLocale(), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function SettingsDialog({ account, onClose, onOpenConnectors }: {
+export function SettingsDialog({ account, workspace, onClose, onOpenConnectors, onOpenSkills }: {
   account: AccountInfo;
+  workspace?: string | null;   // open on this workspace's page
   onClose: () => void;
   onOpenConnectors?: () => void;
+  onOpenSkills?: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("account");
+  const [tab, setTab] = useState<Tab>(workspace ? "workspaces" : "account");
+  useEffect(() => { if (workspace) setTab("workspaces"); }, [workspace]);
   const lang = useLang();
   const isAr = lang === "ar";
   const { membership } = useOrganization();
@@ -91,7 +95,7 @@ export function SettingsDialog({ account, onClose, onOpenConnectors }: {
         {/* Mobile header, context selector + pill tabs */}
         <div className="sm:hidden">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
-            <h2 className="text-lg font-semibold text-foreground">{t("settings")}</h2>
+            <h2 className="font-display text-lg font-semibold text-foreground">{t("settings")}</h2>
             <button onClick={onClose} className="cursor-pointer text-muted-foreground hover:text-foreground" aria-label="Close">
               <Icon name="x" className="size-5" />
             </button>
@@ -115,12 +119,12 @@ export function SettingsDialog({ account, onClose, onOpenConnectors }: {
           </aside>
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
-            <h2 className="mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
-            {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} />}
+            <h2 className="font-display mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
+            {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />}
             {tab === "account" && <AccountTab account={account} />}
             {tab === "organization" && <OrganizationTab account={account} isAdmin={isAdmin} />}
             {tab === "members" && <MembersTab isAdmin={isAdmin} />}
-            {tab === "workspaces" && account.workspaces && <WorkspacesTab ws={account.workspaces} />}
+            {tab === "workspaces" && account.workspaces && <WorkspacesTab key={workspace ?? ""} ws={account.workspaces} open={workspace} />}
             {tab === "billing" && <BillingTab account={account} />}
             {tab === "security" && <SecurityTab />}
             {tab === "help" && <HelpTab />}
@@ -612,7 +616,7 @@ function MemorySection() {
   );
 }
 
-function GeneralTab({ onOpenConnectors }: { onOpenConnectors?: () => void }) {
+function GeneralTab({ onOpenConnectors, onOpenSkills }: { onOpenConnectors?: () => void; onOpenSkills?: () => void }) {
   const [mode, setMode] = useState<ThemeMode>(getThemeMode());
   const [followUps, setFollowUps] = useState(followUpsEnabled);
   const [askOn, setAskOn] = useState(askEnabled);
@@ -623,6 +627,9 @@ function GeneralTab({ onOpenConnectors }: { onOpenConnectors?: () => void }) {
     <ListCard>
       {onOpenConnectors && (
         <Row label={t("connectors")} sub={t("connectorsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenConnectors} />
+      )}
+      {onOpenSkills && (
+        <Row label={t("skills")} sub={t("skillsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenSkills} />
       )}
       <Row
         label={t("appearance")}
@@ -983,14 +990,30 @@ function OrganizationTab({ account, isAdmin }: { account: AccountInfo; isAdmin: 
   );
 }
 
+// A search box at the head of a long list of people.
+function PeopleSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={t("searchPeople")} dir="auto"
+           className="w-full border-b border-border bg-transparent px-4 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
+  );
+}
+
+const PAGE = 20;   // rows a long list of people shows at a time
+
 // Standalone members tab: a real table with invitations alongside, like Clerk's.
 function MembersTab({ isAdmin }: { isAdmin: boolean }) {
-  const { organization, membership, memberships, invitations } = useOrganization({
-    memberships: { infinite: true },
-    invitations: { infinite: true },
-  });
+  const { organization, membership, memberships, invitations } = useOrganization({ memberships: ALL, invitations: ALL });
+  useAllPages(memberships, invitations);
   const toast = useToast();
   const [mTab, setMTab] = useState<"members" | "invitations">("members");
+  const [find, setFind] = useState("");
+  const [limit, setLimit] = useState(PAGE);
+  // Every page is loaded (names need it); the table shows 20 at a time, and the search covers them all.
+  const q = find.trim().toLowerCase();
+  const people = (memberships?.data ?? []).filter((m) => { const u = m.publicUserData;
+    return !q || `${u?.firstName ?? ""} ${u?.lastName ?? ""} ${u?.identifier ?? ""}`.toLowerCase().includes(q); });
+  const invites = (invitations?.data ?? []).filter((i) => !q || i.emailAddress.toLowerCase().includes(q));
+  const left = (mTab === "members" ? people : invites).length - limit;
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteText, setInviteText] = useState("");
   const [inviteRole, setInviteRole] = useState("org:member");
@@ -1031,7 +1054,7 @@ function MembersTab({ isAdmin }: { isAdmin: boolean }) {
             { value: "members" as const, label: `${t("members")} · ${memberships?.count ?? memberIds.length}` },
             { value: "invitations" as const, label: `${t("invitations")} · ${invitations?.count ?? inviteIds.length}` },
           ]}
-          onChange={setMTab}
+          onChange={(v) => { setMTab(v); setLimit(PAGE); }}
         />
         {isAdmin && (
           <button onClick={() => setInviteOpen((o) => !o)} className="cursor-pointer rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-85">
@@ -1067,11 +1090,15 @@ function MembersTab({ isAdmin }: { isAdmin: boolean }) {
         </div>
       )}
 
+      {(memberships?.count ?? 0) + (invitations?.count ?? 0) > SEARCH_FROM && (
+        <input value={find} onChange={(e) => { setFind(e.target.value); setLimit(PAGE); }} placeholder={t("searchPeople")} dir="auto"
+               className="my-3 w-full rounded-lg border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-foreground/30" />
+      )}
       {mTab === "members" ? (
         <TableList
           cols="grid-cols-[minmax(0,1fr)_7rem_7.5rem_5rem]"
           headers={[t("userCol"), t("joined"), t("role"), t("actions")]}
-          rows={(memberships?.data ?? []).map((m) => {
+          rows={people.slice(0, limit).map((m) => {
             const u = m.publicUserData;
             const name = [u?.firstName, u?.lastName].filter(Boolean).join(" ") || u?.identifier || "";
             const self = m.id === membership?.id;
@@ -1110,7 +1137,7 @@ function MembersTab({ isAdmin }: { isAdmin: boolean }) {
         <TableList
           cols="grid-cols-[minmax(0,1fr)_7rem_7.5rem_5rem]"
           headers={[t("email"), t("invited"), t("role"), t("actions")]}
-          rows={(invitations?.data ?? []).map((inv) => ({
+          rows={invites.slice(0, limit).map((inv) => ({
             key: inv.id,
             highlight: freshInvites.has(inv.id),
             cells: [
@@ -1122,15 +1149,22 @@ function MembersTab({ isAdmin }: { isAdmin: boolean }) {
           }))}
         />
       )}
+      {left > 0 && (
+        <button onClick={() => setLimit((l) => l + PAGE)} className="mt-2 w-full cursor-pointer rounded-lg py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground">
+          {t("showMore").replace("{n}", String(left))}
+        </button>
+      )}
     </div>
   );
 }
 
 // Workspace management only — switching happens in the navbar, not here.
 // Members are shown with their org profile (avatar, name, email).
-function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
-  const { memberships } = useOrganization({ memberships: { infinite: true } });
-  const [manageId, setManageId] = useState<string | null>(null);
+function WorkspacesTab({ ws, open }: { ws: WorkspacesMenu; open?: string | null }) {
+  const { memberships } = useOrganization({ memberships: ALL });
+  useAllPages(memberships);
+  const [manageId, setManageId] = useState<string | null>(open ?? null);
+  const [find, setFind] = useState("");
   const [members, setMembers] = useState<MemberInfo[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1139,7 +1173,7 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
   const freshWs = useNewIds(ws.items.map((w) => w.id));
   const freshMembers = useNewIds((members ?? []).map((m) => m.user_id));
   const managed = ws.items.find((w) => w.id === manageId) || null;
-  const memberName = (id: string) => ws.orgMembers.find((m) => m.id === id)?.name || id;
+  const memberName = (id: string) => nameIn(ws, id);
   const infoOf = (uid: string) => {
     const u = (memberships?.data ?? []).find((m) => m.publicUserData?.userId === uid)?.publicUserData;
     return {
@@ -1233,7 +1267,8 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
             <p className="py-2 text-sm text-muted-foreground">{t("everyoneInOrg")}</p>
             {members === null ? <LoadingBar /> : (
               <ListCard>
-                {ws.orgMembers.map((om) => {
+                {ws.orgMembers.length > SEARCH_FROM && <PeopleSearch value={find} onChange={setFind} />}
+                {findIn(ws.orgMembers, find).map((om) => {
                   const excluded = members.some((m) => m.user_id === om.id && m.role === "excluded");
                   return (
                     <Row
@@ -1288,7 +1323,8 @@ function WorkspacesTab({ ws }: { ws: WorkspacesMenu }) {
                 <>
                   <SectionLabel>{t("addMembers")}</SectionLabel>
                   <ListCard>
-                    {outside.map((om) => (
+                    {outside.length > SEARCH_FROM && <PeopleSearch value={find} onChange={setFind} />}
+                    {findIn(outside, find).map((om) => (
                       <Row key={om.id} label={userChip(om.id)} control={<span className="text-lg leading-none">+</span>}
                         onClick={() => ws.onSetMember(managed.id, om.id, "editor").then(refreshMembers)} />
                     ))}

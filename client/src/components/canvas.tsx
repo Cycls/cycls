@@ -581,6 +581,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
     return open.length === h.length ? h : open;
   })), []);
   const flushing = useRef(new Set<string>());
+  const seen = useRef<Record<string, number | undefined>>({});   // the reloadKey each tab last showed
   useEffect(() => {
     for (const f of draining) {
       if (flushing.current.has(f.path)) continue;
@@ -657,9 +658,13 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
         )}
       </div>
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {[file, ...draining.filter((d) => d.path !== file.path),
-          ...held.filter((h) => h.path !== file.path && !draining.some((d) => d.path === h.path))].map((f) => {
+        {/* Every open tab stays mounted, hidden, so going back to one finds it as it was. In path order,
+            never tab order: a reorder must not move a frame in the DOM, which reloads it. A closed tab
+            whose design or video editor still has to save stays too (draining) until it has. */}
+        {[...tabs, ...draining.filter((d) => !tabs.some((t) => t.path === d.path))].sort((a, b) => (a.path < b.path ? -1 : 1)).map((f) => {
           const on = f.path === file.path;
+          // A hidden tab catches up on the agent's writes when it is shown, not at every turn's end.
+          const reload = on ? (seen.current[f.path] = reloadKey) : (seen.current[f.path] ??= reloadKey);
           return (
             <div key={f.path} inert={!on} aria-hidden={on ? undefined : true}
                  className={on ? "flex min-h-0 flex-1 flex-col" : "pointer-events-none invisible absolute inset-0 flex flex-col"}>
@@ -680,7 +685,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   org={org}
                   onShareFile={onShareFile}
                   shareLinks={shareLinks}
-                  reloadKey={reloadKey}
+                  reloadKey={reload}
                   designEditorUrl={designEditorUrl}
                   designHost={designHost}
                   videoEditor={videoEditor}
@@ -927,7 +932,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
   );
 }
 
-// Keyed by path from the parent, so per-file state resets on tab switch.
+// Keyed by path from the parent: each open file keeps its own state.
 function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;

@@ -291,6 +291,7 @@ web = (
 | `.head(html)` | Append raw HTML to `<head>` for site verification or custom meta. Repeatable |
 | `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
 | `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
+| `.mobile_app(ios=, android=)` | Store links for the Cycls app. Each browser's own way comes first: the App Store link adds Apple's `apple-itunes-app` tag, so Safari shows its banner, and the Play link adds a web manifest naming the app, so Open on Android Chrome brings up Google's install sheet. Everywhere else (Chrome on iPhone, in-app browsers) a glass bar under the header, as wide as the composer, links to the store. Dismissing it or tapping Open rests it for two weeks. Off when unset |
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.analytics(bool)` | Enable usage metrics |
 | `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md) |
@@ -628,9 +629,9 @@ description: Generate branded PDF reports from CSV data. Use when the user asks 
 # Full instructions... (up to 48KB loaded on demand)
 ```
 
-`name` is lowercase-hyphen (falls back to the folder name); `description` decides when the model reaches for it, so say *when to use* (max 1KB). Support files (scripts, templates, reference docs) live beside `SKILL.md`.
+`name` is lowercase-hyphen, at most 64 characters (falls back to the folder name); `description` decides when the model reaches for it, so say *when to use* (max 1KB). Support files (scripts, templates, reference docs) live beside `SKILL.md`.
 
-Skills come from two places:
+Skills come from four places:
 
 - **Shipped with the agent**: put a `skills/` dir in your project, include it in the image, and register it:
 
@@ -641,7 +642,11 @@ Skills come from two places:
 
   Shipped skills are read-only; each mounts at `/skills/<name>/` inside the bash sandbox, so the model runs `python /skills/pdf-reports/scripts/render.py` and scripts read their own templates from there. They version with your deploys.
 
-- **User-created**: any `skills/<name>/SKILL.md` in a user's workspace joins the catalog automatically (rescanned every ~30s) and wins name collisions with shipped skills.
+- **The org's own**: its admins publish them for every workspace in the org.
+- **A team workspace's own**: its owners and admins publish them for every member.
+- **A person's own**: they publish them for themselves, and they follow them into every workspace.
+
+  The agent writes a skill in `skill-drafts/<name>/` and publishes it with the `skill` tool (`action: publish`, `scope: org`, `workspace` or `me`), which keeps it as a new version in the workspace's `.skills` slot (hidden from bash and the file tools). A person's own wins a name collision over the workspace's, which wins over the org's, which wins over a shipped one. An org admin can switch a skill off for everyone, and each person for themselves (docs/notes/skills.md). Every skill mounts at `/skills/<name>/`, wherever it is kept. Plain `skills/` folders in a workspace no longer load.
 
 ---
 

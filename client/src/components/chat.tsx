@@ -42,6 +42,7 @@ import { ExamplesGallery } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
 import { Surfaces } from "./surfaces";
 import { SurveyStrip, useSurvey } from "./survey-strip";
+import { AppBanner } from "./app-banner";
 import type { DeckOp } from "./deck-view";
 
 export interface PassAgent {
@@ -200,7 +201,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   const [confirm, setConfirm] = useState<{ tool: string; key: string; connector?: string; label: string; args: unknown } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
-  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string } | null>(null);
+  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
   // @-pills: connectors this message is about. They ride the request and clear on send.
   const [pills, setPills] = useState<Connector[]>([]);
   const pillsRef = useRef<Connector[]>([]);
@@ -217,10 +218,10 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (account) api("/connectors", { silent: true }).then((r) => r.json()).then(setConnectors).catch(() => setConnectors([]));
   }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadConnectors(); }, [loadConnectors]);
-  const openConnectors = (source: string, name?: string) => {
-    track("connector_directory_opened", { source });
+  const openConnectors = (source: string, name?: string, tab?: "skills") => {
+    track("connector_directory_opened", { source, tab: tab ?? "connectors" });
     loadConnectors();
-    setConnectorsOpen({ name });
+    setConnectorsOpen({ name, tab });
   };
   useEffect(() => {   // the callback tab reports success: the card goes away, the directory refreshes
     const done = (e: MessageEvent) => {
@@ -360,11 +361,14 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
   const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
+  // A workspace is managed in Settings: the navbar's members button opens it there, on that workspace.
+  const [settingsWs, setSettingsWs] = useState<string | null>(null);
   const setSettingsOpen = useCallback((v: boolean) => {
     _setSettingsOpen(v);
     if (v) sessionStorage.setItem("cycls_settings", "1");
-    else sessionStorage.removeItem("cycls_settings");
+    else { sessionStorage.removeItem("cycls_settings"); setSettingsWs(null); }
   }, []);
+  const wsNav = workspaces && { ...workspaces, onManage: (id: string) => { setSettingsWs(id); setSettingsOpen(true); } };
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[]>([]);
@@ -464,7 +468,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       textareaRef.current?.blur();
     }
   }, []);
-  const { listening, transcribing, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
+  const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
 
   // Reset sidebar data when org changes
   useEffect(() => {
@@ -896,12 +900,13 @@ export function Chat({ chat, onShare, files, account, config }: {
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
-    listening, transcribing, startMic, stopMic, cancelMic, voice,
+    listening, transcribing, micAnalyser, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
     connectors: connectors?.filter((c) => c.connected),
     approveSwitch: !!connectors?.length,
     onOpenConnectors: account && connectors?.length ? () => openConnectors("plus") : undefined,
+    onOpenSkills: account ? () => openConnectors("plus", undefined, "skills") : undefined,
     onToggleConnector: (c: Connector, on: boolean) => {
       setConnectors((prev) => prev?.map((x) => (x.name === c.name ? { ...x, on } : x)) ?? prev);
       track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
@@ -925,8 +930,10 @@ export function Chat({ chat, onShare, files, account, config }: {
           items={connectors}
           reload={loadConnectors}
           initial={connectorsOpen.name}
+          initialTab={connectorsOpen.tab}
           onClose={() => setConnectorsOpen(null)}
           onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
+          onAsk={(text) => { setInput(text); textareaRef.current?.focus(); }}
         />
       )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -952,20 +959,20 @@ export function Chat({ chat, onShare, files, account, config }: {
               {config?.explore_enabled ? (
                 <button
                   onClick={openExplore}
-                  className="flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
+                  className="font-display flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
                 >
                   {meta?.name || name}
                   <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
                 </button>
               ) : (
-                <span className="text-foreground font-medium capitalize">{meta?.name || name}</span>
+                <span className="font-display text-foreground font-medium capitalize">{meta?.name || name}</span>
               )}
             </div>
           )}
           </div>
           <div className="flex items-center gap-1">
             {/* Desktop only; on a phone it stays a row inside the user menu */}
-            {user && workspaces && isDesktop && <WorkspaceMenu workspaces={workspaces} />}
+            {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
             {messages.length > 0 && (
               <>
                 <button
@@ -1030,10 +1037,11 @@ export function Chat({ chat, onShare, files, account, config }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : workspaces} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} /></div>}
           </div>
         </div>
       </header>
+      <AppBanner />
       <Surfaces config={config ?? null} ready={turnsDone > 0} active={!isStreaming && !ask && !hushed} />
 
       {/* Explore agents dropdown */}
@@ -1301,8 +1309,9 @@ export function Chat({ chat, onShare, files, account, config }: {
         </Popover>
       )}
       {settingsOpen && account && (
-        <SettingsDialog account={account} onClose={() => setSettingsOpen(false)}
-                        onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined} />
+        <SettingsDialog account={account} workspace={settingsWs} onClose={() => setSettingsOpen(false)}
+                        onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined}
+                        onOpenSkills={() => { setSettingsOpen(false); openConnectors("settings", undefined, "skills"); }} />
       )}
       </div>
       <div className={cn(
@@ -1925,7 +1934,7 @@ export function EmptyHero({ meta, absolute }: {
       ) : (
         <img src={meta.logo} alt="" className="size-16 rounded-xl object-cover border border-border" />
       ))}
-      <h2 className="text-2xl font-semibold text-foreground">{meta.name}</h2>
+      <h2 className="font-display text-2xl font-semibold text-foreground">{meta.name}</h2>
       {meta.description && <p className="text-base text-muted-foreground max-w-lg">{meta.description}</p>}
     </motion.div>
   );

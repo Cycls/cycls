@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
@@ -184,6 +184,7 @@ export default function MdEditor({ value, onChange, placeholder, resolveMedia, u
       <HorizontalRulePlugin />
       <Lists />
       <SlashMenu />
+      <TableMenu />
       <MediaPlugin upload={upload} />
       {anchor && <DragHandle anchor={anchor} />}
       <MarkdownShortcutPlugin transformers={MARKDOWN} />
@@ -307,6 +308,82 @@ const SLASH: SlashOption[] = [
   new SlashOption("hr", (e) => e.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined)),
 ];
 
+// The "/" menu sits under the "/" and what's typed after it, as Notion's does: from its start rightward, and in
+// right-to-left text from its end leftward, as the line runs. It is measured from the text itself whenever the query,
+// the scroll or the window changes (an Arabic letter flips the line under it), kept inside the editor, and put above
+// the line when there is no room below.
+function SlashList({ query, children }: { query: string; children: React.ReactNode }) {
+  const [editor] = useLexicalComposerContext();
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const place = () => {
+      const el = ref.current, root = editor.getRootElement(), sel = window.getSelection();
+      if (!el || !root || !sel?.rangeCount) return;
+      const caret = sel.getRangeAt(0), node = caret.startContainer, range = caret.cloneRange();
+      range.setStart(node, Math.max(0, caret.startOffset - query.length - 1));
+      const at = range.getBoundingClientRect(), m = el.getBoundingClientRect(), r = root.getBoundingClientRect();
+      const rtl = getComputedStyle(node instanceof Element ? node : node.parentElement ?? root).direction === "rtl";
+      const x = Math.max(r.left, Math.min(rtl ? at.right - m.width : at.left, r.right - m.width));
+      const up = at.bottom + 6 + m.height > window.innerHeight - 8 && at.top - 6 - m.height > 8;
+      el.style.left = `${x}px`;
+      el.style.top = `${up ? at.top - 6 - m.height : at.bottom + 6}px`;
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  });
+  return <div ref={ref} className="fixed z-[100] max-h-72 w-56 overflow-y-auto rounded-xl border border-border bg-background p-1 shadow-xl">{children}</div>;
+}
+
+// What can be done to a table, in the toolbar and on a right-click in one of its cells.
+const TABLE_OPS: [string, () => void][] = [
+  ["rowAdd", () => { $insertTableRowAtSelection(true); }],
+  ["colAdd", () => { $insertTableColumnAtSelection(true); }],
+  ["rowDel", () => { $deleteTableRowAtSelection(); }],
+  ["colDel", () => { $deleteTableColumnAtSelection(); }],
+  ["tableDel", () => { const at = $getSelection()?.getNodes()[0]; (at && $findMatchingParent(at, $isTableNode))?.remove(); }],
+];
+
+function TableMenu() {
+  const [editor] = useLexicalComposerContext();
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const open = (e: MouseEvent) => {
+      const cell = (e.target as HTMLElement).closest("td, th");
+      if (!cell) return;
+      e.preventDefault();
+      editor.update(() => {   // what the menu does applies to the cell clicked
+        const node = $getNearestNodeFromDOMNode(cell), sel = $getSelection();
+        const inside = sel?.getNodes().some((n) => $findMatchingParent(n, $isTableCellNode) === node);
+        if ($isTableCellNode(node) && !inside) node.selectEnd();
+      });
+      setAt({ x: e.clientX, y: e.clientY });
+    };
+    return editor.registerRootListener((root, prev) => {
+      prev?.removeEventListener("contextmenu", open);
+      root?.addEventListener("contextmenu", open);
+    });
+  }, [editor]);
+  if (!at) return null;
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[100]" onMouseDown={() => setAt(null)} onContextMenu={(e) => { e.preventDefault(); setAt(null); }} />
+      <div className="fixed z-[101] w-48 rounded-xl border border-border bg-background p-1 shadow-xl"
+           style={{ left: Math.max(8, Math.min(at.x, window.innerWidth - 200)), top: Math.max(8, Math.min(at.y, window.innerHeight - 230)) }}>
+        {TABLE_OPS.map(([glyph, run]) => (
+          <button key={glyph} onClick={() => { editor.update(run); setAt(null); }}
+                  className={cn("flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-start text-sm hover:bg-secondary",
+                    glyph === "tableDel" ? "text-red-500" : "text-foreground")}>
+            <span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">{GLYPH[glyph]}</span>{tk(glyph)}
+          </button>
+        ))}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function SlashMenu() {
   const [editor] = useLexicalComposerContext();
   const [query, setQuery] = useState<string | null>(null);
@@ -323,7 +400,7 @@ function SlashMenu() {
       onSelectOption={(option, node, close) => editor.update(() => { node?.remove(); option.run(editor); close(); })}
       menuRenderFn={(anchorRef, { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex }) =>
         anchorRef.current && options.length ? createPortal(
-          <div className="z-50 mt-6 max-h-72 w-56 overflow-y-auto rounded-xl border border-border bg-background p-1 shadow-xl">
+          <SlashList query={query ?? ""}>
             {options.map((o, i) => (
               <button
                 key={o.key}
@@ -337,8 +414,8 @@ function SlashMenu() {
                 {tk(o.glyph)}
               </button>
             ))}
-          </div>,
-          anchorRef.current,
+          </SlashList>,
+          document.body,
         ) : null}
     />
   );
@@ -375,6 +452,7 @@ const GLYPH: Record<string, React.ReactNode> = {
   colAdd: svg(<><rect x="3" y="4" width="11" height="16" rx="2" /><path d="M17 12h4M19 10v4" /></>),
   rowDel: svg(<><rect x="3" y="4" width="18" height="10" rx="2" /><path d="M10 19h4" /></>),
   colDel: svg(<><rect x="3" y="4" width="11" height="16" rx="2" /><path d="M17 12h4" /></>),
+  tableDel: svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M9 4v16M14 13l4 4m0-4l-4 4" /></>),
 };
 
 function Btn({ glyph, pressed, disabled, onClick }: { glyph: string; pressed?: boolean; disabled?: boolean; onClick: () => void }) {
@@ -481,10 +559,7 @@ function Toolbar() {
       {at.table && (
         <>
           <Sep />
-          <Btn glyph="rowAdd" onClick={() => editor.update(() => { $insertTableRowAtSelection(true); })} />
-          <Btn glyph="colAdd" onClick={() => editor.update(() => { $insertTableColumnAtSelection(true); })} />
-          <Btn glyph="rowDel" onClick={() => editor.update(() => { $deleteTableRowAtSelection(); })} />
-          <Btn glyph="colDel" onClick={() => editor.update(() => { $deleteTableColumnAtSelection(); })} />
+          {TABLE_OPS.map(([glyph, run]) => <Btn key={glyph} glyph={glyph} onClick={() => editor.update(run)} />)}
         </>
       )}
       <span className="ms-auto hidden shrink-0 ps-3 text-[11px] text-muted-foreground/70 sm:block">{tk("slashHint")}</span>
