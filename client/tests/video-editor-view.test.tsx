@@ -117,6 +117,19 @@ describe("VideoEditorView", () => {
     expect(screen.queryByTestId("video-conflict")).toBeNull();
   });
 
+  it("a save refused for access says so, not try again (taken off the team while editing)", async () => {
+    const { frame, post } = await mount({ writeFile: async () => {
+      throw Object.assign(new Error("HTTP 404"), { status: 404 });
+    } });
+    const load = await ready(frame, post);
+    fromEditor(frame, "saved", { doc: load.doc, id: 1, composition: "<html>mine</html>" });
+    await flush();
+    await flush();
+    expect(screen.getByText("Not saved — you no longer have access to this file")).toBeTruthy();
+    expect(screen.queryByTestId("video-conflict")).toBeNull();
+    expect(sent(post, "written").at(-1)).toMatchObject({ ok: false });
+  });
+
   it("an agent edit flushes what is unsaved, then loads the new file", async () => {
     const a = api();
     const { frame, post } = await mount({ api: a });

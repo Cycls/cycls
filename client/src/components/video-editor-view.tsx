@@ -71,7 +71,14 @@ export function canEditVideo(): boolean {
   return window.innerWidth >= 900 && window.matchMedia?.("(pointer: fine)").matches !== false;
 }
 
-type Status = "opening" | "ready" | "saving" | "saved" | "saveerror" | "error";
+type Status = "opening" | "ready" | "saving" | "saved" | "saveerror" | "denied" | "error";
+
+// A save the workspace refused because the person may no longer write there (taken off a team
+// workspace while the editor was open, or the file gone): trying again will not help.
+const failed = (err: unknown): Status => {
+  const code = (err as { status?: number }).status;
+  return code === 403 || code === 404 ? "denied" : "saveerror";
+};
 type Pending = { doc: string; id: unknown; composition?: string; words?: { path: string; text: string }[] };
 
 export function VideoEditorView({ path, name, api, writeFile, onClose, onRendered, aside = false, onAside, onBack }: {
@@ -187,7 +194,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
           latest.current.onBack?.();                       // the person decides, so they must see it
           track("video_save_conflict", { choice: "shown" });
         } else {
-          setStatus("saveerror");
+          setStatus(failed(err));
         }
       }
     });
@@ -200,7 +207,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
     track("video_save_conflict", { choice });
     if (!c) return;
     if (choice === "mine") {
-      try { await write(c.pending, true); setStatus("saved"); } catch { setStatus("saveerror"); }
+      try { await write(c.pending, true); setStatus("saved"); } catch (err) { setStatus(failed(err)); }
     } else {
       await load();
     }
@@ -331,7 +338,8 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
   }, []);
 
   const label = status === "opening" ? t("videoEditorOpening") : status === "saving" ? t("videoEditorSaving")
-    : status === "saved" ? t("videoEditorSaved") : status === "saveerror" ? t("videoEditorSaveFailed") : "";
+    : status === "saved" ? t("videoEditorSaved") : status === "saveerror" ? t("videoEditorSaveFailed")
+    : status === "denied" ? t("videoEditorSaveDenied") : "";
 
   // Aside, the editor is see-through, not `visibility: hidden`: Chrome stops drawing a cross-origin
   // frame hidden that way, so an agent's change loaded meanwhile never got its preview (the editor
@@ -343,7 +351,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
         <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
           <span className="truncate text-sm font-medium text-foreground" dir="auto">{name}</span>
           <div className="flex items-center gap-3">
-            {label && <span className={cn("text-xs", status === "saveerror" ? "text-destructive" : "text-muted-foreground")}>{label}</span>}
+            {label && <span className={cn("text-xs", status === "saveerror" || status === "denied" ? "text-destructive" : "text-muted-foreground")}>{label}</span>}
             <button type="button" onClick={() => void done()} data-testid="video-editor-done"
                     className="rounded-md bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90 cursor-pointer">
               {t("videoEditorDone")}
