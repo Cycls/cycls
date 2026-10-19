@@ -123,6 +123,12 @@ found one window of Emirati speech dropped in silence, fixed in the service. Wha
 `unheard` spans, and the footage reply names them ("Nothing could be made out at 18.6–22.5 s …", `report.footage_text`), so
 captions over that stretch are not taken as complete.
 
+In production since 2026-10-19: the service from cycls-video `d9e5ff3`, then super-dev revision `super-dev-00083-snr` on SDK
+`8447f909` (production's `f0bb2dcd` plus `fe4e5dde`, `3d9fd3c1`, `91948fee`, the client rebuilt; the versions change
+`f849d982` is not in it — it waits for super-dev to move to this branch). A real chat on the Cycls organisation's Personal
+workspace: a clip of a person reading attached, nothing said of footage; `footage` came first, then write, edit, render;
+3.1 minutes, $0.23; the MP4 played with its sound and word-lit captions.
+
 In production since 2026-10-13: the service from cycls-video `acb8a16`, then super-dev on SDK `57357c8e`
 (production's `12cd826e` plus the four footage commits, from a deploy tree that holds nothing else).
 Checked through the real agent on 2026-10-14 (the Cycls organisation, Personal workspace): a 10.5 s
