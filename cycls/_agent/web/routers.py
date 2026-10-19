@@ -19,7 +19,7 @@ from cycls._agent.web import office
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt
-from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
+from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
 
@@ -768,7 +768,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
+    async def put_file(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         """Streams the raw body to a .part temp, then renames. No File(...)
         param — that reads the whole body before auth runs, so uploads longer
         than the JWT lifetime 401 at the end. Multipart kept for old clients.
@@ -825,7 +825,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             force = request.query_params.get("force") is not None
             try:
                 reply["version"] = await write_fig(ws.root, rel, data, base=request.query_params.get("base") or None,
-                                                   by="user", reason="keep" if force else "save", force=force)
+                                                   by="user", reason="keep" if force else "save", force=force,
+                                                   who=person(user, ws))
             except Stale as e:
                 what = "video" if video_file else "file" if file_path.name.endswith(".words.json") else "design"
                 return JSONResponse(status_code=412, content={

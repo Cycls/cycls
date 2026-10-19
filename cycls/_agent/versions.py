@@ -47,8 +47,10 @@ def _sweep(d, entries):
     return keep
 
 
-def snapshot(root, rel, data, *, by, reason, intent=None, always=False):
-    """Keep `data`, what `rel` held before a write, as a version → its id; None for an autosave within GAP."""
+def snapshot(root, rel, data, *, by, reason, intent=None, always=False, who=None):
+    """Keep `data`, what `rel` held before a write, as a version → its id; None for an autosave within GAP.
+    `who` ({id, name?}) is the person whose write replaced it, so a team workspace's history can say
+    whose change it was (`by` is only "user" or "agent")."""
     key = (str(Path(root)), rel)
     now = time.time()
     if not always and now - _last.get(key, 0) < GAP:
@@ -63,13 +65,21 @@ def snapshot(root, rel, data, *, by, reason, intent=None, always=False):
     entry = {"id": vid, "at": datetime.now(timezone.utc).isoformat(), "by": by, "reason": reason, "size": len(data)}
     if intent:
         entry["intent"] = str(intent)[:120]
+    if who and who.get("id"):
+        entry["who"] = {"id": str(who["id"])[:120], **({"name": str(who["name"])[:80]} if who.get("name") else {})}
     _write_index(d, _sweep(d, [*_read_index(d), entry]))
     return vid
 
 
-def listing(root, rel):
-    """The versions of `rel`, newest first."""
-    return list(reversed(_read_index(_dir(root, rel))))
+def listing(root, rel, me=None):
+    """The versions of `rel`, newest first. With `me` (the asking person's id), each one a person's
+    write replaced says whether that was them (`mine`)."""
+    entries = list(reversed(_read_index(_dir(root, rel))))
+    if me:
+        for e in entries:
+            if e.get("who"):
+                e["mine"] = e["who"].get("id") == me
+    return entries
 
 
 def read(root, rel, vid):

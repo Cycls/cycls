@@ -16,6 +16,13 @@ function whatReplacedIt(v: DesignVersion): string {
   return t("versionSaved");
 }
 
+// Who made the change: the agent, you, or — in a team workspace — the teammate the server names.
+function byWhom(v: DesignVersion): string {
+  if (v.by === "agent") return t("versionByAgent");
+  if (v.who && v.mine === false) return v.who.name || t("versionByTeammate");
+  return t("versionByYou");
+}
+
 export function VersionHistory({ path, host, onClose }: { path: string; host: DesignHost; onClose: () => void }) {
   const [rows, setRows] = useState<DesignVersion[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -99,7 +106,7 @@ export function VersionHistory({ path, host, onClose }: { path: string; host: De
           {rows?.map((v) => (
             <div key={v.id} className="rounded-lg px-3 py-2 hover:bg-secondary/60" data-testid="design-version">
               <div className="text-xs font-medium text-foreground" dir="auto">{whatReplacedIt(v)}</div>
-              <div className="text-[11px] text-muted-foreground">{ago(v.at)} · {v.by === "agent" ? t("versionByAgent") : t("versionByYou")}</div>
+              <div className="text-[11px] text-muted-foreground" dir="auto">{ago(v.at)} · {byWhom(v)}</div>
               {shown === v.id && (
                 pictures[v.id] === "failed"
                   ? <div className="mt-1.5 text-[11px] text-muted-foreground">{t("versionPreviewFailed")}</div>

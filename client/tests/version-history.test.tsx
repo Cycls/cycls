@@ -49,6 +49,22 @@ describe("Version history", () => {
     expect(row).not.toContain("agent");
   });
 
+  it("in a team workspace a teammate's change is theirs, not yours", async () => {
+    const h = host();
+    h.listVersions = vi.fn(async () => [
+      { id: "20261019T120000-dddddd", at: minutesAgo(2), by: "user", reason: "save", size: 9, who: { id: "user_bob", name: "Bob" }, mine: false },
+      { id: "20261019T110000-eeeeee", at: minutesAgo(40), by: "user", reason: "save", size: 9, who: { id: "user_carl" }, mine: false },
+      { id: "20261019T100000-ffffff", at: minutesAgo(80), by: "user", reason: "save", size: 9, who: { id: "user_alice", name: "Alice" }, mine: true },
+    ]) as never;
+    render(<VersionHistory path="designs/launch.fig" host={h} onClose={() => {}} />);
+    await flush();
+    const rows = screen.getAllByTestId("design-version").map((r) => r.textContent ?? "");
+    expect(rows[0]).toContain("Bob");
+    expect(rows[1]).toContain("A teammate");
+    expect(rows[2]).toContain("You");
+    expect(rows[2]).not.toContain("Alice");
+  });
+
   it("Restore brings a version back and closes", async () => {
     const h = host();
     const onClose = vi.fn();

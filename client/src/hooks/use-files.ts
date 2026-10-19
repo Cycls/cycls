@@ -39,7 +39,9 @@ export function encPath(path: string): string {
 // brand/brand.yaml, as the design editor takes it.
 export type BrandKit = { colors?: Record<string, string>; fonts?: { heading?: string | null; body?: string | null } };
 // A design's earlier version (cycls/_agent/versions.py).
-export type DesignVersion = { id: string; at: string; by: string; reason: string; intent?: string; size: number };
+// `who`: the person whose write replaced it (a team workspace's history says whose change); `mine`: was that the viewer.
+export type DesignVersion = { id: string; at: string; by: string; reason: string; intent?: string; size: number;
+  who?: { id: string; name?: string }; mine?: boolean };
 // `base`: the version a design's save started from.
 export type WriteOpts = { silent?: boolean; base?: string; force?: boolean };
 export type WriteFile = (path: string, data: BlobPart, opts?: boolean | WriteOpts) => Promise<{ version?: string } | void>;

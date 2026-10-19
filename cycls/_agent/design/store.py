@@ -38,22 +38,23 @@ def read_fig(root, rel):
     return data, version_of(data)
 
 
-async def write_fig(root, rel, data, *, base=None, by="user", reason="save", intent=None, force=False):
+async def write_fig(root, rel, data, *, base=None, by="user", reason="save", intent=None, force=False, who=None):
     """Write `data` to design `rel` → its new version. Raises Stale when `base` is no longer
-    current, unless `force` ("keep mine"); no `base`: last write wins."""
+    current, unless `force` ("keep mine"); no `base`: last write wins. `who` ({id, name?}) is the
+    person writing, kept on the version it replaces."""
     root = Path(root)
     async with _lock(root / rel):
-        return await asyncio.to_thread(_write, root, rel, bytes(data), base, by, reason, intent, force)
+        return await asyncio.to_thread(_write, root, rel, bytes(data), base, by, reason, intent, force, who)
 
 
-def _write(root, rel, data, base, by, reason, intent, force):
+def _write(root, rel, data, base, by, reason, intent, force, who=None):
     path = root / rel
     current, now = read_fig(root, rel)
     if base is not None and not force and base != now:
         raise Stale(now)
     if current is not None and current != data:
         versions.snapshot(root, rel, current, by=by, reason=reason, intent=intent,
-                          always=force or reason != "save")
+                          always=force or reason != "save", who=who)
     scratch = root / ".tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     tmp = scratch / f"{uuid.uuid4().hex}.part"

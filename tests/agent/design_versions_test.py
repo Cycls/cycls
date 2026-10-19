@@ -99,6 +99,35 @@ def test_a_design_is_served_with_its_version_and_saved_against_it(tmp_path):
     assert client.put("/files/designs/a.fig", content=b"FOUR").status_code == 200   # no base: as before
 
 
+def test_a_version_says_whose_change_replaced_it_and_whether_it_was_yours(tmp_path):
+    """Two people in one team workspace (the two-person video walk, 2026-10-19): the history said
+    "by you" of every person's save. Each version now keeps who wrote over it."""
+    from fastapi import Depends, FastAPI, Request
+    from fastapi.testclient import TestClient
+    from cycls._app.auth import User
+    from cycls._agent import state
+    people = {"alice": User(id="user_alice", org_id="org_1", org_role="admin", name="Alice"),
+              "bob": User(id="user_bob", org_id="org_1", org_role="member", name="Bob")}
+    stub = SimpleNamespace(prod=False, _auth_provider=None, config=SimpleNamespace(workspaces="member", max_upload=512))
+    app = FastAPI()
+    from cycls._agent.web.routers import install_routers
+
+    def who(request: Request):
+        return people[request.headers["x-who"]]
+    install_routers(stub, app, Depends(who), tmp_path, f"file://{tmp_path}")
+    client = TestClient(app)
+    state._provisioned.discard("org_1")
+    team = client.post("/workspaces", json={"name": "Team"}, headers={"x-who": "alice"}).json()["id"]
+    client.put(f"/workspaces/{team}/members/user_bob", json={"role": "editor"}, headers={"x-who": "alice"})
+    h = lambda who: {"x-who": who, "x-workspace": team}   # noqa: E731
+    client.put("/files/designs/a.fig", content=b"ONE", headers=h("alice"))
+    client.put("/files/designs/a.fig?force=1", content=b"TWO", headers=h("bob"))       # Bob writes over Alice's
+    [as_alice] = client.get("/versions/designs/a.fig", headers=h("alice")).json()["versions"]
+    [as_bob] = client.get("/versions/designs/a.fig", headers=h("bob")).json()["versions"]
+    assert as_alice["who"] == {"id": "user_bob", "name": "Bob"} and as_alice["mine"] is False
+    assert as_bob["mine"] is True
+
+
 def test_versions_list_fetch_and_restore(tmp_path):
     client, root = _client(tmp_path)
     _put(root, "designs/a.fig", b"FIRST")

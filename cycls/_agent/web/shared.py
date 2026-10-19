@@ -12,6 +12,17 @@ from cycls._agent.design import refresh as design_refresh
 _NO_CACHE = {"Cache-Control": "no-cache"}
 
 
+# ---- Who a write is by ----
+
+def person(user, ws):
+    """The person behind a request, as a version keeps them: {id, name?} (the subject's person; the
+    name when the sign-in carries one)."""
+    from cycls._agent import state
+    pid = state.actor_of(getattr(ws, "subject", "") or "")
+    name = getattr(user, "name", None)
+    return {"id": pid, **({"name": name} if name else {})} if pid else None
+
+
 # ---- Path safety ----
 
 def resolve_path(workspace, rel):

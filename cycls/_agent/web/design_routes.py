@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from cycls._app.db import Workspace
 from cycls._agent.design import comments
 from cycls._agent.design import refresh as design_refresh
-from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
+from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 
 
 # renders of one page (`&page=`, else the first), cached by the .fig's path + mtime + size
@@ -414,10 +414,11 @@ def design_router(ws_dep, user_dep, changed):
                 # a version never changes
                 return Response(picture, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
             return Response(data, media_type="application/octet-stream", headers=_NO_CACHE)
-        return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel)}
+        me = (person(None, ws) or {}).get("id")
+        return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel, me)}
 
     @r.post("/versions/{path:path}")
-    async def restore_version(path: str, request: Request, ws: Workspace = ws_dep):
+    async def restore_version(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         """`?restore=<id>`: the design becomes that version again (what it was is kept) → {ok, version}."""
         from cycls._agent import versions
         from cycls._agent.design.store import write_fig
@@ -425,7 +426,7 @@ def design_router(ws_dep, user_dep, changed):
         data = await asyncio.to_thread(versions.read, ws.root, rel, request.query_params.get("restore") or "")
         if data is None:
             raise HTTPException(404, "No such version")
-        version = await write_fig(ws.root, rel, data, by="user", reason="restore")
+        version = await write_fig(ws.root, rel, data, by="user", reason="restore", who=person(user, ws))
         changed(ws.root)
         design_refresh.schedule(ws.root, rel, ws.subject)
         # its live room reloads
