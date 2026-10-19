@@ -208,8 +208,11 @@ def render(workspace, root, rel, quality="standard"):
 
 async def _render(workspace, root, rel, quality, key):
     from cycls._agent import video
+    from . import run
 
     state = _renders[key]
+    # The editor's Render asks for "standard"; the service renders "final" or "draft".
+    quality = "draft" if quality == "draft" else "final"
     try:
         html = (await asyncio.to_thread((root / rel).read_bytes)).decode("utf-8")
         images, image_files, problems = await asyncio.to_thread(media.collect, html, root)
@@ -233,9 +236,17 @@ async def _render(workspace, root, rel, quality, key):
             raise RuntimeError(r.get("error") or r.get("state") or "the render failed")
         name = Path(rel).name[: -len(_SUFFIX)]
         dest = root / files.mp4(name)
-        if dest.exists():
-            await asyncio.to_thread(trash.trash_path, root, files.mp4(name), "user", "re-render")
+        # The MP4 is replaced, and its subtitle files with it (they were timed to the old cut): the
+        # new ones, in each language a translation is kept for, as the agent's render writes them.
+        olds = [files.mp4(name)] + [files.subtitles(name, e) for e in ("srt", "vtt")] + files.translations(root, name)
+        for old in olds:
+            if (root / old).exists():
+                await asyncio.to_thread(trash.trash_path, root, old, "user", "re-render")
         await video.fetch(workspace, job["token"], dest, root / ".tmp" / "video-editor")
+        sound = job.get("sound")
+        if sound:
+            await asyncio.to_thread(files.save_sound, root, name, sound)
+            await asyncio.to_thread(run._subtitles, root, name, sound, audio, words, footage)
         _renders[key] = {"state": "done", "path": files.mp4(name), "at": time.time()}
     except video.Refused as e:
         errors = [f.get("message") for f in e.findings if f.get("severity") == "error"]

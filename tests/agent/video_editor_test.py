@@ -256,12 +256,14 @@ def test_a_render_from_the_editor_lands_beside_the_video(monkeypatch, tmp_path):
     client, root = _client(tmp_path)
     _video(root)
     (root / "videos" / "launch.mp4").write_bytes(b"OLD")
+    (root / "videos" / "launch.ar.srt").write_text("1\n00:00:00,100 --> 00:00:00,900\nold\n", encoding="utf-8")
     _on(monkeypatch)
     calls = []
+    sound = {"tracks": [{"id": "vo", "kind": "voice", "src": "videos/voice/intro.m4a", "start": 0, "end": 1.0, "media_start": 0}]}
 
     async def submit(ws, kind, html, images=None, files=None, **kw):
         calls.append((kind, kw.get("params")))
-        return {"token": "tok", "eta_s": 30}
+        return {"token": "tok", "eta_s": 30, "sound": sound}
 
     async def poll(ws, token, wait=25):
         return {"state": "done"}
@@ -282,6 +284,12 @@ def test_a_render_from_the_editor_lands_beside_the_video(monkeypatch, tmp_path):
             break
         asyncio.run(asyncio.sleep(0.02))
     assert state == {**state, "state": "done", "path": "videos/launch.mp4"}
-    assert (root / "videos" / "launch.mp4").read_bytes() == b"NEW MP4" and calls == [("render", {"quality": "standard"})]
+    # The editor asks for "standard"; the service is asked for "final" (it renders final or draft).
+    assert (root / "videos" / "launch.mp4").read_bytes() == b"NEW MP4" and calls == [("render", {"quality": "final"})]
+    # Its subtitle files are made again for the new cut; a translation of the old one goes to the trash.
+    assert "Hello." in (root / "videos" / "launch.srt").read_text(encoding="utf-8")
+    assert not (root / "videos" / "launch.ar.srt").exists() and list((root / ".trash").glob("*/data/videos/launch.ar.srt"))
+    from cycls._agent.video import files as vfiles
+    assert vfiles.load_sound(root, "launch") == sound
     assert client.post("/video/render?path=videos/launch.video.html&quality=huge").status_code == 400
     client.__exit__(None, None, None)
