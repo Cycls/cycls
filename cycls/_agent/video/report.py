@@ -136,6 +136,29 @@ MAX_SENTENCES = 60
 MAX_SHOTS = 24
 
 
+def tidy_text(rel, info):
+    """The clip tidied (tidy.py): its long pauses out, as the <video> lines to put back to back."""
+    from . import tidy
+
+    p = tidy.plan(info.get("transcript"), info.get("duration"))
+    if not p:
+        return "It cannot be tidied: nothing said in it was made out."
+    if not p["cuts"] or len(p["pieces"]) == 1 and p["of"] - p["kept"] < 0.5:
+        return f"Nothing to tidy: no pause in it is longer than {tidy.PAUSE_S:g} s."
+    longest = max(p["cuts"], key=lambda c: c[1])
+    ids = [f"piece{i}" for i in range(1, len(p["pieces"]) + 1)]
+    return "\n".join([
+        f"Tidied (long pauses out, every word kept): {len(p['pieces'])} pieces, {p['kept']:g} s of the clip's "
+        f"{p['of']:g} s; {len(p['cuts'])} pauses or silent ends cut (the longest {longest[1]:g} s, at {longest[0]:g} s).",
+        "Put the pieces back to back as direct children of the root (never inside a scene), in place of one piece of "
+        "this clip; shift data-start if the clip does not open the video:",
+        *("  " + line for line in tidy.lines(rel, p, prefix="piece")),
+        f"Captions across them: <div class=\"cap\" data-captions=\"{' '.join(ids)}\" data-cap-style=\"phrase\"></div>",
+        "A cut that feels abrupt is eased by lengthening that piece's data-duration (and moving the pieces after it); "
+        "the clip itself is unchanged. Say to the user what was cut.",
+    ])
+
+
 def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
     """A clip made ready, as the model reads it in place of watching: what the clip is, where its
     shots change, what is said in it and when, and the lines that put a piece of it in a video."""

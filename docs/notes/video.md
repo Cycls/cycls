@@ -206,6 +206,18 @@ a 0.6 s pause. A render of this chat's video again replaces them (the old ones t
 with nothing said writes none. Checked on the dev service: a voice-over placed at 0.5 s gave three
 cues starting 0.55 s, 2.03 s and 5.25 s.
 
+## A talking clip tidied
+
+`footage {path, tidy: true}` adds to the reply the clip with its long pauses cut (`tidy.py`): from its
+word timings (the transcript kept beside it, corrected or not), every stretch between words longer
+than 0.7 s goes, each side keeping 0.15 s of breath, and so does the silence before the first word
+and after the last. Every word is kept; a filler the recogniser left out sits in a pause and goes with
+it. The reply gives the `<video>` pieces back to back (`piece1`…), the captions line across them, and
+what was cut; the model puts them in place of one piece and tells the person. Chosen by the user
+(2026-10-19): long pauses only — not filler words, not false starts. Checked on the dev service with a
+real reader's 37.5 s clip with silences put in: 4 pieces, 18.1 s; the render came out 18.2 s with its
+sound and subtitles, one pause left of 0.84 s (word ends run a little past the sound).
+
 ## The canvas
 
 A composition is the file kind `composition` (its suffix, before html, on both sides). Opened,

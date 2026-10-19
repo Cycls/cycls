@@ -476,6 +476,8 @@ async def _footage(workspace, root, chat, inp, again=True):
         else:
             info = {**info, "transcript": kept}
     text = report.footage_text(rel, info, words_rel=words_rel, reused=reused, credit=credit)
+    if inp.get("tidy"):
+        text += "\n" + report.tidy_text(rel, info)
     if others:
         text += ("\nOther clips that search found (footage {\"stock\": \"…\", \"pick\": n} fetches one): "
                  + "; ".join(others) + ".")

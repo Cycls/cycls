@@ -41,7 +41,7 @@ _ACTIONS_TEXT = """ACTIONS
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
-- footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, and the <video> line to use. Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path.
+- footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, and the <video> line to use. Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path. With tidy: true the reply also gives the clip tidied — its long pauses cut, every word kept — as <video> pieces to put back to back: use it when the person asks to tighten, clean up or shorten a talking clip.
 
 A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, the pieces of footage as you placed them, and the sound map when there is sound. Look at the sheet before you render.
 
@@ -84,6 +84,7 @@ def _schema():
         "pick": {"type": "integer", "description": "footage with stock: which result to fetch (0 is the first)."},
         "orientation": {"type": "string", "enum": ["landscape", "portrait", "square"],
                         "description": "footage with stock: the shape of clip to look for."},
+        "tidy": {"type": "boolean", "description": "footage: also give the clip with its long pauses cut, as pieces."},
     }, "required": ["action"]}
 
 

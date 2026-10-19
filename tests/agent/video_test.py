@@ -1130,3 +1130,39 @@ def test_a_render_with_speech_writes_srt_and_vtt_beside_the_mp4(monkeypatch, tmp
     out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))
     assert not (tmp_path / "videos" / "hi.srt").exists() and "Subtitle files" not in out["_model"]
     assert list((tmp_path / ".trash").glob("*/data/videos/hi.srt"))
+
+
+# ---- a talking clip tidied ---------------------------------------------------------------------
+
+def test_a_tidy_cut_takes_out_long_pauses_and_keeps_every_word():
+    from cycls._agent.video import tidy
+    said = {"words": [{"text": t, "start": a, "end": b} for t, a, b in [
+        ("We", 1.2, 1.4), ("opened", 1.45, 1.9), ("in", 1.95, 2.05), ("March.", 2.1, 2.6),   # 1.2 s silence before
+        ("By", 4.6, 4.8), ("June", 4.85, 5.2),                                                # a 2 s pause
+        ("there", 5.6, 5.9), ("were", 5.95, 6.1), ("three.", 6.15, 6.7)]]}                    # 0.4 s: kept
+    p = tidy.plan(said, 9.0)
+    assert p["pieces"] == [[1.05, 1.7], [4.45, 2.4]]
+    assert p["cuts"] == [[0.0, 1.05], [2.75, 1.7], [6.85, 2.15]] and p["kept"] == 4.1 and p["of"] == 9.0
+    for s, e in [(w["start"], w["end"]) for w in said["words"]]:                         # no word is cut
+        assert any(m <= s and e <= m + n + 1e-6 for m, n in p["pieces"])
+    lines = tidy.lines("uploads/talk.mp4", p, prefix="piece")
+    assert lines[0] == ('<video id="piece1" src="uploads/talk.mp4" data-start="0" data-media-start="1.05" '
+                        'data-duration="1.7" data-track-index="0"></video>')
+    assert 'id="piece2"' in lines[1] and 'data-start="1.7"' in lines[1] and 'data-media-start="4.45"' in lines[1]
+    assert tidy.plan({"words": []}, 5) is None
+
+
+def test_footage_with_tidy_gives_the_pieces_and_says_what_was_cut(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    fake = FakeFootage(monkeypatch, state="ready")
+    _clip(tmp_path)
+    out = _run({"action": "footage", "path": "uploads/interview.mp4", "tidy": True}, _ws(tmp_path))
+    text = _text(out)
+    assert "Tidied (long pauses out, every word kept)" in text
+    assert '<video id="piece1" src="uploads/interview.mp4"' in text and 'data-captions="piece1' in text
+    plain = _text(_run({"action": "footage", "path": "uploads/interview.mp4"}, _ws(tmp_path)))
+    assert "Tidied" not in plain
+    assert fake.ingests == []                                   # ready already: nothing is read again
+    # SAID: 12.4-14.0 s and 20.0-21.5 s said in a 40 s clip -> two pieces, the 6 s pause between them cut
+    assert 'data-media-start="12.25" data-duration="1.9"' in text and 'data-start="1.9" data-media-start="19.85"' in text
