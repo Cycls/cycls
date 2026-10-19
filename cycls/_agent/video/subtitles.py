@@ -77,6 +77,40 @@ def _lines(text):
     return [text[:cut], text[cut + 1:]]
 
 
+def wrap(text, width=LINE):
+    """A translated line as subtitle lines: words kept whole, each line at most `width` where it can be."""
+    out, cur = [], ""
+    for word in str(text).split():
+        if cur and len(cur) + 1 + len(word) > width:
+            out.append(cur)
+            cur = word
+        else:
+            cur = f"{cur} {word}" if cur else word
+    if cur:
+        out.append(cur)
+    return out
+
+
+_TIME = re.compile(r"(\d+):(\d\d):(\d\d)[,.](\d{3})\s*-->\s*(\d+):(\d\d):(\d\d)[,.](\d{3})")
+
+
+def parse_srt(text):
+    """An SRT file (as written here, or edited by hand) → [(start, end, [lines])]."""
+    out = []
+    for block in re.split(r"\n\s*\n", str(text).replace("\r\n", "\n").strip()):
+        rows = [r for r in block.split("\n") if r.strip()]
+        at = next((i for i, r in enumerate(rows) if _TIME.search(r)), None)
+        if at is None:
+            continue
+        m = [int(x) for x in _TIME.search(rows[at]).groups()]
+        start = m[0] * 3600 + m[1] * 60 + m[2] + m[3] / 1000
+        end = m[4] * 3600 + m[5] * 60 + m[6] + m[7] / 1000
+        lines = rows[at + 1:]
+        if lines:
+            out.append((round(start, 3), round(end, 3), lines))
+    return out
+
+
 def _stamp(t, sep):
     ms = int(round(t * 1000))
     h, ms = divmod(ms, 3_600_000)

@@ -203,7 +203,14 @@ end and where in its file it begins, kept with the pending render so a render co
 call has it too), so a clip cut into pieces gives only the words shown, when they are heard. Cues: a
 sentence or a part of one, two lines of 42 characters and 6 s at most, broken at a sentence's end or
 a 0.6 s pause. A render of this chat's video again replaces them (the old ones to the Trash); one
-with nothing said writes none. Checked on the dev service: a voice-over placed at 0.5 s gave three
+with nothing said writes none.
+
+**In another language** (`subtitles` action, 2026-10-19): `subtitles {name}` lists the lines of
+`videos/<name>.srt`, numbered (read back from the file, so a hand edit to it is kept); the model
+translates them itself and sends `subtitles {name, to, lines}` — exactly as many lines, in order — and
+they are written as `videos/<name>.<to>.srt` and `.vtt` with the original's timings, each wrapped to
+42-character lines. Nothing goes to another service. The render's reply offers it. A re-render of
+the video moves its translations to the Trash with the rest, since they were timed to the old cut. Checked on the dev service: a voice-over placed at 0.5 s gave three
 cues starting 0.55 s, 2.03 s and 5.25 s.
 
 ## A talking clip tidied

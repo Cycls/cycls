@@ -103,9 +103,19 @@ def render_started(root, chat_id, name, token, sha, quality, sound=None):
     save(root, chat_id, data)
 
 
-def subtitles(name, ext):
-    """A rendered video's subtitle file beside its MP4: videos/<name>.srt or .vtt."""
-    return f"{DIR}/{name}.{ext}"
+def subtitles(name, ext, lang=None):
+    """A rendered video's subtitle file beside its MP4: videos/<name>.srt or .vtt, and a translation
+    of it as videos/<name>.<lang>.srt or .vtt."""
+    return f"{DIR}/{name}.{lang}.{ext}" if lang else f"{DIR}/{name}.{ext}"
+
+
+def translations(root, name):
+    """The translated subtitle files of a video: [workspace path]."""
+    d = Path(root) / DIR
+    if not d.is_dir():
+        return []
+    pat = re.compile(rf"^{re.escape(name)}\.[A-Za-z]{{2,3}}(-[A-Za-z0-9]{{2,8}})?\.(srt|vtt)$")
+    return sorted(f"{DIR}/{p.name}" for p in d.iterdir() if p.is_file() and pat.match(p.name))
 
 
 def render_pending(root, chat_id, name):

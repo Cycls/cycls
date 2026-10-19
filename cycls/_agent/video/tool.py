@@ -14,7 +14,7 @@ import contextvars
 # harness swaps it in after this call), None when no harness swaps it (a custom loop): then `guide`
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
-ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage")
+ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles")
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
@@ -38,6 +38,7 @@ _ACTIONS_TEXT = """ACTIONS
 - template {name, template, vars}: make the composition from one of the templates above with your words, numbers and images (the brand kit fills the colours and fonts you leave out), then the same checks as write.
 - look {name, at?: [seconds], zoom?}: the frames at those times (up to 9), zoom a CSS selector or "x,y,w,h" to look closely. With no times, the file on disk is checked again.
 - render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4, opened for the user; when something is said in it, subtitle files beside it (videos/<name>.srt and .vtt). Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over.
+- subtitles {name} then {name, to, lines}: the render's subtitles in another language. The first call lists the lines of videos/<name>.srt, numbered; translate them yourself and send them back in order with the language code (to: "ar", "en", …): they are written as videos/<name>.<to>.srt and .vtt with the original's timings.
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
@@ -85,6 +86,9 @@ def _schema():
         "orientation": {"type": "string", "enum": ["landscape", "portrait", "square"],
                         "description": "footage with stock: the shape of clip to look for."},
         "tidy": {"type": "boolean", "description": "footage: also give the clip with its long pauses cut, as pieces."},
+        "to": {"type": "string", "description": "subtitles: the language code of the translation, e.g. ar or en."},
+        "lines": {"type": "array", "items": {"type": "string"},
+                  "description": "subtitles: the translated lines, one per line listed, in order."},
     }, "required": ["action"]}
 
 

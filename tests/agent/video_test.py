@@ -1127,9 +1127,12 @@ def test_a_render_with_speech_writes_srt_and_vtt_beside_the_mp4(monkeypatch, tmp
         return {**job, "sound": {"tracks": [], "speech": []}}
     monkeypatch.setattr(video, "submit", silent)
     (tmp_path / "videos" / "hi.video.html").write_text(VOICED.replace("Hi", "Hi again"), encoding="utf-8")
+    (tmp_path / "videos" / "hi.ar.srt").write_text("1\n00:00:00,550 --> 00:00:01,990\nمرحباً\n", encoding="utf-8")
     out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))
     assert not (tmp_path / "videos" / "hi.srt").exists() and "Subtitle files" not in out["_model"]
     assert list((tmp_path / ".trash").glob("*/data/videos/hi.srt"))
+    assert not (tmp_path / "videos" / "hi.ar.srt").exists()                  # a translation of the old cut goes too
+    assert list((tmp_path / ".trash").glob("*/data/videos/hi.ar.srt"))
 
 
 # ---- a talking clip tidied ---------------------------------------------------------------------
@@ -1166,3 +1169,38 @@ def test_footage_with_tidy_gives_the_pieces_and_says_what_was_cut(monkeypatch, t
     assert fake.ingests == []                                   # ready already: nothing is read again
     # SAID: 12.4-14.0 s and 20.0-21.5 s said in a 40 s clip -> two pieces, the 6 s pause between them cut
     assert 'data-media-start="12.25" data-duration="1.9"' in text and 'data-start="1.9" data-media-start="19.85"' in text
+
+
+# ---- translated subtitles ----------------------------------------------------------------------
+
+def test_an_srt_is_read_back_and_a_translation_wrapped_into_lines():
+    from cycls._agent.video import subtitles
+    cs = [(0.55, 1.99, ["Cycls Video is live."]), (2.03, 5.21, ["Make your first video in 2 minutes,", "with a voice."])]
+    assert subtitles.parse_srt(subtitles.srt(cs)) == cs
+    assert subtitles.parse_srt(subtitles.srt(cs).replace("\n", "\r\n")) == cs           # edited on Windows
+    lines = subtitles.wrap("اصنع أول فيديو لك خلال دقيقتين، بصوت وموسيقى وترجمة مكتوبة على الشاشة")
+    assert len(lines) >= 2 and all(len(x) <= subtitles.LINE for x in lines)
+    assert " ".join(lines) == "اصنع أول فيديو لك خلال دقيقتين، بصوت وموسيقى وترجمة مكتوبة على الشاشة"
+
+
+def test_subtitles_lists_the_lines_then_writes_the_translation_with_the_original_timings(monkeypatch, tmp_path):
+    from cycls._agent.video import subtitles
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    ws = _ws(tmp_path)
+    assert "render" in _run({"action": "subtitles", "name": "hi"}, ws)                    # nothing rendered yet
+    (tmp_path / "videos").mkdir(parents=True, exist_ok=True)
+    cs = [(0.55, 1.99, ["Hello there."]), (2.03, 3.5, ["Make one."])]
+    (tmp_path / "videos" / "hi.srt").write_text(subtitles.srt(cs), encoding="utf-8")
+    listed = _run({"action": "subtitles", "name": "hi"}, ws)
+    assert "1. Hello there." in listed and "2. Make one." in listed and "exactly 2 strings" in listed
+    assert _run({"action": "subtitles", "name": "hi", "to": "ar", "lines": ["مرحباً"]}, ws).startswith("Error: lines")
+    assert _run({"action": "subtitles", "name": "hi", "to": "Arabic!", "lines": ["a", "b"]}, ws).startswith("Error: to")
+    out = _run({"action": "subtitles", "name": "hi", "to": "ar", "lines": ["مرحباً بكم.", "اصنع واحداً."]}, ws)
+    assert "videos/hi.ar.srt and videos/hi.ar.vtt (2 lines" in out
+    ar = subtitles.parse_srt((tmp_path / "videos" / "hi.ar.srt").read_text(encoding="utf-8"))
+    assert [(a, b) for a, b, _ in ar] == [(a, b) for a, b, _ in cs] and ar[0][2] == ["مرحباً بكم."]
+    assert (tmp_path / "videos" / "hi.ar.vtt").read_text(encoding="utf-8").startswith("WEBVTT")
+    from cycls._agent.video import files as vfiles
+    assert vfiles.translations(tmp_path, "hi") == ["videos/hi.ar.srt", "videos/hi.ar.vtt"]
+    assert vfiles.translations(tmp_path, "h") == []                                    # another video's name

@@ -281,9 +281,10 @@ async def _render(workspace, root, chat, name, quality):
     if (root / files.mp4(target)).exists():
         if files.rendered_by_me(root, chat, target):
             await asyncio.to_thread(trash.trash_path, root, files.mp4(target), "agent", "re-render")
-            for ext in ("srt", "vtt"):   # its subtitles go with it; the new render writes its own
-                if (root / files.subtitles(target, ext)).exists():
-                    await asyncio.to_thread(trash.trash_path, root, files.subtitles(target, ext), "agent", "re-render")
+            # its subtitles go with it, translations too (timed to the old cut); the new render writes its own
+            for rel_sub in [files.subtitles(target, e) for e in ("srt", "vtt")] + files.translations(root, target):
+                if (root / rel_sub).exists():
+                    await asyncio.to_thread(trash.trash_path, root, rel_sub, "agent", "re-render")
         else:
             n = 2
             while (root / files.mp4(f"{name}-{n}")).exists():
@@ -313,8 +314,44 @@ async def _render(workspace, root, chat, name, quality):
     if written:
         text += (f" Subtitle files beside it, timed to the MP4: {files.subtitles(target, 'srt')} and "
                  f"{files.subtitles(target, 'vtt')} ({written} lines), for platforms that take a captions file "
-                 "(YouTube, TikTok, LinkedIn); mention them to the user.")
+                 "(YouTube, TikTok, LinkedIn); mention them to the user, and that you can add them in another "
+                 f"language (Arabic or English, say): `subtitles` with name {target} gives the lines to translate.")
     return {"_model": text, "_ui": {"type": "ui", "action": "open_canvas", "path": rel_mp4, "name": f"{target}.mp4"}}
+
+
+_LANG = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
+
+
+def _translate(root, name, to, lines):
+    """`subtitles {name}`: the render's subtitle lines, numbered, to translate. `subtitles {name, to,
+    lines}`: those lines in language `to`, written beside the original as videos/<name>.<to>.srt and
+    .vtt with the original's timings (the translation is the model's; nothing is sent anywhere)."""
+    from . import subtitles
+
+    src = Path(root) / files.subtitles(name, "srt")
+    if not src.is_file():
+        return _err(f"{files.subtitles(name, 'srt')} is not here: `render` {name} first (it writes subtitles when "
+                    "something is said in the video).")
+    cues = subtitles.parse_srt(src.read_text(encoding="utf-8"))
+    if not cues:
+        return _err(f"{files.subtitles(name, 'srt')} has no lines.")
+    if not lines:
+        listed = "\n".join(f"{i}. {' '.join(c[2])}" for i, c in enumerate(cues, 1))
+        return (f"{files.subtitles(name, 'srt')} has {len(cues)} lines:\n{listed}\n"
+                f"Translate each as it would be subtitled (natural, short, the same meaning; numbers and names kept), "
+                f"then call subtitles with name {name}, to (a language code: ar, en, fr…) and lines: exactly "
+                f"{len(cues)} strings, in this order, without the numbers.")
+    to = str(to or "").strip()
+    if not _LANG.match(to):
+        return _err("to: the language code of the translation, e.g. ar or en.")
+    if not isinstance(lines, list) or len(lines) != len(cues) or not all(isinstance(x, str) and x.strip() for x in lines):
+        return _err(f"lines: exactly {len(cues)} non-empty strings, one for each line of {files.subtitles(name, 'srt')}, "
+                    "in its order.")
+    cs = [(a, b, subtitles.wrap(" ".join(t.split()))) for (a, b, _), t in zip(cues, lines)]
+    for ext, body in (("srt", subtitles.srt(cs)), ("vtt", subtitles.vtt(cs))):
+        (Path(root) / files.subtitles(name, ext, to)).write_text(body, encoding="utf-8")
+    return (f"Wrote {files.subtitles(name, 'srt', to)} and {files.subtitles(name, 'vtt', to)} ({len(cs)} lines, "
+            f"timed as the original). Tell the user where they are; a platform takes each as its own captions track.")
 
 
 def _subtitles(root, name, sound, audio, words, footage):
@@ -645,6 +682,9 @@ async def _exec_video(inp, workspace, ctx=None):
             if note and isinstance(out, str):
                 out += note
             return out
+
+        if action == "subtitles":
+            return await asyncio.to_thread(_translate, root, name, inp.get("to"), inp.get("lines")) + note
 
         if action == "restore":
             history = versions.listing(root, rel)
