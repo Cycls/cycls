@@ -759,6 +759,26 @@ def test_ingest_unreadable_attachment_names_the_file(tmp_path):
         assert "propose a way to extract" in result[0]["text"]
 
 
+def test_ingest_video_clip_points_at_footage_only_when_video_is_offered(tmp_path):
+    """An attached clip, with Video offered, is sent to `footage` — not to "propose a way to
+    extract" it, which once had the model install a recogniser in its sandbox."""
+    ws = tmp_path / "workspace"
+    (ws / "uploads").mkdir(parents=True)
+    # bytes no text codec reads (not UTF-8, nor Windows' cp1252), as in any real clip
+    (ws / "uploads" / "Talk.MOV").write_bytes(b"\x00\x00\x00\x18ftypqt  \x81\x8d\x8f\x90\x9d\xff" + b"\x00" * 64)
+
+    offered = asyncio.run(_ingest([{"type": "file", "file": "uploads/Talk.MOV"}], str(ws), video=True))
+    assert len(offered) == 1
+    assert '"uploads/Talk.MOV"' in offered[0]["text"] and "`footage`" in offered[0]["text"]
+    assert "propose a way" not in offered[0]["text"]
+
+    plain = asyncio.run(_ingest([{"type": "file", "file": "uploads/Talk.MOV"}], str(ws)))
+    assert "propose a way to extract" in plain[0]["text"] and "footage" not in plain[0]["text"]
+
+    missing = asyncio.run(_ingest([{"type": "file", "file": "uploads/gone.mp4"}], str(ws), video=True))
+    assert "footage" not in missing[0]["text"]
+
+
 def test_ingest_empty_file_ref_passes_through(tmp_path):
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
