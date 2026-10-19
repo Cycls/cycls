@@ -218,6 +218,15 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
         + (": that example is the first sentence, begun 0.15 s before its first word and ended 0.25 s after its last. "
            "Captions for it: <div class=\"cap\" data-captions=\"a\" data-cap-style=\"phrase\"></div>."
            if first else "."))
+    focus = info.get("focus") or {}
+    if focus.get("points"):
+        w, h = info.get("width") or 0, info.get("height") or 0
+        shape = "wide" if w > h else "upright" if h > w else "square"
+        many = f" (up to {focus['most']} faces at once: the largest is followed)" if (focus.get("most") or 0) > 1 else ""
+        lines.append(f"A face is on screen in {round(100 * (focus.get('seen') or 0))}% of it{many}. Add data-reframe to a "
+                     "<video> of it and its crop follows that face (the frame moves with them, and jumps at a cut): use it "
+                     f"whenever the video's shape crops this {shape} clip — a wide clip in a vertical or square video, or "
+                     "in the other sizes of the video (data-sizes) — with object-fit: cover and the piece filling its box.")
     if info.get("sheet_times"):
         lines.append("The sheet shows the clip at " + ", ".join(f"{_t(t)}" for t in info["sheet_times"]) + " s: look at it "
                      "to choose what to show.")

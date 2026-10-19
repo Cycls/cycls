@@ -275,7 +275,23 @@ as written is the main size, so the editor (which shows the file) and the main r
   once, from the main size's sound map: the timing is the same in every size.
 - **The editor's Render** renders every size the same way (`editor._render`).
 
-No service change. Checked on the dev service: a wide title card with a voice-over and word captions,
+### A crop that follows the person (auto-reframe)
+
+`data-reframe` on a `<video>` (2026-10-19, service `cycls_video/faces.py` + `node/audio.mjs`): when a
+clip is made ready, the service finds the faces in it (OpenCV's YuNet, 4 times a second on the
+proxy, about 5% of the clip's length), follows the largest, and smooths it a shot at a time like a
+camera operator — still while the face moves a little (3% of the width), easing after it when it
+moves away, a jump at a cut. The track is kept with the clip's facts (`focus`) and goes to prepare
+with them; for a reframed piece it becomes `object-position` keyframes, worked out in the page for
+the box the piece is laid out in, so one track serves a vertical, square or wide box (and every
+size of a video with `data-sizes`). The footage reply says when a face can be followed
+(`report.footage_text`, "A face is on screen in N% of it…"). A clip with no face, or made ready
+before faces were looked for, gets the warning `reframe_no_face`; such an older clip is made ready
+again the next time `footage` asks for it (the store says "none" for facts without `faces_v`).
+Checked on the dev service: an off-centre speaker in a wide clip, in a vertical video — reframed he
+fills the frame, the centre crop showed the camera behind him and half his face.
+
+No service change for several sizes. Checked on the dev service: a wide title card with a voice-over and word captions,
 `data-sizes="vertical square"`, two rules of its own — three clean checks, three sheets (the
 vertical one with the title centred and the captions higher, its own rule), three MP4s (1920x1080,
 1080x1920, 1080x1080, about 0.5 MB each).

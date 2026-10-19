@@ -1324,3 +1324,13 @@ def test_a_render_makes_every_size_and_a_new_render_replaces_them_all(monkeypatc
     svc.refuse = [{"code": "text_off_frame", "severity": "error", "message": "The title runs off the frame."}]
     (tmp_path / "videos" / "hi.video.html").write_text(WIDE.replace("Hi", "Hi again"), encoding="utf-8")
     assert "Not rendered" in _text(_run({"action": "render", "name": "hi"}, _ws(tmp_path)))
+
+
+def test_the_footage_reply_says_when_a_face_can_be_followed():
+    from cycls._agent.video import report
+    info = {"duration": 41.5, "width": 1920, "height": 1080, "has_audio": False, "shots": [[0, 41.5]],
+            "focus": {"version": 1, "points": [[0, 0.3, 0.45], [41.5, 0.3, 0.45]], "seen": 0.96, "most": 2}}
+    text = report.footage_text("videos/footage/talk.mp4", info)
+    assert "A face is on screen in 96% of it (up to 2 faces at once: the largest is followed)" in text
+    assert "data-reframe" in text and "wide clip" in text
+    assert "data-reframe" not in report.footage_text("videos/footage/sea.mp4", {**info, "focus": None})
