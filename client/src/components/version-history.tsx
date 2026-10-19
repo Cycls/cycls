@@ -4,6 +4,7 @@ import { track } from "../lib/analytics";
 import { t, timeAgo as ago } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
+import { personName } from "../lib/people";
 import { flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 
 // A design's earlier versions (cycls/_agent/versions.py). A restore is itself kept as a version, so it can be undone.
@@ -19,7 +20,7 @@ function whatReplacedIt(v: DesignVersion): string {
 // Who made the change: the agent, you, or — in a team workspace — the teammate the server names.
 function byWhom(v: DesignVersion): string {
   if (v.by === "agent") return t("versionByAgent");
-  if (v.who && v.mine === false) return v.who.name || t("versionByTeammate");
+  if (v.who && v.mine === false) return v.who.name || personName(v.who.id) || t("versionByTeammate");
   return t("versionByYou");
 }
 

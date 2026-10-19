@@ -33,6 +33,7 @@ import { useUrlParam } from "./hooks/use-url-param";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics";
 import { initAffiliate } from "./lib/affiliate";
+import { setPeople } from "./lib/people";
 
 function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null): FilesPanelProps {
   return {
@@ -202,6 +203,17 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     return await chat.share(audience, authorFields);
   };
 
+  // The organisation's members by account id: the workspace menu's member list, and the names a
+  // design's history gives a teammate's change (the sign-in token carries none).
+  const orgMembers = (memberships?.data || [])
+    .map((m) => ({
+      id: m.publicUserData?.userId || "",
+      name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
+        || m.publicUserData?.identifier || m.publicUserData?.userId || "",
+    }))
+    .filter((m) => m.id);
+  setPeople(orgMembers);
+
   const account: AccountInfo = {
     user: {
       id: user?.id,
@@ -230,13 +242,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
       items: ws.workspaces,
       canCreate: config?.workspaces === "member" || membership?.role === "org:admin",
       isOrgAdmin: membership?.role === "org:admin",
-      orgMembers: (memberships?.data || [])
-        .map((m) => ({
-          id: m.publicUserData?.userId || "",
-          name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
-            || m.publicUserData?.identifier || m.publicUserData?.userId || "",
-        }))
-        .filter((m) => m.id),
+      orgMembers,
       onSwitch: workspace.switch,
       onCreate: ws.create,
       onUpdate: ws.update,

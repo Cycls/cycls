@@ -65,6 +65,19 @@ describe("Version history", () => {
     expect(rows[2]).not.toContain("Alice");
   });
 
+  it("a teammate with no name on the version is named from the organisation's members", async () => {
+    const { setPeople } = await import("../src/lib/people");
+    setPeople([{ id: "user_carl", name: "Carl Hassan" }]);
+    const h = host();
+    h.listVersions = vi.fn(async () => [
+      { id: "20261019T110000-eeeeee", at: minutesAgo(40), by: "user", reason: "save", size: 9, who: { id: "user_carl" }, mine: false },
+    ]) as never;
+    render(<VersionHistory path="designs/launch.fig" host={h} onClose={() => {}} />);
+    await flush();
+    expect(screen.getAllByTestId("design-version")[0].textContent).toContain("Carl Hassan");
+    setPeople([]);
+  });
+
   it("Restore brings a version back and closes", async () => {
     const h = host();
     const onClose = vi.fn();
