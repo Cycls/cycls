@@ -37,8 +37,8 @@ _ACTIONS_TEXT = """ACTIONS
 - edit {name, changes: [{old, new, all?}]}: exact find and replace in the saved composition; every change applies or none does. Same checks as write. Prefer it to rewriting the whole file.
 - template {name, template, vars}: make the composition from one of the templates above with your words, numbers and images (the brand kit fills the colours and fonts you leave out), then the same checks as write.
 - look {name, at?: [seconds], zoom?}: the frames at those times (up to 9), zoom a CSS selector or "x,y,w,h" to look closely. With no times, the file on disk is checked again.
-- render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4, opened for the user; when something is said in it, subtitle files beside it (videos/<name>.srt and .vtt). Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over.
-- subtitles {name} then {name, to, lines}: the render's subtitles in another language. The first call lists the lines of videos/<name>.srt, numbered; translate them yourself and send them back in order with the language code (to: "ar", "en", …): they are written as videos/<name>.<to>.srt and .vtt with the original's timings.
+- render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4, opened for the user; when something is said in it, subtitle files beside it (videos/<name>.srt and .vtt, and videos/<name>.<lang>.srt and .vtt for each language it is translated into). Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over.
+- subtitles {name} then {name, to, lines}: what is said in the video, in another language. The first call lists its sentences, numbered; translate them yourself and send them back in order with the language code (to: "ar", "en", …). The translation is kept with the words, and is used two ways: subtitle files (videos/<name>.<to>.srt and .vtt, beside the MP4: files a platform takes as a captions track, nothing on the picture) and captions on the video (a captions box with data-cap-lang="<to>", drawn on the picture; the reply gives the line). Both follow the cut. When the person asks for subtitles or captions in a language, give them the files, and put the translation on the video too when the video shows captions or they ask for it there.
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
@@ -53,7 +53,8 @@ The person can open a video in the editor (Edit on the canvas) and change it by 
 def _schema():
     return {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS),
-                   "description": "guide (first), write, edit, template, look, render, restore, voice, music, footage."},
+                   "description": "guide (first), write, edit, template, look, render, subtitles, restore, voice, music, "
+                                  "footage."},
         "name": {"type": "string",
                  "description": "The video's name: videos/<name>.video.html, rendered to videos/<name>.mp4. "
                                 "Lowercase words and hyphens, e.g. launch-reel."},
@@ -88,7 +89,7 @@ def _schema():
         "tidy": {"type": "boolean", "description": "footage: also give the clip with its long pauses cut, as pieces."},
         "to": {"type": "string", "description": "subtitles: the language code of the translation, e.g. ar or en."},
         "lines": {"type": "array", "items": {"type": "string"},
-                  "description": "subtitles: the translated lines, one per line listed, in order."},
+                  "description": "subtitles: the translation, one string per sentence listed, in order."},
     }, "required": ["action"]}
 
 

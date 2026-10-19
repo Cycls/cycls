@@ -109,6 +109,26 @@ def subtitles(name, ext, lang=None):
     return f"{DIR}/{name}.{lang}.{ext}" if lang else f"{DIR}/{name}.{ext}"
 
 
+def _sound_path(root, name):
+    return Path(root) / SIDECAR / "sound" / f"{name}.json"
+
+
+def save_sound(root, name, sound):
+    """The sound map of videos/<name>.mp4 as rendered, for the workspace (not one chat): a translation
+    added later, from any chat, is timed to the MP4 with it."""
+    path = _sound_path(root, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sound), encoding="utf-8")
+
+
+def load_sound(root, name):
+    try:
+        data = json.loads(_sound_path(root, name).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def translations(root, name):
     """The translated subtitle files of a video: [workspace path]."""
     d = Path(root) / DIR

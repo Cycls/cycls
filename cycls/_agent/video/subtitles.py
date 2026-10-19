@@ -4,7 +4,8 @@ The words are the voice-overs' and the clips' own word timings (what captions ar
 each sits on the video's clock is the service's sound map: every track's start, end, and where in its
 file it begins. So a clip cut into pieces gives only the words of the pieces shown, at the times they
 are heard. A cue is a sentence or a part of one: at most two lines of LINE characters and CUE_MAX_S
-seconds, broken at a sentence's end, at a pause, or where the next word would not fit.
+seconds, broken at a sentence's end, at a pause, or where the next word would not fit. The same
+files in another language come from a translation kept with the words (below).
 """
 import re
 
@@ -77,37 +78,96 @@ def _lines(text):
     return [text[:cut], text[cut + 1:]]
 
 
-def wrap(text, width=LINE):
-    """A translated line as subtitle lines: words kept whole, each line at most `width` where it can be."""
-    out, cur = [], ""
-    for word in str(text).split():
-        if cur and len(cur) + 1 + len(word) > width:
-            out.append(cur)
-            cur = word
-        else:
-            cur = f"{cur} {word}" if cur else word
-    if cur:
-        out.append(cur)
+# ---- in another language ------------------------------------------------------------------------
+# A translation is kept with the words, a sentence at a time: the words file's "translations",
+# {<language code>: {<sentence index>: text}}. The service draws captions on the video from it (a
+# captions box with data-cap-lang); the subtitle files in that language are made here from the same
+# sentences, each over the stretch in which it is heard.
+
+def sentence_of(said):
+    """Each word's sentence index in a words JSON (-1 for a word in none)."""
+    snts = [s for s in (said.get("sentences") or []) if isinstance(s, dict)]
+    out = []
+    for w in said.get("words") or []:
+        a, b = w.get("start"), w.get("end")
+        out.append(next((k for k, s in enumerate(snts) if a is not None and b is not None
+                         and a >= float(s.get("start", 0)) - 0.005 and b <= float(s.get("end", 0)) + 0.005), -1))
     return out
 
 
-_TIME = re.compile(r"(\d+):(\d\d):(\d\d)[,.](\d{3})\s*-->\s*(\d+):(\d\d):(\d\d)[,.](\d{3})")
+def _longest(stretches):
+    """The longest stretch heard together (gaps of a second or less joined): a piece may show part of a sentence."""
+    best = cur = None
+    for a, b in sorted(stretches):
+        if cur and a - cur[1] <= 1.0:
+            cur = [cur[0], max(cur[1], b)]
+        else:
+            cur = [a, b]
+        if best is None or cur[1] - cur[0] > best[1] - best[0]:
+            best = list(cur)
+    return best
 
 
-def parse_srt(text):
-    """An SRT file (as written here, or edited by hand) → [(start, end, [lines])]."""
-    out = []
-    for block in re.split(r"\n\s*\n", str(text).replace("\r\n", "\n").strip()):
-        rows = [r for r in block.split("\n") if r.strip()]
-        at = next((i for i, r in enumerate(rows) if _TIME.search(r)), None)
-        if at is None:
+def placed_translation(sound, words_of, lang):
+    """The translated sentences heard in the video, on its clock, from the sound map's tracks.
+    → ([(start, end, text)] sorted, the count of sentences heard with no translation)."""
+    heard = {}      # (id of the words JSON, sentence index) → [(start, end)]
+    texts = {}
+    for t in (sound or {}).get("tracks") or []:
+        said = words_of(t.get("src") or "") if t.get("src") else None
+        if not said:
             continue
-        m = [int(x) for x in _TIME.search(rows[at]).groups()]
-        start = m[0] * 3600 + m[1] * 60 + m[2] + m[3] / 1000
-        end = m[4] * 3600 + m[5] * 60 + m[6] + m[7] / 1000
-        lines = rows[at + 1:]
-        if lines:
-            out.append((round(start, 3), round(end, 3), lines))
+        idx = sentence_of(said)
+        given = ((said.get("translations") or {}).get(lang) or {}) if isinstance(said.get("translations"), dict) else {}
+        start, media = float(t.get("start") or 0), float(t.get("media_start") or 0)
+        end = float(t["end"]) if t.get("end") is not None else float("inf")
+        for j, w in enumerate(said.get("words") or []):
+            if idx[j] < 0 or w.get("start") is None or w.get("end") is None:
+                continue
+            a, b = start + float(w["start"]) - media, start + float(w["end"]) - media
+            if start - 1e-6 <= (a + b) / 2 < end:
+                key = (id(said), idx[j])
+                heard.setdefault(key, []).append((max(a, start), min(b, end)))
+                texts[key] = " ".join(str(given.get(str(idx[j])) or "").split())
+    spans, missing = [], 0
+    for key, stretches in heard.items():
+        if not texts[key]:
+            missing += 1
+            continue
+        a, b = _longest(stretches)
+        spans.append((round(a, 3), round(b, 3), texts[key]))
+    spans.sort()
+    return spans, missing
+
+
+def translated_cues(spans):
+    """[(start, end, text)] translated sentences → [(start, end, [lines])] cues: a sentence too long
+    for one cue is split between whole words, its parts sharing its time by their length."""
+    out = []
+    for n, (start, end, text) in enumerate(spans):
+        nxt = spans[n + 1][0] if n + 1 < len(spans) else None
+        rows, cur = [], ""
+        for word in text.split():
+            if cur and len(cur) + 1 + len(word) > LINE:
+                rows.append(cur)
+                cur = word
+            else:
+                cur = f"{cur} {word}" if cur else word
+        if cur:
+            rows.append(cur)
+        parts = [rows[i:i + LINES] for i in range(0, len(rows), LINES)]
+        size = [sum(len(r) for r in p) for p in parts]
+        total, at = sum(size), start
+        for m, p in enumerate(parts):
+            stop = at + (end - start) * size[m] / total
+            e = stop        # a part runs into the next part of its sentence
+            if m == len(parts) - 1:
+                e = max(stop + HOLD_S, at + MIN_S)
+                if nxt is not None:
+                    e = min(e, nxt - 0.04)
+                e = max(e, at + 0.2)
+            out.append((round(at, 3), round(e, 3), p))
+            at = stop
     return out
 
 

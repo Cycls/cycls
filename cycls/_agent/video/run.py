@@ -310,52 +310,197 @@ async def _render(workspace, root, chat, name, quality):
         text += " " + report.audio_facts(v["audio"])
     if v.get("faults"):
         text += f" (The renderer noted: {', '.join(v['faults'])}.)"
-    written = await asyncio.to_thread(_subtitles, root, target, sound, audio, words, footage)
+    if sound:
+        await asyncio.to_thread(files.save_sound, root, target, sound)
+    written, done, short = await asyncio.to_thread(_subtitles, root, target, sound, audio, words, footage)
     if written:
+        also = "".join(f", and in {lang}: {files.subtitles(target, 'srt', lang)} and .vtt ({n} cues)"
+                       for lang, n in done.items())
         text += (f" Subtitle files beside it, timed to the MP4: {files.subtitles(target, 'srt')} and "
-                 f"{files.subtitles(target, 'vtt')} ({written} lines), for platforms that take a captions file "
-                 "(YouTube, TikTok, LinkedIn); mention them to the user, and that you can add them in another "
-                 f"language (Arabic or English, say): `subtitles` with name {target} gives the lines to translate.")
+                 f"{files.subtitles(target, 'vtt')} ({written} lines){also}. They are files for platforms that take a "
+                 "captions track (YouTube, TikTok, LinkedIn), not text on the video; mention them to the user.")
+        for lang, missing in short.items():
+            text += (f" The {lang} subtitle files were not written: {missing} sentences heard have no {lang} "
+                     f"translation; `subtitles` {{name: {target}, to: {lang}}} lists them.")
+        if not done and not short:
+            text += (f" `subtitles` with name {target} translates what is said into another language (Arabic or "
+                     "English, say), as subtitle files and as captions on the video.")
     return {"_model": text, "_ui": {"type": "ui", "action": "open_canvas", "path": rel_mp4, "name": f"{target}.mp4"}}
 
 
 _LANG = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
+_RTL = ("ar", "fa", "he", "ur")
+_MEDIA_TAG = re.compile(r"<(audio|video)\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.I)
+_TAG_ATTR = re.compile(r"([\w:-]+)(?:\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s\"'>]+))?")
 
 
-def _translate(root, name, to, lines):
-    """`subtitles {name}`: the render's subtitle lines, numbered, to translate. `subtitles {name, to,
-    lines}`: those lines in language `to`, written beside the original as videos/<name>.<to>.srt and
-    .vtt with the original's timings (the translation is the model's; nothing is sent anywhere)."""
+def _spoken(html, root):
+    """The voice-overs and pieces of footage in a composition that have words, in the order they are
+    heard: [{"id", "words": the words file's workspace path, "said": its JSON, "heard": [sentence
+    index]}]. A sentence is heard when a word of it is inside the piece (the service's rule)."""
     from . import subtitles
 
-    src = Path(root) / files.subtitles(name, "srt")
-    if not src.is_file():
-        return _err(f"{files.subtitles(name, 'srt')} is not here: `render` {name} first (it writes subtitles when "
-                    "something is said in the video).")
-    cues = subtitles.parse_srt(src.read_text(encoding="utf-8"))
-    if not cues:
-        return _err(f"{files.subtitles(name, 'srt')} has no lines.")
-    if not lines:
-        listed = "\n".join(f"{i}. {' '.join(c[2])}" for i, c in enumerate(cues, 1))
-        return (f"{files.subtitles(name, 'srt')} has {len(cues)} lines:\n{listed}\n"
-                f"Translate each as it would be subtitled (natural, short, the same meaning; numbers and names kept), "
-                f"then call subtitles with name {name}, to (a language code: ar, en, fr…) and lines: exactly "
-                f"{len(cues)} strings, in this order, without the numbers.")
-    to = str(to or "").strip()
-    if not _LANG.match(to):
-        return _err("to: the language code of the translation, e.g. ar or en.")
-    if not isinstance(lines, list) or len(lines) != len(cues) or not all(isinstance(x, str) and x.strip() for x in lines):
-        return _err(f"lines: exactly {len(cues)} non-empty strings, one for each line of {files.subtitles(name, 'srt')}, "
-                    "in its order.")
-    cs = [(a, b, subtitles.wrap(" ".join(t.split()))) for (a, b, _), t in zip(cues, lines)]
+    out = []
+    for n, m in enumerate(_MEDIA_TAG.finditer(html)):
+        attrs = {k.lower(): (v or "").strip("\"'") for k, v in _TAG_ATTR.findall(m.group(2))}
+        path = media._local(attrs.get("src") or "")
+        if not path:
+            continue
+        try:
+            _, full = media.resolve_clip(path, root)
+        except ValueError:
+            continue
+        side = media.words_path(full)
+        try:
+            said = json.loads(side.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(said, dict) or not isinstance(said.get("words"), list):
+            continue
+
+        def num(key):
+            try:
+                return float(attrs[key])
+            except (KeyError, ValueError):
+                return None
+        ms = num("data-playback-start")
+        ms = (num("data-media-start") or 0) if ms is None else ms
+        dur, video_tag = num("data-duration"), m.group(1).lower() == "video"
+        idx, heard = subtitles.sentence_of(said), []
+        for j, w in enumerate(said["words"]):
+            a, b = w.get("start"), w.get("end")
+            if a is None or b is None or idx[j] < 0 or idx[j] in heard:
+                continue
+            mid = (a + b) / 2
+            if (mid >= ms and (dur is None or mid < ms + dur)) if video_tag else (b > ms and (dur is None or a < ms + dur)):
+                heard.append(idx[j])
+        out.append({"id": attrs.get("id") or "", "words": side.relative_to(Path(root).resolve()).as_posix(),
+                    "said": said, "heard": heard, "at": num("data-start") or 0, "n": n})
+    return sorted(out, key=lambda x: (x["at"], x["n"]))
+
+
+def _words_beside(root, src):
+    """A track's words JSON as it is now, by the src the sound map names, or None."""
+    try:
+        _, full = media.resolve_clip(media._local(src) or "", root)
+        said = json.loads(media.words_path(full).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return said if isinstance(said, dict) and isinstance(said.get("words"), list) else None
+
+
+def _write_translated(root, name, lang, sound, words_of):
+    """videos/<name>.<lang>.srt and .vtt from the translation kept with the words, timed by the MP4's
+    sound map. → (cues written, sentences heard untranslated); nothing is written unless every
+    sentence heard has its translation."""
+    from . import subtitles
+
+    spans, missing = subtitles.placed_translation(sound, words_of, lang)
+    if missing or not spans:
+        return 0, missing
+    cs = subtitles.translated_cues(spans)
     for ext, body in (("srt", subtitles.srt(cs)), ("vtt", subtitles.vtt(cs))):
-        (Path(root) / files.subtitles(name, ext, to)).write_text(body, encoding="utf-8")
-    return (f"Wrote {files.subtitles(name, 'srt', to)} and {files.subtitles(name, 'vtt', to)} ({len(cs)} lines, "
-            f"timed as the original). Tell the user where they are; a platform takes each as its own captions track.")
+        path = Path(root) / files.subtitles(name, ext, lang)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return len(cs), 0
+
+
+async def _translate(root, name, to, lines):
+    """`subtitles {name}`: what is said in the video, sentence by sentence, to translate. `subtitles
+    {name, to, lines}`: that translation, kept with the words (each words file's "translations"), so
+    captions on the video can show it and subtitle files in that language are made from it — now
+    beside the MP4 when it is here, and at every render after. The translation is the model's own."""
+    rel = files.composition(name)
+    try:
+        html = (root / rel).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return _err(f"there is no {rel}; `write` it first.")
+    spoken = await asyncio.to_thread(_spoken, html, root)
+    order, seen = [], set()
+    for s in spoken:
+        for k in s["heard"]:
+            if (s["words"], k) not in seen:
+                seen.add((s["words"], k))
+                order.append((s["words"], k, s["said"]))
+    if not order:
+        return _err(f"nothing is said in {rel}: subtitles translate the words of a voice-over or a clip "
+                    "(made with `voice` or `footage`).")
+    to = str(to or "").strip()
+    if to and not _LANG.match(to):
+        return _err("to: the language code of the translation, e.g. ar or en.")
+
+    def sentence(said, k):
+        snts = said.get("sentences") or []
+        return str(snts[k].get("text") or "") if k < len(snts) and isinstance(snts[k], dict) else ""
+
+    def kept(said, k):
+        tr = said.get("translations") if isinstance(said.get("translations"), dict) else {}
+        return ((tr.get(to) or {}) if to else {}).get(str(k))
+
+    if not lines:
+        rows = []
+        for i, (_, k, said) in enumerate(order, 1):
+            rows.append(f"{i}. {sentence(said, k)}")
+            if kept(said, k):
+                rows.append(f"   now in {to}: {kept(said, k)}")
+        return (f"What is said in {rel}, sentence by sentence ({len(order)}):\n" + "\n".join(rows) + "\n"
+                "Translate each sentence as a caption says it (natural and short, the same meaning; numbers and "
+                f"names kept), then call subtitles with name {name}, to (the language code: ar, en, fr…) and lines: "
+                f"exactly {len(order)} strings, in this order, without the numbers.")
+    if not to:
+        return _err("to: the language code of the translation, e.g. ar or en.")
+    if not isinstance(lines, list) or len(lines) != len(order) or \
+            not all(isinstance(x, str) and x.strip() and len(x) <= 600 for x in lines):
+        return _err(f"lines: exactly {len(order)} strings (each 600 characters at most), one for each sentence "
+                    f"`subtitles` {{name: {name}}} lists, in its order.")
+    by_file = {}
+    for (wrel, k, _), t in zip(order, lines):
+        by_file.setdefault(wrel, {})[str(k)] = " ".join(t.split())
+    for wrel, given in by_file.items():
+        async with lock(root / wrel):
+            said = json.loads((root / wrel).read_text(encoding="utf-8"))     # read again, under the lock
+            tr = said.get("translations") if isinstance(said.get("translations"), dict) else {}
+            tr[to] = {**(tr.get(to) or {}), **given}
+            said["translations"] = tr
+            await write_fig(root, wrel, json.dumps(said, ensure_ascii=False, indent=1).encode("utf-8"),
+                            by="agent", reason="video-translation")
+
+    text = f"Kept the {to} translation of {len(order)} sentences with the words ({', '.join(by_file)})."
+    sound = files.load_sound(root, name) if (root / files.mp4(name)).is_file() else None
+    if sound:
+        written, missing = await asyncio.to_thread(_write_translated, root, name, to, sound,
+                                                   lambda src: _words_beside(root, src))
+        if written:
+            text += (f" Subtitle files: wrote {files.subtitles(name, 'srt', to)} and {files.subtitles(name, 'vtt', to)} "
+                     f"({written} cues), timed to {files.mp4(name)}: files for platforms that take a captions track, "
+                     "not text on the video; tell the user where they are.")
+        else:
+            text += (f" Subtitle files: not written yet, because {missing} sentences heard in {files.mp4(name)} have no "
+                     f"translation (it was rendered from another cut); they are written with the next render.")
+    else:
+        text += (f" Subtitle files in {to} ({files.subtitles(name, 'srt', to)} and .vtt) are written with the next "
+                 "render of this video.")
+    found = re.search(r"data-captions\s*=\s*\"([^\"]*)\"", html)
+    ids = (found.group(1) if found else "") or " ".join(dict.fromkeys(s["id"] for s in spoken if s["heard"] and s["id"])) \
+        or "<the ids of the voice or the pieces>"
+    if re.search(rf"data-cap-lang\s*=\s*\"{re.escape(to)}\"", html):
+        text += f" The captions box in {to} on the video shows this translation from the next check and render."
+    else:
+        rtl = ' dir="rtl"' if to.split("-")[0] in _RTL else ""
+        text += (f" Captions on the video: a captions box in that language shows the translation a sentence at a "
+                 f"time, timed to what is said, and follows the cut: <div class=\"cap\" data-captions=\"{ids}\" "
+                 f"data-cap-lang=\"{to}\" data-cap-style=\"phrase\"{rtl}></div> at the root, placed and styled by you "
+                 "(beside the original captions, or instead of them). "
+                 + ("This video shows captions, so the person most likely wants the translation on it too: add the box "
+                    "with `edit`, look, then render." if found else
+                    "Add it with `edit` when the person wants the translation on the video, then render."))
+    return text
 
 
 def _subtitles(root, name, sound, audio, words, footage):
-    """What is said in the render, as SRT and WebVTT beside its MP4 (subtitles.py). → the cue count, 0 for none."""
+    """What is said in the render, as SRT and WebVTT beside its MP4 (subtitles.py), and in each language
+    a translation is kept for. → (cues written, {lang: cues}, {lang: sentences untranslated})."""
     from . import subtitles
 
     def words_of(src):
@@ -366,12 +511,23 @@ def _subtitles(root, name, sound, audio, words, footage):
 
     cs = subtitles.cues(subtitles.placed(sound, words_of))
     if not cs:
-        return 0
+        return 0, {}, {}
     for ext, body in (("srt", subtitles.srt(cs)), ("vtt", subtitles.vtt(cs))):
         path = Path(root) / files.subtitles(name, ext)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    return len(cs)
+    langs = set()
+    for said in [*(words or {}).values(), *((c or {}).get("words") for c in (footage or {}).values())]:
+        if isinstance(said, dict) and isinstance(said.get("translations"), dict):
+            langs.update(k for k in said["translations"] if isinstance(k, str) and _LANG.match(k))
+    done, short = {}, {}
+    for lang in sorted(langs):
+        n, missing = _write_translated(root, name, lang, sound, words_of)
+        if n:
+            done[lang] = n
+        elif missing:
+            short[lang] = missing
+    return len(cs), done, short
 
 
 async def _voice(workspace, root, chat, name, text, voice_id, language):
@@ -684,7 +840,8 @@ async def _exec_video(inp, workspace, ctx=None):
             return out
 
         if action == "subtitles":
-            return await asyncio.to_thread(_translate, root, name, inp.get("to"), inp.get("lines")) + note
+            out = await _translate(root, name, inp.get("to"), inp.get("lines"))
+            return out + note
 
         if action == "restore":
             history = versions.listing(root, rel)

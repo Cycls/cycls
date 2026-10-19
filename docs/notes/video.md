@@ -203,15 +203,41 @@ end and where in its file it begins, kept with the pending render so a render co
 call has it too), so a clip cut into pieces gives only the words shown, when they are heard. Cues: a
 sentence or a part of one, two lines of 42 characters and 6 s at most, broken at a sentence's end or
 a 0.6 s pause. A render of this chat's video again replaces them (the old ones to the Trash); one
-with nothing said writes none.
-
-**In another language** (`subtitles` action, 2026-10-19): `subtitles {name}` lists the lines of
-`videos/<name>.srt`, numbered (read back from the file, so a hand edit to it is kept); the model
-translates them itself and sends `subtitles {name, to, lines}` — exactly as many lines, in order — and
-they are written as `videos/<name>.<to>.srt` and `.vtt` with the original's timings, each wrapped to
-42-character lines. Nothing goes to another service. The render's reply offers it. A re-render of
-the video moves its translations to the Trash with the rest, since they were timed to the old cut. Checked on the dev service: a voice-over placed at 0.5 s gave three
+with nothing said writes none. Checked on the dev service: a voice-over placed at 0.5 s gave three
 cues starting 0.55 s, 2.03 s and 5.25 s.
+
+### In another language
+
+The `subtitles` action (2026-10-19). `subtitles {name}` lists what is said in the composition,
+sentence by sentence: the sentences of each voice-over and piece of footage that are heard (a word
+inside the piece, the service's rule), in the order they are heard, each once. The model translates
+them itself and sends `subtitles {name, to, lines}`, exactly as many, in order. Nothing goes to
+another service.
+
+The translation is **kept with the words**: each words file gets `translations: {<lang>:
+{<sentence index>: text}}` (merged, so sentences of an earlier cut keep theirs). It is used twice,
+and both follow the cut because both are placed from the words:
+
+- **Captions on the video**: a captions box with `data-cap-lang="<lang>"` (the service, `node/audio.mjs`
+  `translatedLines`) shows each translated sentence over the stretch in which it is heard (the
+  longest stretch, when pieces show it in parts), in lines of whole words that share that time by
+  their length, "phrase" style only (a translation has no word timings). A sentence heard with no
+  translation is the error `captions_untranslated`. The editor refuses typing into such a box: "ask
+  Cycls to change a line of it". The contract (v4) does not describe the attribute; the tool text
+  and the action's reply do (the exact box, with the ids of the original's box). Put it in the
+  contract at its next version.
+- **Subtitle files**: `videos/<name>.<lang>.srt` and `.vtt`, a sentence a cue (split into parts of two
+  42-character lines when long), written at every render for each language kept, and only when every
+  sentence heard has its translation (the reply says when one does not). A translation sent after
+  the render writes them at once, timed by the render's sound map, which is kept for the workspace
+  in `.cache/video/sound/<name>.json` (so a later chat can add a language).
+
+A sentence-by-sentence translation reads better than one made line by line: Arabic word order does
+not follow English line breaks. The first version (deployed in super-dev-00090 for a few hours)
+translated the `.srt`'s cues; its files are moved to the Trash at the next render, as old
+translations are. Checked on the dev service: three Arabic sentences over a voice-over, the box
+above the English captions, joined and right to left, each sentence on screen while it is spoken;
+`subs.ar.srt` written at the render with the English file's times.
 
 ## A talking clip tidied
 

@@ -1171,36 +1171,83 @@ def test_footage_with_tidy_gives_the_pieces_and_says_what_was_cut(monkeypatch, t
     assert 'data-media-start="12.25" data-duration="1.9"' in text and 'data-start="1.9" data-media-start="19.85"' in text
 
 
-# ---- translated subtitles ----------------------------------------------------------------------
+# ---- in another language -----------------------------------------------------------------------
 
-def test_an_srt_is_read_back_and_a_translation_wrapped_into_lines():
+AR = {"0": "مرحباً بكم.", "1": "اصنع واحداً."}
+
+
+def test_a_translation_is_placed_a_sentence_at_a_time_by_the_sound_map():
     from cycls._agent.video import subtitles
-    cs = [(0.55, 1.99, ["Cycls Video is live."]), (2.03, 5.21, ["Make your first video in 2 minutes,", "with a voice."])]
-    assert subtitles.parse_srt(subtitles.srt(cs)) == cs
-    assert subtitles.parse_srt(subtitles.srt(cs).replace("\n", "\r\n")) == cs           # edited on Windows
-    lines = subtitles.wrap("اصنع أول فيديو لك خلال دقيقتين، بصوت وموسيقى وترجمة مكتوبة على الشاشة")
-    assert len(lines) >= 2 and all(len(x) <= subtitles.LINE for x in lines)
-    assert " ".join(lines) == "اصنع أول فيديو لك خلال دقيقتين، بصوت وموسيقى وترجمة مكتوبة على الشاشة"
+    said = {**WORDS, "translations": {"ar": AR}}
+    spans, missing = subtitles.placed_translation(SOUND, lambda src: said if src == "videos/voice/hi.m4a" else None, "ar")
+    assert missing == 0
+    assert spans == [(0.55, 1.7, "مرحباً بكم."), (2.0, 3.5, "اصنع واحداً.")]     # the voice starts at 0.5 s
+    part = {**WORDS, "translations": {"ar": {"0": "مرحباً بكم."}}}
+    assert subtitles.placed_translation(SOUND, lambda src: part, "ar")[1] == 1
+    assert subtitles.placed_translation(SOUND, lambda src: part, "fr") == ([], 2)
+    cs = subtitles.translated_cues(spans)
+    assert [c[2] for c in cs] == [["مرحباً بكم."], ["اصنع واحداً."]] and cs[0][0] == 0.55 and cs[0][1] < 2.0
+    long = "اصنع أول فيديو لك خلال دقيقتين بصوت وموسيقى وترجمة مكتوبة على الشاشة لكل من يشاهد ويستمع إليه الآن"
+    split = subtitles.translated_cues([(1.0, 7.0, long)])
+    assert len(split) == 2 and split[0][1] == split[1][0]                        # back to back
+    assert all(len(line) <= subtitles.LINE for c in split for line in c[2])
+    assert " ".join(" ".join(c[2]) for c in split) == long
 
 
-def test_subtitles_lists_the_lines_then_writes_the_translation_with_the_original_timings(monkeypatch, tmp_path):
-    from cycls._agent.video import subtitles
+def test_subtitles_lists_the_sentences_then_keeps_the_translation_with_the_words(monkeypatch, tmp_path):
+    from cycls._agent.video import files as vfiles
     _on(monkeypatch)
     FakeService(monkeypatch)
     ws = _ws(tmp_path)
-    assert "render" in _run({"action": "subtitles", "name": "hi"}, ws)                    # nothing rendered yet
-    (tmp_path / "videos").mkdir(parents=True, exist_ok=True)
-    cs = [(0.55, 1.99, ["Hello there."]), (2.03, 3.5, ["Make one."])]
-    (tmp_path / "videos" / "hi.srt").write_text(subtitles.srt(cs), encoding="utf-8")
+    assert "write" in _run({"action": "subtitles", "name": "hi"}, ws)                    # no video yet
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "hi.video.html").write_text(VOICED, encoding="utf-8")
     listed = _run({"action": "subtitles", "name": "hi"}, ws)
-    assert "1. Hello there." in listed and "2. Make one." in listed and "exactly 2 strings" in listed
+    assert "1. Hello there.\n2. Make one." in listed and "exactly 2 strings" in listed
     assert _run({"action": "subtitles", "name": "hi", "to": "ar", "lines": ["مرحباً"]}, ws).startswith("Error: lines")
-    assert _run({"action": "subtitles", "name": "hi", "to": "Arabic!", "lines": ["a", "b"]}, ws).startswith("Error: to")
-    out = _run({"action": "subtitles", "name": "hi", "to": "ar", "lines": ["مرحباً بكم.", "اصنع واحداً."]}, ws)
-    assert "videos/hi.ar.srt and videos/hi.ar.vtt (2 lines" in out
-    ar = subtitles.parse_srt((tmp_path / "videos" / "hi.ar.srt").read_text(encoding="utf-8"))
-    assert [(a, b) for a, b, _ in ar] == [(a, b) for a, b, _ in cs] and ar[0][2] == ["مرحباً بكم."]
+    assert _run({"action": "subtitles", "name": "hi", "to": "Arabic!"}, ws).startswith("Error: to")
+    assert _run({"action": "subtitles", "name": "hi", "lines": ["a", "b"]}, ws).startswith("Error: to")
+    out = _run({"action": "subtitles", "name": "hi", "to": "ar", "lines": [AR["0"], AR["1"]]}, ws)
+    said = json.loads((tmp_path / "videos" / "voice" / "hi.words.json").read_text(encoding="utf-8"))
+    assert said["translations"] == {"ar": AR} and said["words"] == WORDS["words"]
+    assert "Kept the ar translation of 2 sentences" in out and "written with the next render" in out
+    assert 'data-captions="vo" data-cap-lang="ar" data-cap-style="phrase" dir="rtl"' in out
+    assert not (tmp_path / "videos" / "hi.ar.srt").exists()
+    assert "now in ar: مرحباً بكم." in _run({"action": "subtitles", "name": "hi", "to": "ar"}, ws)
+
+    # Rendered already, with its sound map kept: the files are written now, timed to the MP4.
+    (tmp_path / "videos" / "hi.mp4").write_bytes(b"MP4")
+    vfiles.save_sound(tmp_path, "hi", SOUND)
+    (tmp_path / "videos" / "hi.video.html").write_text(
+        VOICED.replace('<audio id="bed"', '<div class="cap" data-captions="vo"></div><audio id="bed"'), encoding="utf-8")
+    out = _run({"action": "subtitles", "name": "hi", "to": "ar", "lines": [AR["0"], "اصنعه."]}, ws)
+    assert "wrote videos/hi.ar.srt and videos/hi.ar.vtt (2 cues)" in out
+    assert "most likely wants the translation on it too" in out
+    srt = (tmp_path / "videos" / "hi.ar.srt").read_text(encoding="utf-8")
+    assert srt.startswith("1\n00:00:00,550 --> ") and "اصنعه." in srt and "00:00:02,000 --> " in srt
     assert (tmp_path / "videos" / "hi.ar.vtt").read_text(encoding="utf-8").startswith("WEBVTT")
+
+
+def test_a_render_writes_the_subtitle_files_in_each_language_kept_and_keeps_its_sound_map(monkeypatch, tmp_path):
     from cycls._agent.video import files as vfiles
-    assert vfiles.translations(tmp_path, "hi") == ["videos/hi.ar.srt", "videos/hi.ar.vtt"]
-    assert vfiles.translations(tmp_path, "h") == []                                    # another video's name
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "voice" / "hi.words.json").write_text(
+        json.dumps({**WORDS, "translations": {"ar": AR, "fr": {"0": "Bonjour."}}}), encoding="utf-8")
+    original = svc.submit
+
+    async def submit(*a, **k):
+        job = await original(*a, **k)
+        return {**job, "sound": SOUND}
+    monkeypatch.setattr(video, "submit", submit)
+    _run({"action": "write", "name": "hi", "html": VOICED}, _ws(tmp_path))
+    svc.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 4.0}}
+    out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))["_model"]
+    assert "and in ar: videos/hi.ar.srt and .vtt (2 cues)" in out
+    assert "The fr subtitle files were not written: 1 sentences heard have no fr translation" in out
+    assert "مرحباً بكم." in (tmp_path / "videos" / "hi.ar.srt").read_text(encoding="utf-8")
+    assert not (tmp_path / "videos" / "hi.fr.srt").exists()
+    assert vfiles.load_sound(tmp_path, "hi") == SOUND
+    assert svc.submitted[-1]["words"] and all("translations" in w for w in svc.submitted[-1]["words"].values())
