@@ -70,6 +70,24 @@ def test_frontmatter_folded_value():
     assert meta["description"] == "Design PowerPoint decks. Match brand style."
 
 
+def test_frontmatter_metadata_map_and_plain_text():
+    """`metadata:` over `key: value` lines is a map; a bare key over prose is still text."""
+    meta, _ = skills.parse_frontmatter("---\nname: pptx\ndescription: d\nmetadata:\n  title: Decks\n  title-ar: عروض\n---\nb")
+    assert meta["metadata.title"] == "Decks" and meta["metadata.title-ar"] == "عروض"
+    meta, _ = skills.parse_frontmatter("---\nname: x\ndescription:\n  Plain text: then more\n---\nb")
+    assert meta["description"] == "Plain text: then more"
+
+
+def test_skill_md_writes_what_people_see(tmp_path):
+    """The form's Arabic name and description land under `metadata`, and the catalog reads them back."""
+    md = skills.skill_md("pptx", "Create decks", "Body", title_ar="عروض", description_ar="إنشاء العروض")
+    (tmp_path / "pptx").mkdir()
+    (tmp_path / "pptx" / "SKILL.md").write_bytes(md)
+    s = skills._load_skill(tmp_path / "pptx", "me")
+    assert (s.name, s.description, s.title_ar, s.description_ar) == ("pptx", "Create decks", "عروض", "إنشاء العروض")
+    assert b"metadata:" not in skills.skill_md("x", "d", "b")   # nothing to show, nothing written
+
+
 def test_frontmatter_absent():
     meta, body = skills.parse_frontmatter("# Just markdown")
     assert meta == {} and body == "# Just markdown"

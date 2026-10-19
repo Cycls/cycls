@@ -2110,6 +2110,7 @@ def skills_router(ws_dep, user_dep):
     async def _row(ws, user, skill, scopes, blocked, off):
         latest = (await asyncio.to_thread(skills.versions, skill) or [{}])[0]
         return {"name": skill.name, "description": skill.description, "source": skill.source, "version": skill.version,
+                "title": skill.title, "title_ar": skill.title_ar, "description_ar": skill.description_ar,
                 "updated": latest.get("at"), "who": latest.get("who"), "yours": latest.get("by") == getattr(user, "id", None),
                 "on": skill.name not in off, "allowed": skill.name not in blocked, "manage": skill.source in scopes}
 
@@ -2195,7 +2196,9 @@ def skills_router(ws_dep, user_dep):
         old = (await asyncio.to_thread(skills.discover, ws)).get(name)
         files = {p: (old.dir / p).read_bytes() for p in await asyncio.to_thread(skills.files_in, old.dir)} \
             if old and old.source == scope else {}
-        files["SKILL.md"] = skills.skill_md(name, data.get("description") or "", data.get("body") or "")
+        files["SKILL.md"] = skills.skill_md(name, data.get("description") or "", data.get("body") or "",
+                                            title=old.title if old else "", title_ar=data.get("title_ar") or "",
+                                            description_ar=data.get("description_ar") or "")
         return await _keep(ws, user, scope, files, name)
 
     @r.post("/skills/{name}/move")

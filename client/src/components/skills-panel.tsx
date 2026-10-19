@@ -14,10 +14,18 @@ type Scope = "org" | "workspace" | "me";
 type Skill = {
   name: string; description: string; source: Scope | "dev"; version: number | null; updated: string | null;
   who: string | null; yours: boolean; on: boolean; allowed: boolean; manage: boolean;
+  title?: string; title_ar?: string; description_ar?: string;
 };
 type Page = Skill & { versions: { v: number; at: string; who: string | null }[]; files: string[] };
 type View = { at: "list" } | { at: "skill"; name: string } | { at: "form"; edit?: Page };
 const SOURCE = { dev: "skillBuiltIn", org: "skillOrg", workspace: "skillWorkspace", me: "skillMine" } as const;
+
+// What people see of a skill: in Arabic, its Arabic title and description; else its title; else its own name and
+// description, which are the model's.
+const display = (s: Skill) => {
+  const ar = getLang() === "ar";
+  return { title: (ar && s.title_ar) || s.title || s.name, about: (ar && s.description_ar) || s.description };
+};
 const WHO = { org: "skillOrgSub", workspace: "skillWorkspaceSub", me: "skillMineSub" } as const;
 const MENU = "absolute end-0 top-full z-20 mt-2 w-64 rounded-xl border border-border bg-background py-1 shadow-lg";
 const ITEM = "flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-start text-sm text-foreground hover:bg-secondary/60";
@@ -57,7 +65,8 @@ export function SkillsPanel({ api, onAsk }: { api: Api; onAsk: (text: string) =>
     onDone={(name) => { load(); setView(name ? { at: "skill", name } : { at: "list" }); }} />;
 
   const q = query.trim().toLowerCase();
-  const rows = (data?.skills ?? []).filter((s) => !q || s.name.includes(q) || s.description.toLowerCase().includes(q));
+  const rows = (data?.skills ?? []).filter((s) => !q
+    || [s.name, s.title, s.title_ar, s.description, s.description_ar].some((f) => f?.toLowerCase().includes(q)));
   return (
     <>
       <div className="mb-5 flex items-center gap-3">
@@ -91,8 +100,8 @@ export function SkillsPanel({ api, onAsk }: { api: Api; onAsk: (text: string) =>
             className={cn("flex cursor-pointer items-center gap-3 py-3 transition-colors hover:bg-secondary/30", !s.allowed && "opacity-50")}>
             <Mark />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground"><bdi>{s.name}</bdi></p>
-              <p className="truncate text-xs text-muted-foreground">{t(SOURCE[s.source])} · <bdi>{s.description}</bdi></p>
+              <p className="truncate text-sm font-medium text-foreground"><bdi>{display(s).title}</bdi></p>
+              <p className="truncate text-xs text-muted-foreground">{t(SOURCE[s.source])} · <bdi>{display(s).about}</bdi></p>
             </div>
             <span className="hidden shrink-0 text-xs text-muted-foreground sm:block">{day(s.updated)}</span>
             {s.allowed && <span onClick={(e) => e.stopPropagation()}><Switch on={s.on} onChange={(on) => act(api(`/skills/${s.name}`, { method: "PATCH", json: { on } }))} /></span>}
@@ -140,7 +149,7 @@ function SkillPage({ api, name, scopes, orgAdmin, onBack, onEdit }: {
       <div className="flex items-center gap-3">
         <Mark />
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-base font-semibold text-foreground"><bdi>{name}</bdi></h3>
+          <h3 className="truncate text-base font-semibold text-foreground"><bdi>{display(page).title}</bdi></h3>
           <p className="truncate text-xs text-muted-foreground">{[by, page.updated && `${t("updated")} ${day(page.updated)}`].filter(Boolean).join(" · ")}</p>
         </div>
         {page.allowed && <Switch on={page.on} onChange={(on) => act(api(`/skills/${name}`, { method: "PATCH", json: { on } }))} />}
@@ -177,7 +186,7 @@ function SkillPage({ api, name, scopes, orgAdmin, onBack, onEdit }: {
         <div className="mt-5 grid gap-6 sm:grid-cols-[1fr_14rem]">
           <div>
             <h4 className="mb-1.5 text-xs text-muted-foreground">{t("description")}</h4>
-            <p className="text-sm leading-relaxed text-foreground"><bdi>{page.description}</bdi></p>
+            <p className="text-sm leading-relaxed text-foreground"><bdi>{display(page).about}</bdi></p>
           </div>
           <dl className="h-fit space-y-3 rounded-xl bg-secondary/40 p-4 text-sm">
             <div><dt className="text-xs text-muted-foreground">{t("availableTo")}</dt><dd className="text-foreground">{t(SOURCE[page.source])}</dd></div>
@@ -234,10 +243,12 @@ function SkillForm({ api, edit, scope, onDone }: { api: Api; edit?: Page; scope:
   const [name, setName] = useState(edit?.name ?? "");
   const [description, setDescription] = useState(edit?.description ?? "");
   const [instructions, setInstructions] = useState("");
+  const [titleAr, setTitleAr] = useState(edit?.title_ar ?? "");
+  const [descriptionAr, setDescriptionAr] = useState(edit?.description_ar ?? "");
   useEffect(() => {
     if (edit) api(`/skills/${edit.name}/file?path=SKILL.md`, { silent: true }).then((r) => r.text()).then((md) => setInstructions(body(md))).catch(() => {});
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  const save = () => api(`/skills/${encodeURIComponent(name)}`, { method: "PUT", json: { description, body: instructions, scope: edit?.source ?? scope } })
+  const save = () => api(`/skills/${encodeURIComponent(name)}`, { method: "PUT", json: { description, body: instructions, title_ar: titleAr, description_ar: descriptionAr, scope: edit?.source ?? scope } })
     .then((r) => r.json()).then((r) => { track("skill_written", { edit: !!edit }); onDone(r.name); }).catch(() => {});
   return (
     <>
@@ -246,6 +257,10 @@ function SkillForm({ api, edit, scope, onDone }: { api: Api; edit?: Page; scope:
       <input value={name} onChange={(e) => setName(e.target.value)} disabled={!!edit} placeholder={t("skillNameHint")} dir="ltr" className={cn(FIELD, "mb-4 disabled:opacity-60")} />
       <label className="mb-1.5 block text-sm text-foreground">{t("description")}</label>
       <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder={t("skillDescriptionHint")} dir="auto" className={cn(FIELD, "mb-4 resize-none")} />
+      <label className="mb-1.5 block text-sm text-foreground">{t("skillNameAr")}</label>
+      <input value={titleAr} onChange={(e) => setTitleAr(e.target.value)} dir="rtl" className={cn(FIELD, "mb-4")} />
+      <label className="mb-1.5 block text-sm text-foreground">{t("skillDescriptionAr")}</label>
+      <textarea value={descriptionAr} onChange={(e) => setDescriptionAr(e.target.value)} rows={2} dir="rtl" className={cn(FIELD, "mb-4 resize-none")} />
       <label className="mb-1.5 block text-sm text-foreground">{t("instructions")}</label>
       <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={12} placeholder={t("skillInstructionsHint")} dir="auto" className={cn(FIELD, "resize-y font-mono text-xs leading-relaxed")} />
       <div className="mt-5 flex justify-end gap-2">

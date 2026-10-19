@@ -51,26 +51,40 @@ class Skill:
     dir: Path       # directory containing SKILL.md (image path for dev skills)
     source: str     # "dev" | "workspace" | "me"
     version: int | None = None
+    title: str = ""            # what people see: frontmatter `metadata.title`, `title-ar`, `description-ar`;
+    title_ar: str = ""         # `name` and `description` stay what the model reads
+    description_ar: str = ""
+
+
+_ENTRY_RE = re.compile(r"[A-Za-z0-9_-]+:(\s|$)")
 
 
 def parse_frontmatter(text):
-    """Split `---` fenced `key: value` frontmatter from the body. Flat string
-    keys only, with folded values (`>-` + indented lines) joined — enough for
-    SKILL.md, no YAML dependency. Unparseable → ({}, text)."""
+    """Split `---` fenced `key: value` frontmatter from the body. String keys,
+    folded values (`>-` + indented lines) joined, and one level of map (a bare
+    `metadata:` over indented `key: value` lines, read as `metadata.key`) —
+    enough for SKILL.md, no YAML dependency. Unparseable → ({}, text)."""
     if not text.startswith("---\n"):
         return {}, text
     lines = text.split("\n")
     for i, line in enumerate(lines[1:], 1):
         if line.strip() == "---":
-            meta, key = {}, None
+            meta, key, maps = {}, None, set()
             for raw in lines[1:i]:
                 if key and raw[:1] in (" ", "\t"):
-                    meta[key] = (meta[key] + " " + raw.strip()).strip()
+                    if key in maps and not meta[key] and _ENTRY_RE.match(raw.strip()):
+                        k, _, value = raw.strip().partition(":")
+                        meta[f"{key}.{k.strip().lower()}"] = value.strip().strip("'\"")
+                    else:   # a bare key's first line that isn't `key: value` makes it text after all
+                        maps.discard(key)
+                        meta[key] = (meta[key] + " " + raw.strip()).strip()
                     continue
                 k, sep, value = raw.partition(":")
                 if sep and k.strip():
                     key = k.strip().lower()
                     value = value.strip().strip("'\"")
+                    if not value:
+                        maps.add(key)
                     meta[key] = "" if value in (">", ">-", "|", "|-") else value
             return meta, "\n".join(lines[i + 1:])
     return {}, text
@@ -100,7 +114,8 @@ def _load_skill(path, source, fallback=None):
     desc = meta.get("description") or next((l.strip() for l in body.split("\n") if l.strip()), "")
     if len(desc) > MAX_DESCRIPTION:
         desc = desc[:MAX_DESCRIPTION] + "…"
-    return Skill(name, desc, path, source)
+    return Skill(name, desc, path, source, title=meta.get("metadata.title", ""),
+                 title_ar=meta.get("metadata.title-ar", ""), description_ar=meta.get("metadata.description-ar", ""))
 
 
 def _scan_dir(root, source):
@@ -288,9 +303,12 @@ def files_in(d):
     return sorted(p.relative_to(d).as_posix() for p in Path(d).rglob("*") if p.is_file())
 
 
-def skill_md(name, description, body):
-    """A SKILL.md from the three fields a person fills in."""
-    return f"---\nname: {name}\ndescription: {' '.join(description.split())}\n---\n\n{body.strip()}\n".encode()
+def skill_md(name, description, body, **shown):
+    """A SKILL.md from the fields a person fills in. `shown` (title, title_ar, description_ar) is what the Skills
+    tab shows, kept under `metadata` where the standard keeps what isn't its own."""
+    extra = "".join(f"\n  {k.replace('_', '-')}: {' '.join(v.split())}" for k, v in shown.items() if v and v.strip())
+    return (f"---\nname: {name}\ndescription: {' '.join(description.split())}\n"
+            f"{'metadata:' + extra + chr(10) if extra else ''}---\n\n{body.strip()}\n").encode()
 
 
 def bundle(skill):
@@ -372,7 +390,9 @@ SKILL_TOOL = {
         "organization (`scope: org`, its admins), everyone in a team workspace (`scope: workspace`, its owners "
         "and admins) or the person alone, everywhere (`scope: me`). It loads from their next message.\n"
         f"- To change a skill, copy /skills/<name>/ to {DRAFTS}/<name>/ and edit it there. To install one someone "
-        f"shares (a .skill or .zip file, a GitHub folder), unpack or fetch it into {DRAFTS}/<name>/. Then publish."
+        f"shares (a .skill or .zip file, a GitHub folder), unpack or fetch it into {DRAFTS}/<name>/. Then publish.\n"
+        "- `name` and `description` are what you read, so write them in English. What people see in the Skills "
+        "tab goes under `metadata` in the frontmatter: `title`, and in Arabic `title-ar` and `description-ar`."
     ),
     "input_schema": {"type": "object", "properties": {
         "name": {"type": "string", "description": "Skill name: as listed in the system prompt, or the one to publish."},
