@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { Part, Message, Source } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
 import { ThinkingPart } from "./parts/thinking-part";
@@ -279,7 +279,30 @@ function Loader() {
     <div className="flex items-center gap-0.5 py-3 text-foreground/70">
       <Star size={16} />
       <Star size={16} />
-      <Star size={16} hollow className="animate-[spin_1.8s_linear_infinite]" />
+      <GlowStar />
     </div>
+  );
+}
+
+// The turning star: the brand's blue and orange, mixed into its ink, sweep through it over a faint glow of them.
+function GlowStar() {
+  const id = useId().replace(/\W/g, "");
+  const mix = (c: string) => ({ stopColor: `color-mix(in oklab, ${c} 88%, currentColor)` });
+  const sweep = <animateTransform attributeName="gradientTransform" type="translate" from="0" to="322" dur="3s" repeatCount="indefinite" />;
+  return (
+    <svg viewBox="0 0 161 161" width={16} height={16} className="animate-[spin_1.8s_linear_infinite] overflow-visible">
+      <defs>
+        <linearGradient id={`${id}i`} gradientUnits="userSpaceOnUse" x2="322" spreadMethod="repeat">
+          <stop stopColor="currentColor" /><stop offset=".25" style={mix("#3171F6")} /><stop offset=".5" stopColor="currentColor" />
+          <stop offset=".75" style={mix("#EF8733")} /><stop offset="1" stopColor="currentColor" />{sweep}
+        </linearGradient>
+        <linearGradient id={`${id}g`} gradientUnits="userSpaceOnUse" x2="322" spreadMethod="repeat">
+          <stop stopColor="#3171F6" /><stop offset=".5" stopColor="#EF8733" /><stop offset="1" stopColor="#3171F6" />{sweep}
+        </linearGradient>
+        <filter id={`${id}b`} x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="22" /></filter>
+      </defs>
+      <path fillRule="evenodd" d={HOLLOW} fill={`url(#${id}g)`} filter={`url(#${id}b)`} opacity={0.2} transform="translate(80.5 80.5) scale(1.15) translate(-80.5 -80.5)" />
+      <path fillRule="evenodd" d={HOLLOW} fill={`url(#${id}i)`} />
+    </svg>
   );
 }

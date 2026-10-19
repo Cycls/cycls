@@ -1,7 +1,7 @@
 import type { PollApi } from "../lib/polls";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
+import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
@@ -1828,61 +1828,22 @@ function FollowUpChip({ text, onAccept, onDismiss }: {
 // Footer link into the trash — Finder/Drive style, from where the loss happened.
 type DockEntry = { icon: IconName; label: string; count?: number; onClick: () => void };
 
-// The panel's dock: one row of shortcuts at its foot. Tiles grow as the pointer nears them.
+// The panel's foot: its shortcuts in one row, each an icon and its name.
 function PanelDock({ items }: { items: DockEntry[] }) {
-  const pointer = useMotionValue(Infinity);
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-24 items-end justify-center bg-gradient-to-t from-background via-background/70 to-transparent pb-3">
-      <div
-        onMouseMove={(e) => pointer.set(e.clientX)}
-        onMouseLeave={() => pointer.set(Infinity)}
-        className="pointer-events-auto flex items-end gap-1 rounded-[18px] border border-black/[0.06] bg-white/70 p-1.5 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.3)] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[0_12px_32px_-12px_rgb(0_0_0/0.9)]"
-      >
-        {items.map((it) => <DockTile key={it.label} {...it} pointer={pointer} />)}
-      </div>
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex gap-1 bg-gradient-to-t from-background via-background/90 to-transparent px-3 pb-3 pt-10">
+      {items.map(({ icon, label, count, onClick }) => (
+        <button
+          key={label}
+          onClick={onClick}
+          className="pointer-events-auto flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+        >
+          <Icon name={icon} className="size-4" strokeWidth={1.8} />
+          {label}
+          {!!count && <span className="rounded-full bg-foreground/[0.08] px-1.5 text-[11px] leading-4 tabular-nums">{count}</span>}
+        </button>
+      ))}
     </div>
-  );
-}
-
-function DockTile({ icon, label, count, onClick, pointer }: DockEntry & { pointer: MotionValue<number> }) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const still = useReducedMotion();
-  const [tip, setTip] = useState(false);
-  const size = useSpring(useTransform(pointer, (x) => {
-    const r = ref.current?.getBoundingClientRect();
-    const d = r ? Math.abs(x - r.left - r.width / 2) : Infinity;
-    return still ? 32 : 32 + 12 * Math.max(0, 1 - d / 80);
-  }), { mass: 0.1, stiffness: 200, damping: 14 });
-  return (
-    <motion.button
-      ref={ref}
-      onClick={onClick}
-      aria-label={label}
-      style={{ width: size, height: size }}
-      onHoverStart={() => setTip(true)}
-      onHoverEnd={() => setTip(false)}
-      onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }}
-      onBlur={() => setTip(false)}
-      className="relative flex cursor-pointer items-center justify-center rounded-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.07] hover:text-foreground"
-    >
-      <AnimatePresence>
-        {tip && (
-          <motion.span
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            transition={{ duration: 0.12 }}
-            className="pointer-events-none absolute bottom-full z-10 mb-2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background"
-          >
-            {label}
-          </motion.span>
-        )}
-      </AnimatePresence>
-      <Icon name={icon} className="size-[45%]" strokeWidth={1.8} />
-      {!!count && (
-        <span className="absolute -end-1 -top-1 min-w-4 rounded-full bg-foreground px-1 text-center text-[10px] font-medium leading-4 text-background">{count}</span>
-      )}
-    </motion.button>
   );
 }
 
