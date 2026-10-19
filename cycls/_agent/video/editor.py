@@ -31,7 +31,7 @@ from .. import trash
 from ..design.deck import lock
 from ..design.store import version_of, write_fig
 from ..paths import _resolve_path
-from . import client, files, media
+from . import client, files, media, sizes
 
 _TIMEOUT = httpx.Timeout(120.0, connect=15.0)
 _SUFFIX = ".video.html"
@@ -222,28 +222,49 @@ async def _render(workspace, root, rel, quality, key):
         if problems:
             raise ValueError(problems[0])
         sent = {**image_files, **audio_files}
-        sha = hashlib.sha256(html.encode("utf-8") + json.dumps(sorted(sent), sort_keys=True).encode()).hexdigest()
-        job_key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|editor|{rel}|{sha}|{quality}".encode()).hexdigest()
-        job = await video.submit(workspace, "render", html, images, sent, params={"quality": quality}, key=job_key,
-                                 audio=audio, words=words, footage=footage)
-        t0, eta = time.time(), max(30, int(job.get("eta_s") or 90))
-        while True:
-            r = await video.poll(workspace, job["token"])
-            if r.get("state") != "pending":
-                break
+        # The main size and each other size the root lists (sizes.py), one job each, at once.
+        shapes, problems = sizes.declared(html)
+        if problems:
+            raise ValueError(problems[0])
+        jobs = []
+        for shape, h in [(None, html)] + [(s, sizes.variant(html, s)) for s in shapes]:
+            sha = hashlib.sha256(h.encode("utf-8") + json.dumps(sorted(sent), sort_keys=True).encode()).hexdigest()
+            job_key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|editor|{rel}|{sha}|{quality}"
+                                     f"{'|' + shape if shape else ''}".encode()).hexdigest()
+            try:
+                job = await video.submit(workspace, "render", h, images, sent, params={"quality": quality},
+                                         key=job_key, audio=audio, words=words, footage=footage)
+            except video.Refused as e:
+                if shape:
+                    e.findings = [{**f, "message": f"At {shape}: {f.get('message')}"} for f in e.findings]
+                raise
+            jobs.append((shape, job))
+        t0 = time.time()
+        eta = max(30, max(int(j.get("eta_s") or 90) for _, j in jobs))
+        results = {}
+        while len(results) < len(jobs):
+            left = [i for i in range(len(jobs)) if i not in results]
+            polled = await asyncio.gather(*(video.poll(workspace, jobs[i][1]["token"]) for i in left))
+            for i, r in zip(left, polled):
+                if r.get("state") != "pending":
+                    results[i] = r
             state["progress"] = min(0.95, (time.time() - t0) / eta)
-        if r.get("state") != "done":
-            raise RuntimeError(r.get("error") or r.get("state") or "the render failed")
+        for i, (shape, _) in enumerate(jobs):
+            if results[i].get("state") != "done":
+                raise RuntimeError((f"at {shape}: " if shape else "")
+                                   + (results[i].get("error") or results[i].get("state") or "the render failed"))
         name = Path(rel).name[: -len(_SUFFIX)]
-        dest = root / files.mp4(name)
-        # The MP4 is replaced, and its subtitle files with it (they were timed to the old cut): the
-        # new ones, in each language a translation is kept for, as the agent's render writes them.
-        olds = [files.mp4(name)] + [files.subtitles(name, e) for e in ("srt", "vtt")] + files.translations(root, name)
+        # The MP4s are replaced, every size, and the subtitle files with them (they were timed to the
+        # old cut): the new ones, in each language a translation is kept for, as the agent's render writes.
+        olds = [files.mp4(name)] + [sizes.mp4(name, s) for s in sizes.SHAPES] + \
+            [files.subtitles(name, e) for e in ("srt", "vtt")] + files.translations(root, name)
         for old in olds:
             if (root / old).exists():
                 await asyncio.to_thread(trash.trash_path, root, old, "user", "re-render")
-        await video.fetch(workspace, job["token"], dest, root / ".tmp" / "video-editor")
-        sound = job.get("sound")
+        for shape, job in jobs:
+            dest = root / (files.mp4(name) if shape is None else sizes.mp4(name, shape))
+            await video.fetch(workspace, job["token"], dest, root / ".tmp" / "video-editor")
+        sound = jobs[0][1].get("sound")
         if sound:
             await asyncio.to_thread(files.save_sound, root, name, sound)
             await asyncio.to_thread(run._subtitles, root, name, sound, audio, words, footage)

@@ -115,9 +115,11 @@ def _root_text(root_info):
     return f"{d:g} s, {w}x{h}" if d and w and h else ""
 
 
-async def _check(workspace, root, rel, html, *, kind="review", params=None, budget=None, again=True):
+async def _check(workspace, root, rel, html, *, kind="review", params=None, budget=None, again=True, label=None,
+                 quiet=False):
     """Lint at the door, then (when clean) the browser check and a sheet, or the frames asked for.
-    → (text, sheet blocks, lint passed)."""
+    `label` names the sheet (a size of the video); `quiet` leaves out what every size shares (the
+    sound map, the reminder to look). → (text, sheet blocks, lint passed)."""
     from cycls._agent import video
 
     images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
@@ -140,13 +142,14 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
                 "the MP4 wait until then — tell the person so."), [], True
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
-    sound = report.sound_text(job.get("sound"))
+    sound = "" if quiet else report.sound_text(job.get("sound"))
     if sound:
         head += "\n" + sound
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
     state = r.get("state")
     if state == "gone" and again:   # the service restarted under the job: ask once more
-        return await _check(workspace, root, rel, html, kind=kind, params=params, budget=budget, again=False)
+        return await _check(workspace, root, rel, html, kind=kind, params=params, budget=budget, again=False,
+                            label=label, quiet=quiet)
     if state == "pending":
         what = "the frames" if kind == "look" else "the browser check and the frames"
         return (f"{head} The renderer is still starting or busy, so {what} are not ready yet (about "
@@ -163,10 +166,45 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     elif r.get("not_ready"):
         parts.append("The page was not ready in time for these frames: they may show it before it settled.")
     times = job.get("times") or []
-    blocks = report.sheet_blocks(r.get("sheet"), times, rel)
-    if blocks:
+    blocks = report.sheet_blocks(r.get("sheet"), times, label or rel)
+    if blocks and not quiet:
         parts.append(report.LOOK_AT_IT)
     return "\n".join(parts), blocks, True
+
+
+async def _checks(workspace, root, rel, html, *, size=None, **kw):
+    """`_check` at the main size and, at once, at each other size the root lists (data-sizes,
+    sizes.py); `size` checks that one alone. → (text, sheet blocks, lint passed at the main size)."""
+    from . import sizes
+
+    shapes, problems = sizes.declared(html)
+    main = sizes.shape_of(sizes.main_size(html) or ())
+    label = lambda s: f"{rel} at {s} {sizes.SHAPES[s][0]}x{sizes.SHAPES[s][1]}"  # noqa: E731
+    if size:
+        asked = sizes.ALIASES.get(str(size).lower(), str(size).lower())
+        if asked not in sizes.SHAPES:
+            return f"size: one of {', '.join(sizes.SHAPES)}.", [], False
+        if asked != main and asked not in shapes:
+            return (f"{rel} is not made in {asked}: add it to the root's data-sizes first "
+                    f"(data-sizes=\"{' '.join(shapes + [asked])}\")."), [], False
+        if asked != main:
+            return await _check(workspace, root, rel, sizes.variant(html, asked), label=label(asked), **kw)
+        shapes = []
+    runs = [_check(workspace, root, rel, html, **kw)]
+    runs += [_check(workspace, root, rel, sizes.variant(html, s), quiet=True, label=label(s), **kw) for s in shapes]
+    results = await asyncio.gather(*runs)
+    text, blocks, clean = results[0]
+    if problems:
+        text = "\n".join(problems) + "\n" + text
+    if not clean or not shapes:
+        return text, blocks, clean
+    name = Path(rel).name[: -len(files.SUFFIX)]
+    for s, (t, b, _) in zip(shapes, results[1:]):
+        w, h = sizes.SHAPES[s]
+        text += (f"\n\nAt {s} {w}x{h} (rendered as {sizes.mp4(name, s)}; rules for this size alone: "
+                 f"#root[data-shape=\"{s}\"] ...):\n{t}")
+        blocks = blocks + b
+    return text, blocks, clean
 
 
 def _hand_edited(root, rel):
@@ -241,75 +279,106 @@ async def _guide(workspace, root, loaded):
 
 
 async def _render(workspace, root, chat, name, quality):
+    """The MP4 at the main size and at each other size the root lists, one job each, all at once.
+    A job cut off (Stop, a dropped connection) is collected by the next call, never paid twice."""
     from cycls._agent import video
+    from . import sizes
 
     rel = files.composition(name)
     try:
         html = (root / rel).read_text(encoding="utf-8")
     except FileNotFoundError:
         return _err(f"there is no {rel} to render; `write` it first.")
+    shapes, problems = sizes.declared(html)
+    if problems:
+        return _err(" ".join(problems))
     images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
     if problems:
         return _err("the images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
-    sha = _sha(html, sent, words, footage)
-    pending = files.render_pending(root, chat, name)
-    collected = bool(pending and pending.get("sha") == sha and pending.get("quality") == quality)
-    sound = None
-    if collected:
-        token, sound = pending["token"], pending.get("sound")
-    else:
-        key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{name}|{sha}|{quality}".encode()).hexdigest()
+    jobs = []      # {shape, slot, sha, token, sound, collected}
+    for shape, h in [(None, html)] + [(s, sizes.variant(html, s)) for s in shapes]:
+        sha = _sha(h, sent, words, footage)
+        slot = name if shape is None else f"{name}@{shape}"
+        pending = files.render_pending(root, chat, slot)
+        if pending and pending.get("sha") == sha and pending.get("quality") == quality:
+            jobs.append({"shape": shape, "slot": slot, "sha": sha, "token": pending["token"],
+                         "sound": pending.get("sound"), "collected": True})
+            continue
+        key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{slot}|{sha}|{quality}".encode()).hexdigest()
         try:
-            job = await video.submit(workspace, "render", html, images, sent, params={"quality": quality}, key=key,
+            job = await video.submit(workspace, "render", h, images, sent, params={"quality": quality}, key=key,
                                      audio=audio, words=words, footage=footage)
         except video.Refused as e:
-            return report.findings_text(e.findings, title="Not rendered — lint") + "\nFix them with `edit`, then render."
-        token, sound = job["token"], job.get("sound")
-        files.render_started(root, chat, name, token, sha, quality, sound=sound)
-    r = await video.wait(workspace, token, BUDGET["render"])
-    if r.get("state") in ("gone", "expired") and collected:
-        files.render_done(root, chat, name, None)   # that job is lost; start it again
-        return await _render(workspace, root, chat, name, quality)
-    if r.get("state") == "pending":
-        return (f"Still rendering {rel} (about {r.get('eta_s', 60)} s more). Call `render` again with the same name "
+            where = f" at {shape}" if shape else ""
+            return (report.findings_text(e.findings, title=f"Not rendered{where} — lint")
+                    + "\nFix them with `edit`, then render.")
+        files.render_started(root, chat, slot, job["token"], sha, quality, sound=job.get("sound"))
+        jobs.append({"shape": shape, "slot": slot, "sha": sha, "token": job["token"], "sound": job.get("sound"),
+                     "collected": False})
+    results = await asyncio.gather(*(video.wait(workspace, j["token"], BUDGET["render"]) for j in jobs))
+    for j, r in zip(jobs, results):
+        if r.get("state") in ("gone", "expired") and j["collected"]:
+            files.render_done(root, chat, j["slot"], None)   # that job is lost; start it again
+            return await _render(workspace, root, chat, name, quality)
+    waiting = [(j, r) for j, r in zip(jobs, results) if r.get("state") == "pending"]
+    if waiting:
+        left = ", ".join(j["shape"] or "the main size" for j, _ in waiting)
+        eta = max(r.get("eta_s", 60) for _, r in waiting)
+        return (f"Still rendering {rel} ({left}; about {eta} s more). Call `render` again with the same name "
                 "to collect it — it keeps running; do not change the composition meanwhile.")
-    if r.get("state") != "done":
-        files.render_done(root, chat, name, None)
-        return _err(f"the render failed: {r.get('error') or r.get('state')}. "
-                    + (f"Details: {r['log'][-600:]}" if r.get("log") else ""))
+    for j, r in zip(jobs, results):
+        if r.get("state") != "done":
+            files.render_done(root, chat, j["slot"], None)
+            where = f" at {j['shape']}" if j["shape"] else ""
+            return _err(f"the render{where} failed: {r.get('error') or r.get('state')}. "
+                        + (f"Details: {r['log'][-600:]}" if r.get("log") else ""))
     target = name
     if (root / files.mp4(target)).exists():
         if files.rendered_by_me(root, chat, target):
-            await asyncio.to_thread(trash.trash_path, root, files.mp4(target), "agent", "re-render")
-            # its subtitles go with it, translations too (timed to the old cut); the new render writes its own
-            for rel_sub in [files.subtitles(target, e) for e in ("srt", "vtt")] + files.translations(root, target):
-                if (root / rel_sub).exists():
-                    await asyncio.to_thread(trash.trash_path, root, rel_sub, "agent", "re-render")
+            # the old MP4s go to the trash, every size, and the subtitle files with them (translations
+            # too: timed to the old cut); this render writes its own
+            olds = [files.mp4(target)] + [sizes.mp4(target, s) for s in sizes.SHAPES] + \
+                [files.subtitles(target, e) for e in ("srt", "vtt")] + files.translations(root, target)
+            for old in olds:
+                if (root / old).exists():
+                    await asyncio.to_thread(trash.trash_path, root, old, "agent", "re-render")
         else:
             n = 2
             while (root / files.mp4(f"{name}-{n}")).exists():
                 n += 1
             target = f"{name}-{n}"
-    dest = root / files.mp4(target)
-    size = await video.fetch(workspace, token, dest, root / ".tmp" / (chat or "video"))
-    files.render_done(root, chat, name, sha)
+    made = []      # (workspace path, the service's facts, bytes)
+    for j, r in zip(jobs, results):
+        out = files.mp4(target) if j["shape"] is None else sizes.mp4(target, j["shape"])
+        size = await video.fetch(workspace, j["token"], root / out, root / ".tmp" / (chat or "video"))
+        files.render_done(root, chat, j["slot"], j["sha"])
+        made.append((out, r.get("video") or {}, size))
     if target != name:
-        files.render_done(root, chat, target, sha)
-    v = r.get("video") or {}
+        files.render_done(root, chat, target, jobs[0]["sha"])
+    rel_mp4, v, size = made[0]
     stream = v.get("stream") or {}
     facts = [f"{v['duration']:.1f} s" if v.get("duration") else "",
              f"{stream.get('width')}x{stream.get('height')}" if stream.get("width") else "",
              f"{size / 1048576:.1f} MB", f"rendered in {v['render_s']:.0f} s" if v.get("render_s") else ""]
-    rel_mp4 = files.mp4(target)
     text = (f"Rendered {rel_mp4} ({', '.join(f for f in facts if f)}); it is open on the canvas for the user. "
             f"Now make one `canvas` call with path {rel_mp4}, so the video stays in the chat as a file card "
             "(after a reload, and in a shared chat).")
+    if made[1:]:
+        others = []
+        for out, vv, n in made[1:]:
+            st = vv.get("stream") or {}
+            others.append(f"{out} ({st.get('width')}x{st.get('height')}, {n / 1048576:.1f} MB)" if st.get("width")
+                          else f"{out} ({n / 1048576:.1f} MB)")
+        text += (f" The other sizes: {', '.join(others)}: the same video, a file each; `canvas` each one the person "
+                 "should see, and tell them which is for where (vertical for Reels, TikTok and Shorts; square and "
+                 "portrait for feeds; wide for YouTube).")
     if target != name:
         text += f" It is named {target}.mp4 because {name}.mp4 was already here and is not this chat's render."
     if v.get("audio"):
         text += " " + report.audio_facts(v["audio"])
     if v.get("faults"):
         text += f" (The renderer noted: {', '.join(v['faults'])}.)"
+    sound = jobs[0]["sound"]
     if sound:
         await asyncio.to_thread(files.save_sound, root, target, sound)
     written, done, short = await asyncio.to_thread(_subtitles, root, target, sound, audio, words, footage)
@@ -318,7 +387,8 @@ async def _render(workspace, root, chat, name, quality):
                        for lang, n in done.items())
         text += (f" Subtitle files beside it, timed to the MP4: {files.subtitles(target, 'srt')} and "
                  f"{files.subtitles(target, 'vtt')} ({written} lines){also}. They are files for platforms that take a "
-                 "captions track (YouTube, TikTok, LinkedIn), not text on the video; mention them to the user.")
+                 "captions track (YouTube, TikTok, LinkedIn), not text on the video; mention them to the user."
+                 + (" They fit every size: the timing is the same." if made[1:] else ""))
         for lang, missing in short.items():
             text += (f" The {lang} subtitle files were not written: {missing} sentences heard have no {lang} "
                      f"translation; `subtitles` {{name: {target}, to: {lang}}} lists them.")
@@ -752,7 +822,7 @@ async def _exec_video(inp, workspace, ctx=None):
             if len(html.encode("utf-8")) > MAX_HTML:
                 return _err(f"the composition is over {MAX_HTML:,} bytes; keep it to the scenes and their animations.")
             name, rel, named = await _save(root, chat, name, html, "video-write")
-            text, blocks, clean = await _check(workspace, root, rel, html)
+            text, blocks, clean = await _checks(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
             return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}", blocks, note, _shown(rel, name, clean))
 
@@ -779,7 +849,7 @@ async def _exec_video(inp, workspace, ctx=None):
             except video.Refused as e:
                 return _err(f"the template was not filled: {e}. Nothing was saved.")
             name, rel, named = await _save(root, chat, name, html, "video-template")
-            text, blocks, clean = await _check(workspace, root, rel, html)
+            text, blocks, clean = await _checks(workspace, root, rel, html)
             return _result(f"Made {rel} from the {which} template ({len(html) / 1024:.1f} KB).{named} It is an ordinary "
                            f"composition now: change it with `edit`.\n{text}", blocks, note, _shown(rel, name, clean))
 
@@ -809,7 +879,7 @@ async def _exec_video(inp, workspace, ctx=None):
                             return _err(f"{rel} changed while it was being edited (the person is editing it); read "
                                         "it again, then edit.")
             files.remember(root, chat, name)
-            text, blocks, clean = await _check(workspace, root, rel, new)
+            text, blocks, clean = await _checks(workspace, root, rel, new)
             return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}", blocks,
                            note, _shown(rel, name, clean, version))
 
@@ -825,9 +895,10 @@ async def _exec_video(inp, workspace, ctx=None):
                 if not isinstance(at, list) or not all(isinstance(t, (int, float)) for t in at):
                     return _err("at: a list of times in seconds.")
                 params = {"at": [float(t) for t in at][:9], "zoom": str(inp.get("zoom") or "")[:200]}
-                text, blocks, _ = await _check(workspace, root, rel, html, kind="look", params=params, budget=BUDGET["look"])
+                text, blocks, _ = await _checks(workspace, root, rel, html, kind="look", params=params,
+                                                budget=BUDGET["look"], size=inp.get("size"))
             else:
-                text, blocks, _ = await _check(workspace, root, rel, html, budget=BUDGET["look"])
+                text, blocks, _ = await _checks(workspace, root, rel, html, budget=BUDGET["look"], size=inp.get("size"))
             return _result(text, blocks, note)
 
         if action == "render":

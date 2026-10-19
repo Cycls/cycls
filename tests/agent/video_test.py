@@ -1251,3 +1251,76 @@ def test_a_render_writes_the_subtitle_files_in_each_language_kept_and_keeps_its_
     assert not (tmp_path / "videos" / "hi.fr.srt").exists()
     assert vfiles.load_sound(tmp_path, "hi") == SOUND
     assert svc.submitted[-1]["words"] and all("translations" in w for w in svc.submitted[-1]["words"].values())
+
+
+# ---- several sizes -----------------------------------------------------------------------------
+
+WIDE = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=1920, height=1080">'
+        '<style>#root{width:1920px;height:1080px}</style></head><body><div id="root" data-composition-id="main" '
+        'data-no-timeline data-start="0" data-duration="5" data-width="1920" data-height="1080" '
+        'data-sizes="vertical square">Hi</div></body></html>')
+
+
+def test_the_sizes_are_read_from_the_root_and_each_is_made_from_the_same_file():
+    from cycls._agent.video import sizes
+    assert sizes.main_size(WIDE) == (1920, 1080)
+    assert sizes.declared(WIDE) == (["vertical", "square"], [])
+    shapes, problems = sizes.declared(WIDE.replace("vertical square", "reel wide 1080x1350 tall reel"))
+    assert shapes == ["vertical", "portrait"] and problems == ['data-sizes: "tall" is not a size; use vertical, portrait, square, wide.']
+    v = sizes.variant(WIDE, "vertical")
+    assert sizes.main_size(v) == (1080, 1920) and 'data-shape="vertical"' in v and "data-sizes" not in v
+    assert v.count("viewport") == 1 and '<meta name="viewport" content="width=1080, height=1920">' in v
+    assert "<style data-cycls-size>#root{width:1080px !important;height:1920px !important}</style></head>" in v
+    assert ">Hi</div>" in v and "#root{width:1920px;height:1080px}" in v           # the file's own rules stay
+    bare = WIDE.replace('<meta name="viewport" content="width=1920, height=1080">', "")
+    assert '<meta name="viewport" content="width=1080, height=1080">' in sizes.variant(bare, "square")
+    assert sizes.declared(WIDE.replace(' data-sizes="vertical square"', "")) == ([], [])
+    assert sizes.mp4("hi", "vertical") == "videos/hi.vertical.mp4"
+
+
+def test_a_video_in_several_sizes_is_checked_at_each_and_looked_at_one(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    out = _run({"action": "write", "name": "hi", "html": WIDE}, _ws(tmp_path))
+    sent = [s["html"] for s in svc.submitted]
+    assert len(sent) == 3 and "data-shape" not in sent[0]
+    assert 'data-shape="vertical"' in sent[1] and 'data-shape="square"' in sent[2]
+    text = _text(out)
+    assert "At vertical 1080x1920 (rendered as videos/hi.vertical.mp4" in text and "At square 1080x1080" in text
+    assert '#root[data-shape="vertical"]' in text
+    assert sum(1 for b in out["_model"] if isinstance(b, dict) and b.get("type") == "image") == 3
+    labels = [b["text"] for b in out["_model"] if isinstance(b, dict) and b.get("type") == "text" and b["text"].startswith("Frames")]
+    assert any("at vertical 1080x1920" in t for t in labels)
+    from cycls._agent.video import report
+    assert text.count(report.LOOK_AT_IT) == 1                                       # said once, not once a size
+    _run({"action": "look", "name": "hi", "at": [1.0], "size": "square"}, _ws(tmp_path))
+    assert len(svc.submitted) == 4 and 'data-shape="square"' in svc.submitted[-1]["html"]
+    assert "not made in portrait" in _text(_run({"action": "look", "name": "hi", "size": "portrait"}, _ws(tmp_path)))
+    bad = _run({"action": "write", "name": "hi", "html": WIDE.replace("vertical square", "tall")}, _ws(tmp_path))
+    assert 'data-sizes: "tall" is not a size' in _text(bad)
+
+
+def test_a_render_makes_every_size_and_a_new_render_replaces_them_all(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _run({"action": "write", "name": "hi", "html": WIDE}, _ws(tmp_path))
+    svc.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 5.0, "stream": {"width": 1920, "height": 1080}}}
+    before = len(svc.submitted)
+    out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))["_model"]
+    renders = svc.submitted[before:]
+    assert [s["kind"] for s in renders] == ["render"] * 3 and 'data-shape="vertical"' in renders[1]["html"]
+    for f in ("hi.mp4", "hi.vertical.mp4", "hi.square.mp4"):
+        assert (tmp_path / "videos" / f).read_bytes().startswith(b"MP4:")
+    assert "The other sizes: videos/hi.vertical.mp4" in out and "videos/hi.square.mp4" in out
+    # Rendered again with one size fewer: every old MP4 goes to the trash, the dropped size's too.
+    (tmp_path / "videos" / "hi.video.html").write_text(WIDE.replace("vertical square", "vertical").replace("Hi", "Hey"),
+                                                       encoding="utf-8")
+    _run({"action": "render", "name": "hi"}, _ws(tmp_path))
+    assert not (tmp_path / "videos" / "hi.square.mp4").exists()
+    assert list((tmp_path / ".trash").glob("*/data/videos/hi.square.mp4")) and (tmp_path / "videos" / "hi.vertical.mp4").exists()
+    # A size the service would refuse is not rendered at all, and the reply says which size.
+    svc.refuse = [{"code": "text_off_frame", "severity": "error", "message": "The title runs off the frame."}]
+    (tmp_path / "videos" / "hi.video.html").write_text(WIDE.replace("Hi", "Hi again"), encoding="utf-8")
+    assert "Not rendered" in _text(_run({"action": "render", "name": "hi"}, _ws(tmp_path)))

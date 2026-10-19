@@ -251,6 +251,35 @@ what was cut; the model puts them in place of one piece and tells the person. Ch
 real reader's 37.5 s clip with silences put in: 4 pieces, 18.1 s; the render came out 18.2 s with its
 sound and subtitles, one pause left of 0.84 s (word ends run a little past the sound).
 
+## Several sizes
+
+One composition, several MP4s (`sizes.py`, 2026-10-19). The root lists the other sizes,
+`data-sizes="vertical square"` (vertical 1080x1920, portrait 1080x1350, square 1080x1080, wide
+1920x1080; the service's format names `reel`, `story`, `post-portrait`, `slide` and `WxH` are taken
+too); its own size is the main one. For every check (`write`, `edit`, `template`, `look`) and render,
+the SDK makes each size from the file: the root's `data-width`/`data-height`, a `data-shape="<size>"`
+on the root, the viewport, and a `<style data-cycls-size>` that sets the root's box over the file's
+own rule; `data-sizes` is taken off. Nothing else changes, so the scenes, timing, sound and captions
+are the same everywhere (the service breaks caption lines to each size's own budget). The model
+writes what one size needs as rules for it alone, `#root[data-shape="vertical"] .title {…}`; the file
+as written is the main size, so the editor (which shows the file) and the main render agree.
+
+- **Checks** run at every size at once (`run._checks`): the main reply, then "At vertical 1080x1920
+  (rendered as videos/<name>.vertical.mp4 …)" with that size's browser check and sheet. The sound
+  map and the reminder to look are said once. `look {size}` looks at one size. A main size that
+  fails lint is answered alone.
+- **Renders**: one job per size, all at once, each kept in the chat's record as `<name>@<size>` so
+  a cut-off render is collected, not paid twice; any size refused by lint stops the render and the
+  reply names the size. Out: `videos/<name>.mp4` and `videos/<name>.<size>.mp4`; a new render moves
+  every size's old MP4 to the Trash (a size dropped from the list too). The subtitle files are written
+  once, from the main size's sound map: the timing is the same in every size.
+- **The editor's Render** renders every size the same way (`editor._render`).
+
+No service change. Checked on the dev service: a wide title card with a voice-over and word captions,
+`data-sizes="vertical square"`, two rules of its own — three clean checks, three sheets (the
+vertical one with the title centred and the captions higher, its own rule), three MP4s (1920x1080,
+1080x1920, 1080x1080, about 0.5 MB each).
+
 ## The canvas
 
 A composition is the file kind `composition` (its suffix, before html, on both sides). Opened,

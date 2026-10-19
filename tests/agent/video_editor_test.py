@@ -293,3 +293,37 @@ def test_a_render_from_the_editor_lands_beside_the_video(monkeypatch, tmp_path):
     assert vfiles.load_sound(root, "launch") == sound
     assert client.post("/video/render?path=videos/launch.video.html&quality=huge").status_code == 400
     client.__exit__(None, None, None)
+
+
+def test_a_render_from_the_editor_makes_every_size_the_root_lists(monkeypatch, tmp_path):
+    from cycls._agent import video
+
+    client, root = _client(tmp_path)
+    _video(root, COMP.replace('data-height="1920"', 'data-height="1920" data-sizes="square"'))
+    _on(monkeypatch)
+    sent = []
+
+    async def submit(ws, kind, html, images=None, files=None, **kw):
+        sent.append(html)
+        return {"token": f"tok{len(sent)}", "eta_s": 30}
+
+    async def poll(ws, token, wait=25):
+        return {"state": "done"}
+
+    async def fetch(ws, token, dest, scratch, what="video"):
+        dest.write_bytes(token.encode())
+        return 4
+
+    monkeypatch.setattr(video, "submit", submit)
+    monkeypatch.setattr(video, "poll", poll)
+    monkeypatch.setattr(video, "fetch", fetch)
+    client.__enter__()
+    client.post("/video/render?path=videos/launch.video.html&quality=standard")
+    for _ in range(50):
+        if client.get("/video/render?path=videos/launch.video.html").json()["state"] != "rendering":
+            break
+        asyncio.run(asyncio.sleep(0.02))
+    assert len(sent) == 2 and 'data-shape="square"' in sent[1] and 'data-width="1080" data-height="1080"' in sent[1]
+    assert (root / "videos" / "launch.mp4").read_bytes() == b"tok1"
+    assert (root / "videos" / "launch.square.mp4").read_bytes() == b"tok2"
+    client.__exit__(None, None, None)
