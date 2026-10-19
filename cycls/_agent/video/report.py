@@ -174,6 +174,13 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
             lines.append(f"(and {len(sentences) - MAX_SENTENCES} more sentences" + (f", in {words_rel}" if words_rel else "") + ")")
         lines.append("A recogniser wrote this down: names, brands and dialect words may be misheard. Check a word that "
                      "matters with the person before it goes in a caption.")
+        unheard = said.get("unheard") or []
+        if unheard:
+            # The service could not make out these stretches (cycls-video listen.py): music or noise,
+            # or speech its recogniser lost. Said, so captions there are not taken as complete.
+            lines.append("Nothing could be made out at " + ", ".join(f"{_t(a)}–{_t(b)} s" for a, b in unheard[:6])
+                         + ": music or noise, or speech the recogniser lost. If someone speaks there, captions will "
+                         "miss it: ask the person what is said, or keep captions off that stretch.")
         first = sentences[0]
     elif info.get("has_audio"):
         why = f" ({info['transcript_note']})" if info.get("transcript_note") else ""

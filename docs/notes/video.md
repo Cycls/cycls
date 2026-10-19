@@ -116,8 +116,12 @@ own voices); word times within 20–30 ms; music with nobody speaking gives no t
 with footage runs at about 2.2× the video's length (204 s for 90 s) and peaks at 9.4 GB of 16.
 
 Decided (2026-10-13): Whisper large-v3-turbo stays, and the comparison with Cohere Transcribe Arabic is dropped; a transcript is
-corrected by hand where it matters. Not done: real speech (every spoken test clip was read by the service's own voices); real
-Safari; a clip's used stretch alone being sent to a renderer (the whole mezzanine goes, once a container).
+corrected by hand where it matters. Not done: real Safari; a clip's used stretch alone being sent to a renderer (the whole
+mezzanine goes, once a container). Real speech was measured on 2026-10-19 (cycls-video `scripts/speech_check.py`, `docs/quirks.md`):
+English about 3 % word error, MSA about 5 % character error, Gulf dialect about 17 %, in noise, music and quiet alike; it
+found one window of Emirati speech dropped in silence, fixed in the service. What the service still cannot make out comes back as
+`unheard` spans, and the footage reply names them ("Nothing could be made out at 18.6–22.5 s …", `report.footage_text`), so
+captions over that stretch are not taken as complete.
 
 In production since 2026-10-13: the service from cycls-video `acb8a16`, then super-dev on SDK `57357c8e`
 (production's `12cd826e` plus the four footage commits, from a deploy tree that holds nothing else).
@@ -132,7 +136,8 @@ Two things seen on the way:
   offered, and the model tried to do the same brief in its sandbox (ffmpeg, `pip install faster-whisper`).
 - `_ingest` (harness/main.py) answers an attachment `read` cannot take with "too large… use bash…
   propose a way to extract its content". With Video offered the model still went to `footage`, but
-  for a clip or a sound file the note could name `footage` instead.
+  for a clip the note could name `footage` instead. **Done 2026-10-19 (`fe4e5dde`):** with Video
+  offered, an attached MP4, MOV, M4V or WebM is named as a clip and sent to `footage`, unread.
 
 ## The tool
 
@@ -256,6 +261,17 @@ select something and **Ask Cycls** about it, or **Render**.
   hidden that way, so an agent's change loaded into an aside editor never got its preview, and the
   editor gave up after 45 s ("The preview did not reload"). Seen on production; fixed in `00df2208`,
   live as `super-dev-00080-l5q` and checked there (Ask, an agent change and render, Back after 112 s: the preview current).
+- **Two people on one video** (walked 2026-10-19, 18 of 18, headless on the real page with the
+  routes mounted for four test people, against the dev editor): in a team workspace each person gets
+  an editor of their own; the second to save over the first meets the conflict dialog and Load the
+  latest brings in the first's change; a write from outside the editor (as an agent's) stops the
+  next save the same way; someone in another organisation cannot close a session by its id (the
+  service checks the organisation) and someone off the team cannot reach it (404), nor read the file
+  or open an editor on it. Taken off the team with the editor open, a person's saves are refused and
+  the editor now says "Not saved — you no longer have access to this file" (`3d9fd3c1`; it said
+  "try again"). Two things as designed, worth knowing: autosaves keep at most one version a file
+  every 5 minutes whoever saves (`versions.GAP`; "Keep mine" always keeps one), and a version says
+  `by: user`, not which person — in a team the history cannot say who made a change.
 
 In production since 2026-10-18: the service from cycls-video `d6fdc9a` (the editor at
 `https://cycls--cycls-video-editor-serve.us-east.modal.run`), then super-dev revision

@@ -1057,3 +1057,13 @@ def test_a_clip_whose_sound_track_is_empty_is_told_as_silent():
     text = report.footage_text("videos/footage/sea.mp4", {**INFO, "has_audio": False, "silent_track": True, "transcript": None,
                                                          "lufs": -70.0, "source": {}})
     assert "(40 s, 1920x1080, its sound track is silent)" in text and "with sound" not in text and "LUFS" not in text
+
+
+def test_a_stretch_the_service_could_not_make_out_is_named_in_the_reply():
+    # Real speech (cycls-video speech_check, 2026-10-19): a window the recogniser lost was dropped in
+    # silence, so captions over it looked complete. The service now returns it as `unheard`.
+    from cycls._agent.video import report
+
+    text = report.footage_text("uploads/talk.mp4", {**INFO, "transcript": {**SAID, "unheard": [[18.3, 26.3]]}})
+    assert "Nothing could be made out at 18.3–26.3 s" in text and "ask the person" in text
+    assert "Nothing could be made out" not in report.footage_text("uploads/talk.mp4", INFO)
