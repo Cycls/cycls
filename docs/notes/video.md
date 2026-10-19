@@ -127,7 +127,10 @@ In production since 2026-10-19: the service from cycls-video `d9e5ff3`, then sup
 `8447f909` (production's `f0bb2dcd` plus `fe4e5dde`, `3d9fd3c1`, `91948fee`, the client rebuilt; the versions change
 `f849d982` is not in it — it waits for super-dev to move to this branch). A real chat on the Cycls organisation's Personal
 workspace: a clip of a person reading attached, nothing said of footage; `footage` came first, then write, edit, render;
-3.1 minutes, $0.23; the MP4 played with its sound and word-lit captions.
+3.1 minutes, $0.23; the MP4 played with its sound and word-lit captions. Then the versions change (`f849d982`, with `17046c16`: a teammate
+named from the organisation's member list, since the production sign-in token carries no name) went out on its own on top of
+that, cherry-picked onto the deploy tree (docstring conflicts only): `super-dev-00085-7ch`. Checked on production: a save
+through the files route kept the person (`who`, `mine: true` for them) and the file was put back as it was.
 
 In production since 2026-10-13: the service from cycls-video `acb8a16`, then super-dev on SDK `57357c8e`
 (production's `12cd826e` plus the four footage commits, from a deploy tree that holds nothing else).
