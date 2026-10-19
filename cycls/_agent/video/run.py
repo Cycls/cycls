@@ -254,8 +254,9 @@ async def _render(workspace, root, chat, name, quality):
     sha = _sha(html, sent, words, footage)
     pending = files.render_pending(root, chat, name)
     collected = bool(pending and pending.get("sha") == sha and pending.get("quality") == quality)
+    sound = None
     if collected:
-        token = pending["token"]
+        token, sound = pending["token"], pending.get("sound")
     else:
         key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{name}|{sha}|{quality}".encode()).hexdigest()
         try:
@@ -263,8 +264,8 @@ async def _render(workspace, root, chat, name, quality):
                                      audio=audio, words=words, footage=footage)
         except video.Refused as e:
             return report.findings_text(e.findings, title="Not rendered — lint") + "\nFix them with `edit`, then render."
-        token = job["token"]
-        files.render_started(root, chat, name, token, sha, quality)
+        token, sound = job["token"], job.get("sound")
+        files.render_started(root, chat, name, token, sha, quality, sound=sound)
     r = await video.wait(workspace, token, BUDGET["render"])
     if r.get("state") in ("gone", "expired") and collected:
         files.render_done(root, chat, name, None)   # that job is lost; start it again
@@ -280,6 +281,9 @@ async def _render(workspace, root, chat, name, quality):
     if (root / files.mp4(target)).exists():
         if files.rendered_by_me(root, chat, target):
             await asyncio.to_thread(trash.trash_path, root, files.mp4(target), "agent", "re-render")
+            for ext in ("srt", "vtt"):   # its subtitles go with it; the new render writes its own
+                if (root / files.subtitles(target, ext)).exists():
+                    await asyncio.to_thread(trash.trash_path, root, files.subtitles(target, ext), "agent", "re-render")
         else:
             n = 2
             while (root / files.mp4(f"{name}-{n}")).exists():
@@ -305,7 +309,32 @@ async def _render(workspace, root, chat, name, quality):
         text += " " + report.audio_facts(v["audio"])
     if v.get("faults"):
         text += f" (The renderer noted: {', '.join(v['faults'])}.)"
+    written = await asyncio.to_thread(_subtitles, root, target, sound, audio, words, footage)
+    if written:
+        text += (f" Subtitle files beside it, timed to the MP4: {files.subtitles(target, 'srt')} and "
+                 f"{files.subtitles(target, 'vtt')} ({written} lines), for platforms that take a captions file "
+                 "(YouTube, TikTok, LinkedIn); mention them to the user.")
     return {"_model": text, "_ui": {"type": "ui", "action": "open_canvas", "path": rel_mp4, "name": f"{target}.mp4"}}
+
+
+def _subtitles(root, name, sound, audio, words, footage):
+    """What is said in the render, as SRT and WebVTT beside its MP4 (subtitles.py). → the cue count, 0 for none."""
+    from . import subtitles
+
+    def words_of(src):
+        if src in (audio or {}):
+            return (words or {}).get(audio[src])
+        clip = (footage or {}).get(src)
+        return clip.get("words") if isinstance(clip, dict) else None
+
+    cs = subtitles.cues(subtitles.placed(sound, words_of))
+    if not cs:
+        return 0
+    for ext, body in (("srt", subtitles.srt(cs)), ("vtt", subtitles.vtt(cs))):
+        path = Path(root) / files.subtitles(name, ext)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return len(cs)
 
 
 async def _voice(workspace, root, chat, name, text, voice_id, language):

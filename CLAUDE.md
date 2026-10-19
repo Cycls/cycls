@@ -65,7 +65,7 @@ cycls/
     │   └── editor.py       # the video editor's sessions on the service (Edit on the canvas → client video-editor-view.tsx) and the render it asks for
     │   ├── client.py       # the door's API (contract, warm, compile, jobs, long-poll, the MP4 streamed to disk; a clip sent in pieces, ingest)
     │   ├── contract.py     # the signed contract, verified (fallback.py: the built-in copy); tool.py — short and whole forms
-    │   └── run.py          # the executor (guide, write, edit, look, render, restore, voice, music, footage); files.py, media.py, report.py, stock.py (Pexels clips)
+    │   └── run.py          # the executor (guide, write, edit, look, render, restore, voice, music, footage); files.py, media.py, report.py, stock.py (Pexels clips), subtitles.py (.srt/.vtt beside a render)
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
     │   ├── skill.py        # the tool's own skills (skills/*.md: design-direction, graphic-design, deck-design, document-design), loaded by `skill`

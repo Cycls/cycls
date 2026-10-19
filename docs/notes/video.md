@@ -193,6 +193,19 @@ Rules that shaped it:
   by setting a URL. Entries match a workspace's organisation, its person (a personal account) or
   its workspace id; `*` is everyone (local development only).
 
+## Subtitle files
+
+A render with something said in it writes `videos/<name>.srt` and `videos/<name>.vtt` beside the MP4
+(`subtitles.py`, called from `run._render`), for platforms that take a captions file. The words are
+the voice-overs' and clips' own word timings, as written (a voice-over keeps "2 minutes", "1,200");
+each is placed on the video's clock from the sound map the render's submit returned (a track's start,
+end and where in its file it begins, kept with the pending render so a render collected on a later
+call has it too), so a clip cut into pieces gives only the words shown, when they are heard. Cues: a
+sentence or a part of one, two lines of 42 characters and 6 s at most, broken at a sentence's end or
+a 0.6 s pause. A render of this chat's video again replaces them (the old ones to the Trash); one
+with nothing said writes none. Checked on the dev service: a voice-over placed at 0.5 s gave three
+cues starting 0.55 s, 2.03 s and 5.25 s.
+
 ## The canvas
 
 A composition is the file kind `composition` (its suffix, before html, on both sides). Opened,

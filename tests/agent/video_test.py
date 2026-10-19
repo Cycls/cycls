@@ -1067,3 +1067,66 @@ def test_a_stretch_the_service_could_not_make_out_is_named_in_the_reply():
     text = report.footage_text("uploads/talk.mp4", {**INFO, "transcript": {**SAID, "unheard": [[18.3, 26.3]]}})
     assert "Nothing could be made out at 18.3–26.3 s" in text and "ask the person" in text
     assert "Nothing could be made out" not in report.footage_text("uploads/talk.mp4", INFO)
+
+
+# ---- subtitle files ----------------------------------------------------------------------------
+
+def test_subtitle_cues_follow_the_words_heard_through_each_piece():
+    from cycls._agent.video import subtitles
+    talk = {"words": [{"text": t, "start": a, "end": b} for t, a, b in [
+        ("We", 1.0, 1.2), ("opened", 1.25, 1.6), ("in", 1.65, 1.75), ("March.", 1.8, 2.3),
+        ("By", 3.0, 3.2), ("June", 3.25, 3.6), ("there", 3.65, 3.9), ("were", 3.95, 4.1), ("three.", 4.15, 4.7)]]}
+    # The clip shown twice: 0.9-2.4 s of it at the video's 0 s, then 2.9-4.8 s of it at 5 s.
+    sound = {"tracks": [{"id": "a", "kind": "footage", "src": "uploads/talk.mp4", "start": 0, "end": 1.5, "media_start": 0.9},
+                        {"id": "b", "kind": "music", "src": "music:calm-01", "start": 0, "end": 8, "media_start": 0},
+                        {"id": "c", "kind": "footage", "src": "uploads/talk.mp4", "start": 5, "end": 6.9, "media_start": 2.9}]}
+    words = subtitles.placed(sound, lambda src: talk if src == "uploads/talk.mp4" else None)
+    assert [w[2] for w in words] == ["We", "opened", "in", "March.", "By", "June", "there", "were", "three."]
+    assert abs(words[0][0] - 0.1) < 1e-6 and abs(words[4][0] - 5.1) < 1e-6        # each on the video's clock
+    cs = subtitles.cues(words)
+    assert [c[2] for c in cs] == [["We opened in March."], ["By June there were three."]]
+    assert cs[0][1] <= cs[1][0] and cs[1][0] == 5.1
+    srt = subtitles.srt(cs)
+    assert srt.startswith("1\n00:00:00,100 --> 00:00:01,") and "2\n00:00:05,100 --> " in srt
+    assert subtitles.vtt(cs).startswith("WEBVTT\n\n00:00:00.100 --> ")
+
+
+def test_a_long_sentence_is_broken_into_cues_of_two_lines_at_most():
+    from cycls._agent.video import subtitles
+    text = ("وصلنا اليوم إلى أكثر من ثلاثة آلاف عميل في كل مدن المملكة ونطمح أن نصل إلى كل بيت "
+            "قبل نهاية العام القادم بإذن الله").split()
+    words = [(0.3 * i, 0.3 * i + 0.25, w) for i, w in enumerate(text)]
+    cs = subtitles.cues(words)
+    assert len(cs) >= 2 and all(len(c[2]) <= 2 and all(len(line) <= subtitles.LINE for line in c[2]) for c in cs)
+    assert " ".join(" ".join(c[2]) for c in cs) == " ".join(text)                 # every word, once, in order
+    assert all(b - a <= subtitles.CUE_MAX_S + subtitles.HOLD_S for a, b, _ in cs)
+
+
+def test_a_render_with_speech_writes_srt_and_vtt_beside_the_mp4(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _voice_files(tmp_path)
+    original = svc.submit
+
+    async def submit(*a, **k):
+        job = await original(*a, **k)
+        return {**job, "sound": SOUND}
+    monkeypatch.setattr(video, "submit", submit)
+    _run({"action": "write", "name": "hi", "html": VOICED}, _ws(tmp_path))
+    svc.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 4.0}}
+    out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))
+    srt = (tmp_path / "videos" / "hi.srt").read_text(encoding="utf-8")
+    assert srt.startswith("1\n00:00:00,550 --> ") and "Hello there." in srt and "Make one." in srt
+    assert (tmp_path / "videos" / "hi.vtt").read_text(encoding="utf-8").startswith("WEBVTT")
+    assert "videos/hi.srt and videos/hi.vtt (2 lines)" in out["_model"]
+
+    # Rendered again with nothing said: the old subtitles go to the trash with the old MP4, none are written.
+    async def silent(*a, **k):
+        job = await original(*a, **k)
+        return {**job, "sound": {"tracks": [], "speech": []}}
+    monkeypatch.setattr(video, "submit", silent)
+    (tmp_path / "videos" / "hi.video.html").write_text(VOICED.replace("Hi", "Hi again"), encoding="utf-8")
+    out = _run({"action": "render", "name": "hi"}, _ws(tmp_path))
+    assert not (tmp_path / "videos" / "hi.srt").exists() and "Subtitle files" not in out["_model"]
+    assert list((tmp_path / ".trash").glob("*/data/videos/hi.srt"))

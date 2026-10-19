@@ -95,10 +95,17 @@ def remember(root, chat_id, name):
         save(root, chat_id, data)
 
 
-def render_started(root, chat_id, name, token, sha, quality):
+def render_started(root, chat_id, name, token, sha, quality, sound=None):
+    """`sound` is the service's sound map for this render, kept for its subtitle files (subtitles.py)."""
     data = load(root, chat_id)
-    data.setdefault("renders", {})[name] = {"token": token, "sha": sha, "quality": quality, "at": time.time()}
+    data.setdefault("renders", {})[name] = {"token": token, "sha": sha, "quality": quality, "at": time.time(),
+                                            **({"sound": sound} if sound else {})}
     save(root, chat_id, data)
+
+
+def subtitles(name, ext):
+    """A rendered video's subtitle file beside its MP4: videos/<name>.srt or .vtt."""
+    return f"{DIR}/{name}.{ext}"
 
 
 def render_pending(root, chat_id, name):
