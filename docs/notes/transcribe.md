@@ -119,6 +119,8 @@ health, warm, a short recording and a job). Production only on the user's go.
    `scripts/speech_check.py dev --own DIR` (each `<name>.<ext>` beside `<name>.txt`).
 2. The Hugging Face token was pasted into a chat on 2026-10-20: rotate it, then update the Modal secret
    `cycls-transcribe-hf` (it is read at build time only).
-4. A press of the real microphone button in the app (the route is checked; the button needs a person).
-5. Production (service, then super-dev) on the user's go. Docs at docs.cycls.com.
-6. Later: speakers, subtitles from `words`, Video's footage on the same service, live transcription.
+3. A press of the real microphone button in the app (the route is checked; the button needs a person).
+4. Other agents (the production `super`): `Transcribe` in their tools and the production service's
+   `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` in their env; the SDK change has to reach the SDK they run.
+   Docs at docs.cycls.com.
+5. Later: speakers, subtitles from `words`, Video's footage on the same service, live transcription.
