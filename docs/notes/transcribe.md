@@ -4,14 +4,22 @@ Speech in, text out, for every Cycls agent: a recording in the workspace (the `T
 chat microphone, written down by a shared service on Modal GPUs. Strong on Gulf Arabic first, MSA and
 English next; other languages work too.
 
-Status (2026-10-20): built and tested on both sides; the service is **deployed to dev**
+Status (2026-10-20): built, tested, and **deployed to dev with Cohere's model**
 (`https://cycls--cycls-transcribe-dev-web.us-east.modal.run`, key and URL in
-`~/.cycls/cycls-transcribe-dev.env`) **with Whisper only** — Cohere's weights need a Hugging Face token
-(below). On cycls-video's real-speech clips the dev service matches cycls-video's Whisper numbers
-(Arabic clean CER 4.6 %, dialect 13.8 %, English WER 4.7 %); through the SDK a 30 s Emirati voice note
-(m4a) is transcribed and saved in 7.5 s, and a 12 s webm through the mic's path in 2.4 s. Branch
-`feat/audio-transcription`; the service is its own repo, `E:\Cycls\cycls-transcribe` (local, not on
-GitHub yet). Nothing in production.
+`~/.cycls/cycls-transcribe-dev.env`). On cycls-video's 22 real-speech clips, through the same service:
+
+| | Whisper turbo | Cohere Transcribe Arabic |
+|---|---|---|
+| Arabic, all: WER / CER | 21.2 % / 7.8 % | 16.0 % / 4.8 % |
+| Gulf + Omani dialect (4 clips): WER / CER | 30.2 % / 13.8 % | 26.3 % / 9.0 % |
+| English: WER | 3.1 % | 2.8 % |
+
+On dialect Whisper writes MSA («عشان» → «لكي», «ما يجي» → «لا يأتي»); Cohere writes what was said.
+The go/no-go target (Gulf CER 12 % or less) is met; the dialect set is small (4 clips, about 2 minutes),
+so real recordings of ours are the next check. Through the SDK a 30 s Emirati voice note (m4a) is
+transcribed and saved in 7.5 s; the mic's path answers a 12 s webm in 2.4 s (both measured on the
+Whisper deploy; Cohere's speed is the same). Branch `feat/audio-transcription`; the service is its
+own repo, `E:\Cycls\cycls-transcribe` (local, not on GitHub yet). Nothing in production.
 
 ## Why this model
 
@@ -90,12 +98,10 @@ health, warm, a short recording and a job). Production only on the user's go.
 
 ## Open
 
-1. The Hugging Face token: accept the gate on
-   https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026 with a Cycls account, then a Modal
-   secret `cycls-transcribe-hf` with `HF_TOKEN`; `scripts/deploy.py dev` again (Cohere then goes in).
-2. Prove the model: `scripts/speech_check.py dev` again (the Whisper run of 2026-10-20 is the baseline) +
-   the user's own recordings (`--own DIR`); go if Gulf CER is clearly under Whisper's (13.8–17 %; target
-   12 % or less) and English stays acceptable.
+1. Real recordings of ours (voice notes, calls, a meeting, mixed Arabic–English) with correct text:
+   `scripts/speech_check.py dev --own DIR` (each `<name>.<ext>` beside `<name>.txt`).
+2. The Hugging Face token was pasted into a chat on 2026-10-20: rotate it, then update the Modal secret
+   `cycls-transcribe-hf` (it is read at build time only).
 3. Push both repos (the service to GitHub as Cycls/cycls-transcribe) on the user's word.
 4. super-dev with `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` and `Transcribe` in its tools; a real chat.
 5. Production (service, then super-dev) on the user's go. Docs at docs.cycls.com.
