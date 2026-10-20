@@ -12,7 +12,7 @@ import { ALL, useAllPages } from "../hooks/use-all-pages";
 import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
-import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, webSearchEnabled, setWebSearchEnabled, type ThemeMode } from "../lib/utils";
+import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, webSearchEnabled, setWebSearchEnabled, autoApprove, setAutoApprove, type ThemeMode } from "../lib/utils";
 import { pushProvider, pushStatus, requestPush, answerResult } from "../lib/notifications";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useToast } from "../lib/toast";
@@ -621,12 +621,26 @@ function GeneralTab({ onOpenConnectors, onOpenSkills }: { onOpenConnectors?: () 
   const [followUps, setFollowUps] = useState(followUpsEnabled);
   const [askOn, setAskOn] = useState(askEnabled);
   const [webOn, setWebOn] = useState(webSearchEnabled);
+  const [auto, setAuto] = useState(autoApprove);
   const [push, setPush] = useState(pushStatus);
   return (
     <>
     <ListCard>
       {onOpenConnectors && (
         <Row label={t("connectors")} sub={t("connectorsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenConnectors} />
+      )}
+      {onOpenConnectors && (   // a connector's writes: Auto runs them and pauses for the destructive, Manual asks for each
+        <Row
+          label={t("approvals")}
+          sub={t(auto ? "autoApproveHint" : "manualApproveHint")}
+          control={
+            <Segmented
+              value={auto ? "auto" : "manual"}
+              options={[{ value: "auto" as const, label: t("auto") }, { value: "manual" as const, label: t("manual") }]}
+              onChange={(v) => { setAuto(v === "auto"); setAutoApprove(v === "auto", "settings"); }}
+            />
+          }
+        />
       )}
       {onOpenSkills && (
         <Row label={t("skills")} sub={t("skillsSub")} control={<Icon name="chevron-right" className="size-4 rtl:rotate-180" />} onClick={onOpenSkills} />

@@ -903,7 +903,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
     connectors: connectors?.filter((c) => c.connected),
-    approveSwitch: !!connectors?.length,
     onOpenConnectors: account && connectors?.length ? () => openConnectors("plus") : undefined,
     onOpenSkills: account ? () => openConnectors("plus", undefined, "skills") : undefined,
     onToggleConnector: (c: Connector, on: boolean) => {
