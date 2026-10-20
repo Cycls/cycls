@@ -108,7 +108,7 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
   if (loading) {
     return (
       <div dir="ltr" className="flex h-dvh flex-col bg-background">
-        <ShareBar />
+        <ShareBar signedIn={signedIn} agent={agent} />
         <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">{t("loading")}</div>
       </div>
     );
@@ -117,7 +117,7 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
   if (error) {
     return (
       <div dir="ltr" className="flex h-dvh flex-col bg-background">
-      <ShareBar />
+      <ShareBar signedIn={signedIn} agent={agent} />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <div className="text-muted-foreground text-sm">{error.message}</div>
         {error.signIn && onSignIn && (
@@ -135,7 +135,7 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
 
   if (!data) return null;
   if (data.type === "file") return <SharedFile share={data} getToken={getToken} signedIn={signedIn} agent={agent} />;
-  return <SharedChat share={data} getToken={getToken} />;
+  return <SharedChat share={data} getToken={getToken} signedIn={signedIn} agent={agent} />;
 }
 
 // Canvas artifacts the conversation produced, in order — same derivation the
@@ -153,7 +153,7 @@ export function canvasArtifacts(messages: Message[]) {
 // every artifact pre-opened as a tab (same strip as the owner's canvas), the
 // final one active. A floating "continue" pill rides the scroll — the page's
 // one conversion affordance is never out of sight.
-function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Promise<string | null> }) {
+function SharedChat({ share, getToken, signedIn, agent }: { share: ChatShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string }) {
   const params = new URLSearchParams(window.location.search);
   // Curated example (?example=1): product showcase, not user content — no
   // author chrome. Regular shares keep their attribution.
@@ -201,7 +201,7 @@ function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Pr
 
   return (
     <div dir="ltr" className="h-dvh flex flex-col bg-background">
-      <ShareBar />
+      <ShareBar signedIn={signedIn} agent={agent} />
       <AppBanner />
 
       <div className="flex min-h-0 flex-1">
@@ -432,7 +432,7 @@ function SharedFile({ share, getToken, signedIn, agent }: { share: FileShare; ge
 }
 
 // The one bar a shared page has: the logo, what is shared and by whom, its actions, and the way into Cycls.
-// A chat share passes no name: the logo and the theme, over its own transcript.
+// A chat share passes no name: the conversation names itself below the bar.
 function ShareBar({ name, author, signedIn, agent, children }: {
   name?: string; author?: Author; signedIn?: boolean; agent?: string; children?: React.ReactNode;
 }) {
@@ -448,12 +448,10 @@ function ShareBar({ name, author, signedIn, agent, children }: {
       <span className={cn(name && "hidden sm:inline-flex")}>
         <IconButton name="moon" onClick={() => toggleDark("shared_view")} label={t("toggleTheme")} />
       </span>
-      {name && (
-        <a href="/" onClick={() => track("share_cta_clicked", { share_url: window.location.href, signed_in: !!signedIn })}
-          className="shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background hover:opacity-90 transition-opacity">
-          {t(signedIn ? "openAgent" : "tryAgent").replace("{name}", agent || "Cycls")}
-        </a>
-      )}
+      <a href="/" onClick={() => track("share_cta_clicked", { share_url: window.location.href, signed_in: !!signedIn })}
+        className="shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background hover:opacity-90 transition-opacity">
+        {t(signedIn ? "openAgent" : "tryAgent").replace("{name}", agent || "Cycls")}
+      </a>
     </header>
   );
 }
