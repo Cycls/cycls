@@ -249,7 +249,9 @@ _BROWSER_TOOL = {
         "Drive a REAL web browser for things a plain fetch can't do: pages "
         "behind JavaScript, logins, search boxes, forms, multi-step flows. The "
         "page stays OPEN between calls this turn — work step by step:\n"
-        "- open {url}        go to a page\n"
+        "- open {url}        go to a page; or a workspace .html file by its path (e.g. deck.html), to see a page you "
+        "wrote. The browser runs on another machine and gets only that file, so its images must be inlined, and "
+        "file:// or localhost addresses never reach it\n"
         "- read              get the page text + a NUMBERED list of the "
         "clickable/typable elements\n"
         "- click {ref}       click element number `ref` from the last read\n"
@@ -276,7 +278,7 @@ _BROWSER_TOOL = {
                    "enum": ["open", "read", "click", "type", "press", "back",
                             "screenshot", "download", "evaluate"],
                    "description": "What to do."},
-        "url": {"type": "string", "description": "For `open`/`download`: the full http(s) URL."},
+        "url": {"type": "string", "description": "For `open`: an http(s) URL, or a workspace .html file's path. For `download`: the full http(s) URL."},
         "ref": {"type": "integer", "description": "For `click`/`type`/`download`: the element number from the last `read`."},
         "text": {"type": "string", "description": "For `type`: the text to enter."},
         "key": {"type": "string", "description": "For `press`: the key, e.g. 'Enter'."},
@@ -976,6 +978,33 @@ async def _browser_read(s):
     return _browser_snapshot_text(await s.snapshot())
 
 
+# A workspace page in the remote browser: written into a blank tab (no site's origin, so none of its cookies),
+# returning once the page has loaded, web fonts and scripts included, or after 15 s.
+_WRITE_PAGE = ("() => new Promise((done) => { document.open(); document.write(%s); document.close(); "
+               "if (document.readyState === 'complete') return done(); addEventListener('load', () => done()); "
+               "setTimeout(done, 15000); })")
+_PAGE_EXTS = {".html", ".htm", ".svg"}
+
+
+def _workspace_page(url, workspace):
+    """The workspace file an `open` names (a path, /workspace/…, file://…), None for a web address, or an
+    Error: the browser runs on another machine, so it can reach neither a file path nor this sandbox."""
+    if url.startswith(("http://", "https://")):
+        host = (url.split("//", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]).strip("[]")
+        if host not in ("localhost", "127.0.0.1", "0.0.0.0", "::1"): return None
+        return ("Error: the browser runs on another machine and cannot reach this sandbox. To see a page you "
+                "wrote, open it by its workspace path, e.g. deck.html.")
+    raw = url.removeprefix("file://")
+    try: path = _resolve_path(raw, workspace.root)
+    except ValueError as e: return f"Error: {e}"
+    if not path.is_file():
+        named = url.startswith(("file:", "/")) or path.suffix.lower() in _PAGE_EXTS
+        return f"Error: {raw} is not a file in the workspace" if named else None
+    if path.suffix.lower() not in _PAGE_EXTS:
+        return f"Error: only an .html or .svg page opens in the browser; use read for {path.name}"
+    return path
+
+
 async def _exec_browser(inp, workspace, chat_id=None):
     """Drive the shared browser service one action at a time. State lives in the
     remote page (which persists between calls), so every navigational action
@@ -985,13 +1014,20 @@ async def _exec_browser(inp, workspace, chat_id=None):
     subject = getattr(workspace, "subject", None)
     # Forward the first navigation's URL so the service can route this session to
     # the proxy by domain (per-site routing). Only `open` carries a target URL.
-    nav_url = inp.get("url") if action == "open" else None
+    url = str(inp.get("url") or "")
+    page = _workspace_page(url, workspace) if action == "open" and url else None
+    if isinstance(page, str): return page
+    nav_url = url if action == "open" and not page else None
     try:
         async with await browser.session(subject, nav_url=nav_url, chat_id=chat_id) as s:
             if action == "open":
-                if not inp.get("url"):
+                if not url:
                     return "Error: `open` needs a `url`."
-                await s.goto(inp["url"])
+                if page:
+                    await s.goto("about:blank")
+                    await s.evaluate(_WRITE_PAGE % json.dumps(page.read_text(errors="replace")))
+                else:
+                    await s.goto(url)
                 return await _browser_read(s)
             if action == "read":
                 return await _browser_read(s)
