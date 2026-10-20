@@ -19,7 +19,15 @@ The go/no-go target (Gulf CER 12 % or less) is met; the dialect set is small (4 
 so real recordings of ours are the next check. Through the SDK a 30 s Emirati voice note (m4a) is
 transcribed and saved in 7.5 s; the mic's path answers a 12 s webm in 2.4 s (both measured on the
 Whisper deploy; Cohere's speed is the same). Branch `feat/audio-transcription`; the service is its
-own repo, `E:\Cycls\cycls-transcribe` (local, not on GitHub yet). Nothing in production.
+own repo, https://github.com/Cycls/cycls-transcribe (private).
+
+**On super-dev** since 2026-10-20 (`super-dev-00096-hhp` = SDK `850a1d0e`, with the dev service's
+`TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` in its `.providers.env` and `Transcribe` in its tools). Checked in
+the app (Cycls org, Personal): an 85 s Emirati voice note attached with "transcribe it, then a short
+summary in Arabic" → the model called `transcribe` by itself (20 s, a cold listener), saved
+`attachments/065ef7fd-voice-note.transcript.md`, and summarised all three topics right (it noticed
+they were unrelated clips); the turn took 50 s and $0.13, no errors. The microphone's route on the
+same site: the same recording through `POST /transcribe` in 5.2 s, `engine: cycls`, Arabic.
 
 ## Why this model
 
@@ -102,7 +110,8 @@ health, warm, a short recording and a job). Production only on the user's go.
    `scripts/speech_check.py dev --own DIR` (each `<name>.<ext>` beside `<name>.txt`).
 2. The Hugging Face token was pasted into a chat on 2026-10-20: rotate it, then update the Modal secret
    `cycls-transcribe-hf` (it is read at build time only).
-3. Push both repos (the service to GitHub as Cycls/cycls-transcribe) on the user's word.
-4. super-dev with `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` and `Transcribe` in its tools; a real chat.
+3. super-dev uses the DEV service: production needs `cycls-transcribe` (prod) deployed — its secret made
+   by hand — and super-dev pointed at it.
+4. A press of the real microphone button in the app (the route is checked; the button needs a person).
 5. Production (service, then super-dev) on the user's go. Docs at docs.cycls.com.
 6. Later: speakers, subtitles from `words`, Video's footage on the same service, live transcription.
