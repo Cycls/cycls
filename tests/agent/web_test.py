@@ -2580,6 +2580,83 @@ def test_last_exchange_route_does_not_shadow_chat_delete(tmp_path):
     assert client.get("/chats").json() == []
 
 
+# ---- /chat with `regenerate` / `retry`: the saved turn runs again ----
+
+def _replay_chat(tmp_path, monkeypatch, status="done"):
+    """A signed-in agent whose chat c1 ends in a reply to "list my files", sent with an
+    @-mention. Returns the client, what each run was handed, a reader of the saved turns,
+    and a setter for the last run's status."""
+    from fastapi.testclient import TestClient
+    from cycls._app.auth import User
+    from cycls._app.db import workspace
+    from cycls._agent import state
+    import cycls._agent.web.server as server
+
+    user = User(id="user_test")
+    monkeypatch.setattr(server, "validator", lambda *a, **k: (lambda: user))
+    seen = []
+    async def agent(context):
+        seen.append(context)
+        yield "ok"
+    client = TestClient(server.web(agent, Config(public_path=THEME_PATH, auth=True, plan="free", volume=str(tmp_path))))
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    turn = {"role": "user", "content": "list my files\n\n[Using: Google Drive]", "connectors": ["gdrive"]}
+    asyncio.run(state.put_meta(ws, "c1", {"id": "c1", "title": "t"}))
+    asyncio.run(state.append_messages(ws, "c1", [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        turn,
+        {"role": "assistant", "content": [{"type": "text", "text": "the old answer"}]},
+    ], 0))
+    put_run = lambda s: asyncio.run(state.put_run(ws, "c1", {"run": "r", "status": s}))
+    put_run(status)
+    return client, seen, turn, (lambda: asyncio.run(state.load_messages(ws, "c1"))), put_run
+
+
+def _sha(text):
+    import hashlib
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_regenerate_runs_the_saved_turn_again_in_one_request(tmp_path, monkeypatch):
+    """It was a DELETE that rewrote the whole chat, then a re-send of the message rebuilt
+    from the screen. Now one request: only the reply goes, and the turn runs again as it
+    was saved, its @-mention's connectors with it."""
+    client, seen, turn, saved, _ = _replay_chat(tmp_path, monkeypatch)
+    body = {"messages": [{"role": "user", "content": "list my files"}], "regenerate": _sha("list my files")}
+    assert client.post("/chat?id=c1", json=body).status_code == 200
+    assert seen[-1].replay and seen[-1].connectors == ["gdrive"]
+    assert saved()[2:] == [turn], "the old reply survived, or the turn was rebuilt"
+
+
+def test_regenerate_refuses_a_turn_that_is_not_the_one_on_screen(tmp_path, monkeypatch):
+    """Another tab moved the chat on: replaying its last turn would replace an answer this
+    person never saw. Refused before a run starts, with nothing deleted."""
+    client, seen, _, saved, _ = _replay_chat(tmp_path, monkeypatch)
+    r = client.post("/chat?id=c1", json={"messages": [{"role": "user", "content": "hi"}], "regenerate": _sha("hi")})
+    assert r.status_code == 409 and r.json()["error"] == "chat_changed"
+    assert isinstance(r.json()["detail"], str)
+    assert not seen and len(saved()) == 4
+
+
+def test_retry_replays_only_a_turn_whose_run_did_not_finish(tmp_path, monkeypatch):
+    """A retry's message may never have reached the server. It replays the saved turn only
+    when that is the message and its run did not finish; otherwise it is an ordinary send."""
+    client, seen, turn, saved, put_run = _replay_chat(tmp_path, monkeypatch, status="done")
+    body = lambda text: {"messages": [{"role": "user", "content": text}], "retry": _sha(text)}
+
+    assert client.post("/chat?id=c1", json=body("list my files")).status_code == 200
+    assert not seen[-1].replay and len(saved()) == 4, "a finished turn is an earlier message, not this one"
+
+    put_run("failed")
+    assert client.post("/chat?id=c1", json=body("something else")).status_code == 200
+    assert not seen[-1].replay and len(saved()) == 4
+
+    put_run("failed")
+    assert client.post("/chat?id=c1", json=body("list my files")).status_code == 200
+    assert seen[-1].replay and saved()[2:] == [turn]
+
+
 # =============================================================================
 # One run per chat (docs/notes/runs.md)
 # =============================================================================
@@ -2848,9 +2925,55 @@ def test_a_hook_that_raises_never_reaches_the_run(tmp_path):
     assert runs == {}, "the slot was not released"
 
 
+def test_a_stopped_run_takes_back_a_prompt_it_kept_nothing_after(tmp_path):
+    """Stop gives the prompt back to the composer at once and asks the run to drop it. The
+    run does, as it ends: before its record says stopped and its slot frees, so no other
+    run can start in between. A run that kept a reply keeps the prompt too."""
+    import hashlib
+    from cycls._agent import state
+    from cycls._agent.web.server import Run, _supervise
+    from cycls._app.db import workspace as mkws
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+
+    async def stopped(after):
+        await state.put_meta(ws, "c1", {"id": "c1", "title": "t"})
+        await state.append_messages(ws, "c1", [{"role": "user", "content": "draft"}, *after], 0)
+        async def stream():
+            yield "a"
+            await asyncio.Event().wait()   # until stopped
+        runs, key = {}, ("ws", "c1")
+        run = Run(detach=True, workspace=ws, chat_id="c1")
+        runs[key] = run
+        run.task = asyncio.create_task(_supervise(run, stream(), runs, key, None))
+        await asyncio.sleep(0.05)
+        run.reason, run.take_back = "stopped", hashlib.sha256(b"draft").hexdigest()
+        run.inner.cancel()
+        await asyncio.wait({run.task}, timeout=5)
+        return run.taken_back, await state.load_messages(ws, "c1"), await state.get_run(ws, "c1"), runs
+
+    taken, left, row, runs = asyncio.run(stopped([]))
+    assert taken and left == [] and runs == {}
+    assert row["status"] == "stopped" and row["taken_back"] == "1"
+
+    taken, left, row, _ = asyncio.run(stopped([{"role": "assistant", "content": [{"type": "text", "text": "half […]"}]}]))
+    assert not taken and len(left) == 2 and "taken_back" not in row
+
+
+def test_a_stop_through_the_record_carries_its_take_back(tmp_path):
+    """A stop that lands on another container reaches the run through the record."""
+    from cycls._agent import state
+    from cycls._agent.web.server import Run, _beat
+    from cycls._app.db import workspace as mkws
+    ws = mkws("tenant", tmp_path, base=f"file://{tmp_path}")
+    run = Run(detach=True, workspace=ws, chat_id="c1")
+    asyncio.run(state.put_run(ws, "c1", {"run": "r", "status": "running", "stop": "1", "take_back": "abc"}))
+    assert asyncio.run(_beat(run)) is True
+    assert (run.reason, run.take_back) == ("stopped", "abc")
+
+
 def test_regenerate_is_refused_while_a_run_is_live(tmp_path):
-    """DELETE last-exchange deletes and renumbers every turn file. Under a live
-    run that moves the slots it is appending to."""
+    """DELETE last-exchange deletes the tail of the chat. Under a live run that is
+    what the run is appending."""
     from cycls._agent import state
     from cycls._app.db import workspace as mkws
     from datetime import datetime, timezone

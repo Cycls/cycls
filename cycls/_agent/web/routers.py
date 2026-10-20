@@ -90,12 +90,9 @@ def to_ui_messages(raw):
                     if msg.get("cards") and out and out[-1]["role"] == "assistant":
                         out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
                     continue
-                text = state.user_text(msg)
-            elif isinstance(c, str):
-                text = c
-            else:
+            elif not isinstance(c, str):
                 continue
-            ui = {"role": "user", "content": text}
+            ui = {"role": "user", "content": state.user_text(msg)}
             if msg.get("attachments"):
                 ui["attachments"] = msg["attachments"]
             if msg.get("selection"):   # the model read it as a line; the person sees a chip
@@ -285,15 +282,14 @@ def chats_router(ws_dep):
 
     @r.delete("/chats/{chat_id}/last-exchange")
     async def truncate_last_exchange(chat_id: str, expect: Optional[str] = None, ws: Workspace = ws_dep):
-        """Drop the last user turn and everything after it — the persistence
-        half of `regenerate`. The FE then re-sends the same message, so the
-        run that follows is an ordinary send. `?expect=<sha256 of its text>` (retry)
-        drops only that turn, and not one that ended well; else `{ok: false}`."""
+        """Drop the last user turn and everything after it: the web takes back a prompt
+        stopped before its reply began; the mobile app regenerates by re-sending after it
+        (the web replays instead, `/chat` with `regenerate`). `?expect=<sha256 of what was
+        typed>` drops only that turn, and not one that ended well; else `{ok: false}`."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        # This is the one route that still deletes and renumbers every turn file.
-        # Under a live run that moves the slots it is appending to — the exact way
-        # two production chats lost turns (docs/notes/runs.md).
+        # Under a live run this would delete the turns it is appending
+        # (docs/notes/runs.md).
         status = state.run_status(await state.get_run(ws, chat_id))
         if status == "running":
             raise HTTPException(status_code=409, detail="This chat is still working on your last message.")

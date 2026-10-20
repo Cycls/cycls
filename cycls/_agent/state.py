@@ -316,21 +316,6 @@ async def append_messages(workspace, chat_id, messages, start_idx, *, create=Tru
     return written
 
 
-async def replace_messages(workspace, chat_id, messages):
-    """Wipe and rewrite all messages for *chat_id*. Preserves the index file —
-    only turns are rewritten. Renumbers from 0, so it invalidates any index a
-    live `Session` is holding: the only caller is `truncate_last_exchange`, where
-    the person asked for it and the route refuses while a run is going."""
-    _validate(chat_id)
-    db = DB(workspace)
-    # keys(), not scan(): scan reads bodies and drops what it cannot decode, so a
-    # torn turn file would survive the wipe and sit above the rewritten prefix.
-    turn_keys = await db.keys(glob=f"chat/{chat_id}/[0-9]*")
-    await asyncio.gather(*(db.delete(k) for k in turn_keys))
-    # create=False: rewriting these slots is the point.
-    await append_messages(workspace, chat_id, messages, 0, create=False)
-
-
 async def get_compaction(workspace, chat_id):
     """The chat's compaction marker `{summary, first_kept, cleared}`, or None. Raw turns
     stay on disk; this marker projects the model's context over them."""
@@ -353,49 +338,57 @@ def _is_plain_user(msg):
     return True
 
 
+# What the harness adds to what was typed (`_ingest`, `_with_mention`, `_with_selection`): an
+# attached file's name with its contents after it, and a line each for an @-mention and a selection.
+_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ")
+_MENTION = re.compile(r"(?:\n\n)?\[Using: [^\n]*\]\Z")   # on a turn sent as a string
+
+
 def user_text(msg):
-    """What the person typed in a user turn, without the line a design selection adds."""
+    """What the person typed in a user turn, without what the harness added to it."""
     c = msg.get("content")
-    if isinstance(c, str):
-        return c
-    return "".join(b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text"
-                   and not (msg.get("selection") and b.get("text", "").startswith("[Selected in ")))
+    if isinstance(c, list):
+        typed = []
+        for b in c:
+            t = b.get("text", "") if isinstance(b, dict) and b.get("type") == "text" else None
+            if t is None or t.startswith(_LINES): continue
+            if t.startswith(_ATTACHED): break   # files come after the text, each with its contents
+            typed.append(t)
+        c = "".join(typed)
+    return _MENTION.sub("", c) if isinstance(c, str) else ""
 
 
-async def truncate_last_exchange(workspace, chat_id, expect=None):
-    """Drop the last user turn and everything after it. Returns the removed
-    user content, or None when there was nothing to remove.
+async def truncate_last_exchange(workspace, chat_id, expect=None, keep=False, alone=False):
+    """Drop the last user turn and everything after it — with `keep`, only what came after
+    it. Returns that turn, or None when there is none, it is not `expect` (the sha256 of
+    what was typed in it), or with `alone` something came after it.
 
-    Backs `regenerate`: the caller re-sends the same message, so the run that
-    follows is an ordinary send — the loop needs no special case. And `retry`:
-    `expect` is the sha256 of the text it re-sends; another last turn stays (the
-    failed request may never have arrived).
-
-    Two invariants make this the only safe shape of deletion here:
-      * Turn files are `{turn:06d}` and `Session._saved` is `len(messages)`, so
-        an in-place delete would leave a numbering gap and the next append
-        would overwrite a live turn. `replace_messages` rewrites contiguously.
-      * The cut lands on a plain user turn, so the removed span starts with an
-        assistant message — no `tool_result` can be orphaned by it.
-    """
+    `keep` is a replay: `/chat` with `regenerate` or `retry` runs the saved turn again
+    rather than a copy of it. `alone` is Stop taking a prompt back, which must not take
+    a reply or a tool call with it. Only the tail is deleted. Nothing before it is
+    rewritten and nothing renumbers, since `Session.open` appends at `turn_end`, past
+    whatever is left. The cut lands on a plain user turn, so no `tool_result` is orphaned."""
     _validate(chat_id)
-    messages = await load_messages(workspace, chat_id)
-    cut = next((i for i in range(len(messages) - 1, -1, -1) if _is_plain_user(messages[i])), None)
-    if cut is None:
+    db = DB(workspace)
+    turns = [(k, m) async for k, m in db.items(glob=f"chat/{chat_id}/[0-9]*")]
+    cut = next((i for i in range(len(turns) - 1, -1, -1) if _is_plain_user(turns[i][1])), None)
+    if cut is None or (alone and cut < len(turns) - 1):
         return None
-    if expect is not None and hashlib.sha256(user_text(messages[cut]).encode("utf-8")).hexdigest() != expect:
+    turn = turns[cut][1]
+    if expect is not None and hashlib.sha256(user_text(turn).encode("utf-8")).hexdigest() != expect:
         return None
-    removed = messages[cut].get("content")
-    await replace_messages(workspace, chat_id, messages[:cut])
+    # The turns read, not a fresh listing: nothing this did not see is deleted.
+    await asyncio.gather(*(db.delete(k) for k, _ in turns[cut + int(keep):]))
     # `first_kept` and `cleared` index the message list. Session clamps on load,
-    # but the marker on disk must shrink too: a stale value larger than the
-    # new length would re-clamp past the turns appended after this one and
-    # silently hide them from the model's context on the following run.
+    # but the marker on disk must shrink too: a stale value past the cut would
+    # re-clamp past the turn sent after it (or the one kept to run again) and
+    # silently hide it from the model's context on the following run.
+    at = len(normalize([m for _, m in turns[:cut]]))
     marker = await get_compaction(workspace, chat_id)
     keys = ("first_kept", "cleared")
-    if marker and any(int(marker.get(k, 0)) > cut for k in keys):
-        await put_compaction(workspace, chat_id, {**marker, **{k: min(int(marker.get(k, 0)), cut) for k in keys}})
-    return removed
+    if marker and any(int(marker.get(k, 0)) > at for k in keys):
+        await put_compaction(workspace, chat_id, {**marker, **{k: min(int(marker.get(k, 0)), at) for k in keys}})
+    return turn
 
 
 async def delete_chat(workspace, chat_id):
@@ -444,10 +437,13 @@ class Session:
         return cls(context.workspace, context.chat_id, messages,
                    summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
                    cleared=int(marker.get("cleared", 0)),
-                   next_idx=await turn_end(context.workspace, context.chat_id))
+                   next_idx=await turn_end(context.workspace, context.chat_id),
+                   replay=bool(getattr(context, "replay", False)))
 
-    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0):
+    def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0,
+                 replay=False):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
+        self.replay = replay   # `regenerate` / `retry`: the person's turn is the last one saved, and runs again
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
         self.cleared = min(cleared, len(messages))
         # Two counters, deliberately: `_saved` indexes `.messages`, `_next_idx`
@@ -489,14 +485,20 @@ class Session:
             await put_compaction(self.workspace, self.chat_id,
                                  {"summary": self.summary, "first_kept": self.first_kept, "cleared": self.cleared})
 
-    async def add_user(self, content, *, attachments=None, internal=False, selection=None):
+    async def add_user(self, content, *, attachments=None, internal=False, selection=None, connectors=None):
         """`internal` marks a turn the person did not type — an approval carried back from a confirm
         card. The model reads it, the chat never shows it, and it never becomes the chat's title.
 
         The turn is durable when this returns. It used to reach disk only at the
         first checkpoint, after the first tool batch, so a run that died before
         then lost what the person typed. Shielded because this runs outside the loop's
-        try, where a disconnect cancels at the nearest await."""
+        try, where a disconnect cancels at the nearest await.
+
+        On a replay it adds nothing: the turn is already the last one saved, so a custom
+        loop that always calls this needs no special case."""
+        if self.replay:
+            self.replay = False
+            return
         msg = {"role": "user", "content": content}
         if internal:
             msg["internal"] = True
@@ -504,6 +506,8 @@ class Session:
             msg["attachments"] = attachments
         if selection:   # the chat shows it as a chip
             msg["selection"] = selection
+        if connectors:   # @-mentioned: a replay loads them up front, as this turn did
+            msg["connectors"] = list(connectors)
         self.messages.append(msg)
         # Before the meta touch: a turn with no index is recoverable (the next
         # touch_meta fills the title, add_cost and the chat-list self-heal both

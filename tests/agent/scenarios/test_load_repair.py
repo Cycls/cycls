@@ -271,7 +271,7 @@ def test_truncate_drops_last_user_turn_and_everything_after(tmp_path):
         {"role": "assistant", "content": [{"type": "text", "text": "two"}]},
     ], 0))
     removed = _run(chat.truncate_last_exchange(ws, cid))
-    assert removed == "second"
+    assert removed["content"] == "second"
     left = _run(chat.load_messages(ws, cid))
     assert [m["content"] for m in left] == ["first", [{"type": "text", "text": "one"}]]
 
@@ -356,7 +356,7 @@ def test_truncate_cuts_at_a_plain_user_turn_not_a_tool_result(tmp_path):
         {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
     ], 0))
     removed = _run(chat.truncate_last_exchange(ws, cid))
-    assert removed == "run it"
+    assert removed["content"] == "run it"
     assert _run(chat.load_messages(ws, cid)) == []
 
 
@@ -379,8 +379,97 @@ def test_truncate_ignores_internal_scaffolding_turns(tmp_path):
         {"role": "user", "internal": True, "content": "Continue."},
         {"role": "assistant", "content": [{"type": "text", "text": "part two"}]},
     ], 0))
-    assert _run(chat.truncate_last_exchange(ws, cid)) == "write it"
+    assert _run(chat.truncate_last_exchange(ws, cid))["content"] == "write it"
     assert _run(chat.load_messages(ws, cid)) == []
+
+
+def test_truncate_deletes_the_tail_and_writes_nothing(tmp_path, monkeypatch):
+    """It used to delete every turn file and write the kept ones back one at a time:
+    8s for 140 turns on GCS, with the chat half-missing meanwhile, which a second click
+    read and cut at the first question. Now only the tail goes: no file before the cut
+    is written, a hole stays a hole, and the next turn lands at `turn_end`."""
+    from cycls._app.db import DB
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "a"}], 0))
+    _run(chat.append_messages(ws, cid, [
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "b"},
+        {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+    ], 2))   # a hole at 1, as two production chats had
+    writes, put = [], DB.put
+    async def counted(self, key, *a, **k):
+        writes.append(key)
+        return await put(self, key, *a, **k)
+    monkeypatch.setattr(DB, "put", counted)
+
+    assert _run(chat.truncate_last_exchange(ws, cid))["content"] == "b"
+    assert writes == [], "turns before the cut were rewritten"
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000002"]
+    assert _run(chat.turn_end(ws, cid)) == 3
+
+
+def test_a_replay_keeps_the_turn_and_drops_what_followed(tmp_path):
+    """`keep` backs `/chat` with `regenerate` or `retry`: the reply goes, and the turn stays
+    exactly as it was saved, its attachment already read, its connectors beside it."""
+    import hashlib
+    ws, cid = _ws(tmp_path), "test"
+    turn = {"role": "user", "content": [{"type": "text", "text": "summarize"},
+                                        {"type": "text", "text": "[Attached: attachments/n.txt]"},
+                                        {"type": "text", "text": "     1\tthe file"}],
+            "attachments": [{"name": "n.txt", "path": "attachments/n.txt"}], "connectors": ["gdrive"]}
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        turn,
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "T", "name": "bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "T", "content": "ok"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "the old answer"}]},
+    ], 0))
+    _run(chat.put_compaction(ws, cid, {"summary": "s", "first_kept": 5}))
+
+    assert _run(chat.truncate_last_exchange(ws, cid, hashlib.sha256(b"other").hexdigest(), keep=True)) is None
+    assert len(_turn_keys(ws, cid)) == 6, "a turn that is not the one named was cut"
+    assert _run(chat.truncate_last_exchange(ws, cid, hashlib.sha256(b"summarize").hexdigest(), keep=True)) == turn
+    left = _run(chat.load_messages(ws, cid))
+    assert left[-1] == turn
+    assert _run(chat.turn_end(ws, cid)) == 3
+    marker = _run(chat.get_compaction(ws, cid))
+    session = chat.Session(ws, cid, left, summary=marker["summary"], first_kept=int(marker["first_kept"]))
+    assert session.context()[-1] == turn, "the model would not see the turn it runs again"
+
+
+def test_a_take_back_drops_a_prompt_only_when_nothing_followed_it(tmp_path):
+    """Stop gives a prompt back only when the run kept nothing after it: a reply or a tool
+    call it kept must not go with the prompt."""
+    import hashlib
+    ws, cid = _ws(tmp_path), "test"
+    sha = hashlib.sha256(b"draft").hexdigest()
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
+        {"role": "user", "content": "draft"},
+    ], 0))
+    assert _run(chat.truncate_last_exchange(ws, cid, sha, alone=True))["content"] == "draft"
+    assert len(_turn_keys(ws, cid)) == 2
+
+    _run(chat.append_messages(ws, cid, [
+        {"role": "user", "content": "draft"},
+        {"role": "assistant", "content": [{"type": "text", "text": "half an ans\n\n[…]"}]},
+    ], 2))
+    assert _run(chat.truncate_last_exchange(ws, cid, sha, alone=True)) is None
+    assert len(_turn_keys(ws, cid)) == 4
+
+
+def test_a_replay_session_adds_the_turn_once_not_twice(tmp_path):
+    """Custom loops call `add_user` every run. On a replay the turn is already the last one
+    saved: the first call adds nothing, and a later one is a real turn."""
+    ws, cid = _ws(tmp_path), "test"
+    _run(chat.append_messages(ws, cid, [{"role": "user", "content": "again"}], 0))
+    session = _run(chat.Session.open(types.SimpleNamespace(workspace=ws, chat_id=cid, user=object(), replay=True)))
+    _run(session.add_user("again"))
+    assert [m["content"] for m in _run(chat.load_messages(ws, cid))] == ["again"]
+    _run(session.add_user("and more"))
+    assert [m["content"] for m in _run(chat.load_messages(ws, cid))] == ["again", "and more"]
 
 
 # ---- create-only turn writes (docs/notes/runs.md) ----
@@ -429,18 +518,6 @@ def test_a_conflict_banks_what_landed_so_a_retry_does_not_duplicate(tmp_path):
         _run(s.checkpoint())
     assert (s._saved, s._next_idx) == (2, 2), "the landed turn was not banked"
     assert _run(chat.load_messages(ws, cid))[1]["content"] == [{"type": "text", "text": "mine"}]
-
-
-def test_replace_messages_still_rewrites_in_place(tmp_path):
-    """create-only must not leak into the one caller whose job is to overwrite."""
-    ws, cid = _ws(tmp_path), "test"
-    _run(chat.append_messages(ws, cid, [
-        {"role": "user", "content": "a"},
-        {"role": "assistant", "content": [{"type": "text", "text": "1"}]},
-    ], 0))
-    _run(chat.replace_messages(ws, cid, [{"role": "user", "content": "only"}]))
-    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000"]
-    assert _run(chat.load_messages(ws, cid)) == [{"role": "user", "content": "only"}]
 
 
 # ---- the user's turn is durable immediately (docs/notes/runs.md) ----

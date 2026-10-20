@@ -218,7 +218,7 @@ def test_create_refuses_to_overwrite_and_leaves_the_value(workspace):
 
 
 def test_put_still_overwrites_by_default(workspace):
-    """replace_messages, put_meta and the KV tool all rewrite in place."""
+    """put_meta and the KV tool rewrite in place."""
     async def t():
         d = DB(workspace)
         await d.put("k", "one")
@@ -242,7 +242,7 @@ def test_concurrent_creates_leave_exactly_one_winner(workspace):
 
 def test_keys_lists_a_file_it_cannot_decode(workspace):
     """`scan` reads bodies and drops what it cannot parse; `keys` must not, or a
-    torn file survives the wipe in replace_messages and sits above the rewrite."""
+    torn file's slot is handed out again: `turn_end` counts every slot taken."""
     async def t():
         d = DB(workspace)
         await d.put("chat/c/000000", {"ok": True})

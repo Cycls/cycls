@@ -184,6 +184,30 @@ def test_history_saved_after_each_tool_round(agent_env):
     assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
 
 
+def test_a_replay_runs_the_saved_turn_not_the_request(agent_env):
+    """Regenerate: the model gets the turn as it was saved, its attachment read when it was
+    sent, not the request's copy of the message, and the turn is not saved twice."""
+    from cycls._agent.state import append_messages
+    ws, ctx = agent_env
+    saved = {"role": "user", "content": [{"type": "text", "text": "summarize"},
+                                         {"type": "text", "text": "[Attached: attachments/n.txt]"},
+                                         {"type": "text", "text": "     1\tTHE FILE"}],
+             "attachments": [{"name": "n.txt", "path": "attachments/n.txt"}]}
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, [saved], 0))
+    ctx.replay = True
+    ctx.messages.raw = [{"role": "user", "content": "summarize"}]
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(iter([_make_response([_text_block("a new answer")])]), calls=calls)
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert "THE FILE" in json.dumps(calls[0]["messages"]), "the model was not given the saved turn"
+    history = _read_history(ctx)
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[0] == saved
+
+
 def test_history_survives_crash_after_first_tool_round(agent_env):
     """Crash during round 2 streaming — round 1 history should already be on disk."""
     ws, ctx = agent_env

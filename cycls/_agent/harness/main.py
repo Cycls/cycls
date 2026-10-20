@@ -280,16 +280,17 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
         allowed_tools = [t for t in allowed_tools if t not in off]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
-    incoming = context.messages.raw[-1]
-    content = await _ingest(incoming.get("content", ""), workspace.root, vision)
-    if mentions:
-        titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
-                  for s in mcp_servers or [] if s._connector}
-        content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
-    if selection := getattr(context, "selection", None):
-        content = _with_selection(content, selection)
-    await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
-                           selection=selection)
+    if not session.replay:   # a replay runs the saved turn again, as it was
+        incoming = context.messages.raw[-1]
+        content = await _ingest(incoming.get("content", ""), workspace.root, vision)
+        if mentions:
+            titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
+                      for s in mcp_servers or [] if s._connector}
+            content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
+        if selection := getattr(context, "selection", None):
+            content = _with_selection(content, selection)
+        await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
+                               selection=selection, connectors=mentions)
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")

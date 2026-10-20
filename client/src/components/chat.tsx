@@ -134,7 +134,7 @@ export function Chat({ chat, onShare, files, account, config }: {
   account?: AccountInfo | null;
   config?: AppConfig | null;
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -531,9 +531,11 @@ export function Chat({ chat, onShare, files, account, config }: {
     return [...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
   }, [account, connectors, searchFiles]);
 
+  // When Stop gives a prompt back, Send takes Stop's place: a double click must not send it again.
+  const givenBackRef = useRef(0);
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
-    if (!text || attachments.some((a) => a.status === "uploading")) return;
+    if (!text || attachments.some((a) => a.status === "uploading") || Date.now() - givenBackRef.current < 600) return;
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     const mentioned = pillsRef.current.filter((p) => text.includes(`@${connectorLabel(p)}`)).map((p) => p.name);
     if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
@@ -612,6 +614,21 @@ export function Chat({ chat, onShare, files, account, config }: {
     requestAnimationFrame(() => textareaRef.current?.focus());
     track("queued_message_edited", { chat_id: chatId });
   }, [chatId]);
+
+  // Stopped before the reply began: the prompt comes back to the composer, after anything typed
+  // since, with its files, its selection and its @-pills.
+  useEffect(() => {
+    setRestoreHandler((sent) => {
+      givenBackRef.current = Date.now();
+      setInput((cur) => (cur ? `${cur} ${sent.text}` : sent.text));
+      if (sent.attachments?.length) setAttachments((cur) => [...cur, ...sent.attachments!]);
+      if (sent.extra?.selection) setAttachedSel(sent.extra.selection);
+      const named = sent.extra?.connectors ?? [];
+      if (named.length) setPills((ps) => [...ps, ...(connectors ?? []).filter((c) => named.includes(c.name) && !ps.some((p) => p.name === c.name))]);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    });
+    return () => setRestoreHandler(null);
+  }, [setRestoreHandler, connectors]);
 
   const dropQueued = useCallback((id: string) => {
     queuedRef.current = queuedRef.current.filter((m) => m.id !== id);

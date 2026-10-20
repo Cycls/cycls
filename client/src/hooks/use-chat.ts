@@ -50,7 +50,12 @@ export interface Part {
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
-export type SendExtra = { approvals?: string[]; connectors?: string[]; selection?: DesignSelection };
+export type SendExtra = {
+  approvals?: string[]; connectors?: string[]; selection?: DesignSelection;
+  replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
+};
+// What was sent: what retry sends again, and what Stop gives back to the composer.
+export type Sent = { text: string; attachments?: Attachment[]; origin?: string; extra?: SendExtra };
 export type UIHandler = (ev: UIAction) => void;
 
 export interface Attachment {
@@ -97,7 +102,7 @@ export interface AppConfig {
   design_editor_url?: string;   // base URL of the embedded design editor for .fig files (env DESIGN_EDITOR_URL)
 }
 
-// How `retry` names the message it drops on the server.
+// How a message is named to the server: by regenerate, retry, and a stopped prompt taken back.
 async function sha256Hex(text: string): Promise<string | null> {
   try {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -128,7 +133,7 @@ export function useChat(baseUrl: string = "") {
   const chatIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const lastRequestRef = useRef<{ text: string; attachments?: Attachment[]; origin?: string; selection?: DesignSelection } | null>(null);
+  const lastRequestRef = useRef<Sent | null>(null);
   // Which conversation the view is showing. A run captures it when it starts and
   // writes nothing once it no longer matches — the chat id is not enough, since a
   // run can learn its id after the user has already moved on.
@@ -139,6 +144,11 @@ export function useChat(baseUrl: string = "") {
   const uiHandlerRef = useRef<UIHandler | null>(null);
   const setUIHandler = useCallback((h: UIHandler | null) => {
     uiHandlerRef.current = h;
+  }, []);
+  // Where Stop gives a prompt back: the composer, registered by the chat that owns it.
+  const restoreRef = useRef<((sent: Sent) => void) | null>(null);
+  const setRestoreHandler = useCallback((h: ((sent: Sent) => void) | null) => {
+    restoreRef.current = h;
   }, []);
   const { api, authHeaders, setGetToken } = useApi(baseUrl);
   const { error: toastError } = useToast();
@@ -304,7 +314,7 @@ export function useChat(baseUrl: string = "") {
       });
 
       // Store for retry
-      lastRequestRef.current = { text, attachments, origin, selection: extra?.selection };
+      lastRequestRef.current = { text, attachments, origin, extra };
 
       let receivedData = false;
       let sawDone = false;   // the server's end marker; its absence means the run may live on
@@ -318,9 +328,9 @@ export function useChat(baseUrl: string = "") {
 
         // Server loads history from disk; only ship the new user message —
         // the one built above, NOT a re-read of messagesRef. The ref only
-        // catches up when React runs the updater, so a send dispatched from a
-        // deferred callback (retry, regenerate) could otherwise read past the
-        // end of a rewound list and throw before ever reaching fetch.
+        // catches up when React runs the updater, so a send right after a
+        // rewind (retry, regenerate) could otherwise read past the end of the
+        // rewound list and throw before ever reaching fetch.
         const newUserMsg = userMessage;
         const withPaths = newUserMsg.attachments?.filter((a) => a.path);
         let content: string | Record<string, string>[] = newUserMsg.content;
@@ -341,6 +351,8 @@ export function useChat(baseUrl: string = "") {
         const url = chatIdRef.current
           ? `${baseUrl}/chat?id=${encodeURIComponent(chatIdRef.current)}`
           : `${baseUrl}/chat`;
+        // A replay names the saved turn by a hash of what was typed; "" (no WebCrypto) names none.
+        const replay = extra?.replay ? { [extra.replay]: (await sha256Hex(text)) ?? "" } : {};
         const response = await fetchAuthed(url, {
           method: "POST",
           headers,
@@ -350,7 +362,8 @@ export function useChat(baseUrl: string = "") {
                                  ...(autoApprove() ? {} : { auto: false }),
                                  ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
-                                 ...(extra?.selection ? { selection: extra.selection } : {}) }),
+                                 ...(extra?.selection ? { selection: extra.selection } : {}),
+                                 ...replay }),
           signal: controller.signal,
         });
 
@@ -604,69 +617,95 @@ export function useChat(baseUrl: string = "") {
     [isStreaming, baseUrl, authHeaders],
   );
 
-  // The server kept the failed turn's message: drop it first or a reload shows it twice.
-  // `expect` names it, so a request that never arrived drops nothing.
-  const retry = useCallback(async () => {
-    if (isStreaming) return;
+  // What was last sent: the request itself while this tab holds it, else the last message on
+  // screen (a server-side failure ends the stream cleanly and clears the stored request).
+  const lastSent = useCallback((): Sent | null => {
+    if (lastRequestRef.current) return lastRequestRef.current;
     const msgs = messagesRef.current;
     let i = msgs.length - 1;
     while (i >= 0 && msgs[i].role !== "user") i--;
-    // A server-side failure ends the stream cleanly and clears the stored request.
-    const request = lastRequestRef.current
-      ?? (i >= 0 ? { text: msgs[i].content, attachments: msgs[i].attachments, origin: "retry", selection: msgs[i].selection } : null);
+    if (i < 0) return null;
+    const { content: text, attachments, selection } = msgs[i];
+    return { text, attachments, origin: "retry", ...(selection ? { extra: { selection } } : {}) };
+  }, []);
+
+  // Send the failed turn again. If the server saved it and its run did not finish, it runs that
+  // turn again in place (`retry`); otherwise the request never arrived, and this is it. A failed
+  // regenerate is retried as one. An approval is not a turn a replay names: it goes again as it was.
+  const retry = useCallback(() => {
+    if (isStreaming) return;
+    const request = lastSent();
     if (!request) return;
-    const { text, attachments, origin, selection } = request;
-    if (chatIdRef.current && origin !== "confirm") {
-      const expect = await sha256Hex(text);
-      if (expect) {
-        try {
-          await api(`/chats/${encodeURIComponent(chatIdRef.current)}/last-exchange?expect=${expect}`, { method: "DELETE" });
-        } catch { return; }   // api() has toasted why
-      }
-    }
+    const { text, attachments, origin, extra } = request;
     track("message_retried", { chat_id: chatIdRef.current });
     // send() puts the message back; a silent send (an approval) has no bubble, so only the reply goes.
+    const msgs = messagesRef.current;
+    let i = msgs.length - 1;
+    while (i >= 0 && msgs[i].role !== "user") i--;
     const shown = i >= 0 && msgs[i].content === text && origin !== "confirm";
     setMessages(shown ? msgs.slice(0, i) : msgs[msgs.length - 1]?.role === "assistant" ? msgs.slice(0, -1) : msgs);
-    setTimeout(() => send(text, attachments, origin, selection ? { selection } : undefined), 0);
-  }, [isStreaming, send, api, setMessages]);
+    return send(text, attachments, origin, { ...extra, replay: origin === "confirm" ? undefined : extra?.replay ?? "retry" });
+  }, [isStreaming, send, setMessages, lastSent]);
 
-  // Re-run the last exchange. The server holds the finished turn on disk, so
-  // the old one has to be dropped there BEFORE re-sending — otherwise the
-  // resend appends a duplicate exchange instead of replacing it. A failed
-  // truncate aborts the whole thing (api() has already toasted the reason)
-  // rather than leaving history doubled.
-  const regenerate = useCallback(async () => {
+  // Run the last exchange again: one request, and the server runs the turn it saved again rather
+  // than a copy rebuilt from the screen, replacing only the reply after it. A second click, or
+  // another tab, meets the chat's run lock like a second send.
+  const regenerate = useCallback(() => {
     if (isStreaming) return;
     const msgs = messagesRef.current;
     let i = msgs.length - 1;
     while (i >= 0 && msgs[i].role !== "user") i--;
     if (i < 0) return;
-    const { content, attachments } = msgs[i];
-    if (chatIdRef.current) {
-      try {
-        await api(`/chats/${encodeURIComponent(chatIdRef.current)}/last-exchange`, { method: "DELETE" });
-      } catch { return; }
-    }
+    const { content, attachments, selection } = msgs[i];
     track("message_regenerated", { chat_id: chatIdRef.current, message_count: msgs.length });
     setMessages(msgs.slice(0, i));
-    setTimeout(() => send(content, attachments, "regenerate"), 0);
-  }, [isStreaming, send, api, setMessages]);
+    return send(content, attachments, "regenerate", { replay: "regenerate", ...(selection ? { selection } : {}) });
+  }, [isStreaming, send, setMessages]);
 
   const stop = useCallback(async () => {
     const id = chatIdRef.current;
     track("generation_stopped", { chat_id: id });
+    // Nothing of the reply shown yet (thinking aside, which is never kept): the prompt goes
+    // straight back to the composer, and the run drops it as it ends if it kept nothing either.
+    const msgs = messagesRef.current;
+    const last = msgs[msgs.length - 1];
+    const sent = lastSent();
+    const shown = (last?.parts || []).some((p) => (p.type === "text" && p.text?.trim()) || (p.type === "step" && p.tool_name));
+    const back = id && sent && sent.origin !== "confirm" && last?.role === "assistant" && !shown && restoreRef.current
+      ? sent : null;
+    if (back) {
+      viewRef.current += 1;   // the stopped run writes nothing more here
+      abortRef.current?.abort();
+      cursorRef.current = openRef.current = null;
+      setRunStatus("stopped");
+      setMessages((prev) => {
+        let j = prev.length - 1;
+        while (j >= 0 && prev[j].role !== "user") j--;
+        return j >= 0 && prev[j].content === back.text ? prev.slice(0, j) : prev;
+      });
+      restoreRef.current?.(back);
+    }
     // Dropping the connection is no longer a stop — the run would keep going.
     // The endpoint is the only thing that cancels; it reaches a run on another
     // container too, through the record.
+    let taken = false;
     if (id) {
-      try { await api(`/chats/${encodeURIComponent(id)}/stop`, { method: "POST" }); }
-      catch { /* it may already have finished; the poll below settles it */ }
+      try {
+        const expect = back && await sha256Hex(back.text);
+        const res = await api(`/chats/${encodeURIComponent(id)}/stop`,
+                              { method: "POST", ...(expect ? { json: { take_back: expect } } : {}) });
+        taken = !!(await res.json()).taken_back;
+      } catch { /* it may already have finished; the poll below settles it */ }
+    }
+    if (back) {
+      track("prompt_restored", { chat_id: id, taken_back: taken });
+      if (!taken) void pollRun(id!);   // it kept a reply, or never had the prompt: show the chat as it is
+      return;
     }
     const streaming = !!abortRef.current;
     abortRef.current?.abort();   // let go of the reader, for immediate feedback
     if (id && !streaming) void pollRun(id);   // a stream settles itself above
-  }, [api, pollRun]);
+  }, [api, pollRun, lastSent, setMessages]);
 
   const clear = useCallback(() => {
     track("chat_cleared", { chat_id: chatIdRef.current });
@@ -836,6 +875,7 @@ export function useChat(baseUrl: string = "") {
     authHeaders,
     api,
     setUIHandler,
+    setRestoreHandler,
   };
 }
 

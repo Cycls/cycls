@@ -135,6 +135,28 @@ def test_user_message_with_text_blocks_only_keeps_text():
     assert to_ui_messages(raw) == [{"role": "user", "content": "Look at this image"}]
 
 
+def test_a_user_bubble_is_what_was_typed(tmp_path):
+    """After a reload the bubble showed what the harness appends to a turn — an attached
+    file's whole text, the @-mention line — and regenerate re-sent it as if typed."""
+    import asyncio, json
+    from cycls._agent.harness.main import _ingest, _with_mention, _with_selection
+    (tmp_path / "attachments").mkdir()
+    (tmp_path / "attachments" / "n.txt").write_text("THE FILE")
+    sel = {"path": "designs/a.fig", "nodes": [{"name": "cta", "type": "TEXT"}]}
+    sent = [{"type": "text", "text": "summarize"}, {"type": "file", "file": "attachments/n.txt"}]
+    ingested = asyncio.run(_ingest(sent, str(tmp_path)))
+    raw = [
+        {"role": "user", "content": _with_selection(_with_mention(ingested, "[Using: Google Drive]"), sel),
+         "selection": sel},
+        {"role": "user", "content": _with_mention("list my files", "[Using: Google Drive]")},
+        {"role": "user", "content": _with_selection(_with_mention("make it red", "[Using: Figma]"), sel),
+         "selection": sel},
+        {"role": "user", "content": _with_selection("", sel), "selection": sel},
+    ]
+    assert "THE FILE" in json.dumps(raw), "the model still reads the file"
+    assert [m["content"] for m in to_ui_messages(raw)] == ["summarize", "list my files", "make it red", ""]
+
+
 def test_consecutive_assistant_messages_merge_into_one_turn():
     """A turn is several assistant/tool-result round-trips on disk; the UI shows
     one bubble — same as the live stream — so steps don't split across bubbles."""

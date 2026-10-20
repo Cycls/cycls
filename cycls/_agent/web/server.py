@@ -112,6 +112,9 @@ class Run:
         self.detach, self.attached, self.reason = detach, True, None
         self.failed = False   # the encoder handles the error itself
         self.error_id = None  # the reference the person was shown, and the key to the error log
+        # Stop's `take_back`: the sha256 of the prompt the person has back in their composer, which
+        # the run drops as it ends if it kept nothing after it; `taken_back` says whether it did.
+        self.take_back, self.taken_back = None, False
         self.task = self.inner = None
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
@@ -123,7 +126,8 @@ class Run:
                 "heartbeat": datetime.now(timezone.utc).isoformat(),
                 "user": getattr(self.user, "id", None), "reason": self.reason,
                 "ms": int((time.monotonic() - self.started) * 1000),
-                **({"error_id": self.error_id} if self.error_id else {})}
+                **({"error_id": self.error_id} if self.error_id else {}),
+                **({"taken_back": "1"} if self.taken_back else {})}
 
     def outcome(self):
         if self.inner.cancelled():
@@ -172,6 +176,13 @@ async def _supervise(run, stream, runs, key, on_run):
         except BaseException: pass
         status = run.outcome() if run.inner.done() else "interrupted"
         if status == "failed": run.reason = run.reason or "error"
+        # Here, before the record says stopped and the slot frees: no other run can start
+        # in between, so the turn dropped is the one taken back and nothing came after it.
+        if status == "stopped" and run.take_back and run.workspace is not None:
+            try:
+                run.taken_back = await state.truncate_last_exchange(
+                    run.workspace, run.chat_id, run.take_back, alone=True) is not None
+            except Exception as e: log("warn", chat_id=run.chat_id, message=f"take back failed: {e}")
         # Shielded: this is the only place that knows the run ended, and it runs
         # while the process may already be shutting down.
         await asyncio.shield(asyncio.ensure_future(_finish(run, status, on_run)))
@@ -189,7 +200,7 @@ async def _beat(run):
     except Exception:
         row = None
     if row and row.get("stop"):
-        run.reason = "stopped"
+        run.reason, run.take_back = "stopped", row.get("take_back")
         return True
     await _record(run, "running")
     return False
@@ -342,6 +353,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         auto: bool = True          # the composer's switch; absent means Auto
         connectors: list = []      # connectors the person @-mentioned — the turn gets a "[Using: …]" line
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
+        replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -422,9 +434,28 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             # The registry only sees this container; the record is the other half,
             # and a heartbeat that stopped reads as gone rather than running.
             if run.workspace is not None:
-                if state.run_status(await state.get_run(run.workspace, chat_id)) == "running":
+                status = state.run_status(await state.get_run(run.workspace, chat_id))
+                if status == "running":
                     runs.pop(key, None)
                     return busy
+                # A replay runs the saved turn again, not the request's copy of it, and drops only
+                # what came after it, here, where this run holds the chat. `regenerate` names a turn
+                # on screen, so it must match. `retry` names one that may never have arrived, and one
+                # whose run finished is an earlier message, so it falls back to an ordinary send.
+                regenerate, retry = data.get("regenerate"), data.get("retry")
+                if isinstance(regenerate, str) or (isinstance(retry, str) and retry and status != "done"):
+                    expect = regenerate if isinstance(regenerate, str) else retry
+                    turn = await state.truncate_last_exchange(run.workspace, chat_id, expect or None, keep=True)
+                    if turn is not None:
+                        context.replay = True
+                        context.connectors = turn.get("connectors") or context.connectors
+                        try: await state.touch_meta(run.workspace, chat_id, turn.get("content"))   # to the top of the list
+                        except Exception as e: log("warn", chat_id=chat_id, message=f"meta touch failed: {e}")
+                    elif isinstance(regenerate, str):
+                        runs.pop(key, None)
+                        return JSONResponse(status_code=409, content={
+                            "error": "chat_changed", "chat_id": chat_id,
+                            "detail": "This chat changed since it was opened. Reload it to see the latest."})
                 await _record(run, "running")   # visible before the first heartbeat
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
             stream = (openai_encoder(stream) if api
@@ -437,15 +468,23 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
 
     @app.post("/chats/{chat_id}/stop")
     async def stop_run(chat_id: str, request: Request, user: Optional[User] = auth):
-        """The only thing that cancels a run. A dropped connection is not a stop."""
+        """The only thing that cancels a run. A dropped connection is not a stop.
+        `{"take_back": <sha256 of the prompt>}`: the person has the prompt back in their
+        composer, so the run drops it as it ends if it kept nothing after it — and this
+        answers once it has, with `taken_back`."""
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
         ws = workspace(user, volume, base=config.storage, ws=ws_id)
+        try: take = (json.loads(await request.body() or b"{}") or {}).get("take_back")
+        except (ValueError, AttributeError): take = None
+        take = take if isinstance(take, str) and take else None
         run = runs.get((ws.path, chat_id))
         if run is not None and run.inner is not None and not run.inner.done():
-            run.reason = "stopped"
+            run.reason, run.take_back = "stopped", take
             run.inner.cancel()
-            return JSONResponse(status_code=202, content={"stopping": True})
+            if take: await asyncio.wait({run.task}, timeout=RUN_DRAIN + 5)
+            return JSONResponse(status_code=202, content={"stopping": True,
+                                                          **({"taken_back": run.taken_back} if take else {})})
         # Not ours: the run is on another container, which can only be reached
         # through the record. Its supervisor reads this on its next beat.
         row = await state.get_run(ws, chat_id) if user is not None else None
@@ -454,8 +493,16 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             return JSONResponse(status_code=202, content={"stopping": False, "status": status})
         if status != "running":
             return JSONResponse(status_code=404, content={"error": "no_run"})
-        await state.put_run(ws, chat_id, {**row, "stop": "1"})
-        return JSONResponse(status_code=202, content={"stopping": True})
+        await state.put_run(ws, chat_id, {**row, "stop": "1", **({"take_back": take} if take else {})})
+        if not take:
+            return JSONResponse(status_code=202, content={"stopping": True})
+        for _ in range(int((RUN_BEAT + RUN_DRAIN + 5) / 0.5)):   # until its next beat ends it
+            await asyncio.sleep(0.5)
+            row = await state.get_run(ws, chat_id)
+            if state.run_status(row) != "running":
+                break
+        return JSONResponse(status_code=202, content={"stopping": True,
+                                                      "taken_back": bool(row and row.get("taken_back"))})
 
     @app.get("/config")
     async def get_config():

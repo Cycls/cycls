@@ -172,7 +172,8 @@ files). The model sees:
 ```
 
 `Session` clamps both on load. `truncate_last_exchange` clamps them on disk too — a stale
-index past the new length would stub or hide the turns appended after it.
+index past the cut would stub or hide the turns appended after it, or the one a regenerate
+runs again.
 
 ## Checking it in production
 
