@@ -126,13 +126,16 @@ interface Queued {
 }
 
 const RAIL_ICON_W = 44;   // folded rail: icon strip only
+// Switching workspace remounts Chat: each one keeps the chat and canvas tabs it had open, for when it's back.
+const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean }>();
 
-export function Chat({ chat, onShare, files, account, config }: {
+export function Chat({ chat, onShare, files, account, config, view = "" }: {
   chat: ChatApi;
   onShare?: (audience: string) => Promise<string>;
   files?: FilesPanelProps;
   account?: AccountInfo | null;
   config?: AppConfig | null;
+  view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
   const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
@@ -278,9 +281,12 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Typing hushes every surface — prompt, tip, survey — until the next turn.
   const [hushed, setHushed] = useState(false);
   useEffect(() => { setHushed(false); }, [turnsDone]);
-  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
-  const [canvasActive, setCanvasActive] = useState<string | null>(null);
-  const [canvasHidden, setCanvasHidden] = useState(false);
+  const [was] = useState(() => kept.get(view));
+  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>(was?.tabs ?? []);
+  const [canvasActive, setCanvasActive] = useState<string | null>(was?.active ?? null);
+  const [canvasHidden, setCanvasHidden] = useState(was?.hidden ?? false);
+  useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden }); },
+    [view, chatId, canvasTabs, canvasActive, canvasHidden]);
   // "Add selection": the visible design's selection, and the one attached to the draft.
   const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
   const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
@@ -704,9 +710,10 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   // Restored-open panel (workspace/org switch remounts Chat): load the
-  // active tab's data, same as the click path would have.
+  // active tab's data, same as the click path would have, and the chat that was open here.
   useEffect(() => {
     if (filesOpen) selectTab(filesTab);
+    if (was?.chat) onLoadChat(was.chat).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -106,10 +106,11 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
     () => wsEnabled ? { id: effectiveWs, switch: switchWorkspace } : undefined,
     [wsEnabled, effectiveWs, switchWorkspace]);
   if (!isLoaded) return null;
-  return <ChatApp key={`${orgKey}:${effectiveWs || "personal"}`} config={config} workspace={workspace} />;
+  const view = `${orgKey}:${effectiveWs || "personal"}`;
+  return <ChatApp key={view} view={view} config={config} workspace={workspace} />;
 }
 
-function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
+function ChatApp({ config, workspace, view }: { config: AppConfig | null; workspace?: WorkspaceSelection; view: string }) {
   const chat = useChat();
   const { user } = useUser();
   const files = useFiles();
@@ -249,6 +250,7 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
       files={filesPanelProps(files, true, organization ? { id: organization.id, name: organization.name } : null)}
       account={account}
       config={config}
+      view={view}
     />
   );
 }
