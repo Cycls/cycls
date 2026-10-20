@@ -1,5 +1,8 @@
 """The Transcribe tool's executor: a recording in the workspace → what is said in it.
 
+Two engines (client.py says which hears first): ElevenLabs Scribe, sent the file in one request; or the
+cycls-transcribe service, as below. When the first is down, the other is tried.
+
 The recording goes to the service once, by the sha256 of its bytes, in pieces (going on from where
 an earlier call stopped), and is heard there as a job; the reply waits up to BUDGET["hear"] and
 otherwise says to call again, the job's token kept for this chat. The transcript is written beside
@@ -20,6 +23,7 @@ from pathlib import Path
 
 from ..design.store import write_fig
 from ..paths import _resolve_path
+from . import elevenlabs
 from .tool import AUDIO_TYPES, LANGUAGES
 
 BUDGET = {"send": 240, "hear": 300}
@@ -121,29 +125,36 @@ def kept(words_full, sha):
 # -- the transcript as a person reads it -----------------------------------------------------------
 
 def paragraphs(t):
-    """[(start seconds, text)]: sentences joined into paragraphs at long pauses, or every ~80 words."""
-    out, cur, start, n, last_end = [], [], None, 0, None
+    """[(start seconds, text, speaker)]: sentences joined into paragraphs at long pauses, a change of
+    speaker, or every ~80 words. `speaker` is None unless the engine told voices apart."""
+    out, cur, start, n, last_end, who = [], [], None, 0, None, None
     for s in t.get("sentences") or []:
-        if cur and (s["start"] - last_end >= PARAGRAPH_GAP_S or n >= PARAGRAPH_WORDS):
-            out.append((start, " ".join(cur)))
+        if cur and (s["start"] - last_end >= PARAGRAPH_GAP_S or n >= PARAGRAPH_WORDS or s.get("speaker") != who):
+            out.append((start, " ".join(cur), who))
             cur, n = [], 0
         if not cur:
-            start = s["start"]
+            start, who = s["start"], s.get("speaker")
         cur.append(s["text"])
         n += len(s["text"].split())
         last_end = s["end"]
     if cur:
-        out.append((start, " ".join(cur)))
+        out.append((start, " ".join(cur), who))
     if not out and t.get("text"):
-        out.append((0.0, t["text"]))
+        out.append((0.0, t["text"], None))
     return out
+
+
+def _line(t, at, text, who):
+    """One paragraph as a person reads it: its time, and who speaks when there are several voices."""
+    return f"[{clock(at)}] Speaker {who}: {text}" if who is not None and (t.get("speakers") or 0) > 1 else f"[{clock(at)}] {text}"
 
 
 def _engine(t):
     asr = str((t.get("engine") or {}).get("asr") or "")
     name = asr.split("@")[0].split("/")[-1]
     return {"cohere-transcribe-arabic-07-2026": "Cohere Transcribe Arabic",
-            "whisper-large-v3-turbo": "Whisper large-v3-turbo"}.get(name, name or "the service")
+            "whisper-large-v3-turbo": "Whisper large-v3-turbo",
+            "scribe_v2": "ElevenLabs Scribe v2"}.get(name, name or "the service")
 
 
 def _language(code):
@@ -153,13 +164,14 @@ def _language(code):
 def markdown(rel, t):
     lines = [f"# Transcript: {Path(rel).name}", "",
              f"- Recording: {rel} ({clock(t.get('duration') or 0)})",
-             f"- Language: {_language(t.get('language'))}",
+             f"- Language: {_language(t.get('language'))}"
+             + (f" · {t['speakers']} speakers" if (t.get("speakers") or 0) > 1 else ""),
              f"- Written down by {_engine(t)}, {time.strftime('%Y-%m-%d', time.gmtime())}. Names, numbers and "
              "dialect words can be misheard.", ""]
     if not t.get("words"):
         lines.append(t.get("note") or "Nobody is heard speaking in it.")
-    for at, text in paragraphs(t):
-        lines += [f"[{clock(at)}] {text}", ""]
+    for at, text, who in paragraphs(t):
+        lines += [_line(t, at, text, who), ""]
     if t.get("unheard"):
         spans = ", ".join(f"{clock(a)}–{clock(b)}" for a, b in t["unheard"])
         lines += [f"Not written down (loud, but no words could be made out: music, noise or crosstalk): {spans}.", ""]
@@ -171,11 +183,12 @@ def reply(rel, t, md_rel, words_rel, *, reused=False):
         return (f"Nobody is heard speaking in {rel} ({clock(t.get('duration') or 0)}): no transcript. "
                 + ("(Saved as before.)" if reused else ""))
     head = (f"{'Transcript of' if not reused else 'Transcript of (saved earlier)'} {rel} "
-            f"({clock(t.get('duration') or 0)}, {_language(t.get('language'))}, {len(t['words']):,} words; "
+            f"({clock(t.get('duration') or 0)}, {_language(t.get('language'))}, {len(t['words']):,} words"
+            + (f", {t['speakers']} speakers" if (t.get("speakers") or 0) > 1 else "") + "; "
             f"written down by {_engine(t)}). Saved as {md_rel} (with times) and {words_rel} (each word timed).")
     body, used = [], 0
-    for at, text in paragraphs(t):
-        line = f"[{clock(at)}] {text}"
+    for at, text, who in paragraphs(t):
+        line = _line(t, at, text, who)
         if used + len(line) > REPLY_CHARS:
             body.append(f"… the rest is in {md_rel}: read it to go on.")
             break
@@ -218,7 +231,7 @@ async def exec_transcribe(inp, workspace, ctx=None, again=True):
         return _err(f"{rel} is {size / 1048576:.0f} MB; a recording is at most {MAX_BYTES // 1048576} MB. "
                     "Export it smaller (a compressed m4a or mp3 is plenty for speech).")
     if not service.configured():
-        return _err("transcription is not configured for this agent (TRANSCRIBE_URL).")
+        return _err("transcription is not configured for this agent (TRANSCRIBE_URL or ELEVENLABS_API_KEY).")
     md_full, words_full = paths_for(full)
     md_rel, words_rel = (p.relative_to(root.resolve()).as_posix() for p in (md_full, words_full))
     sha = await asyncio.to_thread(sha_of, str(root), rel, full)
@@ -226,14 +239,24 @@ async def exec_transcribe(inp, workspace, ctx=None, again=True):
         if not md_full.is_file():
             await _write(root, md_rel, markdown(rel, t))
         return reply(rel, t, md_rel, words_rel, reused=True)
-    try:
-        t = await _hear(service, workspace, root, chat, full, rel, sha, language, size, again)
-    except service.OverAllowance as e:
-        return _err(str(e))
-    except service.Refused as e:
-        return _err(f"{rel} could not be transcribed: {e}")
-    except service.Unavailable as e:
-        return _err(f"the transcription service is unavailable: {e}")
+    t, down = None, []
+    for name in (service.engine(), service.fallback()):
+        if name is None:
+            continue
+        try:
+            if name == "elevenlabs":
+                t = await elevenlabs.transcribe(path=full, filename=full.name, language=language)
+            else:
+                t = await _hear(service, workspace, root, chat, full, rel, sha, language, size, again)
+            break
+        except service.OverAllowance as e:
+            return _err(str(e))
+        except service.Refused as e:
+            return _err(f"{rel} could not be transcribed: {e}")
+        except service.Unavailable as e:
+            down.append(str(e))
+    if t is None:
+        return _err("transcription is unavailable: " + "; ".join(down))
     if isinstance(t, str):
         return t
     said = {**t, "sha": sha, "clip": rel}

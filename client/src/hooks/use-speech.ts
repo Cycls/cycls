@@ -118,7 +118,7 @@ export function useSpeechRecognition({
               transcribe_ms: Date.now() - t0,
               text_length: text.length,
               empty: !text,
-              engine: data.engine === "cycls" ? "cycls" : "openai",
+              engine: typeof data.engine === "string" ? data.engine : "openai",   // elevenlabs | cycls | openai
             });
             onEnd(text);
           } else {

@@ -38,6 +38,28 @@ cold listener), the transcript with times and the dialect as said, the points ri
 Gulf Arabic; the turn 44 s, $0.08, no errors. The mic's route: 3.4 s, `engine: cycls`. Production's
 ledger shows the Cycls organisation's 2 jobs (106 s of audio, 17 GPU seconds).
 
+## Two engines (since 2026-10-20)
+
+After a comparison of providers on the same 22 clips (the team doc "Arabic speech-to-text: providers
+compared"; cycls-transcribe `docs/quirks.md`), the tool and the mic take either engine:
+
+| | ElevenLabs Scribe v2 | cycls-transcribe (Cohere) |
+|---|---|---|
+| Gulf dialect, character errors | 7.5 % | 9.0 % |
+| MSA clean / noisy | 6.3 % / 5.0 % | 2.2 % / 3.2 % |
+| English, word errors | 1.9 % | 2.8 % |
+| Cost | $0.22 per audio hour | ~$0.035 per audio hour + idle GPU (~$0.035 a separate use after tuning); $0 unused |
+| Speakers | yes | not yet |
+| Data | ElevenLabs (US by default) | ours |
+
+At our volume (far under the ~470 audio hours a month where our GPU pays for itself) ElevenLabs is
+cheaper and better on dialect, so super-dev hears first on ElevenLabs (`TRANSCRIBE_ENGINE=elevenlabs`)
+with the service behind it. `client.engine()` / `fallback()` pick them; `hear_short()` is the mic's
+router; `elevenlabs.py` turns Scribe's reply into our transcript shape (words with `speaker`, sentences
+broken at a change of speaker, `speakers`); the tool's `[mm:ss] Speaker N:` lines come from that. OpenAI is
+only the mic's last resort, as `gpt-4o-mini-transcribe`: `gpt-4o-transcribe` returned only the first
+sentence of clips with pauses.
+
 ## Why this model
 
 Cohere Transcribe Arabic (07-2026; 2.07B parameters, BF16, Apache-2.0, gated on Hugging Face), self-hosted:

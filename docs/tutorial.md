@@ -488,31 +488,34 @@ versions of the file, like a design's; the agent reads the file again before it 
 ### Transcribe (voice notes, calls, meetings)
 
 Let an agent **write down what is said in a recording** — a voice note, a phone call, a meeting, a
-lecture, or the sound of a video — strong on Arabic, Gulf dialects included, and on English. A shared
-service on Modal GPUs hears it (Cohere Transcribe Arabic for Arabic and English, Whisper for naming
-the language and for every other language, our own aligner for word times); nothing runs in the
-agent's image.
+lecture, or the sound of a video — strong on Arabic, Gulf dialects included, and on English. Two
+engines, either or both: **ElevenLabs Scribe** (an API: the fewest errors on Gulf dialect in our tests,
+speaker labels, $0.22 per audio hour) and the shared **cycls-transcribe** service on Modal GPUs (Cohere
+Transcribe Arabic + Whisper + our own aligner: the best on standard Arabic, the audio stays ours, cheapest
+at high volume). Nothing runs in the agent's image.
 
 ```python
 llm = cycls.LLM().model(...).allowed_tools(["Editor", "Transcribe"])
 ```
 ```
-TRANSCRIBE_URL=https://<workspace>--cycls-transcribe-web.modal.run   # the deployed service
+ELEVENLABS_API_KEY=sk_...                                            # ElevenLabs Scribe
+TRANSCRIBE_URL=https://<workspace>--cycls-transcribe-web.modal.run   # the cycls-transcribe service
 TRANSCRIBE_SECRET=<the service key>
+TRANSCRIBE_ENGINE=elevenlabs        # which hears first; the other, when set up, is the fallback
 ```
 
 The model calls one `transcribe` tool with a recording's path (mp3, wav, m4a, ogg, opus, webm, flac,
 aac, mp4, mov; up to 512 MB and 3 hours) and an optional `language` (`ar`, `en` or `auto`). The
-reply is the transcript with a `[mm:ss]` mark at each paragraph, and it is saved beside the recording
-as `<name>.transcript.md` and `<name>.words.json` (every word timed; the same shape as a Video
-footage transcript, so neither tool hears a clip twice). A recording attached in chat points the
-model at the tool. A long recording is collected on a later call; asking again for the same bytes
-costs nothing. The service keeps a daily allowance per organisation and per person (in hours of
-audio). See `docs/notes/transcribe.md`.
+reply is the transcript with a `[mm:ss]` mark at each paragraph (and `Speaker 1`, `Speaker 2`… when the
+engine tells voices apart), and it is saved beside the recording as `<name>.transcript.md` and
+`<name>.words.json` (every word timed; the same shape as a Video footage transcript, so neither tool
+hears a clip twice). A recording attached in chat points the model at the tool; asking again for the
+same bytes costs nothing. When the first engine is down, the other is tried. The service keeps a daily
+allowance per organisation and per person (in hours of audio). See `docs/notes/transcribe.md`.
 
-The same service backs the **microphone** once `TRANSCRIBE_URL` is set: the browser warms a listener
-as recording starts, and `POST /transcribe` answers from the service — falling back to OpenAI when
-`OPENAI_API_KEY` is set and the service is down or slow to start.
+The same engines back the **microphone** once either is set: `POST /transcribe` answers from the first,
+then the other; OpenAI's `gpt-4o-mini-transcribe` only when neither is set, or both are down and
+`OPENAI_API_KEY` is set. When the service hears first, the browser warms a GPU as recording starts.
 
 ### Apple IAP entitlements
 
@@ -1037,6 +1040,8 @@ Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is
 | `ANTHROPIC_API_KEY` | Anthropic API key (auto-picked by adapter) |
 | `OPENAI_API_KEY` | OpenAI API key (auto-picked by adapter) |
 | `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` | The cycls-transcribe service: the `Transcribe` tool and the microphone |
+| `ELEVENLABS_API_KEY` | ElevenLabs Scribe, the other transcription engine |
+| `TRANSCRIBE_ENGINE` | `elevenlabs` or `cycls`: which engine hears first (default: the service when `TRANSCRIBE_URL` is set) |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk publishable key (optional override) |
 
 ---

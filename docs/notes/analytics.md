@@ -234,8 +234,8 @@ server's `run` log row — `status`, `reason`, `error_id`, `ms` — and that is 
 `mic_permission_denied` is any mic that couldn't start; `reason` says which — `NotAllowedError`
 (refused), `NotFoundError` (no mic), `NotSupportedError` (no format it can record). The recording
 format is whichever the browser has: mp4 on Safari and Chrome, webm on Firefox.
-`mic_transcribed.engine` says who wrote the words: `cycls` (the cycls-transcribe service, when the
-agent sets `TRANSCRIBE_URL`) or `openai` (no service, or the fallback when it was down or slow).
+`mic_transcribed.engine` says who wrote the words: `elevenlabs`, `cycls` (the cycls-transcribe
+service), or `openai` (no engine set, or both down).
 
 ---
 

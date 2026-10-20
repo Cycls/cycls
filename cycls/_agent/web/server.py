@@ -63,9 +63,11 @@ class Config(BaseModel):
         # Video at all is answered per workspace by POST /video/editor.
         if os.environ.get("VIDEO_EDITOR_URL") and os.environ.get("VIDEO_URL"):
             data["video_editor"] = True
-        # The microphone goes to the cycls-transcribe service: the browser warms a listener as it
-        # starts recording (POST /transcribe/warm), so a cold GPU starts while the person speaks.
-        if os.environ.get("TRANSCRIBE_URL"):
+        # The microphone hears first on the cycls-transcribe service: the browser warms a listener as
+        # it starts recording (POST /transcribe/warm), so a cold GPU starts while the person speaks.
+        # (ElevenLabs, the other engine, has nothing to warm.)
+        from cycls._agent.transcribe import engine as _transcribe_engine
+        if _transcribe_engine() == "cycls":
             data["voice_warm"] = True
         return data
 
@@ -478,14 +480,16 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     async def transcribe_warm(user: Optional[User] = auth):
         """The microphone started recording: a listener starts while the person speaks. A hint only."""
         from cycls._agent import transcribe as service
-        if service.configured():
+        if service.engine() == "cycls":
             asyncio.create_task(service.warm(subject=service.subject_of(user)))
         return {"ok": True}
 
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
-        # The cycls-transcribe service when it is configured (strong on Gulf Arabic, our own GPUs),
-        # OpenAI when it is not — or when the service is down or slow to start and a key is set.
+        # The transcription engines when one is configured (ElevenLabs and/or the cycls-transcribe
+        # service: the first, then the other); OpenAI's gpt-4o-mini-transcribe only when neither is set,
+        # or as the last resort when both are down. (gpt-4o-transcribe was dropped: on clips with pauses
+        # it returned only the first sentence — cycls-transcribe docs/quirks.md, 2026-10-20.)
         from cycls._agent import transcribe as service
         api_key = os.environ.get("OPENAI_API_KEY")
         if not service.configured() and not api_key:
@@ -504,10 +508,12 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             hint = form.get("language")
             language = hint if hint in ("ar", "en") else "auto"
             try:
-                # With OpenAI behind it, a listener that is slow to start is not waited for long.
-                heard = await service.short(audio_bytes, filename=name, language=language,
-                                            subject=service.subject_of(user), timeout=45.0 if api_key else 130.0)
-                return {"text": heard.get("text") or "", "language": heard.get("language"), "engine": "cycls"}
+                # With another engine behind it, a listener that is slow to start is not waited for long.
+                behind = bool(service.fallback() or api_key)
+                heard = await service.hear_short(audio_bytes, filename=name, language=language,
+                                                 subject=service.subject_of(user), timeout=45.0 if behind else 130.0)
+                return {"text": heard.get("text") or "", "language": heard.get("language"),
+                        "engine": heard.get("engine_used") or "cycls"}
             except service.OverAllowance as e:
                 raise HTTPException(status_code=429, detail=str(e))
             except service.Refused as e:
@@ -521,7 +527,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 "https://api.openai.com/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": (name, audio_bytes, file.content_type or "audio/mp4")},
-                data={"model": "gpt-4o-transcribe"},
+                data={"model": "gpt-4o-mini-transcribe"},
                 timeout=30,
             )
             if r.status_code != 200:

@@ -22,7 +22,7 @@ THEME_PATH = str(importlib.resources.files("cycls").joinpath("_agent/web/themes/
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-    for k in ("TRANSCRIBE_URL", "TRANSCRIBE_SECRET", "OPENAI_API_KEY"):
+    for k in ("TRANSCRIBE_URL", "TRANSCRIBE_SECRET", "OPENAI_API_KEY", "ELEVENLABS_API_KEY", "TRANSCRIBE_ENGINE"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -356,7 +356,7 @@ def test_the_mic_goes_to_the_service_when_it_is_configured(monkeypatch):
         calls.append(kw)
         return {"text": "مرحبا", "language": "ar", "words": []}
 
-    monkeypatch.setattr(transcribe, "short", short)
+    monkeypatch.setattr(client, "short", short)
     c = _app()
     r = c.post("/transcribe", files={"file": ("voice.webm", b"x" * 2000, "audio/webm")})
     assert r.json() == {"text": "مرحبا", "language": "ar", "engine": "cycls"}
@@ -379,7 +379,7 @@ def test_the_mic_falls_back_to_openai_when_the_service_is_slow(monkeypatch):
         seen["openai"] = url
         return httpx.Response(200, json={"text": "hello"})
 
-    monkeypatch.setattr(transcribe, "short", short)
+    monkeypatch.setattr(client, "short", short)
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
     r = _app().post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000, "audio/mp4")})
     assert r.json() == {"text": "hello"} and "openai.com" in seen["openai"] and seen["timeout"] == 45.0
@@ -395,10 +395,10 @@ def test_the_mic_says_why_when_it_cannot(monkeypatch):
         raise transcribe.OverAllowance("You have transcribed today's allowance")
 
     c = _app()
-    monkeypatch.setattr(transcribe, "short", busy)
+    monkeypatch.setattr(client, "short", busy)
     r = c.post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000)})
     assert r.status_code == 503 and "too long to start" in r.text
-    monkeypatch.setattr(transcribe, "short", over)
+    monkeypatch.setattr(client, "short", over)
     r = c.post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000)})
     assert r.status_code == 429 and "allowance" in r.text
     r = c.post("/transcribe", files={"file": ("voice.m4a", b"x" * (client.SHORT_BYTES + 1))})
@@ -419,3 +419,173 @@ def test_the_mic_warms_a_listener_only_when_there_is_a_service(monkeypatch):
     _on(monkeypatch)
     assert c.post("/transcribe/warm").json() == {"ok": True}
     assert warmed == ["local"]
+
+
+# ---- two engines: ElevenLabs and the service ---------------------------------------------------
+
+from cycls._agent.transcribe import elevenlabs  # noqa: E402
+
+
+def _el_on(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test")
+
+
+def test_which_engine_hears_first(monkeypatch):
+    assert transcribe.engine() is None and not transcribe.configured()
+    _el_on(monkeypatch)
+    assert transcribe.engine() == "elevenlabs" and transcribe.fallback() is None and transcribe.configured()
+    _on(monkeypatch)
+    assert transcribe.engine() == "cycls" and transcribe.fallback() == "elevenlabs"      # the service by default
+    monkeypatch.setenv("TRANSCRIBE_ENGINE", "elevenlabs")
+    assert transcribe.engine() == "elevenlabs" and transcribe.fallback() == "cycls"
+    monkeypatch.delenv("ELEVENLABS_API_KEY")
+    assert transcribe.engine() == "cycls" and transcribe.fallback() is None                # asked for one not set up
+    assert [t["name"] for t in build_tools(["Transcribe"], None)] == ["transcribe"]
+
+
+_SCRIBE = {"language_code": "ara", "language_probability": 0.99, "audio_duration_secs": 12.5,
+           "text": "مرحبا بكم. أهلاً وسهلاً",
+           "words": [{"text": "مرحبا", "type": "word", "start": 0.5, "end": 0.9, "logprob": -0.05, "speaker_id": "speaker_0"},
+                     {"text": " ", "type": "spacing", "start": 0.9, "end": 1.0, "speaker_id": "speaker_0"},
+                     {"text": "بكم.", "type": "word", "start": 1.0, "end": 1.4, "logprob": -0.1, "speaker_id": "speaker_0"},
+                     {"text": "(laughs)", "type": "audio_event", "start": 1.5, "end": 2.0},
+                     {"text": "أهلاً", "type": "word", "start": 3.0, "end": 3.4, "logprob": -0.2, "speaker_id": "speaker_1"},
+                     {"text": "وسهلاً", "type": "word", "start": 3.5, "end": 3.9, "logprob": -0.3, "speaker_id": "speaker_1"}]}
+
+
+def test_a_scribe_reply_becomes_our_transcript():
+    t = elevenlabs.to_transcript(_SCRIBE)
+    assert t["language"] == "ar" and t["duration"] == 12.5 and t["speakers"] == 2 and t["kind"] == "audio"
+    assert [w["text"] for w in t["words"]] == ["مرحبا", "بكم.", "أهلاً", "وسهلاً"]          # no spacing, no audio events
+    assert t["words"][0]["speaker"] == 1 and t["words"][2]["speaker"] == 2 and 0.9 < t["words"][0]["score"] <= 1
+    assert [(s["text"], s["speaker"]) for s in t["sentences"]] == [("مرحبا بكم.", 1), ("أهلاً وسهلاً", 2)]
+    assert t["engine"]["asr"] == "elevenlabs/scribe_v2"
+    assert elevenlabs.to_transcript({"words": [], "audio_duration_secs": 4})["note"]
+
+
+def test_scribe_is_asked_as_the_tool_needs_and_its_refusals_are_told_apart(monkeypatch, tmp_path):
+    _el_on(monkeypatch)
+    seen = []
+    answers = {"status": 200, "body": _SCRIBE}
+
+    def handler(r):
+        seen.append(r)
+        return httpx.Response(answers["status"], json=answers["body"])
+
+    monkeypatch.setattr(elevenlabs.httpx, "AsyncClient",
+                        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler), **kw))
+    rec = tmp_path / "a.m4a"
+    rec.write_bytes(b"audio")
+    t = asyncio.run(elevenlabs.transcribe(path=rec, filename="a.m4a", language="ar"))
+    body = seen[0].content.decode("utf-8", "replace")
+    assert seen[0].headers["xi-api-key"] == "sk_test" and str(seen[0].url) == elevenlabs.URL
+    assert 'name="model_id"' in body and "scribe_v2" in body and 'name="diarize"' in body and 'name="language_code"' in body
+    assert t["speakers"] == 2
+    asyncio.run(elevenlabs.transcribe(data=b"x", filename="v.webm", language="auto"))
+    assert 'name="language_code"' not in seen[1].content.decode("utf-8", "replace")             # left to Scribe
+    for status, payload, exc in ((401, {"detail": {"status": "invalid_api_key", "message": "bad key"}}, transcribe.Unavailable),
+                                 (402, {"detail": {"status": "quota_exceeded", "message": "quota"}}, transcribe.OverAllowance),
+                                 (422, {"detail": {"message": "not audio"}}, transcribe.Refused),
+                                 (503, {"detail": "busy"}, transcribe.Unavailable)):
+        answers.update(status=status, body=payload)
+        with pytest.raises(exc):
+            asyncio.run(elevenlabs.transcribe(data=b"x", filename="v.webm"))
+    monkeypatch.delenv("ELEVENLABS_API_KEY")
+    with pytest.raises(transcribe.Unavailable):
+        asyncio.run(elevenlabs.transcribe(data=b"x"))
+
+
+def test_the_tool_on_scribe_writes_who_speaks(monkeypatch, tmp_path):
+    _el_on(monkeypatch)
+    calls = []
+
+    async def scribe(**kw):
+        calls.append(kw)
+        return elevenlabs.to_transcript(_SCRIBE)
+
+    monkeypatch.setattr(elevenlabs, "transcribe", scribe)
+    svc = FakeService(monkeypatch)
+    (tmp_path / "call.m4a").write_bytes(b"a call")
+    out = _run({"path": "call.m4a", "language": "ar"}, _ws(tmp_path))
+    assert "ElevenLabs Scribe v2" in out and "2 speakers" in out
+    assert "[00:00] Speaker 1: مرحبا بكم." in out and "[00:03] Speaker 2: أهلاً وسهلاً" in out
+    md = (tmp_path / "call.transcript.md").read_text(encoding="utf-8")
+    assert "Speaker 2: أهلاً وسهلاً" in md and "2 speakers" in md
+    assert calls[0]["language"] == "ar" and calls[0]["filename"] == "call.m4a" and svc.started == []
+
+
+def test_the_tool_falls_back_to_the_other_engine(monkeypatch, tmp_path):
+    _el_on(monkeypatch)
+    _on(monkeypatch)
+    monkeypatch.setenv("TRANSCRIBE_ENGINE", "elevenlabs")
+
+    async def down(**kw):
+        raise transcribe.Unavailable("ElevenLabs is unreachable: ConnectError")
+
+    monkeypatch.setattr(elevenlabs, "transcribe", down)
+    svc = FakeService(monkeypatch)
+    (tmp_path / "a.ogg").write_bytes(b"x")
+    out = _run({"path": "a.ogg"}, _ws(tmp_path))
+    assert out.startswith("Transcript of a.ogg") and len(svc.started) == 1               # the service heard it
+    # The service first, ElevenLabs behind it.
+    monkeypatch.setenv("TRANSCRIBE_ENGINE", "cycls")
+
+    async def gone(*a, **k):
+        raise transcribe.Unavailable("the transcription service is unreachable")
+
+    monkeypatch.setattr(transcribe, "state", gone)
+
+    async def scribe(**kw):
+        return elevenlabs.to_transcript(_SCRIBE)
+
+    monkeypatch.setattr(elevenlabs, "transcribe", scribe)
+    (tmp_path / "b.ogg").write_bytes(b"y")
+    assert "ElevenLabs Scribe v2" in _run({"path": "b.ogg"}, _ws(tmp_path))
+
+    async def down2(**kw):
+        raise transcribe.Unavailable("ElevenLabs refused the key")
+
+    monkeypatch.setattr(elevenlabs, "transcribe", down2)
+    (tmp_path / "c.ogg").write_bytes(b"z")
+    err = _run({"path": "c.ogg"}, _ws(tmp_path))
+    assert err.startswith("Error: transcription is unavailable") and "refused the key" in err and "unreachable" in err
+
+
+def test_the_mic_on_scribe_and_its_fallback(monkeypatch):
+    _el_on(monkeypatch)
+
+    async def scribe(**kw):
+        return elevenlabs.to_transcript(_SCRIBE)
+
+    monkeypatch.setattr(elevenlabs, "transcribe", scribe)
+    c = _app()
+    r = c.post("/transcribe", files={"file": ("voice.webm", b"x" * 2000, "audio/webm")})
+    assert r.json() == {"text": "مرحبا بكم. أهلاً وسهلاً", "language": "ar", "engine": "elevenlabs"}
+    cfg = c.get("/config").json()
+    assert cfg["voice"] is True and "voice_warm" not in cfg                            # nothing of ours to warm
+    _on(monkeypatch)
+    monkeypatch.setenv("TRANSCRIBE_ENGINE", "elevenlabs")
+
+    async def down(**kw):
+        raise transcribe.Unavailable("ElevenLabs is unreachable")
+
+    async def short(data, **kw):
+        return {"text": "من الخدمة", "language": "ar", "words": []}
+
+    monkeypatch.setattr(elevenlabs, "transcribe", down)
+    monkeypatch.setattr(client, "short", short)
+    r = _app().post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000)})
+    assert r.json() == {"text": "من الخدمة", "language": "ar", "engine": "cycls"}
+
+
+def test_the_openai_fallback_is_the_mini_model(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    sent = {}
+
+    async def post(self, url, **kw):
+        sent.update(kw.get("data") or {})
+        return httpx.Response(200, json={"text": "hi"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    assert _app().post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000)}).json() == {"text": "hi"}
+    assert sent["model"] == "gpt-4o-mini-transcribe"        # gpt-4o-transcribe dropped text after the first sentence

@@ -5,10 +5,13 @@ own aligner for word times).
 Configured by the env an agent sets:
   TRANSCRIBE_URL      the service's door, https://<workspace>--cycls-transcribe-web.modal.run
   TRANSCRIBE_SECRET   the key every request carries (X-Transcribe-Key)
+  ELEVENLABS_API_KEY  ElevenLabs Scribe, the other engine (elevenlabs.py)
+  TRANSCRIBE_ENGINE   which hears first, `elevenlabs` or `cycls`; the other, when set up, is the fallback.
+                      Unset: the service when TRANSCRIBE_URL is set, else ElevenLabs.
 
-Unset TRANSCRIBE_URL and the Transcribe tool is simply not offered, and the chat microphone uses
-OpenAI as before (when OPENAI_API_KEY is set). Who may use it is the service's to say: it keeps a
-daily allowance per organisation and per person, and answers 429 past it.
+With neither engine, the Transcribe tool is simply not offered, and the chat microphone uses OpenAI
+(when OPENAI_API_KEY is set). Who may use the service is the service's to say: it keeps a daily
+allowance per organisation and per person, and answers 429 past it.
 
 Two ways in: `short()` sends a recording of up to 25 MB / 10 minutes in one request and gets its
 transcript back (the microphone); a longer one is sent in pieces by the sha256 of its bytes
@@ -55,8 +58,40 @@ class Refused(RuntimeError):
         self.code = code
 
 
-def configured():
+ENGINES = ("elevenlabs", "cycls")
+
+
+def service_configured():
+    """The cycls-transcribe service (our GPUs) is set: TRANSCRIBE_URL."""
     return bool(os.environ.get("TRANSCRIBE_URL"))
+
+
+def _available(name):
+    if name == "cycls":
+        return service_configured()
+    if name == "elevenlabs":
+        return bool(os.environ.get("ELEVENLABS_API_KEY"))
+    return False
+
+
+def engine():
+    """Which engine hears first: TRANSCRIBE_ENGINE when it names one that is set up, else the service when
+    TRANSCRIBE_URL is set, else ElevenLabs when its key is. None = no transcription engine."""
+    wanted = (os.environ.get("TRANSCRIBE_ENGINE") or "").strip().lower()
+    if wanted in ENGINES and _available(wanted):
+        return wanted
+    return next((e for e in ("cycls", "elevenlabs") if _available(e)), None)
+
+
+def fallback():
+    """The other engine, when it is set up too: tried when the first is down or slow."""
+    first = engine()
+    return next((e for e in ENGINES if e != first and _available(e)), None)
+
+
+def configured():
+    """Is there any transcription engine? (The Transcribe tool and the mic are offered on this.)"""
+    return engine() is not None
 
 
 def _hash(kind, value):
@@ -167,6 +202,30 @@ async def short(data, *, filename="voice.m4a", language="auto", workspace=None, 
     if resp.status_code != 200:
         raise _error(resp)
     return resp.json()
+
+
+async def hear_short(data, *, filename="voice.m4a", language="auto", subject=None, timeout=130.0):
+    """A short recording (the microphone) through the first engine, then the other when the first is down or
+    too slow. → the transcript with `engine_used`. Refused (not audio) and OverAllowance are not retried
+    elsewhere: the recording, or today's allowance, is the problem, not the engine."""
+    from . import elevenlabs
+
+    tried, last = [], None
+    for name in (engine(), fallback()):
+        if name is None:
+            continue
+        try:
+            if name == "elevenlabs":
+                heard = await elevenlabs.transcribe(data=data, filename=filename, language=language)
+            else:
+                heard = await short(data, filename=filename, language=language, subject=subject, timeout=timeout)
+            return {**heard, "engine_used": name, **({"fell_back_from": tried[0]} if tried else {})}
+        except (Refused, OverAllowance):
+            raise
+        except (Unavailable, RuntimeError) as e:
+            tried.append(name)
+            last = e
+    raise last or Unavailable("transcription is not configured")
 
 
 async def state(workspace, sha):
