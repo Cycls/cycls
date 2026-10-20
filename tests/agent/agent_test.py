@@ -416,6 +416,65 @@ def test_exec_read_binary_file(tmp_path):
     assert "binary" in result
 
 
+def _parser(monkeypatch, reply):
+    """The deployed parser, stubbed: `reply` is its result dict, or an exception it raises."""
+    import cycls
+    from cycls._agent import tools
+    calls = []
+    def parse(data, filename, mode):
+        calls.append((filename, mode))
+        if isinstance(reply, Exception): raise reply
+        return {"mode": mode, "page_count": 3, "warnings": [], "error": None, **reply}
+    monkeypatch.setattr(tools, "PARSER", "cycls-parser")
+    monkeypatch.setattr(cycls, "remote", lambda name, **_: parse)
+    return calls
+
+
+def test_exec_read_parses_documents_to_markdown(tmp_path, monkeypatch):
+    """Word, PowerPoint, Excel and PDFs come back as the parser's Markdown, its warnings first."""
+    calls = _parser(monkeypatch, {"content": "# التقرير\n\n| a | b |", "warnings": ["page 2: verify"]})
+    (tmp_path / "report.docx").write_bytes(b"PK")
+    (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4")
+
+    assert asyncio.run(_exec_read({"path": "report.docx"}, str(tmp_path))) == "[page 2: verify]\n# التقرير\n\n| a | b |"
+    pdf = asyncio.run(_exec_read({"path": "report.pdf"}, str(tmp_path)))
+    assert "3 pages" in pdf and "pages='N'" in pdf and pdf.endswith("| a | b |")
+    assert calls == [("report.docx", "markdown"), ("report.pdf", "markdown")]
+
+
+def test_exec_read_keeps_a_long_document_in_tmp(tmp_path, monkeypatch):
+    """Past the spill size the model gets the beginning, and the whole text waits in .tmp/ to continue from."""
+    body = "\n".join(f"line {i} " + "x" * 90 for i in range(1, 501))
+    _parser(monkeypatch, {"content": body})
+    (tmp_path / "book.epub").write_bytes(b"PK")
+
+    out = asyncio.run(_exec_read({"path": "book.epub"}, str(tmp_path), chat_id="c1"))
+    assert len(out) < len(body) and out.startswith("line 1 ")
+    kept = next((tmp_path / ".tmp" / "c1").glob("book-*.md"))
+    assert kept.read_text() == body and str(kept.relative_to(tmp_path)) in out
+    nxt = int(out.rsplit("offset=", 1)[1].split(",")[0])
+    assert asyncio.run(_exec_read({"path": str(kept.relative_to(tmp_path)), "offset": nxt, "limit": 1}, str(tmp_path))) \
+        .split("\t", 1)[1].startswith(f"line {nxt} ")
+
+
+def test_exec_read_falls_back_when_the_parser_cannot_help(tmp_path, monkeypatch):
+    """Unavailable, failing, or finding no text (a scan): `read` does what it did before the parser."""
+    (tmp_path / "scan.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
+    (tmp_path / "notes.docx").write_bytes(b"\x80\x81" * 50)
+    for reply in (OSError("unreachable"), {"content": "", "error": "malformed document"}, {"content": "  "}):
+        _parser(monkeypatch, reply)
+        assert asyncio.run(_exec_read({"path": "scan.pdf"}, str(tmp_path)))[0]["type"] == "document"
+        assert "binary" in asyncio.run(_exec_read({"path": "notes.docx"}, str(tmp_path)))
+
+
+def test_exec_read_pages_skip_the_parser(tmp_path, monkeypatch):
+    """`pages` asks to see the PDF, so it is rendered, never parsed."""
+    calls = _parser(monkeypatch, {"content": "text"})
+    (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4")
+    asyncio.run(_exec_read({"path": "doc.pdf", "pages": "1"}, str(tmp_path)))
+    assert calls == []
+
+
 # ---------------------------------------------------------------------------
 # File editing tests (replaces editor edit tests)
 # ---------------------------------------------------------------------------

@@ -12,6 +12,13 @@ def _reset_provisioned():
     state._provisioned.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_parser(monkeypatch):
+    """`read` asks the deployed document parser: tests read as if it were not there, unless they stub it."""
+    from cycls._agent import tools
+    monkeypatch.setattr(tools, "PARSER", "")
+
+
 # ---- Live LLM tests ----
 # Tests marked @pytest.mark.live hit real Anthropic. Off by default; opt
 # in with `pytest --live`. Also auto-skips if ANTHROPIC_API_KEY is unset.

@@ -43,6 +43,14 @@ READ_MAX = 50_000        # chars per read (~25k tokens) — attachments inline t
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
 
+# Documents are read as text by a deployed Cycls function (Cycls/cycls-parser); point it at your own, or set it
+# empty to read them as before — which is also what `read` does whenever the parser is unavailable.
+PARSER = os.environ.get("CYCLS_PARSER", "cycls-parser")
+_PARSED_EXTS = {"pdf", "doc", "docx", "docm", "ppt", "pptx", "pptm", "pps", "ppsx", "ppsm",
+                "xls", "xlsx", "xlsm", "xlsb", "odt", "ods", "odp", "rtf", "epub"}
+_PARSE_MAX = 50 * 1024 * 1024
+_PARSE_TIMEOUT = 120   # seconds — a 200-page PDF takes about 10
+
 _BASH_TOOL = {
     "type": "custom",
     "name": "bash",
@@ -77,10 +85,11 @@ _READ_TOOL = {
         "Read a file from the workspace.\n\n"
         "Usage:\n"
         "- Reads text files with line numbers (cat -n format, 1-indexed).\n"
-        "- Reads images (PNG, JPG, GIF, WebP) and small PDFs visually — you will see their contents.\n"
-        "- For LARGE PDFs (over 3MB): you MUST provide the `pages` parameter, e.g. pages='1-5'. "
-        "The tool will render those pages as images. Maximum 20 pages per read. "
-        "If you don't know how many pages the PDF has, the error message will tell you.\n"
+        "- Reads images (PNG, JPG, GIF, WebP) visually — you will see their contents.\n"
+        "- Reads documents (PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB) as Markdown text. "
+        "A long one shows its beginning and keeps the full text in .tmp/, to continue with offset or search with rg.\n"
+        "- `pages` (e.g. pages='1-5') shows PDF pages as images instead: for scans, charts, or checking a page. "
+        "Maximum 20 pages per read. A PDF with no text layer is shown as images, or asks for `pages` when over 3MB.\n"
         "- Returns up to 50,000 characters per call; a longer file ends with the offset to continue from.\n"
         "- When you already know which part of the file you need, use offset and limit to read only that part.\n"
         "- Only reads files, not directories. Use `ls` via bash for directories.\n"
@@ -91,7 +100,7 @@ _READ_TOOL = {
         "path": {"type": "string", "description": "Relative path to read (e.g. src/main.py)"},
         "offset": {"type": "integer", "description": "Start line, 1-indexed (default: 1)"},
         "limit": {"type": "integer", "description": "Max lines to read. Omit to read as much as fits."},
-        "pages": {"type": "string", "description": "Page range for large PDFs, e.g. '1-5' or '3'. Required for PDFs over 3MB. Max 20 pages."},
+        "pages": {"type": "string", "description": "PDF pages to see as images, e.g. '1-5' or '3'. Max 20 pages."},
     }, "required": ["path"]}
 }
 
@@ -568,12 +577,39 @@ async def _exec_web_fetch(inp):
     return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
 
 
-async def _exec_read(inp, workspace, catalog=None):
+async def _parsed(path, workspace, chat_id):
+    """A document as the parser reads it: Markdown, its warnings first, a long one kept whole in .tmp/. None
+    when the parser is unavailable or finds no text (a scan), and `read` goes on as it did before."""
+    import cycls
+    try:
+        parse = cycls.remote(PARSER, timeout=_PARSE_TIMEOUT)
+        doc = await asyncio.to_thread(lambda: parse(path.read_bytes(), path.name, mode="markdown"))
+        body = doc["content"].strip()
+    except Exception as e:
+        log("parser", chat_id=chat_id, error=f"{type(e).__name__}: {e}"[:300])
+        return None
+    if not body: return None   # an error, or nothing to read
+    text = "".join(f"[{w}]\n" for w in doc["warnings"]) + (
+        f"[{doc['page_count']} pages. To see one as an image (a scan, a chart, a number to check), read with pages='N'.]\n\n"
+        if path.suffix.lower() == ".pdf" else "") + body
+    if len(text) <= spill.SPILL_AT: return text
+    shown = text[:max(text.rfind("\n", 0, spill.SPILL_AT), 0) or spill.SPILL_AT]
+    lines = shown.count("\n") + 1
+    if not (kept := spill.save(text, workspace, chat_id, f"{path.stem}-{uuid.uuid4().hex[:6]}.md")):
+        return f"{shown}\n\n[Showing {len(shown):,} of {len(text):,} characters.]"
+    return (f"{shown}\n\n[Showing {len(shown):,} of {len(text):,} characters, the first {lines:,} lines. The full text is "
+            f"in {kept.relative_to(workspace)}: continue with read at offset={lines + 1}, or search it with rg.]")
+
+
+async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {inp['path']} does not exist"
     if path.is_dir(): return f"Error: {inp['path']} is a directory"
     ext, size = path.suffix.lower().lstrip("."), path.stat().st_size
+
+    if PARSER and ext in _PARSED_EXTS and not inp.get("pages") and size <= _PARSE_MAX:
+        if text := await _parsed(path, workspace, chat_id): return text
 
     if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
         if not (pages_spec := inp.get("pages")):
@@ -1030,7 +1066,7 @@ _TOOLS = {
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None)),
+    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None)),
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),

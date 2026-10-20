@@ -190,7 +190,7 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
     await asyncio.shield(session.checkpoint())
 
 
-async def _ingest(content, workspace, vision=True):
+async def _ingest(content, workspace, vision=True, chat_id=None):
     """Resolve attachment refs in an incoming user message to inline blocks,
     framed with the filename so the model knows what the user attached.
     Reuses `_exec_read` as the single source of truth for path → content.
@@ -202,7 +202,7 @@ async def _ingest(content, workspace, vision=True):
         if block.get("type") in ("image", "file"):
             fname = block.get("image") or block.get("file")
             if fname:
-                result = await _exec_read({"path": fname}, workspace)
+                result = await _exec_read({"path": fname}, workspace, chat_id=chat_id)
                 if isinstance(result, str) and result.startswith("Error:"):
                     out.append({"type": "text", "text":
                         f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
@@ -282,7 +282,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     if not session.replay:   # a replay runs the saved turn again, as it was
         incoming = context.messages.raw[-1]
-        content = await _ingest(incoming.get("content", ""), workspace.root, vision)
+        content = await _ingest(incoming.get("content", ""), workspace.root, vision, session.chat_id)
         if mentions:
             titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                       for s in mcp_servers or [] if s._connector}
