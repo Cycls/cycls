@@ -29,6 +29,15 @@ summary in Arabic" → the model called `transcribe` by itself (20 s, a cold lis
 they were unrelated clips); the turn took 50 s and $0.13, no errors. The microphone's route on the
 same site: the same recording through `POST /transcribe` in 5.2 s, `engine: cycls`, Arabic.
 
+**The service in production** since 2026-10-20 (`cycls-transcribe`,
+`https://cycls--cycls-transcribe-web.us-east.modal.run`, key and URL in
+`~/.cycls/cycls-transcribe-prod.env`; the real-speech check gives dev's numbers), and **super-dev on it**
+(`super-dev-00097-fkx` = SDK `0f42f188`; `.providers.env` points at production). Checked again in the
+app: a 53 s WhatsApp-style ogg (Omani dialect + MSA) asked in Gulf Arabic → `transcribe` (19 s, a
+cold listener), the transcript with times and the dialect as said, the points right, the reply in
+Gulf Arabic; the turn 44 s, $0.08, no errors. The mic's route: 3.4 s, `engine: cycls`. Production's
+ledger shows the Cycls organisation's 2 jobs (106 s of audio, 17 GPU seconds).
+
 ## Why this model
 
 Cohere Transcribe Arabic (07-2026; 2.07B parameters, BF16, Apache-2.0, gated on Hugging Face), self-hosted:
@@ -110,8 +119,6 @@ health, warm, a short recording and a job). Production only on the user's go.
    `scripts/speech_check.py dev --own DIR` (each `<name>.<ext>` beside `<name>.txt`).
 2. The Hugging Face token was pasted into a chat on 2026-10-20: rotate it, then update the Modal secret
    `cycls-transcribe-hf` (it is read at build time only).
-3. super-dev uses the DEV service: production needs `cycls-transcribe` (prod) deployed — its secret made
-   by hand — and super-dev pointed at it.
 4. A press of the real microphone button in the app (the route is checked; the button needs a person).
 5. Production (service, then super-dev) on the user's go. Docs at docs.cycls.com.
 6. Later: speakers, subtitles from `words`, Video's footage on the same service, live transcription.
