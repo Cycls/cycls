@@ -589,3 +589,108 @@ def test_the_openai_fallback_is_the_mini_model(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
     assert _app().post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000)}).json() == {"text": "hi"}
     assert sent["model"] == "gpt-4o-mini-transcribe"        # gpt-4o-transcribe dropped text after the first sentence
+
+
+# ---- the allowance, names and speakers ---------------------------------------------------------
+
+from cycls._agent.transcribe import usage  # noqa: E402
+
+
+def _real_ws(tmp_path, subject="org1:user1"):
+    from cycls._app.db import workspace
+    return workspace(subject, tmp_path, base=f"file://{tmp_path}")
+
+
+def test_the_day_is_counted_per_organisation_and_person(monkeypatch, tmp_path):
+    for k in ("TRANSCRIBE_DAILY_HOURS_ORG", "TRANSCRIBE_DAILY_HOURS_USER"):
+        monkeypatch.delenv(k, raising=False)
+    base = f"file://{tmp_path}"
+    assert asyncio.run(usage.refusal("org1:user1", tmp_path, base)) is None
+    asyncio.run(usage.charge("org1:user1", tmp_path, base, seconds=3 * 3600, engine="elevenlabs", via="tool"))
+    asyncio.run(usage.charge("org1:user1", tmp_path, base, seconds=3 * 3600, engine="cycls", via="mic"))
+    said = asyncio.run(usage.refusal("org1:user1", tmp_path, base))
+    assert said and said.startswith("You have transcribed today's allowance (6 hours")
+    assert asyncio.run(usage.refusal("org1:user2", tmp_path, base)) is None            # a teammate still can
+    monkeypatch.setenv("TRANSCRIBE_DAILY_HOURS_ORG", "5")
+    assert asyncio.run(usage.refusal("org1:user2", tmp_path, base)).startswith("This organisation has")
+    assert asyncio.run(usage.refusal("org2:user9", tmp_path, base)) is None            # another organisation
+    monkeypatch.setenv("TRANSCRIBE_DAILY_HOURS_ORG", "0")
+    monkeypatch.setenv("TRANSCRIBE_DAILY_HOURS_USER", "0")
+    assert asyncio.run(usage.refusal("org1:user1", tmp_path, base)) is None            # 0 = no limit
+    row = asyncio.run(usage._db("org1:user1", tmp_path, base).get(f"transcribe/{usage.day()}/org"))
+    assert row["jobs"] == 2 and row["by_engine"] == {"elevenlabs": 10800.0, "cycls": 10800.0}
+
+
+def test_the_tool_counts_what_it_hears_and_stops_past_the_allowance(monkeypatch, tmp_path):
+    _el_on(monkeypatch)
+    monkeypatch.setenv("TRANSCRIBE_DAILY_HOURS_USER", "0.01")      # 36 s
+
+    async def scribe(**kw):
+        return elevenlabs.to_transcript(_SCRIBE)                  # 12.5 s of audio
+
+    monkeypatch.setattr(elevenlabs, "transcribe", scribe)
+    ws = _real_ws(tmp_path)
+    ws.root.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (ws.root / f"n{i}.m4a").write_bytes(f"note {i}".encode())
+        assert _run({"path": f"n{i}.m4a"}, ws).startswith("Transcript of")
+    (ws.root / "n3.m4a").write_bytes(b"note 3")
+    refused = _run({"path": "n3.m4a"}, ws)
+    assert refused.startswith("Error: You have transcribed today's allowance")
+    # A saved transcript is still read back: it costs nothing.
+    assert "saved earlier" in _run({"path": "n0.m4a"}, ws)
+
+
+def test_names_are_listened_for_as_scribe_takes_them(monkeypatch, tmp_path):
+    _el_on(monkeypatch)
+    seen = []
+
+    def handler(r):
+        seen.append(r)
+        return httpx.Response(200, json=_SCRIBE)
+
+    monkeypatch.setattr(elevenlabs.httpx, "AsyncClient",
+                        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler), **kw))
+    (tmp_path / "m.m4a").write_bytes(b"meeting")
+    _run({"path": "m.m4a", "names": ["خلفان المنصوري", "Cycls", "cycls", "bad{x}", 7]}, _ws(tmp_path))
+    body = seen[0].content.decode("utf-8", "replace")
+    assert body.count('name="keyterms"') == 2 and "خلفان المنصوري" in body and "bad{x}" not in body
+
+
+def test_voices_are_named_without_hearing_again(monkeypatch, tmp_path):
+    _el_on(monkeypatch)
+    calls = []
+
+    async def scribe(**kw):
+        calls.append(kw)
+        return elevenlabs.to_transcript(_SCRIBE)
+
+    monkeypatch.setattr(elevenlabs, "transcribe", scribe)
+    (tmp_path / "call.m4a").write_bytes(b"two voices")
+    first = _run({"path": "call.m4a"}, _ws(tmp_path))
+    assert "Speaker 1: " in first and 'speakers {"1": "name"' in first
+    named = _run({"path": "call.m4a", "speakers": {"1": "Khalfan", "Speaker 2": " Saeed ", "3": ""}}, _ws(tmp_path))
+    assert len(calls) == 1                                                    # not heard again
+    assert "[00:00] Khalfan: مرحبا بكم." in named and "[00:03] Saeed: أهلاً وسهلاً" in named
+    assert 'speakers {"1"' not in named                                       # every voice has a name now
+    md = (tmp_path / "call.transcript.md").read_text(encoding="utf-8")
+    words = json.loads((tmp_path / "call.words.json").read_text(encoding="utf-8"))
+    assert "Saeed: أهلاً وسهلاً" in md and words["speaker_names"] == {"1": "Khalfan", "2": "Saeed"}
+
+
+def test_the_mic_stops_past_the_allowance(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from cycls._agent.web import Config, web
+
+    _el_on(monkeypatch)
+    monkeypatch.setenv("TRANSCRIBE_DAILY_HOURS_USER", "0.001")    # 3.6 s
+
+    async def scribe(**kw):
+        return elevenlabs.to_transcript(_SCRIBE)
+
+    monkeypatch.setattr(elevenlabs, "transcribe", scribe)
+    c = TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False, volume=str(tmp_path))))
+    assert c.post("/transcribe", files={"file": ("v.m4a", b"x" * 2000)}).json()["engine"] == "elevenlabs"
+    r = c.post("/transcribe", files={"file": ("v.m4a", b"x" * 2000)})
+    assert r.status_code == 429 and "allowance" in r.text

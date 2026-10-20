@@ -65,6 +65,20 @@ broken at a change of speaker, `speakers`); the tool's `[mm:ss] Speaker N:` line
 only the mic's last resort, as `gpt-4o-mini-transcribe`: `gpt-4o-transcribe` returned only the first
 sentence of clips with pauses.
 
+## Allowance, names, speakers (2026-10-20)
+
+- **Allowance** (`usage.py`): ElevenLabs keeps no ledger of ours, so the SDK counts seconds of audio per
+  organisation and per person per day (UTC) in the organisation's `.usage` store, whatever engine heard
+  it; past `TRANSCRIBE_DAILY_HOURS_ORG` (24) or `TRANSCRIBE_DAILY_HOURS_USER` (6) the tool answers an
+  Error and the mic 429, until midnight UTC. Checked before, charged the real length after (so one
+  recording can run past it). A saved transcript read back costs nothing. Each transcription is a log
+  line `level: "transcribe"` (engine, via tool|mic, audio_s, ms) for `cycls sql`.
+- **Names** (`names` on the tool): sent to Scribe as `keyterms`, repeated form fields (a JSON list is
+  refused), each under 50 characters and 5 words, none of `<>{}[]\`, at most 100 (past 100 Scribe bills a
+  20 s minimum; key terms add 20 % to the hour). The service ignores them (Cohere's model takes none).
+- **Speakers** (`speakers` on the tool): `{"1": "Khalfan"}` renames voices in the saved transcript
+  (`speaker_names` in the words file) without hearing it again; a reply with unnamed voices says how.
+
 ## Why this model
 
 Cohere Transcribe Arabic (07-2026; 2.07B parameters, BF16, Apache-2.0, gated on Hugging Face), self-hosted:

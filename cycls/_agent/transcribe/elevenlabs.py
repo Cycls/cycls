@@ -29,6 +29,25 @@ SENTENCE_END = re.compile(r"[.!?؟…]+[\"'»”)]*$")
 SENTENCE_GAP_S = 0.9
 PHRASE_GAP_S = 0.30
 SENTENCE_MAX_WORDS = 20
+# Key terms (names, companies, places) Scribe listens for: +20 % on the hour's price; past 100 a request
+# is billed at least 20 s, so no more than 100 are sent. Each under 50 characters, at most 5 words, none
+# of these characters (Scribe refuses the request); sent as repeated form fields (a JSON list is refused).
+MAX_TERMS = 100
+_BAD_TERM = frozenset("<>{}[]" + chr(92))      # chr(92) is the backslash
+
+
+def keyterms(names):
+    """The names worth listening for, as Scribe takes them: trimmed, each once, the unusable left out."""
+    out, seen = [], set()
+    for raw in names or []:
+        term = " ".join(str(raw or "").split())
+        if not term or len(term) >= 50 or len(term.split()) > 5 or _BAD_TERM & set(term) or term.lower() in seen:
+            continue
+        seen.add(term.lower())
+        out.append(term)
+        if len(out) >= MAX_TERMS:
+            break
+    return out
 
 
 def configured():
@@ -49,7 +68,7 @@ def _detail(resp):
     return str(d or resp.text)[:200]
 
 
-async def transcribe(*, data=None, path=None, filename="audio", language=None, diarize=True):
+async def transcribe(*, data=None, path=None, filename="audio", language=None, diarize=True, names=None):
     """One recording (bytes, or a file read as it is sent) → our transcript. Raises Unavailable (no key,
     unreachable, refused, busy), OverAllowance (the account's quota is used) or Refused (not audio)."""
     key = os.environ.get("ELEVENLABS_API_KEY")
@@ -59,6 +78,8 @@ async def transcribe(*, data=None, path=None, filename="audio", language=None, d
             "diarize": "true" if diarize else "false"}
     if language and language != "auto":
         form["language_code"] = language
+    if terms := keyterms(names):
+        form["keyterms"] = terms          # a list: one form field each
     handle = open(path, "rb") if path is not None else None
     try:
         files = {"file": (filename or "audio", handle if handle is not None else data, "application/octet-stream")}

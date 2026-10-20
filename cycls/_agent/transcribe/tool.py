@@ -29,6 +29,15 @@ TRANSCRIBE_TOOL = {
             "fresh": {"type": "boolean",
                       "description": "Transcribe again even if a transcript is saved (e.g. it was heard in the "
                                      "wrong language). Leave out otherwise."},
+            "names": {"type": "array", "items": {"type": "string"},
+                      "description": "Names and terms likely said in it — people, companies, places, products — from "
+                                     "the chat, the file name or what the person told you, so they come out spelled "
+                                     "right (each under 50 characters; up to 100). Leave out when there are none."},
+            "speakers": {"type": "object", "additionalProperties": {"type": "string"},
+                         "description": "Who each voice is, e.g. {\"1\": \"Khalfan\", \"2\": \"Sara\"}: renames "
+                                        "Speaker 1, Speaker 2… in the saved transcript without hearing it again. Only "
+                                        "when the person said so, or the transcript makes it plain (they name each "
+                                        "other)."},
         },
         "required": ["path"],
     },

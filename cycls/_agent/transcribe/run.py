@@ -23,7 +23,7 @@ from pathlib import Path
 
 from ..design.store import write_fig
 from ..paths import _resolve_path
-from . import elevenlabs
+from . import elevenlabs, usage
 from .tool import AUDIO_TYPES, LANGUAGES
 
 BUDGET = {"send": 240, "hear": 300}
@@ -144,9 +144,27 @@ def paragraphs(t):
     return out
 
 
+def _who(t, who):
+    """A voice's name: the one the person gave (`speaker_names`), else Speaker N."""
+    return (t.get("speaker_names") or {}).get(str(who)) or f"Speaker {who}"
+
+
 def _line(t, at, text, who):
     """One paragraph as a person reads it: its time, and who speaks when there are several voices."""
-    return f"[{clock(at)}] Speaker {who}: {text}" if who is not None and (t.get("speakers") or 0) > 1 else f"[{clock(at)}] {text}"
+    return f"[{clock(at)}] {_who(t, who)}: {text}" if who is not None and (t.get("speakers") or 0) > 1 else f"[{clock(at)}] {text}"
+
+
+def _named(raw):
+    """{"1": "Khalfan", ...} from what the model sent: voice numbers to names, the empty left out."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in raw.items():
+        num = "".join(ch for ch in str(k) if ch.isdigit())
+        name = " ".join(str(v or "").split())[:60]
+        if num and name:
+            out[str(int(num))] = name
+    return out
 
 
 def _engine(t):
@@ -198,6 +216,9 @@ def reply(rel, t, md_rel, words_rel, *, reused=False):
     if t.get("unheard"):
         tail = ("\nNot written down (loud, but no words made out — music, noise or crosstalk): "
                 + ", ".join(f"{clock(a)}–{clock(b)}" for a, b in t["unheard"]) + ".")
+    if (t.get("speakers") or 0) > 1 and len(t.get("speaker_names") or {}) < (t.get("speakers") or 0):
+        tail += ("\nIf you know who is speaking (the person said, or they name each other), call transcribe again with "
+                 "the same path and speakers {\"1\": \"name\", ...}: the transcript is relabelled, not heard again.")
     return head + "\n\n" + "\n".join(body) + tail + ("\nNames, numbers and dialect words can be misheard: check "
                                                      "them where they matter.")
 
@@ -235,19 +256,33 @@ async def exec_transcribe(inp, workspace, ctx=None, again=True):
     md_full, words_full = paths_for(full)
     md_rel, words_rel = (p.relative_to(root.resolve()).as_posix() for p in (md_full, words_full))
     sha = await asyncio.to_thread(sha_of, str(root), rel, full)
+    names = _named(inp.get("speakers"))
     if not inp.get("fresh") and (t := kept(words_full, sha)) is not None:
-        if not md_full.is_file():
+        if names:          # naming the voices: the saved transcript relabelled, nothing heard again
+            t = {**t, "speaker_names": {**(t.get("speaker_names") or {}), **names}}
+            await _write(root, words_rel, json.dumps(t, ensure_ascii=False, indent=1))
+            await _write(root, md_rel, markdown(rel, t))
+        elif not md_full.is_file():
             await _write(root, md_rel, markdown(rel, t))
         return reply(rel, t, md_rel, words_rel, reused=True)
-    t, down = None, []
+    store = usage.store_of(workspace)
+    if store is not None:
+        try:
+            if reason := await usage.refusal(*store):
+                return _err(reason)
+        except Exception:  # noqa: BLE001 - an unreadable count never blocks a transcription
+            pass
+    terms = [n for n in inp.get("names") if isinstance(n, str)] if isinstance(inp.get("names"), list) else []
+    t, down, used, t0 = None, [], None, time.monotonic()
     for name in (service.engine(), service.fallback()):
         if name is None:
             continue
         try:
             if name == "elevenlabs":
-                t = await elevenlabs.transcribe(path=full, filename=full.name, language=language)
+                t = await elevenlabs.transcribe(path=full, filename=full.name, language=language, names=terms)
             else:
                 t = await _hear(service, workspace, root, chat, full, rel, sha, language, size, again)
+            used = name
             break
         except service.OverAllowance as e:
             return _err(str(e))
@@ -259,6 +294,11 @@ async def exec_transcribe(inp, workspace, ctx=None, again=True):
         return _err("transcription is unavailable: " + "; ".join(down))
     if isinstance(t, str):
         return t
+    if store is not None:
+        await usage.charge(*store, seconds=t.get("duration") or 0, engine=used, via="tool",
+                           ms=round((time.monotonic() - t0) * 1000), user=getattr(ctx, "user", None), chat_id=chat)
+    if names:
+        t = {**t, "speaker_names": names}
     said = {**t, "sha": sha, "clip": rel}
     await _write(root, words_rel, json.dumps(said, ensure_ascii=False, indent=1))
     await _write(root, md_rel, markdown(rel, t))

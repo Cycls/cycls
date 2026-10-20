@@ -507,11 +507,23 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         if service.configured():
             hint = form.get("language")
             language = hint if hint in ("ar", "en") else "auto"
+            from cycls._agent.transcribe import usage
+            subject = service.subject_of(user)
+            try:
+                reason = await usage.refusal(subject, volume, config.storage)
+            except Exception:  # noqa: BLE001 - an unreadable count never blocks the mic
+                reason = None
+            if reason:
+                raise HTTPException(status_code=429, detail=reason)
             try:
                 # With another engine behind it, a listener that is slow to start is not waited for long.
                 behind = bool(service.fallback() or api_key)
+                t0 = time.monotonic()
                 heard = await service.hear_short(audio_bytes, filename=name, language=language,
-                                                 subject=service.subject_of(user), timeout=45.0 if behind else 130.0)
+                                                 subject=subject, timeout=45.0 if behind else 130.0)
+                await usage.charge(subject, volume, config.storage, seconds=heard.get("duration") or 0,
+                                   engine=heard.get("engine_used") or "cycls", via="mic",
+                                   ms=round((time.monotonic() - t0) * 1000), user=user)
                 return {"text": heard.get("text") or "", "language": heard.get("language"),
                         "engine": heard.get("engine_used") or "cycls"}
             except service.OverAllowance as e:

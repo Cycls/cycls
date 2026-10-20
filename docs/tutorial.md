@@ -510,8 +510,12 @@ reply is the transcript with a `[mm:ss]` mark at each paragraph (and `Speaker 1`
 engine tells voices apart), and it is saved beside the recording as `<name>.transcript.md` and
 `<name>.words.json` (every word timed; the same shape as a Video footage transcript, so neither tool
 hears a clip twice). A recording attached in chat points the model at the tool; asking again for the
-same bytes costs nothing. When the first engine is down, the other is tried. The service keeps a daily
-allowance per organisation and per person (in hours of audio). See `docs/notes/transcribe.md`.
+same bytes costs nothing. When the first engine is down, the other is tried. Two more inputs: `names`
+(people, companies, places likely said: ElevenLabs listens for them, so they come out spelled right) and
+`speakers` (`{"1": "Khalfan", "2": "Sara"}`: renames the voices in the saved transcript without hearing it
+again). Every engine counts against a daily allowance per organisation and per person, in hours of audio
+(`TRANSCRIBE_DAILY_HOURS_ORG`, default 24; `TRANSCRIBE_DAILY_HOURS_USER`, default 6; 0 = no limit), and
+each transcription is logged (`level: "transcribe"`). See `docs/notes/transcribe.md`.
 
 The same engines back the **microphone** once either is set: `POST /transcribe` answers from the first,
 then the other; OpenAI's `gpt-4o-mini-transcribe` only when neither is set, or both are down and
@@ -1042,6 +1046,7 @@ Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is
 | `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` | The cycls-transcribe service: the `Transcribe` tool and the microphone |
 | `ELEVENLABS_API_KEY` | ElevenLabs Scribe, the other transcription engine |
 | `TRANSCRIBE_ENGINE` | `elevenlabs` or `cycls`: which engine hears first (default: the service when `TRANSCRIBE_URL` is set) |
+| `TRANSCRIBE_DAILY_HOURS_ORG` / `TRANSCRIBE_DAILY_HOURS_USER` | Transcription allowance a day, in hours of audio (24 / 6; 0 = no limit) |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk publishable key (optional override) |
 
 ---
