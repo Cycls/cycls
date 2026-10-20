@@ -54,7 +54,12 @@ compared"; cycls-transcribe `docs/quirks.md`), the tool and the mic take either 
 
 At our volume (far under the ~470 audio hours a month where our GPU pays for itself) ElevenLabs is
 cheaper and better on dialect, so super-dev hears first on ElevenLabs (`TRANSCRIBE_ENGINE=elevenlabs`)
-with the service behind it. `client.engine()` / `fallback()` pick them; `hear_short()` is the mic's
+with the service behind it — live since `super-dev-00099-tpd` (SDK `88a4d569`). Checked in the app: a
+55 s two-speaker recording (Emirati, then Omani) → `transcribe` in 4.2 s (19–20 s on a cold GPU of
+ours), "who said what" written as Speaker 1 / Speaker 2 and told apart right, the whole turn 21 s; the
+mic's route 4.9 s, `engine: elevenlabs`, no GPU warm-up; our service's ledger untouched by either. The
+service was tuned the same day (a listener stops 1 minute after its last part, 2 cores / 12 GiB; the door
+1 core / 2 GiB / 5 minutes): dev and production redeployed, same accuracy. `client.engine()` / `fallback()` pick them; `hear_short()` is the mic's
 router; `elevenlabs.py` turns Scribe's reply into our transcript shape (words with `speaker`, sentences
 broken at a change of speaker, `speakers`); the tool's `[mm:ss] Speaker N:` lines come from that. OpenAI is
 only the mic's last resort, as `gpt-4o-mini-transcribe`: `gpt-4o-transcribe` returned only the first
