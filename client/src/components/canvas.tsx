@@ -455,7 +455,8 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
   if (isMd(fileKind(file))) {
     return (
       <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
-        <TextPart text={content ?? ""} resolveMedia={resolveMedia} />
+        {/* a shared page gives it the whole screen: keep the lines a reading width */}
+        <div className={shared ? "mx-auto max-w-3xl py-6" : undefined}><TextPart text={content ?? ""} resolveMedia={resolveMedia} /></div>
       </div>
     );
   }

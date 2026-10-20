@@ -182,6 +182,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `share_created` / `share_create_failed` / `share_deleted` | owner mints/revokes | `message_count` |
 | `share_viewed` / `share_view_failed` | share data loads on /shared/… (404s don't count) | `type`, `example` (gallery vs organic — two different funnels), `artifacts`, `signed_in`, `referrer` |
 | `share_fork_clicked` | continue-this-conversation pill | |
+| `share_cta_clicked` | the Try Cycls (or, signed in, Open Cycls) button on a shared file's bar | `signed_in` |
 | `share_forked` | fork API succeeds | loop closed. Viewer is anonymous until sign-in — same-device journeys stitch, cross-device shows as two people |
 
 ### Agent interventions
