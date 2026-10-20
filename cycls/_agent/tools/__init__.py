@@ -613,7 +613,7 @@ async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     if PARSER and ext in _PARSED_EXTS and not inp.get("pages") and size <= _PARSE_MAX:
         if text := await _parsed(path, workspace, chat_id): return text
 
-    if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
+    if ext == "pdf" and (inp.get("pages") or size > pdf.EXTRACT_SIZE_THRESHOLD):   # `pages` asks to see them, at any size
         if not (pages_spec := inp.get("pages")):
             count = await pdf.page_count(path)
             hint = f"{count} pages" if count else "unknown page count"

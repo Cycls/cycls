@@ -467,6 +467,18 @@ def test_exec_read_falls_back_when_the_parser_cannot_help(tmp_path, monkeypatch)
         assert "binary" in asyncio.run(_exec_read({"path": "notes.docx"}, str(tmp_path)))
 
 
+def test_exec_read_pages_render_a_small_pdf_too(tmp_path, monkeypatch):
+    """`pages` is how a model without PDF support sees one: a small PDF sent whole again would be stubbed again."""
+    from cycls._agent.tools import pdf
+    seen = []
+    async def extract(path, first, last):
+        seen.append((path.name, first, last)); return [{"type": "image", "source": {}}]
+    monkeypatch.setattr(pdf, "extract", extract)
+    (tmp_path / "small.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
+    assert asyncio.run(_exec_read({"path": "small.pdf", "pages": "1-2"}, str(tmp_path)))[0]["type"] == "image"
+    assert seen == [("small.pdf", 1, 2)]
+
+
 def test_exec_read_pages_skip_the_parser(tmp_path, monkeypatch):
     """`pages` asks to see the PDF, so it is rendered, never parsed."""
     calls = _parser(monkeypatch, {"content": "text"})
