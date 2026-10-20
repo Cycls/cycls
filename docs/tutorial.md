@@ -485,6 +485,35 @@ person retimes and trims scenes and clips, moves and restyles titles, fixes a ca
 lowers the music, renders — or selects something and asks the agent about it. Their saves are
 versions of the file, like a design's; the agent reads the file again before it edits after them.
 
+### Transcribe (voice notes, calls, meetings)
+
+Let an agent **write down what is said in a recording** — a voice note, a phone call, a meeting, a
+lecture, or the sound of a video — strong on Arabic, Gulf dialects included, and on English. A shared
+service on Modal GPUs hears it (Cohere Transcribe Arabic for Arabic and English, Whisper for naming
+the language and for every other language, our own aligner for word times); nothing runs in the
+agent's image.
+
+```python
+llm = cycls.LLM().model(...).allowed_tools(["Editor", "Transcribe"])
+```
+```
+TRANSCRIBE_URL=https://<workspace>--cycls-transcribe-web.modal.run   # the deployed service
+TRANSCRIBE_SECRET=<the service key>
+```
+
+The model calls one `transcribe` tool with a recording's path (mp3, wav, m4a, ogg, opus, webm, flac,
+aac, mp4, mov; up to 512 MB and 3 hours) and an optional `language` (`ar`, `en` or `auto`). The
+reply is the transcript with a `[mm:ss]` mark at each paragraph, and it is saved beside the recording
+as `<name>.transcript.md` and `<name>.words.json` (every word timed; the same shape as a Video
+footage transcript, so neither tool hears a clip twice). A recording attached in chat points the
+model at the tool. A long recording is collected on a later call; asking again for the same bytes
+costs nothing. The service keeps a daily allowance per organisation and per person (in hours of
+audio). See `docs/notes/transcribe.md`.
+
+The same service backs the **microphone** once `TRANSCRIBE_URL` is set: the browser warms a listener
+as recording starts, and `POST /transcribe` answers from the service — falling back to OpenAI when
+`OPENAI_API_KEY` is set and the service is down or slow to start.
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
@@ -533,7 +562,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design` and `Video` are offered only when their service is configured (see below) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `Video`, `Transcribe`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design`, `Video` and `Transcribe` are offered only when their service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens; sets when compaction kicks in (default 1M; set it for smaller models) |
@@ -972,7 +1001,8 @@ Every agent exposes these HTTP endpoints:
 POST /                     # Cycls streaming protocol (SSE); /chat is an alias
 POST /chat/completions     # OpenAI-compatible format
 GET  /config               # App config (title, plan, auth flag, ...)
-POST /transcribe           # Voice input → text
+POST /transcribe           # Voice input → text (the cycls-transcribe service, or OpenAI)
+POST /transcribe/warm      # The mic started recording: warm a listener (a hint)
 GET  /og.png               # Social-preview image
 
 # Authenticated:
@@ -1006,6 +1036,7 @@ Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is
 | `CYCLS_BASE_URL` | Cycls API base URL (defaults to `https://api.cycls.ai`) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (auto-picked by adapter) |
 | `OPENAI_API_KEY` | OpenAI API key (auto-picked by adapter) |
+| `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` | The cycls-transcribe service: the `Transcribe` tool and the microphone |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk publishable key (optional override) |
 
 ---

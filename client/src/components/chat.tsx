@@ -468,7 +468,7 @@ export function Chat({ chat, onShare, files, account, config }: {
       textareaRef.current?.blur();
     }
   }, []);
-  const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
+  const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders, warm: !!config?.voice_warm });
 
   // Reset sidebar data when org changes
   useEffect(() => {

@@ -109,6 +109,30 @@ describe("voice input", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  test("with the service on our GPUs, a listener is warmed as recording starts, and the engine is counted", async () => {
+    browser(["audio/mp4"]);
+    const fetch = vi.fn(async (url: unknown) =>
+      new Response(JSON.stringify(url === "/transcribe/warm" ? { ok: true } : { text: "مرحبا", engine: "cycls" })));
+    vi.stubGlobal("fetch", fetch);
+    const onEnd = vi.fn();
+    const authHeaders = vi.fn(async () => ({ Authorization: "Bearer t" }));
+    const { result } = renderHook(() => useSpeechRecognition({ onEnd, authHeaders, warm: true }));
+    await act(async () => { await result.current.start(); });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/transcribe/warm", { method: "POST", headers: { Authorization: "Bearer t" } }));
+    await act(async () => { result.current.stop(); });
+    await waitFor(() => expect(onEnd).toHaveBeenCalledWith("مرحبا"));
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual(["/transcribe/warm", "/transcribe"]);
+    expect(track).toHaveBeenCalledWith("mic_transcribed", expect.objectContaining({ engine: "cycls" }));
+  });
+
+  test("without it, nothing is warmed and the engine is OpenAI", async () => {
+    const b = browser(["audio/mp4"]);
+    await speak();
+    expect(b.uploaded().name).toBe("voice.m4a");
+    expect((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[0])).toEqual(["/transcribe"]);
+    expect(track).toHaveBeenCalledWith("mic_transcribed", expect.objectContaining({ engine: "openai" }));
+  });
+
   test("the waveform scrolls in from the right: silence is dots, the voice is bars", () => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));

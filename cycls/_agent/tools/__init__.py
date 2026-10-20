@@ -38,6 +38,10 @@ from ..design.run import _design_step, _exec_design
 # model is given it (short until a chat uses it; tools/ondemand.py swaps in the whole form), and
 # the executor.
 from ..video.tool import VIDEO_PROMPT, video_tool
+# The Transcribe tool lives in cycls/_agent/transcribe: the client to the cycls-transcribe service,
+# the tool's schema and its executor.
+from ..transcribe.tool import TRANSCRIBE_TOOL, transcribe_step
+from ..transcribe.run import exec_transcribe
 from ..video.run import _exec_video, _video_step
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
@@ -423,6 +427,12 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import video as _video
             if _video.configured():
                 tools.append(video_tool(False))
+        elif name == "Transcribe":
+            # like Design: offered only when the service is configured (TRANSCRIBE_URL); its daily
+            # allowance per organisation and person is the service's to keep
+            from cycls._agent import transcribe as _transcribe
+            if _transcribe.configured():
+                tools.append(TRANSCRIBE_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -1043,6 +1053,9 @@ _TOOLS = {
     "video":      Tool(lambda inp, ws, ctx=None, **_: _exec_video(inp, ws, ctx), _video_step, prompt=VIDEO_PROMPT,
                        interrupted="The composition is saved as it was. A render that was started keeps running "
                                    "on the service: call render again with the same name to collect it."),
+    "transcribe": Tool(lambda inp, ws, ctx=None, **_: exec_transcribe(inp, ws, ctx), transcribe_step,
+                       interrupted="A transcription that was started keeps running on the service: call "
+                                   "transcribe again with the same path to collect it."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None)),

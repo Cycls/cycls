@@ -63,6 +63,10 @@ class Config(BaseModel):
         # Video at all is answered per workspace by POST /video/editor.
         if os.environ.get("VIDEO_EDITOR_URL") and os.environ.get("VIDEO_URL"):
             data["video_editor"] = True
+        # The microphone goes to the cycls-transcribe service: the browser warms a listener as it
+        # starts recording (POST /transcribe/warm), so a cold GPU starts while the person speaks.
+        if os.environ.get("TRANSCRIBE_URL"):
+            data["voice_warm"] = True
         return data
 
     @property
@@ -470,19 +474,48 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         asyncio.create_task(_refresh())
         return config.public()
 
+    @app.post("/transcribe/warm")
+    async def transcribe_warm(user: Optional[User] = auth):
+        """The microphone started recording: a listener starts while the person speaks. A hint only."""
+        from cycls._agent import transcribe as service
+        if service.configured():
+            asyncio.create_task(service.warm(subject=service.subject_of(user)))
+        return {"ok": True}
+
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
+        # The cycls-transcribe service when it is configured (strong on Gulf Arabic, our own GPUs),
+        # OpenAI when it is not — or when the service is down or slow to start and a key is set.
+        from cycls._agent import transcribe as service
         api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
+        if not service.configured() and not api_key:
             raise HTTPException(status_code=501, detail="Transcription not configured")
         form = await request.form()
         file = form.get("file")
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
         audio_bytes = await file.read()
+        if len(audio_bytes) > service.client.SHORT_BYTES:
+            raise HTTPException(status_code=413, detail="The recording is too long for the microphone")
         # OpenAI reads the format off the name: Firefox records webm, Safari and Chrome m4a.
         ext = (file.filename or "").rsplit(".", 1)[-1].lower()
         name = f"voice.{ext}" if ext in ("m4a", "mp4", "webm", "ogg", "mp3", "wav") else "voice.m4a"
+        if service.configured():
+            hint = form.get("language")
+            language = hint if hint in ("ar", "en") else "auto"
+            try:
+                # With OpenAI behind it, a listener that is slow to start is not waited for long.
+                heard = await service.short(audio_bytes, filename=name, language=language,
+                                            subject=service.subject_of(user), timeout=45.0 if api_key else 130.0)
+                return {"text": heard.get("text") or "", "language": heard.get("language"), "engine": "cycls"}
+            except service.OverAllowance as e:
+                raise HTTPException(status_code=429, detail=str(e))
+            except service.Refused as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except (service.Unavailable, RuntimeError) as e:
+                if not api_key:
+                    raise HTTPException(status_code=503, detail=f"Transcription is unavailable: {e}")
+                log("warn", user=getattr(user, "id", None), message=f"transcribe fell back to OpenAI: {str(e)[:200]}")
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 "https://api.openai.com/v1/audio/transcriptions",
@@ -526,7 +559,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     from html import escape
     _base_html = (Path(config.public_path) / "index.html").read_text(encoding="utf-8")
 
-    config.voice = bool(os.environ.get("OPENAI_API_KEY"))
+    from cycls._agent.transcribe import configured as _transcribe_configured
+    config.voice = bool(os.environ.get("OPENAI_API_KEY")) or _transcribe_configured()
 
     _head = ""   # the <head> additions the CMS cannot change, so they are built once
     _gtm_id = next((p.get("id") for p in (config.analytics or [])

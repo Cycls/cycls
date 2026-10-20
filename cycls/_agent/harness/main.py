@@ -23,6 +23,7 @@ from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompt
 from ..design.tool import DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded, design_tool, design_wanted
 from ..tools import ondemand
 from ..video.client import offered as video_offered
+from ..transcribe.client import configured as transcribe_configured
 from ..tools import skills as skills_mod
 
 
@@ -227,27 +228,39 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
 
 
 CLIP_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm")   # what the Video tool's `footage` reads
+# What the Transcribe tool hears beyond those (cycls/_agent/transcribe/tool.py's AUDIO_TYPES).
+AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".amr", ".caf", ".aif",
+                  ".aiff", ".3gp")
 
 
-async def _ingest(content, workspace, vision=True, video=False):
+async def _ingest(content, workspace, vision=True, video=False, transcribe=False):
     """Resolve attachment refs in an incoming user message to inline blocks,
     framed with the filename so the model knows what the user attached.
     Reuses `_exec_read` as the single source of truth for path → content.
     With `vision=False`, media that resolves to base64 blocks (images, PDFs)
     stays out of history — the model gets a note naming the file instead.
     With `video=True` (the Video tool is offered), an attached video clip is
-    pointed at its `footage` action rather than at extracting it by hand."""
+    pointed at its `footage` action rather than at extracting it by hand; with
+    `transcribe=True`, an attached recording at the Transcribe tool."""
     if not isinstance(content, list): return content
     out = []
     for block in content:
         if block.get("type") in ("image", "file"):
             fname = block.get("image") or block.get("file")
             if fname:
-                if video and fname.lower().endswith(CLIP_SUFFIXES) and (Path(workspace) / fname).is_file():
+                low = fname.lower()
+                there = (low.endswith(CLIP_SUFFIXES) or low.endswith(AUDIO_SUFFIXES)) and (Path(workspace) / fname).is_file()
+                if transcribe and there and (low.endswith(AUDIO_SUFFIXES) or not video):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}", a recording saved in the workspace. To know what is said '
+                        "in it, call the Transcribe tool with this path first; it writes the transcript beside it.]"})
+                    continue
+                if video and there and low.endswith(CLIP_SUFFIXES):
                     out.append({"type": "text", "text":
                         f'[The user attached "{fname}", a video clip saved in the workspace. To see and hear '
                         "what is in it, or to cut it into a video, call the Video tool's `footage` action "
-                        "with this path first.]"})
+                        "with this path first." + (" If only what is said in it is wanted (a transcript, a "
+                        "summary), the Transcribe tool writes it down." if transcribe else "") + "]"})
                     continue
                 result = await _exec_read({"path": fname}, workspace)
                 if isinstance(result, str) and result.startswith("Error:"):
@@ -353,7 +366,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         allowed_tools = [t for t in allowed_tools if t != "Video"]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     incoming = context.messages.raw[-1]
-    content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools)
+    content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
+                            transcribe="Transcribe" in allowed_tools and transcribe_configured())
     if mentions:
         titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                   for s in mcp_servers or [] if s._connector}

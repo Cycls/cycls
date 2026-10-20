@@ -234,6 +234,8 @@ server's `run` log row — `status`, `reason`, `error_id`, `ms` — and that is 
 `mic_permission_denied` is any mic that couldn't start; `reason` says which — `NotAllowedError`
 (refused), `NotFoundError` (no mic), `NotSupportedError` (no format it can record). The recording
 format is whichever the browser has: mp4 on Safari and Chrome, webm on Firefox.
+`mic_transcribed.engine` says who wrote the words: `cycls` (the cycls-transcribe service, when the
+agent sets `TRANSCRIBE_URL`) or `openai` (no service, or the fallback when it was down or slow).
 
 ---
 
@@ -606,6 +608,9 @@ FROM events
 WHERE event = 'mic_transcribed'
   AND timestamp > now() - INTERVAL 14 DAY
 ```
+
+Add `GROUP BY properties.engine` to compare the service with OpenAI, and to see how often the
+service fell back (`engine = 'openai'` on an agent that sets `TRANSCRIBE_URL`).
 
 **Mic failure breakdown** — stack `mic_permission_denied`, `mic_cancelled`,
 `mic_transcription_failed`: friction at OS permission, UI intent, or

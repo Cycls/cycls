@@ -11,9 +11,13 @@ const extension = (type: string) => (type.includes("webm") ? "webm" : type.inclu
 export function useSpeechRecognition({
   onEnd,
   authHeaders,
+  warm = false,
 }: {
   onEnd: (text: string) => void;
   authHeaders?: () => Promise<Record<string, string>>;
+  // The server transcribes on its own GPUs (config.voice_warm): start one as recording starts, so a
+  // cold listener is ready by the time the person stops speaking.
+  warm?: boolean;
 }) {
   const { error: toastError } = useToast();
   const [listening, setListening] = useState(false);
@@ -114,6 +118,7 @@ export function useSpeechRecognition({
               transcribe_ms: Date.now() - t0,
               text_length: text.length,
               empty: !text,
+              engine: data.engine === "cycls" ? "cycls" : "openai",
             });
             onEnd(text);
           } else {
@@ -135,13 +140,18 @@ export function useSpeechRecognition({
       recorder.start();
       setListening(true);
       track("mic_started");
+      if (warm) {   // a hint: a failed warm-up changes nothing
+        Promise.resolve(authHeadersRef.current ? authHeadersRef.current() : {})
+          .then((headers) => fetch("/transcribe/warm", { method: "POST", headers }))
+          .catch(() => {});
+      }
     } catch (e) {
       release();
       recorderRef.current = null;
       track("mic_permission_denied", { reason: (e as Error)?.name });   // NotAllowedError, NotFoundError, NotSupportedError…
       toastError(t("micUnavailable"));
     }
-  }, [onEnd, release, toastError]);
+  }, [onEnd, release, toastError, warm]);
 
   useEffect(() => {
     return () => {
