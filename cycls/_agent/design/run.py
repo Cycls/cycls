@@ -14,7 +14,44 @@ from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comment
 
 
 async def _exec_design(inp, workspace):
-    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens)."""
+    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens); the workspace's
+    own fonts (brand/fonts) reach the service first, and the call that first gives them says their family."""
+    from cycls._agent import design
+    said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))
+    out = await _design_call(inp, workspace)
+    if said and isinstance(out, str):
+        return f"{said}\n\n{out}"
+    if said and isinstance(out, dict) and "_model" in out:
+        m = out["_model"]
+        return {**out, "_model": [{"type": "text", "text": said}, *m] if isinstance(m, list) else f"{said}\n\n{m}"}
+    return out
+
+
+_FONT_KEYS = ("font", "headerFont", "heading", "body", "arHeading", "arBody")
+
+
+async def _font_files(v, root, user_id):
+    """A font named by its file anywhere in the workspace (a .ttf / .otf path) → given to the service and named by
+    the family and weight the file says, so that design draws with it."""
+    from cycls._agent import design
+    if isinstance(v, list):
+        return [await _font_files(x, root, user_id) for x in v]
+    if not isinstance(v, dict):
+        return v
+    out = {}
+    for k, x in v.items():
+        if k in _FONT_KEYS and isinstance(x, str) and x.lower().endswith((".ttf", ".otf")):
+            if not (path := _resolve_path(x, root)).is_file():
+                raise RuntimeError(f"there is no font file {x} in the workspace")
+            got, _ = await design.give_font(path, user_id)
+            if isinstance(got, str):
+                raise RuntimeError(f"the font file {x} can't be used: {got}")
+            x = f"{got['family']} {got['style']}"
+        out[k] = await _font_files(x, root, user_id)
+    return out
+
+
+async def _design_call(inp, workspace):
     from cycls._agent import design
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
@@ -50,6 +87,10 @@ async def _exec_design(inp, workspace):
                         if key == "spec" else "")
                 return (f"Error: `{key}` came as text that isn't valid JSON — {why}. Nothing was done. "
                         f"Send `{key}` again as an object, with that put right.{more}")
+    try:
+        inp = await _font_files(inp, workspace.root, getattr(workspace, "subject", None))
+    except (RuntimeError, ValueError) as e:
+        return f"Error: {e}. Nothing was done."
     action = (inp.get("action") or "render").lower()
     # a design written beside `spec` rather than under it
     if action == "render" and inp.get("spec") is None:

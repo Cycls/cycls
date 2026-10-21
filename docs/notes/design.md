@@ -148,6 +148,13 @@ Fontsource. The service's `fonts.ts` makes that dependable before every render:
   (cached per process). A weight the family lacks falls back to its Regular with a
   note; an unknown family is a 422 naming it — never blank text. `/apply` checks the
   fonts an edit leaves on the page the same way.
+- **A workspace's own fonts.** The `.ttf` / `.otf` files in `brand/fonts/` — and any one a design
+  names by its path, as a `font` or a theme's `heading` / `body` (`run._font_files`) — reach the
+  service (`POST /fonts`) on a Design call (`client.give_font`): their sha256 first, once a process,
+  and the file itself only when the service has never had it. The service reads the family and
+  weight from the file and keeps it beside its baked faces, on a volume, so renders, PDFs and
+  the editor's `/font` find it like any other; one on Google Fonts is refused. The first call
+  to give a font tells the model its family name.
 
 The service returns `notes` for what it changed; the SDK appends them to the ack.
 

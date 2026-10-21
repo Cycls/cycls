@@ -259,6 +259,39 @@ def test_the_services_own_429_message_wins(monkeypatch):
         asyncio.run(design.render({}))
 
 
+def test_a_workspaces_own_fonts_reach_the_service_once_and_the_model_hears_their_family(tmp_path, monkeypatch):
+    (tmp_path / "brand" / "fonts").mkdir(parents=True)
+    (tmp_path / "brand" / "fonts" / "Brand-Bold.otf").write_bytes(b"OTTO")
+    (tmp_path / "brand" / "fonts" / "readme.txt").write_text("not a font")
+    sent = []
+
+    async def _post(path, body, user_id=None):
+        sent.append((path, base64.b64decode(body["data"]) if "data" in body else body["sha"][:8]))
+        return {"ok": True, "family": "Brand Sans", "style": "Bold"} if "data" in body else {"ok": True, "need": True}
+    monkeypatch.setattr("cycls._agent.design.client._post", _post)
+    monkeypatch.setattr("cycls._agent.design.client._given", {})
+    first = asyncio.run(_exec_design({"action": "guide"}, _ws(tmp_path)))
+    again = asyncio.run(_exec_design({"action": "guide"}, _ws(tmp_path)))
+    assert first.startswith("The workspace's own fonts are ready for designs: Brand Sans (Bold). Name them by that family.")
+    assert not again.startswith("The workspace's") and sent == [("/fonts", "7ff30fcf"), ("/fonts", b"OTTO")]   # its sha256, then the file
+
+
+def test_a_font_named_by_its_file_is_given_and_named_by_its_family(tmp_path, monkeypatch):
+    from cycls._agent.design.run import _font_files
+    (tmp_path / "events").mkdir()
+    (tmp_path / "events" / "Gala-Bold.otf").write_bytes(b"OTTO gala")
+
+    async def _post(path, body, user_id=None):
+        return {"ok": True, "family": "Gala Display", "style": "Bold"} if "data" in body else {"ok": True, "need": True}
+    monkeypatch.setattr("cycls._agent.design.client._post", _post)
+    monkeypatch.setattr("cycls._agent.design.client._given", {})
+    spec = {"nodes": [{"type": "text", "text": "Hi", "font": "events/Gala-Bold.otf"}], "theme": {"heading": "events/Gala-Bold.otf"}}
+    out = asyncio.run(_font_files({"spec": spec}, str(tmp_path), None))
+    assert out["spec"]["nodes"][0]["font"] == out["spec"]["theme"]["heading"] == "Gala Display Bold"
+    with pytest.raises(RuntimeError, match="no font file events/Nope.otf"):
+        asyncio.run(_font_files({"font": "events/Nope.otf"}, str(tmp_path), None))
+
+
 # ---- the Design tool (executor + gating + label), with render faked ----
 
 def _ws(tmp_path):

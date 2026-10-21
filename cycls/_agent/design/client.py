@@ -2,7 +2,9 @@
 DESIGN_URL turns it on (unset: no Design tool); DESIGN_SECRET is the optional Bearer secret."""
 import asyncio
 import base64
+import hashlib
 import os
+import pathlib
 from typing import NamedTuple
 
 import httpx
@@ -70,6 +72,47 @@ async def _post(path, body, user_id=None):
             detail = "too many design requests — wait a moment and try again"
         raise RuntimeError(detail or f"design service {resp.status_code}: {resp.text[:200]}")
     return data
+
+
+_given = {}        # a font file's sha256 → its face as the service named it, or why it can't be used (this process)
+
+
+async def give_font(path, user_id=None):
+    """A font file given to the service — its sha256 first, the file itself only if the service never had it →
+    (its face {"family", "style"}, or why it can't be used; new to this process?). Unavailable passes."""
+    data = await asyncio.to_thread(pathlib.Path(path).read_bytes)
+    if (sha := hashlib.sha256(data).hexdigest()) in _given:
+        return _given[sha], False
+    try:
+        r = await _post("/fonts", {"sha": sha}, user_id)
+        if r.get("need"):                               # a file the service has never had: sent once, ever
+            r = await _post("/fonts", {"sha": sha, "data": base64.b64encode(data).decode()}, user_id)
+        _given[sha] = {"family": r["family"], "style": r["style"]}
+    except Unavailable:
+        raise
+    except RuntimeError as e:                           # the service read it and said no: not asked again
+        _given[sha] = str(e)
+    return _given[sha], True
+
+
+async def add_fonts(root, user_id=None):
+    """A workspace's brand fonts (brand/fonts/*.ttf|.otf) given to the service: its designs, PDFs and editor draw
+    with them from then on → what was newly given, said for the model ('' for nothing)."""
+    faces, bad = {}, []
+    for p in sorted(pathlib.Path(root, "brand", "fonts").glob("*")):
+        if p.suffix.lower() not in (".ttf", ".otf"):
+            continue
+        try:
+            got, new = await give_font(p, user_id)
+        except Unavailable:
+            continue                                    # given on a later call
+        if new and isinstance(got, dict):
+            faces.setdefault(got["family"], []).append(got["style"])
+        elif new:
+            bad.append(f"brand/fonts/{p.name} ({got})")
+    ready = "; ".join(f"{f} ({', '.join(s)})" for f, s in faces.items())
+    return " ".join(filter(None, [f"The workspace's own fonts are ready for designs: {ready}. Name them by that family." if ready else "",
+                                  f"Not usable as fonts: {'; '.join(bad)}." if bad else ""]))
 
 
 class Rendered(NamedTuple):
