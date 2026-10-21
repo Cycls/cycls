@@ -89,17 +89,13 @@ async def _exec_design(inp, workspace):
             return (f"Error: {rel} doesn't exist — `{action}` works on a design you rendered (`render` creates one). "
                     f"The designs here: {_designs_there(workspace.root)}.")
     page = str(inp.get("page") or "").strip() or None
-    # `page` is a variant of the design (a post and its story), not a slide: "page 2" of a deck was a miss, twice
-    pages_said = (" `page` names one of a design's variants (a post and its story); a deck's slides are its frames — "
-                  "`inspect` without `page` lists every slide, and an edit names one with `frame`, from 0.")
-    hint = lambda e: pages_said if str(e).startswith("there is no page") and page and page.isdigit() else ""
     if action == "inspect":
         try:
             o = await design.outline(await asyncio.to_thread(fig_path.read_bytes), user_id=subject, page=page)
         except design.Unavailable as e:
             return f"Error: design unavailable — {e}"
         except Exception as e:
-            return f"Error: couldn't inspect {rel} — {e}.{hint(e)}"
+            return f"Error: couldn't inspect {rel} — {e}"
         text = _outline_text(rel, o["frames"], o["pages"], o["page"])
         if pinned := await _comments_note(workspace, rel, o):
             text += "\n\n" + pinned
@@ -134,9 +130,9 @@ async def _exec_design(inp, workspace):
                     return f"Error: design unavailable — {e}"
                 except Exception as e:
                     # a service error with " has: " already lists the nodes
-                    nodes = "" if " has: " in str(e) else " (Design inspect lists the nodes)"
+                    hint = "" if " has: " in str(e) else " (Design inspect lists the nodes)"
                     return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
-                            f"{'ops' if ops else 'script'}{nodes} and try again.{hint(e)}")
+                            f"{'ops' if ops else 'script'}{hint} and try again.")
                 try:   # a save in the editor meanwhile: apply to that, once
                     version = await write_fig(workspace.root, rel, r["fig"], base=base, by="agent", reason="agent",
                                               intent=inp.get("intent"))

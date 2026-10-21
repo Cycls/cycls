@@ -1241,18 +1241,6 @@ def test_inspect_and_edit_work_on_the_page_named(tmp_path, monkeypatch):
     assert 'on page "Story"' in out["_model"]
 
 
-def test_a_slide_asked_for_as_a_page_is_told_what_pages_and_slides_are(tmp_path, monkeypatch):
-    _design(tmp_path)
-
-    async def _outline(fig, user_id=None, page=None, full=False):
-        raise RuntimeError('there is no page "2" — this design\'s pages: design')
-    monkeypatch.setattr("cycls._agent.design.outline", _outline)
-    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch", "page": 2}, _ws(tmp_path)))
-    assert out.startswith("Error: couldn't inspect") and "a deck's slides are its frames" in out and "`frame`, from 0" in out
-    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch", "page": "Story"}, _ws(tmp_path)))
-    assert "a deck's slides" not in out                                       # a page asked for by its name: no lesson
-
-
 def test_a_page_an_edit_makes_is_prepared(tmp_path, monkeypatch):
     _design(tmp_path)
     grown = [{"name": "design", "frames": 1}, {"name": "Story", "frames": 1}]
