@@ -298,6 +298,13 @@ class Messages(list):
     def raw(self):
         return self._raw
 
+def _clean_folder(raw):
+    """The folder the person has open in Files (a workspace path), else ""."""
+    if not isinstance(raw, str) or len(raw) > 300 or raw.startswith("/") or "\\" in raw or ".." in raw.split("/") or raw.startswith("."):
+        return ""
+    return raw.strip("/")
+
+
 def _clean_selection(raw):
     """A design selection {path: a workspace .fig, frame, nodes: [{name, type, text?}], page?}, capped; else None."""
     if not isinstance(raw, dict):
@@ -353,6 +360,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         auto: bool = True          # the composer's switch; absent means Auto
         connectors: list = []      # connectors the person @-mentioned — the turn gets a "[Using: …]" line
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
+        folder: str = ""           # the folder open in Files: where a design named without one is saved
         replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
 
         model_config = {"arbitrary_types_allowed": True}
@@ -414,7 +422,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           disabled_tools=[t for t in (data.get("disabled_tools") or []) if isinstance(t, str)][:20],
                           approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
-                          selection=_clean_selection(data.get("selection")))
+                          selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")))
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
         # counts it, and shutdown drains it. A fresh id simply never collides.

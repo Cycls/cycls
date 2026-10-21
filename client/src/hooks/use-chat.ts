@@ -52,6 +52,7 @@ export interface Part {
 export type UIAction = { action: string } & Record<string, unknown>;
 export type SendExtra = {
   approvals?: string[]; connectors?: string[]; selection?: DesignSelection;
+  folder?: string;   // the folder open in Files: where the agent saves a design named without one
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
 };
 // What was sent: what retry sends again, and what Stop gives back to the composer.
@@ -363,6 +364,7 @@ export function useChat(baseUrl: string = "") {
                                  ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
                                  ...(extra?.selection ? { selection: extra.selection } : {}),
+                                 ...(extra?.folder ? { folder: extra.folder } : {}),
                                  ...replay }),
           signal: controller.signal,
         });

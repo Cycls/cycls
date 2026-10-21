@@ -5,7 +5,7 @@ import { t, useLang, getLang } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
-import { isRenderable, saveBlob, tintTile, tintLabel, tileExt } from "./canvas-utils";
+import { isDesignEditor, isRenderable, saveBlob, shownName, tintTile, tintLabel, tileExt } from "./canvas-utils";
 import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
 import type { FilesPanelProps } from "./chat";
@@ -628,16 +628,20 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                     <img src={thumbUrls[entry.name]} alt={entry.name} className="size-8 rounded object-cover shrink-0" draggable={false} />
                   ) : (
                     <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg" style={tintTile(entry.name)}>
-                      <span className="text-[10px] font-medium text-muted-foreground uppercase" style={tintLabel(entry.name)}>{tileExt(entry.name)}</span>
+                      {isDesignEditor(entry.name)
+                        ? <span style={tintLabel(entry.name)}><Icon name="grid" className="size-4" /></span>
+                        : <span className="text-[10px] font-medium text-muted-foreground uppercase" style={tintLabel(entry.name)}>{tileExt(entry.name)}</span>}
                     </div>
                   )}
 
                   <div className="flex-1 min-w-0">
                     {renaming === entry.name ? (
                       <InlineInput
-                        initial={entry.name}
-                        onSubmit={async (newName) => {
+                        initial={shownName(entry.name)}
+                        onSubmit={async (typed) => {
                           setRenaming(null);
+                          // A design keeps its .fig: the person names it, not its extension.
+                          const newName = isDesignEditor(entry.name) && !isDesignEditor(typed) ? `${typed}.fig` : typed;
                           if (newName === entry.name) return;
                           // Reload either way: a rename that failed part-way has still changed the folder.
                           try { await onRename(entryPath, fullPath(newName)); } catch { /* the toast said why */ }
@@ -646,7 +650,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                         onCancel={() => setRenaming(null)}
                       />
                     ) : (
-                      <span className="text-sm text-foreground truncate block select-none" title={entry.name}>{entry.name}</span>
+                      <span className="text-sm text-foreground truncate block select-none" title={shownName(entry.name)}>{shownName(entry.name)}</span>
                     )}
                   </div>
 

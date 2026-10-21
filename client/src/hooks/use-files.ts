@@ -244,9 +244,10 @@ export function useFiles(baseUrl: string = "") {
   }, [api]);
 
   // A blank design in designs/, of a size preset or [w, h].
+  // In the folder the person is in, like any new file.
   const newDesign = useCallback(async (body: { name?: string; size?: string | [number, number]; background?: string } = {}) => {
-    return (await (await api("/design/new", { method: "POST", json: body })).json()) as { path: string; name: string; size: [number, number] };
-  }, [api]);
+    return (await (await api("/design/new", { method: "POST", json: { ...body, ...(path ? { folder: path } : {}) } })).json()) as { path: string; name: string; size: [number, number] };
+  }, [api, path]);
 
   // Rendered by the design service to a file beside the design.
   const exportDesign = useCallback(async (filePath: string, format: "pdf" | "png", page?: string) => {

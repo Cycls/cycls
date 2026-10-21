@@ -3,7 +3,7 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isRenderable, saveBlob, extTint } from "./canvas-utils";
+import { isHtml, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
 import { AppBanner } from "./app-banner";
 import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
@@ -398,7 +398,7 @@ function SharedFile({ share, getToken, signedIn, agent }: { share: FileShare; ge
   // The file is the page: one bar above it, and nothing around it.
   return (
     <div dir="ltr" className="flex h-dvh flex-col bg-background">
-      <ShareBar name={name} author={share} signedIn={signedIn} agent={agent}>
+      <ShareBar name={shownName(name)} author={share} signedIn={signedIn} agent={agent}>
         {isHtml(name) && content != null && (
           <button onClick={openInTab} className={action} title={t("openInTab")}>
             <Icon name="arrow-up-right" className="size-4" /><span className="hidden sm:inline">{t("openInTab")}</span>

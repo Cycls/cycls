@@ -113,6 +113,8 @@ def _prepare_spec(spec, brand, root=None):
                 if brand and n.get("font") is None:
                     face = brand["heading"] if (n.get("size") or 32) >= 48 else brand["body"]
                     face = face or brand["heading"] or brand["body"]
+                    if brand.get("latin") and not re.search(r"[\u0600-\u06ff]", str(n.get("text") or "")):
+                        face = brand["latin"]             # Latin words in the kit's Latin face
                     if face:
                         n["font"], branded_fonts = face, branded_fonts + 1
                 if bg and n.get("color") is None and n.get("fill") is None:
@@ -239,6 +241,10 @@ def _brand_theme(brand):
         theme["heading"] = f"{brand['heading']} Bold"
     if brand.get("body"):
         theme["body"] = brand["body"]
+    if brand.get("latin"):          # Latin text in its own face; the kit's heading and body set the Arabic
+        theme.update(heading=f"{brand['latin']} Bold", body=brand["latin"],
+                     **({"arHeading": f"{brand['heading']} Bold"} if brand.get("heading") else {}),
+                     **({"arBody": brand["body"]} if brand.get("body") else {}))
     return theme
 
 
@@ -274,7 +280,7 @@ def _prepare_deck(spec, brand, root):
         logo = next((f"brand/{n}" for n in _BRAND_LOGOS if root and (pathlib.Path(root) / "brand" / n).is_file()), None)
         if logo and not deck.get("logo"):
             deck["logo"] = logo
-        fonts = " / ".join(f for f in (brand.get("heading"), brand.get("body")) if f)
+        fonts = " / ".join(dict.fromkeys(f for f in (brand.get("latin"), brand.get("heading"), brand.get("body")) if f))
         notes.append(f"The deck uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
                      f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
     try:
@@ -460,7 +466,7 @@ def _prepare_document(spec, brand, root):
         logo = next((f"brand/{n}" for n in _BRAND_LOGOS if root and (pathlib.Path(root) / "brand" / n).is_file()), None)
         if logo and not doc.get("logo"):
             doc["logo"] = logo
-        fonts = " / ".join(f for f in (brand.get("heading"), brand.get("body")) if f)
+        fonts = " / ".join(dict.fromkeys(f for f in (brand.get("latin"), brand.get("heading"), brand.get("body")) if f))
         notes.append(f"The document uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
                      f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
     size = doc.get("size") or "a4"

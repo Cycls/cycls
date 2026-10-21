@@ -20,7 +20,7 @@ from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
-from ..design.tool import DESIGN_LOADED, design_called, design_tool, design_wanted
+from ..design.tool import DESIGN_FOLDER, DESIGN_LOADED, design_called, design_tool, design_wanted
 from ..tools import skills as skills_mod
 
 
@@ -323,6 +323,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if t is design_tool(True):
                 tools_list[i], design_loaded = design_tool(False), False
     DESIGN_LOADED.set(design_loaded)
+    DESIGN_FOLDER.set(getattr(context, "folder", "") or "")
     if skill_catalog is not None and not any(t.get("name") == "skill" for t in tools_list):   # even with none yet: it is how the first is made
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line

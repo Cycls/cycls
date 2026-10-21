@@ -6,22 +6,25 @@ import { Canvas, addMenuLeft, type CanvasFile } from "../src/components/canvas";
 import { DESIGN_PRESETS } from "../src/components/canvas-utils";
 import { encPath } from "../src/hooks/use-files";
 
-// Designs in the canvas: every open tab stays mounted, hidden, and a design editor
-// whose tab is closed stays until it has saved what's unsaved; "New design" is in
-// the + menu, with the server's sizes.
+// Designs in the canvas: a design opens as its preview, and its editor is loaded the first time
+// it's wanted; every open tab stays mounted, hidden, and a design editor whose tab is closed stays
+// until it has saved what's unsaved; "New design" is in the + menu, with the server's sizes.
 
 const EDITOR = "https://ed.example";
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 const TABS: CanvasFile[] = [{ path: "designs/a.fig", name: "a.fig" }, { path: "notes.md", name: "notes.md" }];
+const ONE = JSON.stringify({ count: 1, slides: ["data:image/jpeg;base64,S1"], fig: "designs/a.fig" });
 
 function canvas(active: string, extra: Record<string, unknown> = {}) {
   return (
     <Canvas tabs={TABS} active={active} docked hidden={false} expanded={false}
             onToggleExpand={() => {}} onSelectTab={() => {}} onCloseTab={() => {}} onHide={() => {}}
-            readFile={async () => "# notes"} openFile={async () => "blob:fig"} writeFile={async () => {}}
+            readFile={async (p: string) => (p.includes("?as=slides") ? ONE : "# notes")} openFile={async () => "blob:fig"} writeFile={async () => {}}
             designEditorUrl={EDITOR} {...extra} />
   );
 }
+// Into the design editor (a design opens as its preview).
+const toEdit = async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); await flush(); };
 
 describe("the + menu", () => {
   it("stays inside the window", () => {
@@ -71,27 +74,63 @@ describe("a design's Edit | Preview switch", () => {
   const reader = (n: number) => vi.fn(async (p: string) => (p.includes("?as=slides") ? slides(n) : "# notes"));
   const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
 
-  it("shows the design without the editor around it, and comes back to the same editor", async () => {
+  it("opens as the design itself; Edit loads the editor, and Preview and Edit go back and forth to the same one", async () => {
     const readFile = reader(1);
     const { container } = render(canvas("designs/a.fig", { readFile }));
     await flush();
-    const frame = container.querySelector("iframe")!;
-    expect(pressed("Edit")).toBe("true");
-
-    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await flush();
+    expect(pressed("Preview")).toBe("true");
     expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides", true);
     expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,S1");
+    expect(container.querySelector("iframe")).toBeNull();                   // no editor until it's wanted
+
+    await toEdit();
+    const frame = container.querySelector("iframe")!;
+    expect(frame).toBeTruthy();
+    expect(screen.queryByTestId("design-preview")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await flush();
     expect(pressed("Preview")).toBe("true");
     expect(container.querySelector("iframe")).toBe(frame);                  // the editor is still there…
     expect(frame.closest("[inert]")).toBeTruthy();                           // …under the preview, out of reach
     expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await flush();
+    await toEdit();
     expect(screen.queryByTestId("design-preview")).toBeNull();
     expect(container.querySelector("iframe")).toBe(frame);                  // the same one: nothing reloaded
     expect(frame.closest("[inert]")).toBeNull();
+  });
+
+  it("while the agent works on it, it is the editor; when its turn ends, the preview — unless the person took to the editor", async () => {
+    const live = (on: boolean) => canvas("designs/a.fig", { tabs: [{ path: "designs/a.fig", name: "a", live: on }, TABS[1]] });
+    const { container, rerender } = render(live(true));
+    await flush();
+    expect(pressed("Edit")).toBe("true");
+    expect(container.querySelector("iframe")).toBeTruthy();                 // the agent's changes land in the editor
+    rerender(live(false));                                                    // the turn is over
+    await flush();
+    expect(pressed("Preview")).toBe("true");
+    expect(screen.getByTestId("design-picture")).toBeTruthy();
+
+    rerender(live(true));                                                     // its next turn: the editor again
+    await flush();
+    expect(pressed("Edit")).toBe("true");
+    const frame = container.querySelector("iframe")!;
+    frame.focus();                                                            // the person clicks into it
+    window.dispatchEvent(new Event("blur"));
+    await flush();
+    rerender(live(false));
+    await flush();
+    expect(pressed("Edit")).toBe("true");                                     // it stays theirs
+  });
+
+  it("says what it is beside its name", async () => {
+    const deck = JSON.stringify({ count: 8, slides: Array(8).fill("data:image/jpeg;base64,S"), fig: "designs/a.fig", kind: "deck" });
+    render(canvas("designs/a.fig", { readFile: async (p: string) => (p.includes("?as=slides") ? deck : "") }));
+    await flush();
+    expect(screen.getByTestId("design-kind").textContent).toBe("· Deck · 8 slides");
+    expect(screen.getAllByText("a").length).toBeGreaterThan(0);               // its name, without ".fig"
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    for (const label of ["Download PDF", "Download PowerPoint", "Download images (.zip)", "Download design (.fig)"]) expect(screen.getByText(label)).toBeTruthy();
   });
 
   it("a design of several frames previews as its slides", async () => {
@@ -107,6 +146,7 @@ describe("a design's Edit | Preview switch", () => {
     const readFile = reader(1);
     const { container } = render(canvas("designs/a.fig", { readFile }));
     await flush();
+    await toEdit();
     const frame = container.querySelector("iframe")!;
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     const say = (type: string, extra: Record<string, unknown> = {}) => window.dispatchEvent(
@@ -128,10 +168,8 @@ describe("a design's Edit | Preview switch", () => {
     const readFile = vi.fn(async (p: string) => { if (p.includes("?as=slides")) throw new Error("415"); return "x"; });
     render(canvas("designs/a.fig", { readFile }));
     await flush();
-    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await flush();
     expect(screen.getByText(/Preview isn't available/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await toEdit();
     expect(screen.queryByTestId("design-preview")).toBeNull();
   });
 });
@@ -160,6 +198,7 @@ describe("a design of several pages", () => {
   async function open(readFile: ReturnType<typeof reader>, page: string, extra: Record<string, unknown> = {}) {
     const utils = render(canvas("designs/a.fig", { readFile, ...extra }));
     await flush();
+    await toEdit();
     const frame = utils.container.querySelector("iframe")!;
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     const say = (type: string, more: Record<string, unknown> = {}) => window.dispatchEvent(
@@ -173,6 +212,7 @@ describe("a design of several pages", () => {
     await flush();
     // The editor answers a flush at once (nothing unsaved).
     post.mockImplementation(((m: Record<string, unknown>) => { if (m.type === "flush") say("flushed", { id: m.id, ok: true }); }) as never);
+    readFile.mockClear();                                                     // what it opened on is not what's tested
     return { ...utils, post, say };
   }
   const sent = (post: { mock: { calls: unknown[][] } }, type: string) =>
@@ -289,6 +329,7 @@ describe("designs in the canvas", () => {
   it("keeps a switched-away editor while its tab is open, and a closed one until it has saved", async () => {
     const { container, rerender } = render(canvas("designs/a.fig"));
     await flush();
+    await toEdit();
     const frame = container.querySelector("iframe")!;
     expect(frame).toBeTruthy();
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -320,6 +361,7 @@ describe("designs in the canvas", () => {
     const onCloseTab = vi.fn();
     const { container } = render(canvas("designs/a.fig", { tabs: [TABS[0]], onCloseTab }));
     await flush();
+    await toEdit();
     const frame = container.querySelector("iframe")!;
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     const say = (type: string, extra: Record<string, unknown> = {}) => window.dispatchEvent(
@@ -346,6 +388,7 @@ describe("designs in the canvas", () => {
     try {
       const { container } = render(canvas("designs/a.fig"));
       await flush();
+      await toEdit();
       fireEvent.click(screen.getByLabelText("Full screen"));
       expect(asked).toEqual([container.querySelector("iframe")!.parentElement]);
     } finally {

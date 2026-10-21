@@ -374,8 +374,6 @@ _PUBLIC = ("name", "path", "type", "size", "modified", "kind")
 
 
 def _kind(name):
-    if name.lower().endswith(".deck.json"):
-        return "deck"                      # a design deck's document: the deck viewer
     return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
 
 
@@ -727,7 +725,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
-        # a design deck (its deck document or .fig): ?as=slides|pptx|pdf|images|png
+        # a design (.fig): ?as=slides|pptx|pdf|images|png
         if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
             return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject,
                                           request.query_params.get("page"))
@@ -818,8 +816,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                 return JSONResponse(status_code=412, content={
                     "detail": "This design changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
-        # re-export the images beside an edited design; a new one (`dedupe`) gets its .png
-        design_refresh.schedule(ws.root, rel, ws.subject, ensure=dedupe)
+        design_refresh.schedule(ws.root, rel, ws.subject)   # a design's preview, made ready
         return reply
 
     @r.post("/files-batch/{path:path}")
@@ -904,12 +901,6 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             except OSError as e:   # never fail a rename that already happened
                 log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
             if dest.suffix.lower() == ".fig" and Path(rel).suffix.lower() == ".fig":
-                # …and the files kept beside it
-                from cycls._agent.design import refresh
-                try:
-                    await asyncio.to_thread(refresh.follow, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
-                except OSError as e:
-                    log("warn", message=f"the files beside {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
                 await _comments(ws, "move", Path(rel).as_posix(), Path(dst).as_posix())   # …and what was said about it
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
@@ -1168,8 +1159,8 @@ def _poll_key(deck):
 
 def _poll_deck(value):
     deck = str(value or "")
-    if not deck.endswith((".deck.json", ".fig")) or ".." in deck.split("/") or deck.startswith("/") or len(deck) > 400:
-        raise HTTPException(400, "deck must be a deck document path")
+    if not deck.endswith(".fig") or ".." in deck.split("/") or deck.startswith("/") or len(deck) > 400:
+        raise HTTPException(400, "deck must be a design's path")
     return deck
 
 
@@ -1520,7 +1511,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     def _shared_deck(row):
         path = (row or {}).get("path", "")
-        if not (path.startswith("file/") and path.endswith((".deck.json", ".fig"))):
+        if not (path.startswith("file/") and path.endswith(".fig")):
             raise HTTPException(404, "This link isn't a deck")
         return path[5:]
 

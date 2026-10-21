@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { fileKind } from "../src/components/canvas";
-import { isHtml, isMd, isPdf, isDesignEditor, isDeck, isRenderable, extTint, tileExt, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
+import { isHtml, isMd, isPdf, isDesignEditor, isRenderable, extTint, tileExt, shownName, codeLang, ext, editWorkingPath } from "../src/components/canvas-utils";
 
 // An app's canvas tab is titled by its manifest, so the display name has no
 // extension. Every renderer check must therefore key off the path — keyed off
@@ -76,17 +76,16 @@ describe("editWorkingPath", () => {
   });
 });
 
-// A design deck's document is .json on disk but opens the deck viewer — so it's
-// told apart before the code path would claim it.
-describe("deck documents", () => {
-  it("are decks, renderable, tinted like designs and labelled deck", () => {
-    expect(isDeck("designs/pitch.deck.json")).toBe(true);
-    expect(isDeck("designs/Pitch.DECK.json")).toBe(true);
-    expect(isDeck("data.json")).toBe(false);
-    expect(isRenderable("designs/pitch.deck.json")).toBe(true);
-    expect(isRenderable("pitch.deck.json", "deck")).toBe(true);
-    expect(extTint("pitch.deck.json")).toBe(extTint("pitch.fig"));
-    expect(tileExt("pitch.deck.json")).toBe("deck");
+// A design is one .fig: shown by its name, its tile says "design".
+describe("designs", () => {
+  it("are one .fig, named without it and labelled design; a .deck.json is plain JSON", () => {
+    expect(isDesignEditor("decks/Pitch.FIG")).toBe(true);
+    expect(isRenderable("pitch.fig")).toBe(true);
+    expect(shownName("Launch.fig")).toBe("Launch");
+    expect(shownName("notes.md")).toBe("notes.md");
+    expect(tileExt("pitch.fig")).toBe("design");
+    expect(tileExt("pitch.deck.json")).toBe("json");
+    expect(extTint("pitch.deck.json")).toBe(extTint("data.json"));
     expect(tileExt("notes.md")).toBe("md");
   });
 });

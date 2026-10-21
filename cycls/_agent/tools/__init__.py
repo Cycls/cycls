@@ -28,8 +28,8 @@ from ..design.extract import (_DIRECTION_MARKS, _PDF_CUT_DPI, _PDF_LOOK_DPI, _PD
     _PDF_TABLE_ROWS, _PDF_TEXT_ALL, _PDF_TEXT_PAGE, _SHAPED, _SHAPED_ARABIC, _laid_out_tables, _pdf_page,
     _pdf_parts, _run_tool)
 from ..design.report import _OUTLINE_STYLE, _edit_names, _layout_check, _outline_text, _page_changes
-from ..design.files import (_DECK_EXTS, _DESIGN_EXTS, _dedupe_design_name, _designs_there, _rendered_copy,
-    _save_pages, _write_beside)
+from ..design.files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _find_design, _free_design, _rendered_copy,
+    _save_pages, _stem_of, _write_beside)
 from ..design.actions import (_BLOCK_KINDS, _DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _document_source,
     _edits_hold, _edits_since_render, _exec_design_file, _exec_document, _exec_slides, _render_document,
     _sections_text, _seen_pages, _to_the_room)

@@ -154,7 +154,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
-| `deck_opened` | a design deck opens in the deck viewer (a multi-slide Design render, or its `.deck.json` from Files / a share) | `slides` — are decks being made and looked at? |
+| `deck_opened` | a design of several slides opens in the deck viewer (its preview, from the canvas, Files or a share) | `slides` — are decks being made and looked at? |
 | `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
 | `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |
 | `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |

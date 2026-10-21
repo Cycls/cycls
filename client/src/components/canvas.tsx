@@ -11,7 +11,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isDeck, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, DESIGN_PRESETS } from "./canvas-utils";
+import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
@@ -53,6 +53,7 @@ export interface CanvasFile {
   iconSrc?: string;   // image (data: or blob:)
   letter?: string;    // first letter of the app name
   writable?: boolean; // a document written here (the instructions): missing opens empty, Edit sits in the header
+  live?: boolean;     // a design the agent is working on: in the editor while it does, then its preview
 }
 
 // Fetch a file's content for the canvas. pdf → blob URL (native viewer);
@@ -91,8 +92,8 @@ export function useFileContent(
     // Presentations fetch the slide manifest as text; .docx and spreadsheets
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
-    // Decks and editor-less designs fetch their slide manifest.
-    const load = isDeck(kind) || (designAsPictures && isDesignEditor(kind))
+    // Editor-less designs fetch their slide manifest.
+    const load = designAsPictures && isDesignEditor(kind)
       ? readFile(`${file.path}?as=slides`, true)
       : isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path, file.writable)
@@ -222,7 +223,7 @@ function NoPreviewCard({ file, onDownload, onShare }: {
       <div className="flex size-16 items-center justify-center rounded-2xl bg-secondary text-xs font-bold text-muted-foreground" style={tintTile(fileKind(file))}>
         <span style={tintLabel(fileKind(file))}>{(tileExt(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
       </div>
-      <p className="text-sm font-medium text-foreground">{file.name}</p>
+      <p className="text-sm font-medium text-foreground">{shownName(file.name)}</p>
       <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
       {(onDownload || onShare) && (
         <div className="mt-1 flex gap-2">
@@ -244,8 +245,21 @@ function NoPreviewCard({ file, onDownload, onShare }: {
 
 const pageQuery = (page?: string) => (page ? `&page=${encodeURIComponent(page)}` : "");
 
+// What a design is, from its slide manifest: "Deck · 8 slides", "Document · 6 pages", "Post".
+export function designKind(manifest: string | null): { label: string; several: boolean } | null {
+  const deck = manifest ? parseDeck(manifest) : null;
+  if (!deck?.count) return null;
+  const n = deck.count, many = (one: "onePage" | "oneSlide", more: "nPages" | "nSlides") => (n === 1 ? t(one) : t(more).replace("{n}", String(n)));
+  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("onePage", "nPages")}`
+    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${t("nPages").replace("{n}", String(deck.pages!.length))}`
+    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("oneSlide", "nSlides")}`
+    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("oneSlide", "nSlides")}`
+    : t("kindPost");
+  return { label, several: n > 1 || deck.kind === "deck" || deck.kind === "document" };
+}
+
 // A design without its editor (a preview, a shared page), one page at a time.
-function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, onPage, onReload, onSlideOp }: {
+function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, onPage, onReload, onSlideOp, pollsFor }: {
   file: CanvasFile;
   data: string;
   tabs?: boolean;                      // its own page tabs (false: the canvas shows them above)
@@ -255,6 +269,7 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
   onPage?: (page: string) => void;
   onReload?: () => void;
   onSlideOp?: (op: DeckOp) => Promise<void>;
+  pollsFor?: (deck: string) => PollApi;   // live polls when it is presented (the owner's)
 }) {
   const [shown, setShown] = useState(data);
   const [want, setWant] = useState<string | null>(null);   // the page being fetched
@@ -280,7 +295,7 @@ function DesignPages({ file, data, readFile, openFile, downloads, tabs = true, o
       <div className="min-h-0 flex-1">
         {deck.count > 1
           // Slide ops apply only to the first page (a deck is one page).
-          ? <DeckView data={shown} path={file.path} openFile={openFile} onReload={onReload}
+          ? <DeckView data={shown} path={file.path} openFile={openFile} onReload={onReload} pollsFor={pollsFor}
                       onSlideOp={!page || page === pages[0]?.name ? onSlideOp : undefined}
                       onPage={readFile ? (name) => void pick(name) : undefined} />
           : deck.count === 1
@@ -326,7 +341,7 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, deckOp, pollsFor, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onReload, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -335,15 +350,12 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   readFile?: (path: string, silent?: boolean) => Promise<string>;
   openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL (a deck's downloads, its .fig)
   writeFile?: WriteFile;
-  deckOp?: (path: string, body: DeckOp) => Promise<void>;          // a deck's slide moves / copies / deletes
-  pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
   designHost?: DesignHost;
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
-  onReload?: () => void;      // refetch this document (a deck whose slides changed)
   onDownload?: () => void;
   onShare?: () => void;
 }) {
@@ -353,18 +365,9 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     // A failed Office conversion / render (service down, unconvertible, parse
     // error) degrades to the download card rather than a dead error — same as an
     // unrenderable file.
-    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDeck(fileKind(file)) || isDesignEditor(fileKind(file)))
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDesignEditor(fileKind(file)))
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
-  }
-  // A design deck → the deck viewer; `content` is its slide manifest.
-  if (isDeck(fileKind(file))) {
-    return content ? (
-      <DeckView data={content} path={file.path} openFile={openFile} writeFile={shared ? undefined : writeFile}
-                designEditorUrl={shared ? undefined : designEditorUrl} designHost={shared ? undefined : designHost} onReload={onReload}
-                onSlideOp={shared || !deckOp ? undefined : (op) => deckOp(file.path, op)}
-                pollsFor={shared ? undefined : pollsFor} />
-    ) : null;
   }
   if (isHtml(fileKind(file))) {
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} />;
@@ -885,9 +888,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   designEditorUrl?: string;
   designHost?: DesignHost;
 }) {
-  const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl);
-  const onReload = useCallback(() => setBump((n) => n + 1), []);
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey ?? 0, !designEditorUrl);
   const resolveMedia = useMemo(() => mediaResolver(file.path, openFile), [file.path, openFile]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -899,8 +900,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   const [historyOpen, setHistoryOpen] = useState(false);
   const md = isMd(fileKind(file));
   const lang = codeLang(fileKind(file));
-  const deck = isDeck(fileKind(file));
-  const isText = !deck && (md || lang != null);   // text-based: editable + copyable (a deck's content is its slides)
+  const isText = md || lang != null;   // text-based: editable + copyable
   const dirs = file.path.split("/").slice(0, -1);
 
   const copy = () => {
@@ -910,9 +910,12 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // A design's preview: what it looks like without the editor around it.
+  // A design opens as its preview — what it is — and Edit is the design editor. While the agent works on
+  // it (`live`) it is the editor, where its changes land; when the agent's turn ends, the preview again,
+  // unless the person took to the editor meanwhile. The editor is loaded the first time it is wanted.
   const design = isDesignEditor(fileKind(file)) && !!designEditorUrl;
-  const [previewing, setPreviewing] = useState(false);
+  const [previewing, setPreviewing] = useState(design && !file.live);
+  const [editorOn, setEditorOn] = useState(!design || !!file.live);
   const [preview, setPreview] = useState<string | null>(null);     // its slide manifest
   const [previewFailed, setPreviewFailed] = useState(false);
   // With several pages, they are tabs above the design, in the editor and the preview alike.
@@ -938,13 +941,33 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     if (previewing) void loadPreview(page);
   };
   const showPreview = async () => {
-    setPreview(null);
     setPreviewFailed(false);
     setPreviewing(true);
     track("design_previewed", {});
     await flushDesignEditor(file.path, 3000);   // what's unsaved is in the preview
-    await loadPreview(designPage(file.path));
+    await loadPreview(designPage(file.path) ?? previewPage.current);
   };
+  const edit = () => { setEditorOn(true); setPreviewing(false); };
+  useEffect(() => { if (design && previewing) void loadPreview(undefined); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The agent's turn: the editor while it works, the preview once it's done — unless the person clicked into
+  // the editor meanwhile (the window loses focus to its frame), when it stays theirs.
+  const body = useRef<HTMLDivElement>(null);
+  const handled = useRef(false);
+  const wasLive = useRef(!!file.live);
+  useEffect(() => {
+    if (!design) return;
+    if (file.live && !wasLive.current) { handled.current = false; edit(); }
+    if (!file.live && wasLive.current && !handled.current) void showPreview();
+    wasLive.current = !!file.live;
+  }, [file.live, design]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!file.live) return;
+    const onBlur = () => setTimeout(() => { if (body.current?.contains(document.activeElement)) handled.current = true; });
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [file.live]);
+  // What it is, said beside its name: "Deck · 8 slides".
+  const kind = designKind(preview ?? (isDesignEditor(fileKind(file)) && !designEditorUrl ? content : null));
   useEffect(() => {   // an agent edit while previewing is already saved: show it
     if (!previewing) return;
     const onCommand = (e: Event) => {
@@ -956,12 +979,12 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
 
   const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
   // Rendered from the saved file by the design service, so the editor flushes first.
-  const downloadDesignAs = async (as: "png" | "pdf") => {
+  const downloadDesignAs = async (as: "png" | "pdf" | "pptx" | "images") => {
     await flushDesignEditor(file.path, 3000);
     track("design_exported", { format: as, files: 1 });
     const page = previewing ? previewPage.current : designPage(file.path);
     openFile(`${file.path}?as=${as}${pageQuery(page)}`)
-      .then((url) => saveBlob(url, `${file.name.replace(/\.fig$/i, "")}${page ? `-${page}` : ""}.${as}`)).catch(() => {});
+      .then((url) => saveBlob(url, `${shownName(file.path.split("/").pop() || file.name)}${page ? `-${page}` : ""}.${as === "images" ? "zip" : as}`)).catch(() => {});
   };
   const reloadFile = useCallback(() => openFile(file.path), [openFile, file.path]);
 
@@ -1011,9 +1034,10 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               <Icon name="chevron-right" className="size-3 text-muted-foreground/50" strokeWidth={2.5} />
             </span>
           ))}
-          <span className="min-w-0 truncate font-medium text-foreground">{file.name}</span>
+          <span className="min-w-0 truncate font-medium text-foreground">{shownName(file.name)}</span>
+          {kind && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline" data-testid="design-kind">· {kind.label}</span>}
         </div>
-        {lang && lang !== "text" && !deck && (
+        {lang && lang !== "text" && (
           <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{lang}</span>
         )}
         <div className="flex-1" />
@@ -1039,7 +1063,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
             {design && !previewing && <CommentButtons path={file.path}
                                                       onComment={(adding) => { if (adding && !designEditorComments(file.path)) void showPreview(); }}
                                                       onList={() => { if (!designEditorComments(file.path)) void showPreview(); }} />}
-            {design && <EditPreviewSwitch previewing={previewing} onEdit={() => setPreviewing(false)} onPreview={() => void showPreview()} />}
+            {design && <EditPreviewSwitch previewing={previewing} onEdit={edit} onPreview={() => void showPreview()} />}
             {/* Invisible, not removed, in a preview so the switch beside it doesn't jump. */}
             {design && canFullscreen() && (
               <button onClick={() => fullscreenDesignEditor(file.path)} className={cn(headerBtn, previewing && "invisible")}
@@ -1059,9 +1083,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
                 ...(isDesignEditor(fileKind(file)) && designEditorUrl && designHost?.listVersions
                   ? [{ label: t("versionHistory"), onClick: () => setHistoryOpen(true) }] : []),
-                ...(isDesignEditor(fileKind(file)) && designEditorUrl ? [
-                  { label: t("downloadPng"), onClick: () => void downloadDesignAs("png") },
-                  { label: t("downloadPdf"), onClick: () => void downloadDesignAs("pdf") },
+                // What people know first — a deck as PowerPoint, PDF or its images — and the design file last.
+                ...(isDesignEditor(fileKind(file)) ? [
+                  ...(kind?.several ? [{ label: t("downloadPdf"), onClick: () => void downloadDesignAs("pdf") },
+                                       { label: t("downloadPptx"), onClick: () => void downloadDesignAs("pptx") },
+                                       { label: t("downloadImages"), onClick: () => void downloadDesignAs("images") }]
+                    : [{ label: t("downloadPng"), onClick: () => void downloadDesignAs("png") },
+                       { label: t("downloadPdf"), onClick: () => void downloadDesignAs("pdf") }]),
                   { label: t("downloadFig"), onClick: download },
                 ] : [{ label: t("download"), onClick: download }]),
               ];
@@ -1086,7 +1114,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
       )}
 
       {/* Body */}
-      <div className="relative flex-1 overflow-hidden">
+      <div ref={body} className="relative flex-1 overflow-hidden">
         {historyOpen && designHost && (
           <VersionHistory path={file.path} host={designHost} onClose={() => setHistoryOpen(false)} />
         )}
@@ -1117,14 +1145,14 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           </div>
         ) : (
           <>
-            {/* Hidden, not unmounted, under a preview: it keeps its state and saves. */}
-            <div className={previewing ? "invisible absolute inset-0" : "h-full"} inert={previewing} aria-hidden={previewing || undefined}>
-              <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} deckOp={deckOp} pollsFor={pollsFor} listFolders={listFolders}
+            {/* Hidden, not unmounted, under a preview once it has been opened: it keeps its state and saves. */}
+            {editorOn && <div className={previewing ? "invisible absolute inset-0" : "h-full"} inert={previewing} aria-hidden={previewing || undefined}>
+              <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} listFolders={listFolders}
                          fetchConnector={fetchConnector}
                          appData={appData}
-                         designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile} onReload={onReload}
+                         designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile}
                          onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
-            </div>
+            </div>}
             {previewing && (() => {
               const pictures = preview ? parseDeck(preview) : null;
               return (
@@ -1135,7 +1163,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                     : <DesignPages file={file} data={preview!} readFile={readFile} openFile={openFile} tabs={!several}
                                    onPage={(page) => { previewPage.current = page; setShownPage(page); showDesignPage(file.path, page); }}
                                    onReload={() => void loadPreview(previewPage.current)}
-                                   onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} />}
+                                   onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} pollsFor={pollsFor} />}
                 </div>
               );
             })()}

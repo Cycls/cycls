@@ -1,13 +1,12 @@
 """Design actions beyond a plain render: a deck's slides, a document's sections and render,
 comments, and the file itself (export, rename, duplicate, delete, versions). Called from run.py."""
-import asyncio, base64, json, os, pathlib
+import asyncio, base64, json, pathlib
 from .. import trash
-from ..paths import _safe_filename
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
-from .prepare import _PAPER, _num, _prepare_document, _prepare_slide
+from .prepare import _num, _prepare_document, _prepare_slide
 from .report import _layout_check, _page_changes
-from .files import _DECK_EXTS, _DESIGN_EXTS, _dedupe_design_name, _designs_there, _rendered_copy, _write_beside
+from .files import _DECK_EXTS, _DESIGN_EXTS, _designs_there, _free_design, _opened, _rendered_copy, _stem_of, _write_beside
 
 
 _SLIDE_ACTIONS = ("add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide")
@@ -16,14 +15,25 @@ _BLOCK_KINDS = ("lead", "p", "h2", "h3", "bullets", "numbered", "callout", "quot
                 "columns", "cards", "pairs", "note", "nodes", "break")
 
 
-def _document_source(root, name):
-    """The source a document was rendered from (kept in its deck document), or None."""
-    try:
-        deck = json.loads((pathlib.Path(root) / f"designs/{name}.deck.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    doc = deck.get("document") if isinstance(deck, dict) and deck.get("kind") == "document" else None
+def _document_of(keep):
+    """The source a document was rendered from (its file keeps it: `keep`), or None."""
+    doc = keep.get("document") if isinstance(keep, dict) and keep.get("kind") == "document" else None
     return doc if isinstance(doc, dict) and isinstance(doc.get("sections"), list) else None
+
+
+async def _document_source(workspace, fig_rel):
+    """The source of document `fig_rel` → (source or None, error or None)."""
+    from cycls._agent import design
+    path = pathlib.Path(workspace.root) / fig_rel
+    if not path.is_file():
+        return None, None
+    try:
+        o = await design.outline(await asyncio.to_thread(path.read_bytes), user_id=getattr(workspace, "subject", None))
+    except design.Unavailable as e:
+        return None, f"Error: design unavailable — {e}"
+    except Exception as e:
+        return None, f"Error: couldn't read {fig_rel} — {e}"
+    return _document_of(o.get("keep")), None
 
 
 def _sections_text(name, doc):
@@ -40,10 +50,12 @@ def _sections_text(name, doc):
 
 async def _exec_document(action, inp, workspace, name):
     """A section or document-level change, made on the kept source and re-rendered in place."""
-    doc = await asyncio.to_thread(_document_source, workspace.root, name)
+    doc, err = await _document_source(workspace, f"{name}.fig")
+    if err:
+        return err
     if doc is None:
-        return (f"Error: designs/{name}.deck.json isn't a document — `{action}` works on a document you rendered "
-                f"({{document: …}}); a deck's slides have add_slide / update_slide.")
+        return (f"Error: {name}.fig isn't a document — `{action}` works on a document you rendered "
+                f"({{document: …}}); a deck's slides have add_slide / update_slide. The designs here: {_designs_there(workspace.root)}.")
     sections = list(doc["sections"])
 
     def number(key, upto):
@@ -137,7 +149,7 @@ async def _exec_comments(inp, workspace, name):
     """List a design's comments, or reply to / resolve / reopen one by `number`, as the agent."""
     from . import comments
     from .report import _comments_listing
-    rel = f"designs/{name}.fig"
+    rel = f"{name}.fig"
     if not (pathlib.Path(workspace.root) / rel).is_file():
         return f"Error: {rel} doesn't exist — `comments` are on a design that is saved. The designs here: {_designs_there(pathlib.Path(workspace.root))}."
     if not comments.usable(workspace):
@@ -180,10 +192,18 @@ async def _exec_slides(action, inp, workspace, name):
     from cycls._agent import design
     from cycls._agent.design import deck as decks
     root, subject = workspace.root, getattr(workspace, "subject", None)
-    fig_path, fig_rel, deck_path, _ = decks.paths(root, name)
+    fig_rel = f"{name}.fig"
+    fig_path = pathlib.Path(root) / fig_rel
     if not fig_path.is_file():
-        return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered."
-    doc = await asyncio.to_thread(decks.read_doc, deck_path)
+        return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered. The designs here: {_designs_there(root)}."
+    settings = {}
+    if action == "add_slide" or (action == "update_slide" and inp.get("slide") is not None):
+        try:   # what the deck's added slides are laid out with, as its file keeps it
+            settings, _ = await decks.settings(await asyncio.to_thread(fig_path.read_bytes), user_id=subject)
+        except design.Unavailable as e:
+            return f"Error: design unavailable — {e}"
+        except Exception as e:
+            return f"Error: couldn't read {fig_rel} — {e}"
     credits = []   # {"stock": "…"} photos → saved workspace files
     if isinstance(inp.get("slide"), dict):
         from cycls._agent.design import stock
@@ -198,7 +218,6 @@ async def _exec_slides(action, inp, workspace, name):
         return int(v) - 1
 
     def slide_op(kind, extra):
-        settings = doc.get("settings") or ({"size": doc["size"]} if doc.get("size") else {})
         slide = dict(inp.get("slide") or {})
         for k in ("notes", "title", "transition"):
             if inp.get(k) is not None and k not in slide:
@@ -233,14 +252,13 @@ async def _exec_slides(action, inp, workspace, name):
     except ValueError as e:
         return f"Error: {e}."
     try:
-        r = await decks.apply_ops(root, name, [op], user_id=subject, preview=True)
+        r = await decks.apply_ops(root, fig_rel, [op], user_id=subject, preview=True)
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
         return f"Error: {action} failed on {fig_rel} — {e}. Nothing was changed."
     count = len(r.get("slides") or [])
-    ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; the deck viewer and "
-           f"the exports beside it update in a few seconds." + _layout_check(r.get("lint"), "pptx"))
+    ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; the canvas shows it." + _layout_check(r.get("lint"), "pptx"))
     for line in r.get("notes") or []:          # what the slide's layout had no room for
         ack += f" Note — {line}"
     for credit in credits:
@@ -251,7 +269,7 @@ async def _exec_slides(action, inp, workspace, name):
         command["intent"] = str(intent)[:80]
     await _to_the_room(root, fig_rel, command)
     # (re)open the deck so the change shows even when it wasn't open
-    ui = [command, {"type": "ui", "action": "open_canvas", "path": f"designs/{name}.deck.json", "name": f"{name}.deck.json"}]
+    ui = [command, _opened(fig_rel, "")[1]]
     blocks, total = [], 0
     for i, jpg in zip(r.get("touched") or [], r.get("previews") or []):
         if total + len(jpg) > _DESIGN_QA_MAX:
@@ -270,17 +288,15 @@ _FILE_ACTIONS = ("export", "rename", "duplicate", "delete", "versions", "restore
 
 
 async def _exec_design_file(action, inp, workspace, name):
-    """File actions on the saved designs/<name>.fig, never re-rendered; what is kept beside it
-    (refresh.beside) goes with it."""
+    """File actions on the saved `<name>.fig`, never re-rendered."""
     from cycls._agent import design, trash, versions
     from cycls._agent.design import refresh
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
-    rel = f"designs/{name}.fig"
+    rel = f"{name}.fig"
     fig_path = root / rel
     if not fig_path.is_file():
         return (f"Error: {rel} doesn't exist — `{action}` works on a design that is saved. "
                 f"The designs here: {_designs_there(root)}.")
-    deck_path = fig_path.with_name(f"{name}.deck.json")
     shown = lambda r: {"type": "ui", "action": "open_canvas", "path": r, "name": r.rsplit("/", 1)[-1]}
 
     if action == "export":
@@ -289,75 +305,67 @@ async def _exec_design_file(action, inp, workspace, name):
             return "Error: `export` needs `format` — pdf, pptx, png, jpg, webp or svg."
         fig = await asyncio.to_thread(fig_path.read_bytes)
         scale, page = inp.get("scale") or 2, str(inp.get("page") or "").strip() or None
-        try:
-            slides = int((json.loads(await asyncio.to_thread(deck_path.read_text, "utf-8")) or {}).get("slides") or 1) if deck_path.is_file() else 1
-        except (OSError, ValueError, TypeError):
-            slides = 1
         where = ""
         try:
             if page:
                 data, pages, page_name = await design.export_page(fig, page, fmt=fmt, scale=scale, user_id=subject)
-                place = next((n for n, p in enumerate(pages, 1) if p["name"] == page_name), 1)
-                outs = [(f"designs/{refresh.page_file(name, place, fmt)}", data)]
+                outs = [(f"{name}-{page_name}.{fmt}", data)]
                 where = f" (page {json.dumps(page_name, ensure_ascii=False)})"
-            elif slides > 1 and fmt not in _DECK_EXTS:
+            elif fmt not in _DECK_EXTS and len((await design.outline(fig, user_id=subject))["frames"]) > 1:
                 images = await design.export(fig, fmt=fmt, scale=scale, user_id=subject, every=True)
-                outs = [(f"designs/{name}-slide-{n}.{fmt}", d) for n, d in enumerate(images, 1)]
+                outs = [(f"{name}-slide-{n}.{fmt}", d) for n, d in enumerate(images, 1)]
             else:
-                outs = [(f"designs/{name}.{fmt}", await design.export(fig, fmt=fmt, scale=scale, user_id=subject))]
+                outs = [(f"{name}.{fmt}", await design.export(fig, fmt=fmt, scale=scale, user_id=subject))]
         except design.Unavailable as e:
             return f"Error: design unavailable — {e}"
         except Exception as e:
             return f"Error: couldn't export {rel} — {e}"
         if not outs:
             return f"Error: {rel} has nothing to export."
+        # beside the design; an earlier copy of the same name goes to the trash first (restorable), not to `-2`
+        replaced = []
+        for out_rel, _ in outs:
+            if (root / out_rel).is_file():
+                await asyncio.to_thread(trash.trash_path, str(root), out_rel, "agent", "replace")
+                replaced.append(out_rel)
         for out_rel, data in outs:
             await _write_beside(root / out_rel, data)
         kb = sum(len(d) for _, d in outs) // 1024
         what = (f"{outs[0][0]}{where}" if len(outs) == 1 else f"{len(outs)} images, {outs[0][0]} … {outs[-1][0]}")
+        old = (f" The earlier {'copy' if len(replaced) == 1 else f'{len(replaced)} files'} of that name went to the trash." if replaced else "")
         return {"_model": (f"Exported {what} ({kb} KB) from the saved design {rel} — as it is now, with everything changed "
-                           f"since it was made. Nothing was rendered again. The file is kept in step with the design from here on."),
+                           f"since it was made. It is a copy: a later change to the design doesn't change it.{old}"),
                 "_ui": shown(outs[0][0])}
 
     if action in ("rename", "duplicate"):
         asked = str(inp.get("new_name") or "").strip()
         if action == "rename" and not asked:
             return "Error: `rename` needs `new_name` — the design's new name."
-        to = _safe_filename(asked or f"{name}-copy", "design").rsplit(".", 1)[0] or "design"
+        to = _stem_of(asked or f"{name}-copy", rel.rsplit("/", 1)[0] if "/" in rel else "")   # a bare name stays in its folder
         if action == "duplicate":
-            to = await asyncio.to_thread(_dedupe_design_name, root / "designs", to, "png")
-        new_rel = f"designs/{to}.fig"
+            to = await asyncio.to_thread(_free_design, root, to)
+        new_rel = f"{to}.fig"
         if (root / new_rel).exists():
             return f"Error: {new_rel} is already a design — choose another `new_name`. Nothing was changed."
+        await asyncio.to_thread((root / new_rel).parent.mkdir, parents=True, exist_ok=True)
         if action == "rename":
             await asyncio.to_thread(fig_path.rename, root / new_rel)
             await asyncio.to_thread(versions.move, str(root), rel, new_rel)
             await _comments_follow(workspace, "move", rel, new_rel)
         else:
             await asyncio.to_thread(lambda: (root / new_rel).write_bytes(fig_path.read_bytes()))
-        went = await asyncio.to_thread(refresh.follow, str(root), rel, new_rel, action == "duplicate")
-        if action == "duplicate":
-            refresh.schedule(str(root), new_rel, subject, ensure=True)            # a copy with no image gets one
-        opened = f"designs/{to}.deck.json" if (root / f"designs/{to}.deck.json").is_file() else new_rel
-        beside_it = f" with what is kept beside it ({', '.join(p.name for p in went[:6])}{', …' if len(went) > 6 else ''})" if went else ""
-        ack = (f"Renamed {rel} to {new_rel}{beside_it}. Its name is now \"{to}\" — use that in the next call."
+        ack = (f"Renamed {rel} to {new_rel}. Its name is now \"{to}\" — use that in the next call."
                if action == "rename" else
-               f"Copied {rel} to {new_rel}{beside_it}. The copy is \"{to}\": change it freely with Design edit — \"{name}\" stays as it is.")
-        return {"_model": ack, "_ui": shown(opened)}
+               f"Copied {rel} to {new_rel}. The copy is \"{to}\": change it freely with Design edit — \"{name}\" stays as it is.")
+        return {"_model": ack, "_ui": _opened(new_rel, "")[1]}
 
     if action == "delete":
-        files = [fig_path, *(f for f, _ in await asyncio.to_thread(refresh.beside, str(root), rel))]
-        gone = []
-        for f in files:
-            try:
-                meta = await asyncio.to_thread(trash.trash_path, str(root), f.relative_to(root).as_posix(), "agent", "delete")
-                gone.append(f.name)
-            except (OSError, ValueError) as e:
-                return f"Error: couldn't delete {f.name} — {e}. Moved to the trash so far: {', '.join(gone) or 'nothing'}."
-            if f == fig_path:   # so a new design of this name starts with no comments
-                await _comments_follow(workspace, "shelve", rel, meta["id"])
-        return (f"Moved {rel} to the trash{f' with what was kept beside it ({len(gone) - 1} more files)' if len(gone) > 1 else ''}. "
-                f"The user can restore it from Files › Trash; tell them so. Nothing else was deleted.")
+        try:
+            meta = await asyncio.to_thread(trash.trash_path, str(root), rel, "agent", "delete")
+        except (OSError, ValueError) as e:
+            return f"Error: couldn't delete {rel} — {e}. Nothing was deleted."
+        await _comments_follow(workspace, "shelve", rel, meta["id"])   # so a new design of this name starts with no comments
+        return (f"Moved {rel} to the trash. The user can restore it from Files › Trash; tell them so. Nothing else was deleted.")
 
     listed = await asyncio.to_thread(versions.listing, str(root), rel)             # newest first
     if action == "versions":
@@ -393,38 +401,27 @@ async def _exec_design_file(action, inp, workspace, name):
     from cycls._agent.design.store import write_fig
     async with lock(fig_path):
         version = await write_fig(str(root), rel, data, by="agent", reason="restore")
-    refresh.schedule(str(root), rel, subject, ensure=True)
+    refresh.schedule(str(root), rel, subject)
     await live.notify(str(root), rel, {"kind": "reload", "version": version})
     return {"_model": (f"Restored {rel} to its version {vid}. What it was a moment ago is kept as a version too (`versions`), so this "
-                       f"can be undone. Its image re-exports in a few seconds; an open editor opens it again."),
+                       f"can be undone. An open editor opens it again."),
             "_ui": {"type": "ui", "action": "design_command", "path": rel, "script": "", "reload": True, "version": version}}
 
 
-async def _edits_since_render(workspace, name):
+async def _edits_since_render(workspace, fig_rel):
     """Page changes since a document's last render (by hand or `edit`), not in its source: None if
     none or unknowable, else lines saying what — empty when only that it changed is known."""
     from cycls._agent import design
-    from cycls._agent.design.store import version_of
     root = pathlib.Path(workspace.root)
-    fig_rel = f"designs/{name}.fig"
 
     def read():
         try:
-            deck = json.loads((root / f"designs/{name}.deck.json").read_text(encoding="utf-8"))
-            current = (root / fig_rel).read_bytes()
-        except (OSError, ValueError):
-            return None, None, None
-        rendered = deck.get("rendered") if isinstance(deck, dict) else None
-        try:
-            base = _rendered_copy(root, fig_rel).read_bytes()
+            return (root / fig_rel).read_bytes(), _rendered_copy(root, fig_rel).read_bytes()
         except OSError:
-            base = None
-        return rendered, current, base
-    rendered, current, base = await asyncio.to_thread(read)
-    if not rendered or current is None or version_of(current) == rendered:
+            return None, None
+    current, base = await asyncio.to_thread(read)
+    if current is None or base is None or current == base:
         return None
-    if base is None or version_of(base) != rendered:
-        return []
     subject = getattr(workspace, "subject", None)
     try:
         before = (await design.outline(base, user_id=subject, full=True))["frames"]
@@ -438,35 +435,33 @@ async def _edits_since_render(workspace, name):
 def _edits_hold(name, changes):
     """Why a document was not rendered again, and what to do about it."""
     detail = "".join(f"\n- {line}" for line in changes) if changes else ""
-    return (f"Error: not rendered — designs/{name}'s pages were changed after it was last rendered (by hand in the editor, or by an "
+    return (f"Error: not rendered — {name}.fig's pages were changed after it was last rendered (by hand in the editor, or by an "
             f"`edit`), and those changes are not in its source: rendering it again lays every page out from the source, without them."
             f"{detail}\nDon't drop them silently. Put the wording changes into what you send (the section they are in — or the whole "
             f"document with `render` and \"replace\": true), tell the user which of the others can't be kept (a page laid out again "
             f"keeps no moved or restyled node), and call again with \"discard_edits\": true. The edited pages stay in History either way.")
 
 
-def _seen_pages(deck_path):
+def _seen_pages(root, fig_rel):
     """Hashes of a document's pages as last rendered (what the model has seen), or []."""
     try:
-        hashes = json.loads(deck_path.read_text(encoding="utf-8")).get("hashes")
+        hashes = json.loads(_rendered_copy(root, fig_rel, "json").read_text(encoding="utf-8")).get("hashes")
     except (OSError, ValueError, AttributeError):
         return []
     return [h for h in hashes if isinstance(h, str)] if isinstance(hashes, list) else []
 
 
 async def _render_document(inp, workspace, name):
-    """Render a document to designs/<name>.pdf / .fig plus a "document" deck file, pages back for QA.
-    `replace` re-renders under the same name, keeping the earlier .fig as a version."""
+    """Render a document to `<name>.fig`, its source kept in it, pages back for QA. `replace` re-renders
+    under the same name, keeping the earlier .fig as a version."""
     from cycls._agent import design
-    from cycls._agent.design import stock
+    from cycls._agent.design import refresh, stock
     from cycls._agent.design.deck import lock
     from cycls._agent.design.store import write_fig
-    from cycls._agent.design.store import version_of
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
-    designs = root / "designs"
-    replacing = inp.get("replace") is True and (designs / f"{name}.fig").is_file() and (designs / f"{name}.deck.json").is_file()
+    replacing = inp.get("replace") is True and (root / f"{name}.fig").is_file()
     # hand edits since the last render aren't in the source: held until discard_edits
-    edited = await _edits_since_render(workspace, name) if replacing else None
+    edited = await _edits_since_render(workspace, f"{name}.fig") if replacing else None
     if edited is not None and inp.get("discard_edits") is not True:
         return _edits_hold(name, edited)
     credits, err = await stock.resolve(inp["spec"], workspace.root)
@@ -478,8 +473,9 @@ async def _render_document(inp, workspace, name):
         return err
     try:
         # a re-render sends the seen page hashes; only changed pages come back
-        known = await asyncio.to_thread(_seen_pages, designs / f"{name}.deck.json") if replacing else []
-        r = await design.render(spec, fmt="pdf", scale=2, user_id=subject, sheets=True, known=known)
+        known = await asyncio.to_thread(_seen_pages, root, f"{name}.fig") if replacing else []
+        r = await design.render(spec, fmt="png", scale=1, user_id=subject, sheets=True, known=known,
+                                keep={"kind": "document", "document": source})
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
@@ -487,11 +483,11 @@ async def _render_document(inp, workspace, name):
     notes = [*notes, *(f"{c}." for c in credits), *r.notes]
     if edited is not None:
         notes.append("The pages changed after the last render were laid out again from the source; they are kept in History.")
-    await asyncio.to_thread(designs.mkdir, parents=True, exist_ok=True)
     requested = name
     if not replacing:
-        name = _dedupe_design_name(designs, name, "pdf")
-    fig_rel, pdf_rel, deck_rel = f"designs/{name}.fig", f"designs/{name}.pdf", f"designs/{name}.deck.json"
+        name = await asyncio.to_thread(_free_design, root, name)
+    fig_rel = f"{name}.fig"
+    await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
     version = None
     if replacing:
         async with lock(root / fig_rel):
@@ -499,35 +495,28 @@ async def _render_document(inp, workspace, name):
                                       intent=str(inp.get("intent") or "re-rendered")[:80])
     else:
         await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
-    await asyncio.to_thread((root / pdf_rel).write_bytes, r.image)
+    refresh.schedule(workspace.root, fig_rel, subject)
 
-    def keep_rendered():                                           # what _edits_since_render diffs against
+    def keep_rendered():                                           # what _edits_since_render diffs against, and what was seen
         try:
             copy = _rendered_copy(root, fig_rel)
             copy.parent.mkdir(parents=True, exist_ok=True)
             copy.write_bytes(r.fig)
+            _rendered_copy(root, fig_rel, "json").write_text(json.dumps({"hashes": r.hashes}), encoding="utf-8")
         except OSError:
             pass
     await asyncio.to_thread(keep_rendered)
     count = max(len(r.slides), 1)
-    deck = {"type": "cycls.deck", "version": 1, "kind": "document", "fig": fig_rel, "size": r.size or _PAPER["a4"],
-            "slides": count, "exports": [pdf_rel], "document": source, "rendered": version_of(r.fig),
-            **({"hashes": r.hashes} if r.hashes else {})}
-    await asyncio.to_thread((root / deck_rel).write_text, json.dumps(deck, indent=2, ensure_ascii=False), "utf-8")
-    note = f" (named '{name}' so it doesn't overwrite the existing '{requested}')" if name != requested else ""
-    editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
-    ack = (f"Document {'re-rendered' if replacing else 'saved'} ({pdf_rel}, {count} pages, {len(r.image) // 1024} KB{note}). "
-           f"It's OPEN in the page viewer ({deck_rel}): the user pages through it and downloads the PDF"
-           f"{'; Edit opens the pages in the design editor' if editor else ''}. Its pages were laid out from the "
-           f"content — so a small fix on one page (a word, a colour) is Design edit {{name: \"{name}\", ops}} with "
-           f"`frame` = the page from 0, and anything that changes the length is made on the document: "
-           f"update_section {{name: \"{name}\", number, section}} (or add_section / move_section / delete_section / "
-           f"update_document) sends only what changes and renders it again in place — or this render again with "
-           f"\"replace\": true. A page edited by hand does not re-flow the pages after it.")
+    note = f", named '{name}' so it doesn't overwrite the existing '{requested}'" if name != requested else ""
+    ack, ui = _opened(fig_rel, f"Document {'re-rendered' if replacing else 'saved'} ({count} pages{note})")
+    ack += (f" Its pages were laid out from the content — so a small fix on one page (a word, a colour) is Design edit "
+            f"{{name: \"{name}\", ops}} with `frame` = the page from 0, and anything that changes the length is made on the "
+            f"document: update_section {{name: \"{name}\", number, section}} (or add_section / move_section / delete_section / "
+            f"update_document) sends only what changes and renders it again in place — or this render again with "
+            f"\"replace\": true. A page edited by hand does not re-flow the pages after it.")
     for line in notes:
         ack += " " + line
     ack += _layout_check(r.lint, "pptx")
-    ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
     if replacing:      # an open viewer refetches, an open editor reloads
         again = {"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}
         await _to_the_room(workspace.root, fig_rel, again)

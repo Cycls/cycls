@@ -6,7 +6,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
-import { editWorkingPath, ext } from "./canvas-utils";
+import { editWorkingPath, ext, isDesignEditor } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
@@ -304,11 +304,16 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
   const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
-    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs
+    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? (ident ? tabs.map((f) => (f.path === path ? { ...f, ...ident } : f)) : tabs)
       : [...tabs, { ...ident, path, name: name || path.split("/").pop() || path }]));
     setCanvasActive(path);
     setCanvasHidden(false);
   }, []);
+
+  // The agent's turn is over: the designs it worked on show as their previews again.
+  useEffect(() => {
+    if (!isStreaming) setCanvasTabs((tabs) => (tabs.some((f) => f.live) ? tabs.map((f) => (f.live ? { ...f, live: false } : f)) : tabs));
+  }, [isStreaming]);
 
   // A deliverable being written opens the canvas in a working state — the
   // path arrives in the live edit step's streamed args. Desktop only.
@@ -401,9 +406,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         setWorkingPaths((ws) => ws.filter((x) => x !== done));
         const app = appsRef.current.find((a) => a.entry === ev.path);
         if (app) openApp(app);
-        else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
+        // A design the agent is making opens live: the person watches it in the editor until the turn ends.
+        else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined, isDesignEditor(ev.path) ? { live: true } : undefined);
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
-        // A live agent edit of an open design: DesignEditorView replays it.
+        // A live agent edit of an open design: DesignEditorView replays it, in the editor while the agent works.
+        const live = ev.path;
+        setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
         window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
@@ -547,6 +555,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
     const selection = attachedSel;
     if (selection) { extra = { ...extra, selection }; setAttachedSel(null); }
+    if (files?.path) extra = { ...extra, folder: files.path };   // where a design named without a folder is saved
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -566,7 +575,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
     if (selection) void flushDesignEditor(selection.path, 1500).then(go);
     else go();
-  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel]);
+  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, files?.path]);
 
   // Drain on the falling edge of `isStreaming` — one message per edge, and the
   // send it triggers raises the flag again, so the rest follow in order.

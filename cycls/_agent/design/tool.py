@@ -148,15 +148,15 @@ _DESIGN_TOOL = {
         "(their data edits there), Arabic keeps its side (gradients, icons, SVG, photos and "
         "blurs become pictures, one element each; decor bleeding off a slide "
         "is cropped by the slide in the show). \"pdf\" is one page per slide, its words searchable. png / jpg / webp "
-        "save every slide as its own image, <name>-slide-1, -slide-2 … (an Instagram carousel). "
+        "make it a carousel (an Instagram carousel: every slide downloads as its own image). The format says what it is "
+        "and what the person downloads first — every design downloads as PowerPoint, PDF and images alike. "
         "Write notes for a talk deck. Every slide comes back to you to QA.\n"
         "  PAGES — one design, several VARIANTS of the same piece of work (a post, a story and a "
         "banner of one campaign; a light and a dark version): spec = {\"pages\":[{\"name\":\"Post\","
         "\"size\":\"square\",\"fill\":…,\"nodes\":[…]}, {\"name\":\"Story\",\"size\":\"story\",…}]} — each page "
         "a design of its own (its own size; or {\"name\", \"frames\":[…]} for a carousel), under a "
-        "name no other page has. It is ONE file (designs/<name>.fig) whose pages the user switches "
-        "between in the editor, previews and downloads one at a time; each page's image is saved "
-        "too (<name>.png the first, then <name>-page-2.png, -page-3 …). Use pages when the user "
+        "name no other page has. It is ONE file (<name>.fig) whose pages the user switches "
+        "between in the editor, previews and downloads one at a time. Use pages when the user "
         "asks for the same thing in several formats or versions — not separate renders, and not "
         "for a deck's slides (those are `frames` / a `deck`). Lay each page out for ITS size: "
         "never the same coordinates on another shape.\n"
@@ -200,8 +200,8 @@ _DESIGN_TOOL = {
         "columns — a newsletter, a magazine piece, a paper (3 for a dense bulletin or a reference sheet); what is "
         "wide (a section's opening, its lead, charts, tables, stats) spans them, and the columns are evened out by "
         "themselves. The PDF carries the document's title, `author` (else `organization`) and subtitle as its own; "
-        "give \"lang\" (\"en\", \"fr\", …) for its language — Arabic is known without. It saves designs/<name>.pdf "
-        "and opens in the page viewer; every page comes back to you to QA (past twelve pages: the first "
+        "give \"lang\" (\"en\", \"fr\", …) for its language — Arabic is known without. It is ONE file, <name>.fig, "
+        "its source kept in it, and the person downloads it as a PDF; every page comes back to you to QA (past twelve pages: the first "
         "four to read, the rest small on contact sheets — look at how each is laid out). A small fix on one page is "
         "an `edit` (ops with `frame`: the page, from 0). Anything that changes the length is made on the "
         "document itself, and only the part that changes is sent: update_section {name, number, section: "
@@ -219,7 +219,7 @@ _DESIGN_TOOL = {
         "- extract {path, name?} — an EXISTING PDF taken apart to be redesigned: its text page by page "
         "(in reading order, its tables as they are laid out; a long one a few pages at a time — the reply "
         "says how to read on: \"pages\": \"5-12\"), and its pictures saved into "
-        "designs/<name>-assets/ to use again; then write it as a document. A chart or diagram drawn in "
+        "<name>-assets/ beside it to use again; then write it as a document. A chart or diagram drawn in "
         "the PDF is not among its pictures: extract {path, page: N} shows that page, and with "
         "\"area\": [left, top, width, height] (parts of the page, 0 to 1) cuts the figure out and saves it. "
         "A scan, or text the reply says can't be trusted, is read from its pages the same way.\n"
@@ -236,26 +236,28 @@ _DESIGN_TOOL = {
         "text-1, rect-2…), with its box, text, font and colour. Do this before an edit you "
         "can't name from the spec you wrote. A design with several pages lists them, and shows "
         "ONE: `page` (its name), the first when you give none. A message that carries "
-        "\"[Selected in designs/<name>.fig › <frame>: <node> (<type>), …]\" is the person "
+        "\"[Selected in <name>.fig › <frame>: <node> (<type>), …]\" is the person "
         "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names "
         "(\"[… page \"Story\" › …]\" says which page they are on: pass it as `page`).\n"
         "- export {name, format, page?} — a design you ALREADY have, as another file: pdf, pptx, png, jpg, "
         "webp or svg, made from its saved .fig as it is now — with everything changed since, by you or by "
         "hand in the editor. When the user wants the same design in another format (\"send me this as a "
         "PDF\", \"I need the slides as images\"), use this, NOT render: a render makes a second design from "
-        "the spec, without those changes. A deck as png / jpg is an image a slide; `page` exports one page.\n"
+        "the spec, without those changes. A deck as png / jpg is an image a slide; `page` exports one page. "
+        "Export only for a file to send or attach — never to deliver: the design is already open on the canvas, "
+        "and the person downloads every format from there. Exporting again replaces the earlier copy.\n"
         "- A design as a file (name = the design): rename {name, new_name} · duplicate {name, new_name?} — a "
         "copy to change freely (a variant in another language, a second direction) · delete {name} — to the "
         "trash, where the user can restore it · versions {name} — its earlier versions (every edit and save "
-        "keeps one) · restore {name, version} — go back to one (what it is now is kept as a version). What is "
-        "kept beside a design — its images, slides, deck — goes with it.\n"
+        "keeps one) · restore {name, version} — go back to one (what it is now is kept as a version). A design "
+        "is ONE file: nothing beside it moves with it.\n"
         "- comments {name} — what the people working on a design pinned on it: each comment's number, the "
         "slide and point it is on, who wrote it, the replies. With `number`: answer it (`reply`: your words) "
         "and/or close it (`resolve`: true; false opens it again). `inspect` lists the open ones of a page, "
         "each with the part it sits on. Asked to address the comments: read them, make each change (`edit`, "
         "or a slide / section action), then reply saying what you did and resolve it — one that needs the "
         "person's decision gets a reply and stays open.\n"
-        "- edit {ops, name, page?, intent?} — change a design you rendered (designs/<name>.fig) with "
+        "- edit {ops, name, page?, intent?} — change a design you rendered (<name>.fig) with "
         "named operations, applied in order: "
         "[{\"op\":\"set_text\",\"node\":\"headline\",\"text\":\"New\"}, "
         "{\"op\":\"style\",\"node\":\"headline\",\"color\":\"#f5a623\",\"font\":\"Playfair Display Bold\"}, "
@@ -266,15 +268,14 @@ _DESIGN_TOOL = {
         "removed and recoloured whole; an icon or QR is resized with `resize`. The edit is "
         "applied to the saved design first: names that don't exist are ONE error naming all "
         "of them and listing the parts that do, and nothing changes; on success the "
-        ".fig is saved, its image re-exported, and the edited design comes back to you to "
+        ".fig is saved, and the edited design comes back to you to "
         "check, with a layout check. If the design is open, the user WATCHES a labeled "
         "'Super' cursor replay the change live — pass a short `intent` ('making the "
         "headline gold') shown on it. Use `edit` to tweak a design ('bigger headline', "
         "'move the button down'); `render` to CREATE one. A chart's or table's DATA (values, "
         "labels, rows) changes by rebuilding it — update_slide with the new data, or a new render "
         "— never by moving its bars one by one (that chart then goes into PowerPoint as shapes). "
-        "`name` is the design's base name "
-        "(e.g. `launch`). An edit is made on ONE page — `page`, the first when absent; the same "
+        "`name` is the design's name, as its render's reply gave it. An edit is made on ONE page — `page`, the first when absent; the same "
         "node name on another page is another node. Page ops (in `ops`) change the pages "
         "themselves: page_add {name, spec} (a new variant, `spec` as in render), page_duplicate "
         "{page?, name?} (a copy to restyle — the ops after it in the same edit land on the copy), "
@@ -285,8 +286,11 @@ _DESIGN_TOOL = {
         "{family:'Poppins',style:'Semi Bold'} (spaced style names); `textAlignHorizontal` "
         "follows the text's direction (on Arabic 'LEFT' is the right side).\n\n"
         "`format` is png (default), jpg, webp, svg, pptx (PowerPoint) or pdf — pptx or pdf "
-        "for a deck. `name` is the file base name, e.g. `launch`. The render opens on the "
-        "canvas; the editable `.fig` is saved beside it for later edits. Every render "
+        "for a deck. `name` is the design's path without `.fig`: `launch` saves launch.fig in the folder the "
+        "person has open (else at the top of the workspace), `clients/acme/pitch` saves it there — put it where "
+        "it belongs, beside the work it is part of. A design is ONE file, `<name>.fig`, and it opens on the "
+        "canvas: the person watches it being made, then sees it as a preview to page through, present and "
+        "download (PowerPoint, PDF, images or the design file); nothing is written beside it. Every render "
         "also comes back to YOU as an image (a deck: every slide) — look at it and "
         "fix what's off before you present it. A fresh "
         "`render`/`script` NEVER overwrites an earlier design — if the name is taken "
@@ -323,10 +327,10 @@ _DESIGN_TOOL = {
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
                    "description": "For `edit`: a short label of the change (e.g. 'making the headline gold') shown on the live 'Super' cursor."},
-        "name": {"type": "string", "description": "Output file base name, e.g. `launch` (lowercase, no extension)."},
+        "name": {"type": "string", "description": "The design's path without `.fig`: `launch` (in the folder the person has open) or `clients/acme/pitch`. For a design you made, its name as the reply gave it."},
         "format": {"type": "string", "enum": ["png", "jpg", "webp", "svg", "pptx", "pdf"],
-                   "description": "Output format (default png). A deck: pptx (PowerPoint, with speaker notes) or pdf; png for a carousel (one image per slide)."},
-        "scale": {"type": "integer", "description": "Raster scale for png/jpg/webp (default 2 = @2x)."},
+                   "description": "What it is (default png): pptx or pdf for a deck, png for a post or a carousel. For `export`: the file written."},
+        "scale": {"type": "integer", "description": "For `export`: raster scale for png/jpg/webp (default 2 = @2x)."},
     }, "required": ["action"]}
 }
 
@@ -336,12 +340,14 @@ _DESIGN_TOOL = {
 # DESIGN_LOADED is which form the model saw; `_exec_design` reads it.
 
 DESIGN_LOADED = contextvars.ContextVar("design_loaded", default=True)
+# The folder the person has open in Files: where a design named without a folder is saved.
+DESIGN_FOLDER = contextvars.ContextVar("design_folder", default="")
 
 _DESIGN_SHORT = (
     "Design: make and change visual work, shown to the user on the canvas — a social post, a poster, a "
     "banner, a carousel; a slide deck (PowerPoint / PDF); a document that flows over pages (a report, a "
     "proposal, a CV, a newsletter — as a PDF); several variants of one design; and edits to any design "
-    "already in designs/ (text, colours, layout, slides, sections). It can also take an existing PDF apart "
+    "already made (a .fig: text, colours, layout, slides, sections). It can also take an existing PDF apart "
     "to redesign it.\n\n"
     "This is the SHORT form of the tool — how a design is written is not in it. Before your first use of it "
     "in a chat, call it with {\"action\": \"guide\"}: its full instructions load into this description. Then "
@@ -375,7 +381,7 @@ def design_called(messages):
 
 
 def design_wanted(messages):
-    """Does this chat design? A Design call, a `designs/` path, or design words in the transcript."""
+    """Does this chat design? A Design call, a `.fig` path, or design words in the transcript."""
     if design_called(messages):
         return True
     for m in messages:
@@ -385,7 +391,7 @@ def design_wanted(messages):
         texts = [content] if isinstance(content, str) else [
             b.get("text") or "" for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
         for text in texts:
-            if "designs/" in text or _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR):
+            if ".fig" in text or _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR):
                 return True
     return False
 

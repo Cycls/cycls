@@ -597,7 +597,7 @@ def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
     (ws.root / "designs" / "launch.fig").write_bytes(b"FIG")
     (ws.root / "designs" / "other.fig").write_bytes(b"OTHER")
 
-    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
+    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None, fit=None):
         return {"images": [b"\xff\xd8one"], "sizes": [[1080, 1080]], "format": "jpg", "meta": [{"name": "slide-1"}]}
 
     async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False, page=None):
@@ -1765,18 +1765,17 @@ def test_office_slides_unavailable_returns_415(tmp_path, monkeypatch):
 
 # ---- design decks: ?as=slides|pptx|pdf|images on a deck document or a .fig ----
 
-_DECK_DOC = json.dumps({"type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig",
-                        "size": [1920, 1080], "slides": 2, "exports": ["designs/pitch.pptx"]}).encode()
+_KEEPS = {b"DOC-FIG": {"kind": "document", "document": {"title": "R", "sections": []}}}   # what a .fig keeps, by its bytes
 
 
 def _fake_design(monkeypatch):
     from cycls._agent import design
     calls = []
 
-    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
-        calls.append(("slides", fig, scale, user_id, page) if page else ("slides", fig, scale, user_id))
+    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None, fit=None):
+        calls.append(("slides", fig, fit or scale, user_id, page) if page else ("slides", fig, fit or scale, user_id))
         return {"images": [b"\xff\xd8one", b"\xff\xd8two"], "sizes": [[1920, 1080]] * 2, "format": "jpg",
-                "pages": _PAGES, "page": page or "Post",
+                "pages": _PAGES, "page": page or "Post", "keep": _KEEPS.get(fig, {}),
                 "meta": [{"name": "cover", "title": "Cover", "notes": "Hello", "transition": "fade"},
                          {"name": "slide-2", "poll": json.dumps({"question": "Tea or coffee?", "options": ["Tea", "Coffee"],
                                                                 "tracks": [], "dir": "ltr"})}]}
@@ -1814,7 +1813,7 @@ def test_a_designs_pages_preview_and_download_one_at_a_time(tmp_path, monkeypatc
     first = get("slides").json()
     assert first["pages"] == _PAGES and first["page"] == "Post"
     story = get("slides", "Story").json()
-    assert story["page"] == "Story" and calls[-1] == ("slides", b"FIG", 1, "org_1:user_1", "Story")
+    assert story["page"] == "Story" and calls[-1] == ("slides", b"FIG", 1920, "org_1:user_1", "Story")   # sized to fit
     get("slides"); get("slides", "Story")                                     # both stay cached, side by side
     assert len(calls) == 2
 
@@ -1833,22 +1832,15 @@ def test_a_designs_pages_preview_and_download_one_at_a_time(tmp_path, monkeypatc
 
 
 def test_a_documents_manifest_says_it_is_one(tmp_path, monkeypatch):
-    """A document's deck (kind "document") tells the viewer so — pages, PDF first. The
-    same pages asked for through the .fig, or through a deck that isn't one, carry no
-    kind; each is cached by itself, so neither answers for the other."""
-    doc = json.dumps({"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/report.fig",
-                      "size": [1240, 1754], "slides": 2, "exports": ["designs/report.pdf"]}).encode()
-    _seed(tmp_path, {"designs/report.fig": b"FIG", "designs/report.deck.json": doc,
-                     "designs/pitch.fig": b"FIG2", "designs/pitch.deck.json": _DECK_DOC})
-    calls = _fake_design(monkeypatch)
+    """A document's file says so (its record, `kind` "document"): the viewer shows pages, PDF first.
+    A deck's carries its own kind, or none."""
+    _seed(tmp_path, {"report.fig": b"DOC-FIG", "pitch.fig": b"FIG2"})
+    _fake_design(monkeypatch)
     client = _ws_routers_client(tmp_path)
     slides = lambda path: client.get(f"/files/{path}", params={"as": "slides"}).json()
-    assert slides("designs/report.deck.json")["kind"] == "document"
-    assert "kind" not in slides("designs/report.fig")                         # asked for as a design: its frames
-    assert slides("designs/report.deck.json")["kind"] == "document"           # …and the deck's answer is still its own
-    assert "kind" not in slides("designs/pitch.deck.json")
-    assert client.get("/files/designs/report.deck.json", params={"as": "pdf"}).content == b"%PDF-deck"
-    assert [c[0] for c in calls].count("slides") == 3                         # report (deck), report (.fig), pitch
+    assert slides("report.fig")["kind"] == "document"
+    assert "kind" not in slides("pitch.fig")
+    assert client.get("/files/report.fig", params={"as": "pdf"}).content == b"%PDF-deck"
 
 
 def test_a_page_that_is_gone_is_a_404(tmp_path, monkeypatch):
@@ -1865,33 +1857,32 @@ def test_a_page_that_is_gone_is_a_404(tmp_path, monkeypatch):
 
 
 def test_a_page_exports_to_its_own_file(tmp_path, monkeypatch):
-    """Export PDF from inside the editor, on the page in view: the first page is the
-    design's own file, a later one `<name>-page-<its place>` — kept in step from then on."""
+    """Export PDF from inside the editor, on the page in view: `<name>-<page>` beside the design, over nothing."""
     root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "notes/logo.fig": b"LOGO"})
     calls = _fake_design(monkeypatch)
     client = _ws_routers_client(tmp_path)
     export = lambda **body: client.post("/design/export", json=body)
-    assert export(path="designs/launch.fig", format="pdf", page="Story").json() == {"path": "designs/launch-page-2.pdf"}
-    assert (root / "designs/launch-page-2.pdf").read_bytes() == b"pdf:Story" and calls[-1] == ("page", "Story", "pdf", b"FIG")
-    assert export(path="designs/launch.fig", format="png", page="Post").json() == {"path": "designs/launch.png"}
-    assert export(path="notes/logo.fig", format="png", page="Story").json() == {"path": "notes/logo-page-2.png"}
+    assert export(path="designs/launch.fig", format="pdf", page="Story").json() == {"path": "designs/launch-Story.pdf"}
+    assert (root / "designs/launch-Story.pdf").read_bytes() == b"pdf:Story" and calls[-1] == ("page", "Story", "pdf", b"FIG")
+    assert export(path="designs/launch.fig", format="pdf", page="Story").json() == {"path": "designs/launch-Story-2.pdf"}
+    assert export(path="notes/logo.fig", format="png", page="Story").json() == {"path": "notes/logo-Story.png"}
     assert export(path="designs/launch.fig", page="Nope").status_code == 404
     assert not list((root / "designs").glob(".*.part"))
 
 
 def test_kinds_for_designs_and_decks(tmp_path):
-    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC, "a.json": b"{}"})
+    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": b"{}", "a.json": b"{}"})
     client = _ws_routers_client(tmp_path)
     kinds = {e["name"]: e["kind"] for e in client.get("/files", params={"path": "designs"}).json()}
-    assert kinds == {"pitch.fig": "design", "pitch.deck.json": "deck"}   # a .fig no longer downloads on click
+    assert kinds == {"pitch.fig": "design", "pitch.deck.json": "code"}   # a .fig opens as a design; a .deck.json is JSON now
     assert {e["name"]: e["kind"] for e in client.get("/files").json()}["a.json"] == "code"
 
 
 def test_deck_slides_render_once_and_carry_the_notes(tmp_path, monkeypatch):
-    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG"})
     calls = _fake_design(monkeypatch)
     client = _ws_routers_client(tmp_path)
-    r = client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
+    r = client.get("/files/designs/pitch.fig", params={"as": "slides"})
     assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
     body = r.json()
     assert body["count"] == 2 and body["fig"] == "designs/pitch.fig"
@@ -1899,48 +1890,65 @@ def test_deck_slides_render_once_and_carry_the_notes(tmp_path, monkeypatch):
     assert body["slides"][0].startswith("data:image/jpeg;base64,")
     assert body["notes"] == ["Hello", ""] and body["titles"] == ["Cover", ""] and body["transitions"] == ["fade", ""]
     assert body["polls"][0] is None and body["polls"][1]["question"] == "Tea or coffee?"   # a poll slide's poll
-    assert calls == [("slides", b"FIG", 1, "org_1:user_1")]                 # 1920 wide → @1x
-    client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
-    client.get("/files/designs/pitch.fig", params={"as": "slides"})          # the .fig itself: same cache
-    assert len(calls) == 1
+    assert calls == [("slides", b"FIG", 1920, "org_1:user_1")]              # its long side at 1920, whatever its size
+    client.get("/files/designs/pitch.fig", params={"as": "slides"})
+    assert len(calls) == 1                                                   # cached
     (root / "designs" / "pitch.fig").write_bytes(b"EDITED-FIG")          # an edit → a fresh render
-    client.get("/files/designs/pitch.deck.json", params={"as": "slides"})
+    client.get("/files/designs/pitch.fig", params={"as": "slides"})
     assert calls[-1][1] == b"EDITED-FIG"
 
 
+def test_a_preview_asked_for_while_it_is_being_made_waits_for_it(tmp_path, monkeypatch):
+    """The preview made ready after a save, and the person opening it meanwhile: one render, not two."""
+    from cycls._agent import design
+    from cycls._agent.web.design_routes import _design_slides
+    root = _seed(tmp_path, {"pitch.fig": b"FIG"})
+    calls = []
+
+    async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None, fit=None):
+        calls.append(fig)
+        await asyncio.sleep(0.05)
+        return {"images": [b"J"], "sizes": [[1920, 1080]], "format": "jpg", "meta": [{}]}
+    monkeypatch.setattr(design, "slides", slides)
+
+    async def both():
+        return await asyncio.gather(_design_slides(root, root / "pitch.fig", "u"), _design_slides(root, root / "pitch.fig", "u"))
+    a, b = asyncio.run(both())
+    assert a == b and calls == [b"FIG"]
+
+
 def test_deck_downloads_export_on_demand(tmp_path, monkeypatch):
-    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    _seed(tmp_path, {"designs/pitch.fig": b"FIG"})
     calls = _fake_design(monkeypatch)
     client = _ws_routers_client(tmp_path)
-    r = client.get("/files/designs/pitch.deck.json", params={"as": "pdf"})
+    r = client.get("/files/designs/pitch.fig", params={"as": "pdf"})
     assert r.status_code == 200 and r.content == b"%PDF-deck"
     assert 'filename="pitch.pdf"' in r.headers["content-disposition"]
-    r = client.get("/files/designs/pitch.deck.json", params={"as": "pptx"})
+    r = client.get("/files/designs/pitch.fig", params={"as": "pptx"})
     assert r.content == b"PK-deck" and 'filename="pitch.pptx"' in r.headers["content-disposition"]
-    client.get("/files/designs/pitch.deck.json", params={"as": "pdf"})       # cached
+    client.get("/files/designs/pitch.fig", params={"as": "pdf"})             # cached
     assert [c[0] for c in calls] == ["pdf", "pptx"]
-    assert client.get("/files/designs/pitch.deck.json").content == _DECK_DOC   # no ?as: the document itself
+    assert client.get("/files/designs/pitch.fig").content == b"FIG"          # no ?as: the design itself
 
 
 def test_a_decks_images_download_as_a_zip(tmp_path, monkeypatch):
-    """A carousel is posted as images: the deck viewer's Download had only PowerPoint
-    and PDF. `?as=images` is every slide as a PNG, named as a carousel render names them."""
+    """A carousel is posted as images: `?as=images` is every slide as a PNG, in one zip."""
     import io, zipfile
-    _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    _seed(tmp_path, {"designs/pitch.fig": b"FIG"})
     calls = _fake_design(monkeypatch)
     client = _ws_routers_client(tmp_path)
-    r = client.get("/files/designs/pitch.deck.json", params={"as": "images"})
+    r = client.get("/files/designs/pitch.fig", params={"as": "images"})
     assert r.status_code == 200 and 'filename="pitch.zip"' in r.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         assert zf.namelist() == ["pitch-slide-1.png", "pitch-slide-2.png"]
         assert zf.read("pitch-slide-2.png") == b"PNG-two"
-    client.get("/files/designs/pitch.fig", params={"as": "images"})          # the .fig itself: same cache
+    client.get("/files/designs/pitch.fig", params={"as": "images"})          # cached
     assert calls == [("png", b"FIG", "org_1:user_1")]
 
 
 def test_a_design_exports_to_a_file_beside_it(tmp_path, monkeypatch):
-    """The editor's File › Export › PDF: Cycls renders the design through the service
-    and writes `designs/<name>.pdf` — the design's own image, replaced by the next one."""
+    """The editor's File › Export › PDF: Cycls renders the design through the service and writes
+    `<name>.pdf` beside it — a file of its own, over nothing."""
     from cycls._agent import design
     root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "notes/logo.fig": b"LOGO", "notes/logo.pdf": b"MINE",
                             "notes/a.txt": b"x"})
@@ -1951,13 +1959,10 @@ def test_a_design_exports_to_a_file_beside_it(tmp_path, monkeypatch):
     r = export(path="designs/launch.fig", format="pdf")
     assert r.status_code == 200 and r.json() == {"path": "designs/launch.pdf"}
     assert (root / "designs/launch.pdf").read_bytes() == b"%PDF-deck" and calls == [("pdf", b"FIG", "org_1:user_1")]
-    (root / "designs/launch.fig").write_bytes(b"EDITED")                      # an edit, then again: replaced
-    assert export(path="designs/launch.fig").json() == {"path": "designs/launch.pdf"}     # pdf is the default
-    assert calls[-1] == ("pdf", b"EDITED", "org_1:user_1")
-    assert "launch.pdf" in [e["name"] for e in client.get("/files", params={"path": "designs"}).json()]
+    (root / "designs/launch.fig").write_bytes(b"EDITED")                      # an edit, then again: a second file
+    assert export(path="designs/launch.fig").json() == {"path": "designs/launch-2.pdf"}   # pdf is the default
+    assert calls[-1] == ("pdf", b"EDITED", "org_1:user_1") and (root / "designs/launch.pdf").read_bytes() == b"%PDF-deck"
     assert not list((root / "designs").glob(".*.part"))
-
-    # Outside designs/ a file that's there is the person's own: the export takes a free name.
     assert export(path="notes/logo.fig", format="pdf").json() == {"path": "notes/logo-2.pdf"}
     assert (root / "notes/logo.pdf").read_bytes() == b"MINE"
 
@@ -1975,26 +1980,23 @@ def test_a_design_exports_to_a_file_beside_it(tmp_path, monkeypatch):
 
 def test_deck_errors(tmp_path, monkeypatch):
     from cycls._agent import design
-    root = _seed(tmp_path, {"designs/pitch.deck.json": _DECK_DOC,
-                     "designs/evil.deck.json": json.dumps({"fig": "../../outside.fig"}).encode(),
-                     "designs/bare.deck.json": b"{}"})
+    root = _seed(tmp_path, {"designs/old.deck.json": b"{}"})
     client = _ws_routers_client(tmp_path)
-    assert client.get("/files/designs/pitch.deck.json", params={"as": "slides"}).status_code == 404   # no .fig
-    assert client.get("/files/designs/evil.deck.json", params={"as": "slides"}).status_code == 422    # stays inside
-    assert client.get("/files/designs/bare.deck.json", params={"as": "slides"}).status_code == 422
+    assert client.get("/files/designs/pitch.fig", params={"as": "slides"}).status_code == 404       # no such design
+    assert client.get("/files/designs/old.deck.json", params={"as": "slides"}).content == b"{}"     # not a design: the file
     (root / "designs" / "pitch.fig").write_bytes(b"FIG")
 
     async def down(*a, **k):
         raise design.Unavailable("design not configured (DESIGN_URL)")
     monkeypatch.setattr(design, "slides", down)
-    assert client.get("/files/designs/pitch.deck.json", params={"as": "slides"}).status_code == 415   # → download card
+    assert client.get("/files/designs/pitch.fig", params={"as": "slides"}).status_code == 415   # → download card
 
 
 def test_deck_route_moves_duplicates_and_deletes_slides(tmp_path, monkeypatch):
     """The deck viewer's own slide changes go through the same service op as the agent's."""
     from cycls._agent import design
     from cycls._agent.design import refresh
-    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG"})
     seen = []
 
     async def apply(fig, script=None, user_id=None, ops=None, preview=False):
@@ -2003,15 +2005,19 @@ def test_deck_route_moves_duplicates_and_deletes_slides(tmp_path, monkeypatch):
     monkeypatch.setattr(design, "apply", apply)
     monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
     client = _ws_routers_client(tmp_path)
-    r = client.post("/deck/designs/pitch.deck.json", json={"op": "move", "number": 3, "to": 1})
+    r = client.post("/deck/designs/pitch.fig", json={"op": "move", "number": 3, "to": 1})
     assert r.status_code == 200 and r.json() == {"ok": True, "slides": 3}
     assert seen[-1] == [{"op": "slide_move", "index": 2, "to": 0}]
     assert (root / "designs" / "pitch.fig").read_bytes() == b"NEW"
     client.post("/deck/designs/pitch.fig", json={"op": "duplicate", "number": 1})
     assert seen[-1] == [{"op": "slide_duplicate", "index": 0}]
-    assert client.post("/deck/designs/pitch.deck.json", json={"op": "move", "number": 2}).status_code == 400   # no `to`
-    assert client.post("/deck/designs/pitch.deck.json", json={"op": "explode", "number": 1}).status_code == 400
-    assert client.post("/deck/notes/pitch.deck.json", json={"op": "delete", "number": 1}).status_code == 404   # outside designs/
+    assert client.post("/deck/designs/pitch.fig", json={"op": "move", "number": 2}).status_code == 400   # no `to`
+    assert client.post("/deck/designs/pitch.fig", json={"op": "explode", "number": 1}).status_code == 400
+    assert client.post("/deck/designs/pitch.deck.json", json={"op": "delete", "number": 1}).status_code == 404   # not a design
+    assert client.post("/deck/notes/nope.fig", json={"op": "delete", "number": 1}).status_code == 404         # none there
+    (root / "notes").mkdir()
+    (root / "notes" / "pitch.fig").write_bytes(b"FIG")
+    assert client.post("/deck/notes/pitch.fig", json={"op": "delete", "number": 1}).status_code == 200        # a design anywhere
 
 
 def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch):
@@ -2021,25 +2027,23 @@ def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch)
     slide's, as the agent's `update_slide` writes them."""
     from cycls._agent import design
     from cycls._agent.design import refresh
-    laid = json.dumps({"type": "cycls.deck", "version": 1, "fig": "designs/pitch.fig", "size": [1920, 1080], "slides": 3,
-                       "exports": [], "settings": {"theme": "editorial", "size": [1920, 1080]}}).encode()
-    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": laid,
-                            "designs/hand.fig": b"FIG", "designs/hand.deck.json": _DECK_DOC})
+    root = _seed(tmp_path, {"designs/pitch.fig": b"LAID-FIG", "designs/hand.fig": b"HAND-FIG"})
     seen = []
 
     async def apply(fig, script=None, user_id=None, ops=None, preview=False):
         seen.append(ops)
         return {"fig": b"NEW", "lint": [], "script": "S", "preview": None, "previews": [], "touched": [], "slides": [{}] * 4}
 
-    async def inspect(fig, user_id=None, page=None):
-        return [{"slide": 1, "size": [1920, 1080], "fill": "#ffffff", "nodes": []},
-                {"slide": 2, "size": [1920, 1080], "fill": "#0f172a", "nodes": []}]
+    async def outline(fig, user_id=None, page=None, full=False):     # a deck of layouts keeps its settings in its file
+        return {"frames": [{"slide": 1, "size": [1920, 1080], "fill": "#ffffff", "nodes": []},
+                           {"slide": 2, "size": [1920, 1080], "fill": "#0f172a", "nodes": []}], "pages": [], "page": "",
+                "keep": {"kind": "deck", "deck": {"theme": "editorial", "size": [1920, 1080]}} if fig in (b"LAID-FIG", b"NEW") else {}}   # kept through an edit
     monkeypatch.setattr(design, "apply", apply)
-    monkeypatch.setattr(design, "inspect", inspect)
+    monkeypatch.setattr(design, "outline", outline)
     monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
     client = _ws_routers_client(tmp_path)
 
-    r = client.post("/deck/designs/pitch.deck.json", json={"op": "add", "number": 2, "title": "شريحة جديدة", "text": "أضف نصك"})
+    r = client.post("/deck/designs/pitch.fig", json={"op": "add", "number": 2, "title": "شريحة جديدة", "text": "أضف نصك"})
     assert r.status_code == 200 and r.json() == {"ok": True, "slides": 4, "added": 3}
     [op] = seen[-1]
     assert op["op"] == "slide_add" and op["at"] == 2
@@ -2051,7 +2055,7 @@ def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch)
     assert "at" not in op and op["slide"]["title"] == "New slide" and op["slide"]["bullets"] == ["Add your text"]
 
     # A hand-built deck: a blank slide the colour of the one it comes after, its title readable on it.
-    r = client.post("/deck/designs/hand.deck.json", json={"op": "add", "number": 2, "title": "Next"})
+    r = client.post("/deck/designs/hand.fig", json={"op": "add", "number": 2, "title": "Next"})
     assert r.status_code == 200
     [op] = seen[-1]
     assert op["at"] == 2 and op["slide"]["fill"] == "#0f172a" and "layout" not in op["slide"]
@@ -2059,64 +2063,60 @@ def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch)
     assert title["text"] == "Next" and title["color"].lower() == "#ffffff"
 
     # Notes: the slide's own, trimmed; emptied when cleared.
-    r = client.post("/deck/designs/pitch.deck.json", json={"op": "notes", "number": 2, "notes": "  Say hello  "})
+    r = client.post("/deck/designs/pitch.fig", json={"op": "notes", "number": 2, "notes": "  Say hello  "})
     assert r.status_code == 200 and seen[-1] == [{"op": "slide_meta", "index": 1, "notes": "Say hello"}]
-    client.post("/deck/designs/pitch.deck.json", json={"op": "notes", "number": 1, "notes": ""})
+    client.post("/deck/designs/pitch.fig", json={"op": "notes", "number": 1, "notes": ""})
     assert seen[-1] == [{"op": "slide_meta", "index": 0, "notes": ""}]
     count = len(seen)
     for bad in ({"op": "notes", "number": 0, "notes": "x"}, {"op": "notes", "number": 1}, {"op": "notes", "number": 1, "notes": "x" * 20001},
                 {"op": "add", "number": -1}, {"op": "add", "number": "2"}, {"op": "add", "title": "t" * 301}):
-        assert client.post("/deck/designs/pitch.deck.json", json=bad).status_code == 400, bad
+        assert client.post("/deck/designs/pitch.fig", json=bad).status_code == 400, bad
     assert len(seen) == count                                           # nothing was sent for any of them
 
 
 def test_new_design_route_makes_a_blank_design(tmp_path, monkeypatch):
-    """Cycls's "New design": one blank frame of a size preset (or [w, h]), saved as
-    designs/<name>.fig with its .png like a render, never over another design."""
+    """Cycls's "New design": one blank frame of a size preset (or [w, h]), saved as <name>.fig in the folder
+    the person is in — one file, like a render — never over another design."""
     from types import SimpleNamespace
     from cycls._agent import design
-    root = _seed(tmp_path, {"designs/.keep": b""})
+    root = _seed(tmp_path, {"clients/.keep": b""})
     seen = []
 
-    async def render(spec, fmt="png", scale=2, user_id=None, every=False):
-        seen.append((spec, fmt, scale))
+    async def render(spec, fmt="png", scale=2, user_id=None, every=False, keep=None):
+        seen.append((spec, fmt, scale, keep))
         return SimpleNamespace(image=b"PNG", fig=b"FIG")
     monkeypatch.setattr(design, "configured", lambda: True)
     monkeypatch.setattr(design, "render", render)
     client = _ws_routers_client(tmp_path)
 
-    r = client.post("/design/new", json={"name": "Launch", "size": "story"})
-    assert r.status_code == 200 and r.json() == {"path": "designs/Launch.fig", "name": "Launch", "size": [1080, 1920]}
-    assert seen[-1] == ({"size": [1080, 1920], "fill": "#ffffff", "nodes": []}, "png", 1)
-    assert (root / "designs/Launch.fig").read_bytes() == b"FIG" and (root / "designs/Launch.png").read_bytes() == b"PNG"
-    assert client.post("/design/new", json={"name": "Launch"}).json()["path"] == "designs/Launch-2.fig"   # never over one
-    assert client.post("/design/new").json() == {"path": "designs/untitled.fig", "name": "untitled", "size": [1080, 1080]}
+    r = client.post("/design/new", json={"name": "Launch", "size": "story", "folder": "clients"})
+    assert r.status_code == 200 and r.json() == {"path": "clients/Launch.fig", "name": "Launch", "size": [1080, 1920]}
+    assert seen[-1] == ({"size": [1080, 1920], "fill": "#ffffff", "nodes": []}, "png", 1, {"kind": "post"})
+    assert sorted(p.name for p in (root / "clients").iterdir() if not p.name.startswith(".")) == ["Launch.fig"]
+    assert client.post("/design/new", json={"name": "Launch", "folder": "clients"}).json()["path"] == "clients/Launch-2.fig"   # never over one
+    assert client.post("/design/new").json() == {"path": "untitled.fig", "name": "untitled", "size": [1080, 1080]}   # no folder: the top
     assert client.post("/design/new", json={"name": "../x/حملة الإطلاق.fig"}).json()["name"] == "حملة الإطلاق"
     r = client.post("/design/new", json={"size": [800, 600], "background": "#0F172A"})
     assert r.json()["size"] == [800, 600] and seen[-1][0]["fill"] == "#0f172a"
     for bad in ({"size": "huge"}, {"size": [5, 5]}, {"size": [800, "600"]}, {"background": "red"}):
         assert client.post("/design/new", json=bad).status_code == 400, bad
+    assert client.post("/design/new", json={"folder": "../out"}).status_code == 403
     monkeypatch.setattr(design, "configured", lambda: False)
     assert client.post("/design/new").status_code == 503
 
 
 def test_put_dedupe_writes_a_new_file(tmp_path, monkeypatch):
-    """`?dedupe=1` — an export or a copy from the editor — takes the next free name:
-    never an existing file, never an image the design refresh keeps beside a .fig,
-    and a .fig copy keeps clear of another design's images."""
+    """`?dedupe=1` — an export or a copy from the editor — takes the next free name: never an existing file."""
     from cycls._agent.design import refresh
     monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
-    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG", "designs/draft-2.png": b"P"})
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG"})
     client = _ws_routers_client(tmp_path)
     put = lambda path, data=b"X": client.put(f"/files/{path}?dedupe=1", content=data).json()["path"]
 
     assert put("designs/launch-hero@2x.png") == "designs/launch-hero@2x.png"
     assert put("designs/launch-hero@2x.png") == "designs/launch-hero@2x-2.png"
-    assert put("designs/launch.svg") == "designs/launch-2.svg"             # the refresh's name for launch.fig's SVG
-    assert put("designs/launch-slide-1.png") == "designs/launch-slide-1-2.png"
+    assert put("designs/launch.svg") == "designs/launch.svg"                 # nothing is kept beside a design now
     assert put("designs/launch.fig", b"COPY") == "designs/launch-2.fig"
-    assert put("designs/draft.fig") == "designs/draft.fig"
-    assert put("designs/draft.fig") == "designs/draft-3.fig"                 # draft-2.png is another design's
     assert (root / "designs/launch.fig").read_bytes() == b"FIG"               # the original stands
     from cycls._agent.design.store import version_of
     assert client.put("/files/designs/launch.fig", content=b"NEW").json() == {
@@ -2125,29 +2125,16 @@ def test_put_dedupe_writes_a_new_file(tmp_path, monkeypatch):
     assert (root / "my docs" / "a#b.txt").read_bytes() == b"hi"
 
 
-def test_a_new_design_file_is_left_with_an_image(tmp_path, monkeypatch):
-    """A copy from the editor (`?dedupe=1`) asks the refresh for its `.png`; an ordinary
-    save only keeps up the images already beside the design."""
+def test_a_saved_design_has_its_preview_made_ready(tmp_path, monkeypatch):
+    """A save of a .fig — the editor's, a copy's — makes its preview ready for when it is opened."""
     from cycls._agent.design import refresh
     asked = []
-    monkeypatch.setattr(refresh, "schedule", lambda root, rel, user_id=None, ensure=False: asked.append((rel, ensure)))
-    _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG"})
+    monkeypatch.setattr(refresh, "schedule", lambda root, rel, user_id=None: asked.append(rel))
+    _seed(tmp_path, {"designs/launch.fig": b"FIG"})
     client = _ws_routers_client(tmp_path)
     assert client.put("/files/designs/launch copy.fig?dedupe=1", content=b"COPY").json()["path"] == "designs/launch copy.fig"
     client.put("/files/designs/launch copy.fig", content=b"EDITED")
-    assert asked == [("designs/launch copy.fig", True), ("designs/launch copy.fig", False)]
-
-
-def test_refresh_managed_names_the_images_beside_a_design(tmp_path):
-    from cycls._agent.design import refresh
-    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/sub/deck.fig": b"FIG"})
-    assert refresh.managed(root, "designs/launch.png") and refresh.managed(root, "designs/launch.pdf")
-    assert refresh.managed(root, "designs/launch-slide-2.webp")
-    assert refresh.managed(root, "designs/sub/deck.pptx")
-    assert not refresh.managed(root, "designs/launch-hero.png")
-    assert not refresh.managed(root, "designs/other.png")
-    assert not refresh.managed(root, "designs/launch.txt")
-    assert not refresh.managed(root, "notes/launch.png")
+    assert asked == ["designs/launch copy.fig", "designs/launch copy.fig"]
 
 
 def test_brand_route_reads_the_brand_kit(tmp_path):
@@ -2998,7 +2985,7 @@ def test_regenerate_is_refused_while_a_run_is_live(tmp_path):
 
 # ---- live polls: the presenter opens, the audience votes through the share link ----
 
-def _poll_setup(tmp_path, audience="public", path="file/designs/pitch.deck.json"):
+def _poll_setup(tmp_path, audience="public", path="file/designs/pitch.fig"):
     svc, user, client = _share_test_app(tmp_path)
     token = client.post("/share", json={"path": path, "audience": audience}).json()["token"]
     return client, f"/share/user_test/{token}/poll"
@@ -3007,7 +2994,7 @@ def _poll_setup(tmp_path, audience="public", path="file/designs/pitch.deck.json"
 def test_a_poll_opens_takes_one_vote_per_voter_and_tallies(tmp_path):
     client, base = _poll_setup(tmp_path)
     assert client.get(base).json() == {"open": False}                                   # nothing open yet
-    opened = client.post("/polls", json={"deck": "designs/pitch.deck.json", "slide": 3, "question": "Tea or coffee?",
+    opened = client.post("/polls", json={"deck": "designs/pitch.fig", "slide": 3, "question": "Tea or coffee?",
                                          "options": ["Tea", "Coffee", "Neither"]}).json()
     session = opened["session"]
     seen = client.get(base).json()
@@ -3016,13 +3003,13 @@ def test_a_poll_opens_takes_one_vote_per_voter_and_tallies(tmp_path):
     assert client.post(f"{base}/vote", json={"session": session, "option": 1, "voter": a}).json()["counts"] == [0, 1, 0]
     assert client.post(f"{base}/vote", json={"session": session, "option": 1, "voter": b}).json()["total"] == 2
     assert client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": a}).status_code == 409   # once
-    assert client.get("/polls/results", params={"deck": "designs/pitch.deck.json", "session": session}).json()["counts"] == [0, 2, 0]
+    assert client.get("/polls/results", params={"deck": "designs/pitch.fig", "session": session}).json()["counts"] == [0, 2, 0]
     assert client.get(f"{base}/results", params={"session": session}).json()["counts"] == [0, 2, 0]
 
 
 def test_a_vote_is_checked(tmp_path):
     client, base = _poll_setup(tmp_path)
-    session = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
+    session = client.post("/polls", json={"deck": "designs/pitch.fig", "question": "Q?", "options": ["A", "B"]}).json()["session"]
     v = "c" * 32
     assert client.post(f"{base}/vote", json={"session": "old", "option": 0, "voter": v}).status_code == 409   # another session
     assert client.post(f"{base}/vote", json={"session": session, "option": 2, "voter": v}).status_code == 400
@@ -3030,19 +3017,19 @@ def test_a_vote_is_checked(tmp_path):
     assert client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": "../x"}).status_code == 400
     # A restart is a fresh session: earlier votes don't count; a closed poll takes none.
     client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": v})
-    fresh = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
+    fresh = client.post("/polls", json={"deck": "designs/pitch.fig", "question": "Q?", "options": ["A", "B"]}).json()["session"]
     assert client.post(f"{base}/vote", json={"session": fresh, "option": 1, "voter": v}).json()["counts"] == [0, 1]
-    client.post("/polls/close", json={"deck": "designs/pitch.deck.json"})
+    client.post("/polls/close", json={"deck": "designs/pitch.fig"})
     assert client.get(base).json() == {"open": False}
     assert client.post(f"{base}/vote", json={"session": fresh, "option": 0, "voter": "d" * 32}).status_code == 409
-    assert client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["only"]}).status_code == 400
-    assert client.post("/polls", json={"deck": "../etc/x.deck.json", "question": "Q?", "options": ["A", "B"]}).status_code == 400
+    assert client.post("/polls", json={"deck": "designs/pitch.fig", "question": "Q?", "options": ["only"]}).status_code == 400
+    assert client.post("/polls", json={"deck": "../etc/x.fig", "question": "Q?", "options": ["A", "B"]}).status_code == 400
 
 
 def test_a_late_close_leaves_a_newer_poll_open(tmp_path, monkeypatch):
     from cycls._app.db import DB
     client, base = _poll_setup(tmp_path)
-    deck = {"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}
+    deck = {"deck": "designs/pitch.fig", "question": "Q?", "options": ["A", "B"]}
     first = client.post("/polls", json=deck).json()["session"]
     second = client.post("/polls", json=deck).json()["session"]
     client.post("/polls/close", json={"deck": deck["deck"], "session": first})   # a restart's close, landing after its open
@@ -3074,35 +3061,18 @@ def test_votes_are_throttled_per_address(tmp_path, monkeypatch):
     monkeypatch.setattr(routers, "POLL_VOTES_PER_MINUTE", 2)
     monkeypatch.setattr(routers, "_poll_hits", {})
     client, base = _poll_setup(tmp_path)
-    session = client.post("/polls", json={"deck": "designs/pitch.deck.json", "question": "Q?", "options": ["A", "B"]}).json()["session"]
+    session = client.post("/polls", json={"deck": "designs/pitch.fig", "question": "Q?", "options": ["A", "B"]}).json()["session"]
     codes = [client.post(f"{base}/vote", json={"session": session, "option": 0, "voter": f"{i:032x}"}).status_code for i in range(3)]
     assert codes == [200, 200, 429]
 
 
-def test_renaming_a_design_takes_its_images_and_its_deck_document_with_it(tmp_path, monkeypatch):
-    """A design is its .fig and what is kept beside it — its image, its slides' and pages'
-    images, its PDF, its deck document. Renamed alone, the .fig left them behind under the
-    old name: stale pictures, and a deck document pointing at a file that was gone."""
-    deck = json.dumps({"type": "cycls.deck", "version": 1, "kind": "document", "fig": "designs/launch.fig",
-                       "size": [1240, 1754], "slides": 2, "exports": ["designs/launch.pdf"]}).encode()
-    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.png": b"PNG", "designs/launch-slide-2.png": b"S2",
-                            "designs/launch-page-2.jpg": b"P2", "designs/launch.pdf": b"%PDF", "designs/launch.deck.json": deck,
-                            "designs/launch-notes.txt": b"mine", "designs/launchpad.png": b"other", "designs/summer.pdf": b"KEEP"})
+def test_a_design_renamed_is_one_file_moved(tmp_path, monkeypatch):
+    """A design is its .fig: renamed or moved, it goes alone — what has a name like it is someone's own file."""
+    root = _seed(tmp_path, {"designs/launch.fig": b"FIG", "designs/launch.pdf": b"%PDF", "designs/launch-notes.txt": b"mine"})
     client = _ws_routers_client(tmp_path)
-    assert client.patch("/files/designs/launch.fig", json={"to": "designs/summer.fig"}).status_code == 200
-    names = sorted(p.name for p in (root / "designs").iterdir())
-    assert names == ["launch-notes.txt", "launch.pdf", "launchpad.png", "summer-page-2.jpg", "summer-slide-2.png",
-                     "summer.deck.json", "summer.fig", "summer.pdf", "summer.png"]
-    assert (root / "designs/summer.pdf").read_bytes() == b"KEEP"              # what was already there is not written over
-    moved = json.loads((root / "designs/summer.deck.json").read_text())
-    assert moved["fig"] == "designs/summer.fig" and moved["exports"] == ["designs/summer.pdf"] and moved["kind"] == "document"
-    # Moved to another folder, they go there too; a file that isn't a design moves alone.
-    assert client.patch("/files/designs/summer.fig", json={"to": "designs/2026/summer.fig"}).status_code == 200
-    assert sorted(p.name for p in (root / "designs/2026").iterdir()) == ["summer-page-2.jpg", "summer-slide-2.png", "summer.deck.json",
-                                                                          "summer.fig", "summer.pdf", "summer.png"]
-    assert json.loads((root / "designs/2026/summer.deck.json").read_text())["fig"] == "designs/2026/summer.fig"
-    assert client.patch("/files/designs/launch-notes.txt", json={"to": "designs/notes.txt"}).status_code == 200
-    assert (root / "designs/launchpad.png").is_file()
+    assert client.patch("/files/designs/launch.fig", json={"to": "decks/summer.fig"}).status_code == 200
+    assert sorted(p.name for p in (root / "designs").iterdir()) == ["launch-notes.txt", "launch.pdf"]
+    assert (root / "decks/summer.fig").read_bytes() == b"FIG"
 
 
 # ---- together: a design written anew is told to the people who have it open ----
@@ -3167,7 +3137,7 @@ def test_a_change_made_in_the_deck_viewer_is_the_persons_in_the_version_history(
     listed as the agent's ("Before an agent edit · Agent") — the person had done it."""
     from cycls._agent import design
     from cycls._agent.design import deck as decks, refresh
-    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG", "designs/pitch.deck.json": _DECK_DOC})
+    root = _seed(tmp_path, {"designs/pitch.fig": b"FIG"})
     monkeypatch.setattr(refresh, "schedule", lambda *a, **k: None)
     turn = iter([b"ONE", b"TWO"])
 
@@ -3179,7 +3149,7 @@ def test_a_change_made_in_the_deck_viewer_is_the_persons_in_the_version_history(
     [mine] = client.get("/versions/designs/pitch.fig").json()["versions"]
     assert (mine["by"], mine["reason"], mine["intent"]) == ("user", "change", "slide 2's notes")
     # The agent's own slide change is still the agent's.
-    asyncio.run(decks.apply_ops(root, "pitch", [{"op": "slide_move", "index": 0, "to": 1}], user_id="u"))
+    asyncio.run(decks.apply_ops(root, "designs/pitch.fig", [{"op": "slide_move", "index": 0, "to": 1}], user_id="u"))
     newest = client.get("/versions/designs/pitch.fig").json()["versions"][0]
     assert (newest["by"], newest["reason"], newest["intent"]) == ("agent", "agent", "move slide 1")
 

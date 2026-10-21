@@ -67,7 +67,7 @@ cycls/
     │   ├── actions.py      # slide, section and file actions; a document rendered
     │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
     │   ├── extract.py      # a PDF taken apart to be made again; report.py — what the model is told; files.py — a design's files
-    │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py exports beside a design, live.py rooms, stock.py photos
+    │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py a design's preview made ready, live.py rooms, stock.py photos
     │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
     ├── paths.py            # a path a tool was given, kept inside the workspace
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design is imported from design/
