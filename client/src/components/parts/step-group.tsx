@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
 import { t } from "../../lib/i18n";
 import type { Part } from "../../hooks/use-chat";
-import { StepPart } from "./step-part";
+import { StepDot, StepPart } from "./step-part";
 import { ToolCall, ConnectorsContext, isCall } from "./tool-call";
 import { connectorLabel, type Connector } from "../connectors-dialog";
 
@@ -57,20 +57,7 @@ export const StepGroup = memo(function StepGroup({ items, live }: { items: Part[
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
       >
-        <span
-          className={cn(
-            "flex size-5 shrink-0 items-center justify-center rounded-full border border-border",
-            live ? "border-accent" : "bg-accent/10",
-          )}
-        >
-          {live ? (
-            <span className="block size-1.5 rounded-full bg-accent animate-pulse" />
-          ) : (
-            <svg className="size-3 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-            </svg>
-          )}
-        </span>
+        <StepDot live={live} />
         <span className="text-[13px]">
           {named ? <span className="font-medium text-foreground">{t("usedConnectors").replace("{names}", gist)}</span> : (
             <><span className="font-medium text-foreground">{items.length} {t("steps")}</span>{gist && <span> — {gist}</span>}</>

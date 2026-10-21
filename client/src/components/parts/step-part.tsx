@@ -6,8 +6,8 @@ import { GlowStar, Star } from "../cycls-star";
 import { ext, tintTile, tintLabel } from "../canvas-utils";
 import { stepText, t } from "../../lib/i18n";
 
-// A built-in tool wears its own glyph, the way a connector wears its logo. A row with a face keeps no
-// check: the shimmer stopping is what says it finished, and a red tint is what says it didn't.
+// A built-in tool wears its own glyph, the way a connector wears its logo: the shimmer stopping is what
+// says it finished, and a red tint is what says it didn't.
 const GLYPHS: Record<string, IconName> = {
   "Web Search": "globe",
   Fetching: "link",
@@ -15,7 +15,6 @@ const GLYPHS: Record<string, IconName> = {
   Editing: "pencil",
   Bash: "terminal",
   Database: "database",
-  Skill: "star",
   "Finding tools": "search",
 };
 
@@ -49,14 +48,6 @@ export const StepDot = ({ live, toolName, step, ok }: { live?: boolean; toolName
       </span>
     );
   }
-  // Design wears the Cycls star: the brand's colours sweep through it while it works, then it is grey like the rest.
-  if (toolName === "Design") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center text-foreground/70">
-        {live ? <GlowStar /> : <Star hollow size={16} className={ok === false ? "text-destructive" : "text-muted-foreground"} />}
-      </span>
-    );
-  }
   const glyph = toolName && GLYPHS[toolName];
   if (glyph) {
     return (
@@ -65,14 +56,11 @@ export const StepDot = ({ live, toolName, step, ok }: { live?: boolean; toolName
       </span>
     );
   }
+  // Every other step wears the Cycls star: the brand's colours sweep through it while it works, then it is grey.
   return (
-    <div className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border", live ? "border-accent" : ok === false ? "border-destructive/40 bg-destructive/10" : "border-border bg-accent/10")}>
-      {live ? <span className="block size-1.5 rounded-full bg-accent animate-pulse" /> : (
-        <svg className={cn("size-3", ok === false ? "text-destructive" : "text-accent")} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={ok === false ? "M6 18L18 6M6 6l12 12" : "M5 13l4 4L19 7"} />
-        </svg>
-      )}
-    </div>
+    <span className="flex size-5 shrink-0 items-center justify-center text-foreground/70">
+      {live ? <GlowStar /> : <Star hollow size={16} className={ok === false ? "text-destructive" : "text-muted-foreground"} />}
+    </span>
   );
 };
 
