@@ -21,7 +21,7 @@ import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
 import { IconButton } from "./components/icon";
-import { Star } from "./components/message";
+import { Star } from "./components/cycls-star";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { PublicHome } from "./components/public-home";
 import { SharedView } from "./components/shared-view";

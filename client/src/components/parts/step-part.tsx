@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
 import { Icon, type IconName } from "../icon";
 import { Favicon } from "./sources-part";
+import { GlowStar, Star } from "../cycls-star";
 import { ext, tintTile, tintLabel } from "../canvas-utils";
 import { stepText, t } from "../../lib/i18n";
 
@@ -45,6 +46,14 @@ export const StepDot = ({ live, toolName, step, ok }: { live?: boolean; toolName
       <span className="relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded">
         <Favicon url={page} className="size-4" />
         {live && <span className="logo-shimmer absolute inset-y-0 -inset-x-full" />}
+      </span>
+    );
+  }
+  // Design wears the Cycls star: the brand's colours sweep through it while it works, then it is grey like the rest.
+  if (toolName === "Design") {
+    return (
+      <span className="flex size-5 shrink-0 items-center justify-center text-foreground/70">
+        {live ? <GlowStar /> : <Star hollow size={16} className={ok === false ? "text-destructive" : "text-muted-foreground"} />}
       </span>
     );
   }
