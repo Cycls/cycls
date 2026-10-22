@@ -1703,3 +1703,34 @@ def test_a_call_without_a_name_means_this_chats_latest_video(monkeypatch, tmp_pa
 def test_a_language_is_taken_as_the_model_writes_it():
     assert [vrun._language(x) for x in ("ar", "AR", "ar-SA", "Arabic", "العربية", "en", "English", "en-GB", "fr")] == \
         ["ar", "ar", "ar", "ar", "ar", "en", "en", "en", "fr"]
+
+
+def test_a_dub_asked_again_points_at_the_voice_and_never_dubs_the_dub(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fd = FakeDub(monkeypatch, svc)
+    ws = _ws(tmp_path)
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "voice" / "hi.words.json").write_text(json.dumps({**WORDS, "translations": {"ar": AR}}),
+                                                                 encoding="utf-8")
+    _run({"action": "write", "name": "hi", "html": VOICED}, ws)
+    _run({"action": "dub", "name": "hi", "to": "ar"}, ws)
+    assert len(fd.calls) == 1
+    # The same again: nothing read again, and the reply says how to get the other voice.
+    again = _text(_run({"action": "dub", "name": "hi", "to": "ar"}, ws))
+    assert "nothing was read again; for the saudi voice, call dub with voice: \"saudi\"" in again
+    # No name: the video this chat dubbed, not its dub.
+    out = _text(_run({"action": "dub", "to": "ar", "voice": "saudi"}, ws))
+    assert "hi, this chat's latest video, was used" in out and fd.calls[-1]["voice"] == "saudi"
+    # The dub itself, asked to be dubbed into its own language: the reply names the video it came from.
+    fd.words = {**DUB_WORDS, "dub": {"from": "videos/hi.video.html", "to": "ar"}}
+    (tmp_path / "videos" / "voice" / "hi-ar.words.json").write_text(json.dumps(fd.words), encoding="utf-8")
+
+    async def compile_dub(ws_, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None,
+                          fonts=None):
+        return {"ok": True, "findings": [], "root": {"duration": 10},
+                "sound": {"tracks": [{"id": "dub", "kind": "voice", "src": "videos/voice/hi-ar.m4a", "start": 0,
+                                      "end": 4, "media_start": 0}]}}
+    monkeypatch.setattr(video, "compile", compile_dub)
+    err = _run({"action": "dub", "name": "hi-ar", "to": "ar"}, ws)
+    assert "it is the ar dub of videos/hi.video.html" in err and "call dub with name hi, to ar" in err

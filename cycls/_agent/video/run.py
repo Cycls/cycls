@@ -754,6 +754,12 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
         return _err(f"nothing is said in {rel}: a dub says again the words of a voice-over or a clip (made with "
                     "`voice` or `footage`).")
     if p["from"] == to:
+        made_from = next(((_words_beside(root, r["src"]) or {}).get("dub", {}).get("from") for r in p["rows"]
+                          if (_words_beside(root, r["src"]) or {}).get("dub")), None)
+        if made_from:
+            source = Path(made_from).name[: -len(files.SUFFIX)]
+            return _err(f"{rel} is already in {to}: it is the {to} dub of {made_from}. To make that dub again (another "
+                        f"voice, other lines), call dub with name {source}, to {to}, and voice (default or saudi).")
         return _err(f"{rel} is already in {to}.")
     if lines:
         why = await _keep_lines(root, p["rows"], to, lines)
@@ -820,8 +826,11 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
     new_html, notes, dub_id = dubbing.compose(html, p, to=to, src=audio_rel)
     dub_name, drel, named = await _save(root, chat, dub_name, new_html, "video-dub")
     text, blocks, clean = await _checks(workspace, root, drel, new_html)
+    other = {"default": "saudi", "saudi": "default"}[voice_id] if to == "ar" else None
     head = [f"{'Already made' if reused else 'Made'} the {to} dub of {rel}: {drel}, with its voice {audio_rel} "
-            f"({len(slots)} sentences, voice {voice_id}).{named}",
+            f"({len(slots)} sentences, voice {voice_id}).{named}"
+            + (f" (The same lines and voice as before, so nothing was read again; for the {other} voice, call dub with "
+               f"voice: \"{other}\".)" if reused and other else ""),
             dubbing.fits_text(words.get("sentences") or [], slots)]
     changed = []
     voices = [i for i, k in p["tracks"].items() if k == "voice"]
@@ -1007,6 +1016,9 @@ async def _exec_video(inp, workspace, ctx=None):
             # A call that leaves the name out (weaker models do, after a long `lines`) means this
             # chat's video when there is one: its latest.
             mine = files.load(root, chat).get("names") or []
+            if action == "dub":     # a dub is made from a video, not from a dub of it
+                lang = _language(inp.get("to"))
+                mine = [n for n in mine if not n.endswith(f"-{lang}")] or mine
             if mine:
                 name = mine[-1]
                 note = f"\n(name was left out: {name}, this chat's latest video, was used.)" + note
