@@ -37,6 +37,7 @@ import { useUrlParam } from "../hooks/use-url-param";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { useEscapeFallback } from "../hooks/use-escape";
+import { useHeldSend, uploading } from "../hooks/use-held-send";
 import { SUGGESTIONS } from "./suggestions-data";
 import { ExamplesGallery } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
@@ -377,7 +378,11 @@ export function Chat({ chat, onShare, files, account, config }: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
-  const handleSubmitRef = useRef<(overrideText?: string, origin?: string) => void>(() => {});
+  const handleSubmitRef = useRef<(overrideText?: string, origin?: string, extra?: SendExtra) => void>(() => {});
+  // Send pressed while a file uploads: held, shown, and sent by itself when the uploads finish.
+  const { held: heldSend, request: holdSend, cancel: cancelHeld } = useHeldSend({
+    input, attachments, send: (origin, extra) => handleSubmitRef.current(undefined, origin, extra),
+  });
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
   const openPricing = useCallback((payer: "user" | "organization", source: string) => {
     setPricingFor(payer);
@@ -519,8 +524,9 @@ export function Chat({ chat, onShare, files, account, config }: {
   }, [uploadFile, config?.max_upload, toastError]);
 
   const removeFile = useCallback((index: number) => {
+    cancelHeld();   // the message changed: a held send waits for a fresh press
     setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  }, [cancelHeld]);
 
   const openFilePicker = useCallback(() => {
     fileInputRef.current?.click();
@@ -553,7 +559,14 @@ export function Chat({ chat, onShare, files, account, config }: {
 
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
-    if (!text || attachments.some((a) => a.status === "uploading")) return;
+    if (!text) return;
+    // A file still uploading holds the send (useHeldSend), in the composer where it can be
+    // seen and edited; it comes back through here when the uploads finish.
+    if (uploading(attachments)) {
+      if (overrideText !== undefined) setInput(text);
+      holdSend(text, origin, extra);
+      return;
+    }
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     const mentioned = pillsRef.current.filter((p) => text.includes(`@${connectorLabel(p)}`)).map((p) => p.name);
     if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
@@ -578,7 +591,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
     if (selection) void flushDesignEditor(selection.path, 1500).then(go);
     else go();
-  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel]);
+  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend]);
 
   // Drain on the falling edge of `isStreaming` — one message per edge, and the
   // send it triggers raises the flag again, so the rest follow in order.
@@ -646,6 +659,11 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (e.key === "Enter" && !e.shiftKey && !isMobile) {
       e.preventDefault();
       handleSubmit();
+    }
+    // Escape takes a held send back (and so doesn't also close the side pane).
+    if (e.key === "Escape" && heldSend) {
+      e.preventDefault();
+      cancelHeld();
     }
     // Shell-style accept: ArrowUp in an empty composer pulls the suggested
     // follow-up in for editing; Enter then sends it.
@@ -900,6 +918,8 @@ export function Chat({ chat, onShare, files, account, config }: {
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
+    held: heldSend,
+    onCancelHeld: cancelHeld,
     listening, transcribing, micAnalyser, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,

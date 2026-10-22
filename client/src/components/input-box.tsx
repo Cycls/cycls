@@ -79,6 +79,8 @@ export function InputBox({
   selection,
   onAddSelection,
   onRemoveSelection,
+  held,
+  onCancelHeld,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -111,6 +113,8 @@ export function InputBox({
   approveSwitch?: boolean;   // the deployment has connectors: show Auto / Manual
   onAddConnector?: (c: Connector) => void;
   placeholder?: string;
+  held?: boolean;               // send was pressed while a file uploads: it goes when the uploads finish
+  onCancelHeld?: () => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
 
@@ -285,6 +289,20 @@ export function InputBox({
         )}
       </AnimatePresence>
 
+      {/* A send held for an upload — says so, and can be taken back */}
+      {held && (
+        <div role="status" data-testid="held-send" dir={getLang() === "ar" ? "rtl" : "ltr"}
+             className="flex items-center gap-2 px-3 pb-1 text-xs text-muted-foreground">
+          <span>{t("sendsAfterUpload")}</span>
+          {onCancelHeld && (
+            <button type="button" onClick={onCancelHeld}
+                    className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline">
+              {t("cancel")}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Design selection chip, or "Add selection" */}
       {(selection || onAddSelection) && (
         <div className="flex flex-wrap items-center gap-2 px-3 pt-3" onClick={(e) => e.stopPropagation()}>
@@ -406,19 +424,29 @@ export function InputBox({
           {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
           {/* A filled composer stays sendable mid-run — the message queues and
               fires when the reply finishes — so send and stop sit side by
-              side while streaming. Empty composer, streaming: stop only. */}
+              side while streaming. Empty composer, streaming: stop only.
+              While a file uploads, send stays pressable too: it holds the
+              message until the uploads finish. Held, it spins; pressing it
+              again changes nothing. */}
           {(!isStreaming || input.trim()) && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-              disabled={!input.trim() || attachments?.some((a) => a.status === "uploading")}
-              className={`flex size-8 items-center justify-center rounded-full transition cursor-pointer disabled:opacity-30 ${isStreaming ? "border border-border text-foreground hover:bg-secondary" : "bg-foreground text-background hover:opacity-80"}`}
-              aria-label={isStreaming ? t("queueMessage") : "Send"}
-              title={isStreaming ? t("queueMessage") : undefined}
+              disabled={!input.trim()}
+              className={`flex size-8 items-center justify-center rounded-full transition disabled:opacity-30 ${isStreaming ? "border border-border text-foreground" : "bg-foreground text-background"} ${held ? "cursor-default opacity-60" : isStreaming ? "cursor-pointer hover:bg-secondary" : "cursor-pointer hover:opacity-80"}`}
+              aria-label={held ? t("sendsAfterUpload") : isStreaming ? t("queueMessage") : "Send"}
+              title={held ? t("sendsAfterUpload") : isStreaming ? t("queueMessage") : undefined}
             >
-              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
-              </svg>
+              {held ? (
+                <svg className="size-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12l7-7 7 7M12 5v14" />
+                </svg>
+              )}
             </button>
           )}
           {isStreaming && (
