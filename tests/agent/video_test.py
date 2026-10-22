@@ -1334,3 +1334,170 @@ def test_the_footage_reply_says_when_a_face_can_be_followed():
     assert "A face is on screen in 96% of it (up to 2 faces at once: the largest is followed)" in text
     assert "data-reframe" in text and "wide clip" in text
     assert "data-reframe" not in report.footage_text("videos/footage/sea.mp4", {**info, "focus": None})
+
+
+# ---- a dub -------------------------------------------------------------------------------------
+
+DUB_WORDS = {"version": 1, "kind": "dub", "language": "ar", "voice": "default", "duration": 3.6, "text": "مرحباً بكم. اصنع واحداً.",
+             "sentences": [{"i": 0, "start": 0.55, "end": 1.6, "text": "مرحباً بكم.", "slot": [0.55, 1.7], "speed": 1.0, "fit": "ok"},
+                           {"i": 1, "start": 2.0, "end": 3.4, "text": "اصنع واحداً.", "slot": [2.0, 3.5], "speed": 1.12, "fit": "ok"}],
+             "words": [{"text": "مرحباً", "start": 0.55, "end": 1.0}, {"text": "بكم.", "start": 1.05, "end": 1.6},
+                       {"text": "اصنع", "start": 2.0, "end": 2.5}, {"text": "واحداً.", "start": 2.6, "end": 3.4}]}
+
+
+def _said(translations=None):
+    return lambda src: {**WORDS, **({"translations": translations} if translations else {})} \
+        if src == "videos/voice/hi.m4a" else None
+
+
+def test_a_dub_is_planned_a_sentence_at_a_time_from_the_sound_map():
+    from cycls._agent.video import dubbing as dub
+    p = dub.plan(SOUND, _said({"ar": AR, "fr": {"0": "Bonjour.", "1": "Fais-en un."}}), "ar", 10)
+    assert p["missing"] == 0 and p["from"] == "en" and p["tracks"] == {"vo": "voice"}
+    assert p["slots"] == [{"text": "مرحباً بكم.", "start": 0.55, "end": 1.7, "until": 1.92},
+                          {"text": "اصنع واحداً.", "start": 2.0, "end": 3.5, "until": 10.0}]
+    # The dub's own translations: the original sentences, and every other language kept.
+    assert p["translations"] == {"en": {"0": "Hello there.", "1": "Make one."}, "fr": {"0": "Bonjour.", "1": "Fais-en un."}}
+    untranslated = dub.plan(SOUND, _said({"ar": {"0": "مرحباً بكم."}}), "ar", 10)
+    assert untranslated["missing"] == 1 and untranslated["slots"] == [] and len(untranslated["rows"]) == 2
+    assert "1. (1.1 s) Hello there.\n   now in ar: مرحباً بكم.\n2. (1.5 s) Make one." in dub.listing(untranslated["rows"], "ar")
+
+
+def test_the_dubbed_composition_swaps_the_voice_points_the_captions_and_keeps_the_rest():
+    from cycls._agent.video import dubbing as dub
+    p = dub.plan(SOUND, _said({"ar": AR}), "ar", 10)
+    html = VOICED.replace('<audio id="bed"', '<div class="cap en" data-captions="vo" data-cap-style="word"></div>'
+                                            '<div class="cap ar" data-captions="vo" data-cap-lang="ar" data-cap-style="phrase" '
+                                            'dir="rtl"></div><audio id="bed"')
+    out, notes, dub_id = dub.compose(html, p, to="ar", src="videos/voice/hi-ar.m4a")
+    assert dub_id == "dub" and '<audio id="vo"' not in out
+    assert '<div id="root" data-composition-id="main">\n  <audio id="dub" src="videos/voice/hi-ar.m4a" data-start="0"></audio>' in out
+    assert '<audio id="bed" data-start="0" src="music:calm-01" data-duck="dub">' in out
+    assert '<html lang="ar">' in out
+    # The box styled for Arabic shows the dub's own words (word by word, as the main box did); the
+    # English box shows the original sentences from the dub's translations.
+    assert '<div class="cap ar" data-captions="dub" data-cap-style="word" dir="rtl">' in out
+    assert '<div class="cap en" data-captions="dub" data-cap-style="phrase" data-cap-lang="en">' in out
+    assert "swapped" in notes and "arabic_font" not in notes and "data-cycls-dub" not in out
+
+    # No Arabic box: the main box turns right to left with an Arabic family.
+    one = VOICED.replace('<audio id="bed"', '<div class="cap" data-captions="vo"></div><audio id="bed"')
+    out, notes, _ = dub.compose(one, p, to="ar", src="videos/voice/hi-ar.m4a")
+    assert '<div class="cap" data-captions="dub" dir="rtl">' in out and "arabic_font" in notes
+    assert f'font-family: "{dub.ARABIC_FAMILY}"' in out and "<style data-cycls-dub>" in out
+
+
+def test_a_dubbed_clip_keeps_its_own_sound_quietly_under():
+    from cycls._agent.video import dubbing as dub
+    p = {"tracks": {"a": "footage", "b": "footage"}, "from": "en"}
+    html = ('<html lang="en"><head></head><body><div id="root" data-composition-id="main">'
+            '<video id="a" src="uploads/x.mp4" data-start="0" data-media-start="2" data-duration="3"></video>'
+            '<video id="b" src="uploads/x.mp4" data-start="3" data-volume="1.5" data-reframe></video>'
+            '<video id="c" src="uploads/y.mp4" data-start="6" muted></video>'
+            '<audio id="m" src="music:calm-01" data-start="0" data-duck="a b"></audio></div></body></html>')
+    out, _, _ = dub.compose(html, p, to="ar", src="videos/voice/x-ar.m4a")
+    assert ('<video id="a" src="uploads/x.mp4" data-start="0" data-media-start="2" data-duration="3" data-volume="0.2" '
+            'data-dubbed="dub">') in out
+    assert '<video id="b" src="uploads/x.mp4" data-start="3" data-volume="0.3" data-reframe data-dubbed="dub">' in out
+    assert '<video id="c" src="uploads/y.mp4" data-start="6" muted>' in out                     # not dubbed, untouched
+    assert 'data-duck="dub"' in out
+    # Their words are no longer speech: subtitles, translations and another dub read the dub alone.
+    assert dub.dubbed_ids(out) == {"a", "b"}
+    sound = {"tracks": [{"id": "dub", "kind": "voice"}, {"id": "a", "kind": "footage"}],
+             "speech": [{"track": "dub", "text": "x"}, {"track": "a", "text": "y"}]}
+    assert dub.for_words(sound, {"a"}) == {"tracks": [{"id": "dub", "kind": "voice"}], "speech": [{"track": "dub", "text": "x"}]}
+    assert dub.for_reading(sound, {"a"})["tracks"] == sound["tracks"]
+    assert dub.for_reading(sound, {"a"})["speech"] == [{"track": "dub", "text": "x"}]
+
+
+class FakeDub:
+    def __init__(self, monkeypatch, svc, words=None):
+        self.calls, self.words = [], words or DUB_WORDS
+        monkeypatch.setattr(video, "dub", self.dub)
+        monkeypatch.setattr(video, "compile", self.compile)
+        review = svc.result
+
+        async def wait(ws, token, budget):
+            svc.polls.append(token)
+            return {"state": "done", "kind": "voice", "words": json.loads(json.dumps(self.words)), "warnings": []} \
+                if token.startswith("d") else review
+        monkeypatch.setattr(video, "wait", wait)
+
+    async def dub(self, ws, slots, *, language, voice_id=None, key=None):
+        self.calls.append({"slots": slots, "language": language, "voice": voice_id, "key": key})
+        return {"token": f"d{len(self.calls)}", "eta_s": 40}
+
+    async def compile(self, ws, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
+        return {"ok": True, "findings": [], "sound": SOUND, "root": {"duration": 10, "width": 1080, "height": 1920}}
+
+
+def test_dub_lists_the_sentences_then_says_the_video_again_as_a_new_one(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fd = FakeDub(monkeypatch, svc)
+    ws = _ws(tmp_path)
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "hi.video.html").write_text(
+        VOICED.replace('<audio id="bed"', '<div class="cap" data-captions="vo"></div><audio id="bed"'), encoding="utf-8")
+    assert _run({"action": "dub", "name": "hi", "to": "fr"}, ws).startswith("Error: to: ar or en")
+    assert "speaks Arabic" in _run({"action": "dub", "name": "hi", "to": "en", "voice": "saudi"}, ws)
+    assert "already in en" in _run({"action": "dub", "name": "hi", "to": "en"}, ws)
+    listed = _run({"action": "dub", "name": "hi", "to": "ar"}, ws)
+    assert "1. (1.1 s) Hello there." in listed and "FOR SPEAKING" in listed and "exactly 2 strings" in listed
+    assert not fd.calls
+    assert _run({"action": "dub", "name": "hi", "to": "ar", "lines": ["one"]}, ws).startswith("Error: lines")
+
+    out = _run({"action": "dub", "name": "hi", "to": "ar", "lines": [AR["0"], AR["1"]]}, ws)
+    text = _text(out)
+    said = json.loads((tmp_path / "videos" / "voice" / "hi.words.json").read_text(encoding="utf-8"))
+    assert said["translations"] == {"ar": AR}                                  # kept with the words, as subtitles does
+    assert fd.calls[0]["language"] == "ar" and fd.calls[0]["voice"] == "default"
+    assert [s["start"] for s in fd.calls[0]["slots"]] == [0.55, 2.0]
+    assert (tmp_path / "videos" / "voice" / "hi-ar.m4a").read_bytes() == b"M4A:d1"
+    dw = json.loads((tmp_path / "videos" / "voice" / "hi-ar.words.json").read_text(encoding="utf-8"))
+    assert dw["translations"] == {"en": {"0": "Hello there.", "1": "Make one."}} and dw["dub"]["to"] == "ar"
+    new = (tmp_path / "videos" / "hi-ar.video.html").read_text(encoding="utf-8")
+    assert '<audio id="dub" src="videos/voice/hi-ar.m4a" data-start="0"></audio>' in new and 'id="vo"' not in new
+    assert svc.submitted[-1]["kind"] == "review" and svc.submitted[-1]["html"] == new        # checked like a write
+    assert "Made the ar dub of videos/hi.video.html: videos/hi-ar.video.html" in text
+    assert "Sped up to fit: 2 (1.12x)" in text and "built-in synthetic voice" in text and "Arabic family" in text
+    assert out["_ui"][0] == {"type": "ui", "action": "open_canvas", "path": "videos/hi-ar.video.html",
+                             "name": "hi-ar.video.html"}
+
+    again = _text(_run({"action": "dub", "name": "hi", "to": "ar"}, ws))
+    assert again.startswith("Already made the ar dub") and len(fd.calls) == 1               # the same dub, not a second job
+
+
+def test_a_dubbed_sentence_too_long_even_sped_up_asks_for_a_shorter_one(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    long = json.loads(json.dumps(DUB_WORDS))
+    long["sentences"][0].update(speed=1.25, fit="long", end=2.45, over_s=0.5)
+    FakeDub(monkeypatch, svc, words=long)
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "voice" / "hi.words.json").write_text(json.dumps({**WORDS, "translations": {"ar": AR}}),
+                                                                 encoding="utf-8")
+    (tmp_path / "videos" / "hi.video.html").write_text(VOICED, encoding="utf-8")
+    text = _text(_run({"action": "dub", "name": "hi", "to": "ar"}, _ws(tmp_path)))
+    assert "TOO LONG for its place" in text and "1 (\"مرحباً بكم.\": 1.9 s even sped up, 1.4 s before the next sentence" in text
+    assert "call dub again with all the lines" in text
+
+
+def test_a_dub_still_reading_is_collected_by_the_next_call(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fd = FakeDub(monkeypatch, svc)
+    _voice_files(tmp_path)
+    (tmp_path / "videos" / "voice" / "hi.words.json").write_text(json.dumps({**WORDS, "translations": {"ar": AR}}),
+                                                                 encoding="utf-8")
+    (tmp_path / "videos" / "hi.video.html").write_text(VOICED, encoding="utf-8")
+    real_wait = video.wait
+
+    async def slow(ws, token, budget):
+        return {"state": "pending", "eta_s": 30}
+    monkeypatch.setattr(video, "wait", slow)
+    first = _run({"action": "dub", "name": "hi", "to": "ar"}, _ws(tmp_path))
+    assert "Still reading the ar dub" in first
+    monkeypatch.setattr(video, "wait", real_wait)
+    _run({"action": "dub", "name": "hi", "to": "ar"}, _ws(tmp_path))
+    assert len(fd.calls) == 1 and (tmp_path / "videos" / "hi-ar.video.html").exists()

@@ -246,6 +246,25 @@ async def voice(workspace, text, *, language=None, voice_id=None, key=None):
     return resp.json()
 
 
+async def dub(workspace, slots, *, language, voice_id=None, key=None):
+    """Start a dub: each sentence said in `language` in its slot on the video's clock (the service's
+    voice.dub), one voice job. → {token, eta_s, slots}. Refused (with the reason) for bad slots."""
+    meta = {"kind": "voice", "voice": {"slots": slots, "language": language, "voice": voice_id or "default"}}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+                          headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        why = (_body(resp) or {}).get("error") or "the dub was refused"
+        if why.startswith("There is no script"):      # a service from before dubbing
+            why = "this video service cannot dub yet"
+        raise Refused(why, [])
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
 async def clip_state(workspace, sha, *, sheet=False):
     """Does the door hold this clip (named by the sha256 of its bytes)? → {"state": none | partial |
     uploaded | ready, "at": bytes it has, "info": its facts when ready, "sheet": its frames when asked for}."""

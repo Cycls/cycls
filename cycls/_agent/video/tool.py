@@ -14,7 +14,8 @@ import contextvars
 # harness swaps it in after this call), None when no harness swaps it (a custom loop): then `guide`
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
-ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles")
+ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles",
+           "dub")
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
@@ -36,18 +37,16 @@ _ACTIONS_TEXT = """ACTIONS
 - write {name, html}: save the whole composition as videos/<name>.video.html and check it. Or {name, path} to adopt a composition you wrote with the editor. Saved even when the checks find errors.
 - edit {name, changes: [{old, new, all?}]}: exact find and replace in the saved composition; every change applies or none does. Same checks as write. Prefer it to rewriting the whole file.
 - template {name, template, vars}: make the composition from one of the templates above with your words, numbers and images (the brand kit fills the colours and fonts you leave out), then the same checks as write.
-- look {name, at?: [seconds], zoom?, size?}: the frames at those times (up to 9), zoom a CSS selector or "x,y,w,h" to look closely; size: one of the video's sizes alone (below). With no times, the file on disk is checked again.
-- render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4, opened for the user; when something is said in it, subtitle files beside it (videos/<name>.srt and .vtt, and videos/<name>.<lang>.srt and .vtt for each language it is translated into). Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over.
-- subtitles {name} then {name, to, lines}: what is said in the video, in another language. The first call lists its sentences, numbered; translate them yourself and send them back in order with the language code (to: "ar", "en", …). The translation is kept with the words, and is used two ways: subtitle files (videos/<name>.<to>.srt and .vtt, beside the MP4: files a platform takes as a captions track, nothing on the picture) and captions on the video (a captions box with data-cap-lang="<to>", drawn on the picture; the reply gives the line). Both follow the cut. When the person asks for subtitles or captions in a language, give them the files, and put the translation on the video too when the video shows captions or they ask for it there.
+- look {name, at?: [seconds], zoom?, size?}: the frames at those times (up to 9), zoom a CSS selector or "x,y,w,h" to look closely; size: one of the video's sizes alone (SEVERAL SIZES above). With no times, the file on disk is checked again.
+- render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4 (and videos/<name>.<size>.mp4 for each other size the root lists), opened for the user; when something is said in it, subtitle files beside it (videos/<name>.srt and .vtt, and videos/<name>.<lang>.srt and .vtt for each language it is translated into). Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over. For "a vertical version" or more platforms, add the sizes to the root's data-sizes (SEVERAL SIZES) and render again rather than writing a second file.
+- subtitles {name} then {name, to, lines}: what is said in the video, in another language. The first call lists its sentences, numbered; translate them yourself and send them back in order with the language code (to: "ar", "en", …). The translation is kept with the words and follows the cut. It makes subtitle files (videos/<name>.<to>.srt and .vtt, beside the MP4: a captions track platforms take, nothing on the picture), captions on the video (the data-cap-lang box in the instructions; the reply gives the line), and a dub. When the person asks for subtitles or captions in a language, give them the files, and put the translation on the video too when the video shows captions or they ask for it there.
+- dub {name, to, voice?, lines?}: the video said in another language (to: "ar" or "en"), made as a new video, videos/<name>-<to>.video.html: each sentence spoken in that language where the original says it (sped up a little when it runs long), a voice-over replaced, a person's own voice in footage kept quietly under, the captions in the new language. It needs the translation kept with the words: the first call lists the sentences and how long each is said; translate each FOR SPEAKING, about as long as the original, and call dub again with lines (one string per sentence, in order). The reply says which sentences were sped up and which do not fit even so: shorten those and call dub with all the lines again. On-screen titles are not translated for you: translate them with `edit` on the new video, then look and render it. The dub's voice is one of the built-in voices (default; saudi for Saudi Arabic when asked), never the person's own: say so if they might expect it.
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
-- footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, the <video> line to use, and whether a face in it can be followed (data-reframe on the <video>: its crop keeps that person in frame when the video's shape is not the clip's, a wide interview in a vertical reel). Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path. With tidy: true the reply also gives the clip tidied — its long pauses cut, every word kept — as <video> pieces to put back to back: use it when the person asks to tighten, clean up or shorten a talking clip.
+- footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, the <video> line to use, and whether a face in it can be followed (data-reframe). Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path. With tidy: true the reply also gives the clip tidied — its long pauses cut, every word kept — as <video> pieces to put back to back: use it when the person asks to tighten, clean up or shorten a talking clip.
 
 A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, the pieces of footage as you placed them, and the sound map when there is sound. Look at the sheet before you render.
-
-SEVERAL SIZES
-One video can be made in several sizes at once (Reels and TikTok want vertical, feeds square or portrait, YouTube wide). List the other sizes on the root: data-sizes="vertical square" (vertical 1080x1920, portrait 1080x1350, square 1080x1080, wide 1920x1080); the root's own size is the main one. The same file is then checked and rendered at every size: each reply has the browser check and a sheet for each size, and `render` makes videos/<name>.mp4 and videos/<name>.<size>.mp4 for each other size — the same scenes, timing, voice, music and captions. Write the layout so it holds at any size (flex or grid, sizes in % of the frame where you can), then fix what one size needs with rules for it alone in the same <style>: #root[data-shape="vertical"] .title { font-size: 110px; } — the file as written is the main size, and only the other sizes carry data-shape. Footage of a person: add data-reframe to its <video> (the footage reply says when a face can be followed) and its crop follows them at every size. Use it when the person asks for more than one size or platform, or for "a vertical version" of a video (add the size and its rules, then render); a single size needs none of it.
 
 THE PERSON'S EDITS
 The person can open a video in the editor (Edit on the canvas) and change it by hand; their saves are kept as versions. When they select something there and ask you, their message carries a line such as [Selected in videos/launch.video.html at 4.2 s: title (h1) "Ready when you are"]: the video, where the playhead was, and each selected element by its id or name, its tag and its text. Change that element (find it by its id in the file) and keep what they did by hand. After they edit, read the file before you `edit` it: a save from the editor writes the file afresh, so text you remember may no longer match exactly."""
@@ -56,8 +55,8 @@ The person can open a video in the editor (Edit on the canvas) and change it by 
 def _schema():
     return {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS),
-                   "description": "guide (first), write, edit, template, look, render, subtitles, restore, voice, music, "
-                                  "footage."},
+                   "description": "guide (first), write, edit, template, look, render, subtitles, dub, restore, voice, "
+                                  "music, footage."},
         "name": {"type": "string",
                  "description": "The video's name: videos/<name>.video.html, rendered to videos/<name>.mp4. "
                                 "Lowercase words and hyphens, e.g. launch-reel."},
@@ -82,7 +81,7 @@ def _schema():
                     "description": "render: final (default) or draft (faster, larger file, softer)."},
         "text": {"type": "string", "description": "voice: the script to read aloud; figures, prices and dates are read out."},
         "voice": {"type": "string", "enum": ["default", "saudi"],
-                  "description": "voice: default (any language) or saudi (Saudi dialect)."},
+                  "description": "voice and dub: default (any language) or saudi (Saudi dialect)."},
         "language": {"type": "string", "enum": ["ar", "en"],
                      "description": "voice: the script's language, when not plain from it. footage: the language spoken "
                                     "in the clip, when you know it."},
@@ -92,9 +91,10 @@ def _schema():
         "orientation": {"type": "string", "enum": ["landscape", "portrait", "square"],
                         "description": "footage with stock: the shape of clip to look for."},
         "tidy": {"type": "boolean", "description": "footage: also give the clip with its long pauses cut, as pieces."},
-        "to": {"type": "string", "description": "subtitles: the language code of the translation, e.g. ar or en."},
+        "to": {"type": "string", "description": "subtitles: the language code of the translation, e.g. ar or en. "
+                                                "dub: the language to dub into, ar or en."},
         "lines": {"type": "array", "items": {"type": "string"},
-                  "description": "subtitles: the translation, one string per sentence listed, in order."},
+                  "description": "subtitles and dub: the translation, one string per sentence listed, in order."},
     }, "required": ["action"]}
 
 

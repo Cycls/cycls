@@ -17,12 +17,12 @@ from ..design.deck import lock
 from ..design.store import Stale, version_of, write_fig
 from ..paths import _resolve_path
 from . import contract as contract_mod
-from . import files, media, report
+from . import dubbing, files, media, report
 from .tool import ACTIONS, VIDEO_LOADED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
 # limit, so the client keeps its own: a save with its frames, a look, a render.
-BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300, "send": 240, "footage": 420}
+BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300, "dub": 420, "send": 240, "footage": 420}
 MAX_HTML = 400_000
 
 _LOADED_NOTE = ("\n\nVideo's full instructions were not loaded when you made this call; they are now in this tool's "
@@ -133,7 +133,7 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
                                  footage=footage)
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
-        sound = report.sound_text(e.sound)
+        sound = report.sound_text(dubbing.for_reading(e.sound, dubbing.dubbed_ids(html)))
         return ((text or str(e)) + ("\n" + sound if sound else "")
                 + "\nFix them with `edit`; the file is saved as it is."), [], False
     except video.OverAllowance as e:
@@ -142,7 +142,7 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
                 "the MP4 wait until then — tell the person so."), [], True
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
-    sound = "" if quiet else report.sound_text(job.get("sound"))
+    sound = "" if quiet else report.sound_text(dubbing.for_reading(job.get("sound"), dubbing.dubbed_ids(html)))
     if sound:
         head += "\n" + sound
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
@@ -378,7 +378,7 @@ async def _render(workspace, root, chat, name, quality):
         text += " " + report.audio_facts(v["audio"])
     if v.get("faults"):
         text += f" (The renderer noted: {', '.join(v['faults'])}.)"
-    sound = jobs[0]["sound"]
+    sound = dubbing.for_words(jobs[0]["sound"], dubbing.dubbed_ids(html))
     if sound:
         await asyncio.to_thread(files.save_sound, root, target, sound)
     written, done, short = await asyncio.to_thread(_subtitles, root, target, sound, audio, words, footage)
@@ -413,6 +413,8 @@ def _spoken(html, root):
     out = []
     for n, m in enumerate(_MEDIA_TAG.finditer(html)):
         attrs = {k.lower(): (v or "").strip("\"'") for k, v in _TAG_ATTR.findall(m.group(2))}
+        if "data-dubbed" in attrs:      # its speech is said by a dub: heard quietly, not as words
+            continue
         path = media._local(attrs.get("src") or "")
         if not path:
             continue
@@ -586,10 +588,12 @@ def _subtitles(root, name, sound, audio, words, footage):
         path = Path(root) / files.subtitles(name, ext)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    langs = set()
-    for said in [*(words or {}).values(), *((c or {}).get("words") for c in (footage or {}).values())]:
+    langs = set()      # the languages a translation is kept in, of what is heard (a dubbed clip is not)
+    for t in (sound or {}).get("tracks") or []:
+        said = words_of(t.get("src") or "") if t.get("src") else None
         if isinstance(said, dict) and isinstance(said.get("translations"), dict):
-            langs.update(k for k in said["translations"] if isinstance(k, str) and _LANG.match(k))
+            langs.update(k for k in said["translations"]
+                         if isinstance(k, str) and _LANG.match(k) and k != said.get("language"))
     done, short = {}, {}
     for lang in sorted(langs):
         n, missing = _write_translated(root, name, lang, sound, words_of)
@@ -645,6 +649,165 @@ async def _voice(workspace, root, chat, name, text, voice_id, language):
                         by="agent", reason="video-voice")
     files.voice_done(root, chat, name)
     return report.voice_text(words, rel, warnings=r.get("warnings") or [], voice_id=voice_id)
+
+
+async def _keep_lines(root, rows, to, lines):
+    """A translation sent with `dub`, kept with the words like `subtitles` keeps one: rows are the
+    sentences heard (dub.plan), the lines one for each, in their order. → why not, or None."""
+    if not isinstance(lines, list) or len(lines) != len(rows) or \
+            not all(isinstance(x, str) and x.strip() and len(x) <= 600 for x in lines):
+        return (f"lines: exactly {len(rows)} strings (each 600 characters at most), one for each sentence the first "
+                "`dub` call lists, in its order.")
+    by_file = {}
+    for r, t in zip(rows, lines):
+        try:
+            _, full = media.resolve_clip(media._local(r["src"]) or "", root)
+        except ValueError:
+            return f"the words of {r['src']} could not be found."
+        rel = media.words_path(full).relative_to(Path(root).resolve()).as_posix()
+        by_file.setdefault(rel, {})[str(r["k"])] = " ".join(t.split())
+    for wrel, given in by_file.items():
+        async with lock(root / wrel):
+            said = json.loads((root / wrel).read_text(encoding="utf-8"))
+            tr = said.get("translations") if isinstance(said.get("translations"), dict) else {}
+            tr[to] = {**(tr.get(to) or {}), **given}
+            said["translations"] = tr
+            await write_fig(root, wrel, json.dumps(said, ensure_ascii=False, indent=1).encode("utf-8"),
+                            by="agent", reason="video-translation")
+    return None
+
+
+async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
+    """`dub`: the video said in another language, as a new video beside it (dub.py)."""
+    from cycls._agent import video
+
+
+    rel = files.composition(name)
+    try:
+        html = (root / rel).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return _err(f"there is no {rel}; `write` it first.")
+    to = str(to or "").strip().lower()
+    if to not in ("ar", "en"):
+        return _err("to: ar or en, the language to dub the video into.")
+    voice_id = voice_id or "default"
+    if voice_id not in ("default", "saudi"):
+        return _err("voice: default or saudi.")
+    if voice_id == "saudi" and to != "ar":
+        return _err("the saudi voice speaks Arabic: dub into ar, or use the default voice.")
+
+    async def planned():
+        images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
+        if problems:
+            return None, "The images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems)
+        c = await video.compile(workspace, html, images, sent, audio=audio, words=words, footage=footage)
+        if not c.get("ok"):
+            return None, (report.findings_text(c.get("findings") or [], title="Lint")
+                          + f"\nFix {rel} with `edit` before dubbing it.")
+
+        def words_of(src):
+            return _words_beside(root, src)
+        sound = dubbing.for_words(c.get("sound"), dubbing.dubbed_ids(html))
+        return dubbing.plan(sound, words_of, to, (c.get("root") or {}).get("duration")), None
+
+    p, why = await planned()
+    if why:
+        return why
+    if not p["heard"]:
+        return _err(f"nothing is said in {rel}: a dub says again the words of a voice-over or a clip (made with "
+                    "`voice` or `footage`).")
+    if p["from"] == to:
+        return _err(f"{rel} is already in {to}.")
+    if lines:
+        why = await _keep_lines(root, p["rows"], to, lines)
+        if why:
+            return _err(why)
+        p, why = await planned()
+        if why:
+            return why
+    if p["missing"]:
+        return (f"What is said in {rel}, sentence by sentence ({len(p['rows'])}), with how long each is said:\n"
+                f"{dubbing.listing(p['rows'], to)}\n"
+                f"Translate each into {to} FOR SPEAKING: natural, the same meaning, and about as long to say as the "
+                "original (a little shorter is better than longer; numbers and names kept). Then call dub with name "
+                f"{name}, to {to} and lines: exactly {len(p['rows'])} strings, in this order, without the numbers. "
+                "The same translation is used for subtitles and captions in that language.")
+
+    slots = p["slots"]
+    dub_name = files.claim(root, chat, f"{name}-{to}")
+    audio_rel, words_rel = files.voice_audio(dub_name), files.voice_words(dub_name)
+    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|dub|{name}|{to}|{voice_id}|"
+                         f"{json.dumps(slots, sort_keys=True)}".encode()).hexdigest()
+    try:
+        old = json.loads((root / words_rel).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = None
+    if old and (old.get("dub") or {}).get("key") == key and (root / audio_rel).is_file():
+        words, reused = old, True
+    else:
+        reused = False
+        slot_name = f"dub:{dub_name}"
+        pending = files.voice_pending(root, chat, slot_name)
+        if pending and pending.get("key") == key:
+            token = pending["token"]
+        else:
+            try:
+                job = await video.dub(workspace, slots, language=to, voice_id=voice_id, key=key)
+            except video.Refused as e:
+                return _err(f"the dub was not made: {e}")
+            token = job["token"]
+            files.voice_started(root, chat, slot_name, token, key)
+        r = await video.wait(workspace, token, BUDGET["dub"])
+        if r.get("state") == "pending":
+            return (f"Still reading the {to} dub of {name} ({len(slots)} sentences; about {r.get('eta_s', 60)} s more, and "
+                    "the first voice of a session also loads the voice). Call dub again with the same name and to to "
+                    "collect it.")
+        if r.get("state") != "done":
+            files.voice_done(root, chat, slot_name)
+            return _err(f"the dub failed: {r.get('error') or r.get('state')}.")
+        tmp = root / ".tmp" / (chat or "video")
+        dest = tmp / f"{dub_name}.m4a.part"
+        await video.fetch(workspace, token, dest, tmp, what="audio")
+        data = dest.read_bytes()
+        dest.unlink(missing_ok=True)
+        words = r.get("words") or {}
+        if p["translations"]:
+            words["translations"] = p["translations"]
+        words["dub"] = {"from": rel, "to": to, "key": key}
+        async with lock(root / audio_rel):
+            await write_fig(root, audio_rel, data, by="agent", reason="video-dub")
+            await write_fig(root, words_rel, json.dumps(words, ensure_ascii=False, indent=1).encode("utf-8"),
+                            by="agent", reason="video-dub")
+        files.voice_done(root, chat, slot_name)
+
+    new_html, notes, dub_id = dubbing.compose(html, p, to=to, src=audio_rel)
+    dub_name, drel, named = await _save(root, chat, dub_name, new_html, "video-dub")
+    text, blocks, clean = await _checks(workspace, root, drel, new_html)
+    head = [f"{'Already made' if reused else 'Made'} the {to} dub of {rel}: {drel}, with its voice {audio_rel} "
+            f"({len(slots)} sentences, voice {voice_id}).{named}",
+            dubbing.fits_text(words.get("sentences") or [], slots)]
+    changed = []
+    voices = [i for i, k in p["tracks"].items() if k == "voice"]
+    clips = [i for i, k in p["tracks"].items() if k == "footage"]
+    if voices:
+        changed.append(f"the voice-over ({', '.join(voices)}) is replaced by the dub (<audio id=\"{dub_id}\">)")
+    if clips:
+        changed.append(f"the clips' own sound ({', '.join(clips)}) plays quietly under it")
+    if "captions" in notes:
+        changed.append("the captions show the dub's words" + (f", and the box that showed the {to} translation now shows "
+                                                               "the original language" if "swapped" in notes else ""))
+    if "no_root" in notes:
+        changed.append(f"the dub's <audio id=\"{dub_id}\" src=\"{audio_rel}\" data-start=\"0\"> could NOT be placed "
+                       "(no root found): add it at the root with `edit`")
+    head.append("In the new video: " + "; ".join(changed) + "; everything else is as it was.")
+    if "arabic_font" in notes:
+        head.append(f"The captions box was styled for the original language: it is now right to left with an Arabic "
+                    f"family ({dubbing.ARABIC_FAMILY}, in <style data-cycls-dub>); restyle it if the brand calls for another.")
+    head.append(f"On-screen text (titles, labels) is still in the original language: translate it with `edit` on "
+                f"{dub_name} when the person wants the whole video in {to} (Arabic text needs dir=\"rtl\" and an Arabic "
+                "family), look at the sheet, then render it. Tell the person the voice is a built-in synthetic voice, "
+                "not the speaker's own.")
+    return _result("\n".join(h for h in head if h) + "\n\n" + text, blocks, note, _shown(drel, dub_name, clean))
 
 
 async def _footage(workspace, root, chat, inp, again=True):
@@ -913,6 +1076,10 @@ async def _exec_video(inp, workspace, ctx=None):
         if action == "subtitles":
             out = await _translate(root, name, inp.get("to"), inp.get("lines"))
             return out + note
+
+        if action == "dub":
+            out = await _dub(workspace, root, chat, name, inp.get("to"), inp.get("voice"), inp.get("lines"), note)
+            return out + note if isinstance(out, str) else out
 
         if action == "restore":
             history = versions.listing(root, rel)
