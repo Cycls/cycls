@@ -777,7 +777,7 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
         if made_from:
             source = Path(made_from).name[: -len(files.SUFFIX)]
             return _err(f"{rel} is already in {to}: it is the {to} dub of {made_from}. To make that dub again (another "
-                        f"voice, other lines), call dub with name {source}, to {to}, and voice (default or saudi).")
+                        f"voice, other lines), call dub with name {source} and to {to} (or ar-SA for the Saudi voice).")
         return _err(f"{rel} is already in {to}.")
     if lines:
         why = await _keep_lines(root, p["rows"], to, lines)
@@ -844,11 +844,15 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
     new_html, notes, dub_id = dubbing.compose(html, p, to=to, src=audio_rel)
     dub_name, drel, named = await _save(root, chat, dub_name, new_html, "video-dub")
     text, blocks, clean = await _checks(workspace, root, drel, new_html)
-    other = {"default": "saudi", "saudi": "default"}[voice_id] if to == "ar" else None
+    said = {"default": "the Standard Arabic voice", "saudi": "the Saudi voice"}.get(voice_id, f"voice {voice_id}") \
+        if to == "ar" else f"voice {voice_id}"
+    switch = ({"default": "for the Saudi voice, call dub again with to: \"ar-SA\"",
+               "saudi": "for the Standard Arabic voice, call dub again with to: \"ar\" and voice: \"default\""}
+              .get(voice_id) if to == "ar" else None)
     head = [f"{'Already made' if reused else 'Made'} the {to} dub of {rel}: {drel}, with its voice {audio_rel} "
-            f"({len(slots)} sentences, voice {voice_id}).{named}"
-            + (f" (The same lines and voice as before, so nothing was read again; for the {other} voice, call dub with "
-               f"voice: \"{other}\".)" if reused and other else ""),
+            f"({len(slots)} sentences, read in {said}).{named}"
+            + (" (The same lines and voice as before, so nothing was read again.)" if reused else "")
+            + (f" If that is not the voice the person asked for: {switch}." if switch else ""),
             dubbing.fits_text(words.get("sentences") or [], slots)]
     changed = []
     voices = [i for i, k in p["tracks"].items() if k == "voice"]

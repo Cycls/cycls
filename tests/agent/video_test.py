@@ -1718,7 +1718,11 @@ def test_a_dub_asked_again_points_at_the_voice_and_never_dubs_the_dub(monkeypatc
     assert len(fd.calls) == 1
     # The same again: nothing read again, and the reply says how to get the other voice.
     again = _text(_run({"action": "dub", "name": "hi", "to": "ar"}, ws))
-    assert "nothing was read again; for the saudi voice, call dub with voice: \"saudi\"" in again
+    assert "read in the Standard Arabic voice" in again and "nothing was read again" in again
+    assert 'for the Saudi voice, call dub again with to: "ar-SA"' in again
+    # The Saudi voice asked for the way a model reliably sends it: to ar-SA.
+    _run({"action": "dub", "name": "hi", "to": "ar-SA"}, ws)
+    assert fd.calls[-1]["voice"] == "saudi" and fd.calls[-1]["language"] == "ar"
     # No name: the video this chat dubbed, not its dub.
     out = _text(_run({"action": "dub", "to": "ar", "voice": "saudi"}, ws))
     assert "hi, this chat's latest video, was used" in out and fd.calls[-1]["voice"] == "saudi"
@@ -1733,7 +1737,7 @@ def test_a_dub_asked_again_points_at_the_voice_and_never_dubs_the_dub(monkeypatc
                                       "end": 4, "media_start": 0}]}}
     monkeypatch.setattr(video, "compile", compile_dub)
     err = _run({"action": "dub", "name": "hi-ar", "to": "ar"}, ws)
-    assert "it is the ar dub of videos/hi.video.html" in err and "call dub with name hi, to ar" in err
+    assert "it is the ar dub of videos/hi.video.html" in err and "call dub with name hi and to ar" in err
 
 
 def test_a_dubs_voice_is_found_wherever_the_model_puts_it():
