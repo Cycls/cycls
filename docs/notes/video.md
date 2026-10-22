@@ -159,6 +159,8 @@ Two things seen on the way:
 | `look` | `name`, `at?: [s]`, `zoom?` | Frames at those times (up to 9); no times: the file checked again. |
 | `render` | `name`, `quality?: final \| draft` | The MP4 path, length, size; opens it. Refused while lint finds errors. |
 | `restore` | `name` | The version before the last save. |
+| `voice`, `music`, `footage`, `subtitles` | (below) | Sound, clips, and what is said in another language. |
+| `dub` | `name`, `to`, `voice?`, `lines?` | The video said again in another language, as `<name>-<to>` (Dubbing, below). |
 
 Rules that shaped it:
 
@@ -191,7 +193,9 @@ Rules that shaped it:
   `examples/agents/video_dev.py` uses 64,000.
 - `VIDEO_ORGS`: an agent that admits anyone who signs in must not switch Video on for all of them
   by setting a URL. Entries match a workspace's organisation, its person (a personal account) or
-  its workspace id; `*` is everyone (local development only).
+  its workspace id; `*` is everyone (local development only). It decides the tool, the editor, the
+  editor's Render and, since 2026-10-22, the canvas: elsewhere a composition is a file with no preview built
+  at the door and no Edit (`?as=player` answers `editor: false` and why).
 
 ## Subtitle files
 
@@ -251,6 +255,42 @@ what was cut; the model puts them in place of one piece and tells the person. Ch
 real reader's 37.5 s clip with silences put in: 4 pieces, 18.1 s; the render came out 18.2 s with its
 sound and subtitles, one pause left of 0.84 s (word ends run a little past the sound).
 
+## Dubbing
+
+`dub {name, to, voice?, lines?}` (2026-10-22; `dubbing.py`, the service's `voice.dub`) says a video again in
+another language, Arabic or English, as a new video beside it: `videos/<name>-<to>.video.html`, its voice
+`videos/voice/<name>-<to>.m4a` and words. Decided with the user: a person's own voice in footage stays quietly
+under the dub (documentary style), Arabic is the default voice in Standard Arabic unless Saudi is asked for, and
+there is no voice cloning (the dub is a built-in voice, and the reply tells the agent to say so).
+
+- **The words.** The translation is the one `subtitles` keeps with the words (`translations[<to>]`, a sentence
+  at a time). `dub {name, to}` with no translation lists the sentences heard, each with how long it is said, and
+  asks for a translation *for speaking*; `dub {name, to, lines}` keeps it (as `subtitles` would) and dubs. The
+  same translation then serves the subtitle files and captions in that language.
+- **The timing.** Each translated sentence gets a slot from the service's sound map (the CPU `compile`, no GPU):
+  where the original sentence is heard on the video's clock (the longest stretch, when a cut splits it) and until
+  when the next one starts. The service reads each sentence alone (checked and read again like a voice-over),
+  speeds it up only as much as its slot needs and 1.25x at most (ffmpeg's `atempo`, same pitch), places its first
+  word where the original's begins, and puts them all on one track from 0 s. One still too long runs into the
+  pause after it; one that would run into the next sentence is reported `long` and the sentences after it wait
+  (never two at once). The reply names what was sped up, what started later and what is too long, with how
+  much shorter to make it; the agent shortens those and calls `dub` again with all the lines.
+- **The new composition.** The dubbed voice-overs are taken out; each dubbed piece of footage keeps its own
+  sound at x0.2 and is marked `data-dubbed` (so its words are no longer speech for subtitles, translations or
+  another dub, `dubbing.for_words`); the dub is one `<audio id="dub" data-start="0">` first inside the root;
+  `data-duck` and `data-captions` point at it; a captions box that showed the `<to>` translation now shows the
+  dub word by word and the main box shows the original language (from the dub's own `translations`), so each
+  language keeps the box styled for it; with no such box, the main box turns right to left with an Arabic family
+  (`<style data-cycls-dub>`); `<html lang>` is the new language. Sizes, reframing and everything else carry over.
+  On-screen titles are left for the agent to translate with `edit`.
+- **Again.** The same name, language, voice and slots is the same dub (`words.dub.key`); a dub cut off by Stop is
+  collected by the next call (the chat's sidecar keeps its token, `dub:<name>`).
+
+Checked on the dev service: an English voice-over video with an Arabic captions box, into Arabic (the boxes
+swapped as meant, one sentence too long reported and the next pushed 0.6 s, rendered at -16.7 LUFS with Arabic
+and English subtitle files); a real reader's talking clip in four pieces, into Arabic (her voice faint under the
+dub, Arabic captions right to left, subtitles Arabic only with the English as its translation).
+
 ## Several sizes
 
 One composition, several MP4s (`sizes.py`, 2026-10-19). The root lists the other sizes,
@@ -295,6 +335,32 @@ No service change for several sizes. Checked on the dev service: a wide title ca
 `data-sizes="vertical square"`, two rules of its own — three clean checks, three sheets (the
 vertical one with the title centred and the captions higher, its own rule), three MP4s (1920x1080,
 1080x1920, 1080x1080, about 0.5 MB each).
+
+## The brand kit
+
+Every video uses the workspace's brand kit when it has one, not only the templates (2026-10-22, `brand.py`,
+`fonts.py`). The kit is what Design reads: `brand/brand.yaml` (colours, `font_heading`, `font_body`; the
+brand-kit skill writes it), `brand/logo.*`, and the brand's own font files in `brand/fonts/*.ttf|otf`.
+
+- **The guide** adds one line: use the kit in every video unless the person asks otherwise — its colours by
+  role, its heading and body fonts (a family the video catalogue lacks and the kit has no file of: the closest
+  catalogue family), its own font files by the exact family each file declares, with the weights and whether it
+  draws Arabic, Arabic text in a family that has Arabic, and the logo as `<img src="brand/logo.png">`.
+- **A save that leaves it out** (`write`, `edit`, `template`) is told so in one line when the composition uses
+  none of the kit's colours (any case, short or long hex) and not its logo.
+- **Templates** get the accent, `accent2`, background and text (both or neither: one alone is a contrast guess),
+  the heading and body fonts and the logo where the template takes them; an Arabic template keeps an Arabic
+  family.
+- **Font files.** `fonts.py` reads each file's family (the typographic family, else the family), weight, italic
+  and whether it maps ALEF, from the font's own tables. A check, render, dub, editor render or canvas preview
+  whose composition names one of those families sends its files with `meta.fonts`; the service gives them an
+  `@font-face` for that job alone (a family the catalogue has keeps the catalogue's faces) and they ship with the
+  project, so the GPU renders them and the preview inlines them. At most 8 files of 4 MB. The family a stack
+  meant, dropped for a fallback, is now a warning (`font_substituted`) instead of silent. Not yet: the video
+  editor's own preview shows such a family as its fallback (the render is right).
+
+Checked on the dev service: the catalogue's Amiri renamed "Brand Serif" in `brand/fonts`, named before Cairo:
+the sheet drew it in the brand font and the canvas page carried it inline.
 
 ## The canvas
 
@@ -402,6 +468,11 @@ waits 4 s for it, `guide` 30 s; when none can be had or none verifies, the built
 (`fallback.py`, generated from the signed v1) is used and the reply says so. Changing the contract
 means signing it again (`scripts/contract.py sign`) and deploying the service; no agent redeploys.
 
+v4 was signed again in place on 2026-10-22: it now teaches several sizes (`data-sizes`, `#root[data-shape]`
+rules), `data-reframe`, a captions box in another language (`data-cap-lang`) and the workspace's own fonts,
+which until then only the SDK's tool text taught. The tool text keeps the actions (`ACTIONS`) and no longer
+repeats them; `fallback.py` is the new v4.
+
 ## Environment
 
 | Variable | Meaning |
@@ -465,6 +536,8 @@ checklist) and its README.
 | `cycls/_agent/video/tool.py` | The short and the whole form; `video_called`; the routing paragraph. |
 | `cycls/_agent/video/run.py` | The executor. |
 | `cycls/_agent/video/files.py`, `media.py`, `report.py` | Names and the sidecar; the images sent; the reply. |
+| `cycls/_agent/video/dubbing.py` | A dub's slots from the sound map, the dubbed composition, what the reply says of the fit. |
+| `cycls/_agent/video/brand.py`, `fonts.py` | The brand kit for every video; the kit's font files read and sent. |
 | `cycls/_agent/tools/ondemand.py` | The seam: a tool short until a chat uses it, swapped in by the loop; its start warms the GPU. |
 | `cycls/_agent/video/editor.py` | The editor's sessions (open, replace, close) and the render it asks for. |
 | `cycls/_agent/web/video_routes.py` | `?as=player`; `/video/editor`, `/video/render`; which files are versioned. |
