@@ -222,7 +222,13 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
     if focus.get("points"):
         w, h = info.get("width") or 0, info.get("height") or 0
         shape = "wide" if w > h else "upright" if h > w else "square"
-        many = f" (up to {focus['most']} faces at once: the largest is followed)" if (focus.get("most") or 0) > 1 else ""
+        if (focus.get("most") or 0) > 1 and focus.get("follows") == "speaker":
+            many = (f" (up to {focus['most']} faces at once: the one talking is followed, cut to as they take turns"
+                    + (f", {focus['changes']} times" if focus.get("changes") else "") + ")")
+        elif (focus.get("most") or 0) > 1:
+            many = f" (up to {focus['most']} faces at once: the largest is followed)"
+        else:
+            many = ""
         lines.append(f"A face is on screen in {round(100 * (focus.get('seen') or 0))}% of it{many}. Add data-reframe to a "
                      "<video> of it and its crop follows that face (the frame moves with them, and jumps at a cut): use it "
                      f"whenever the video's shape crops this {shape} clip — a wide clip in a vertical or square video, or "
@@ -234,6 +240,16 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
         lines.append(f"The words and their times are in {words_rel}. To correct a misheard word, change its text there "
                      "and leave its times: the captions follow.")
     return "\n".join(lines)
+
+
+def queue_text(waiting):
+    """Where a waiting job is, when the service says it is queued behind other videos: [(job, result)]."""
+    ahead = [r.get("ahead") for _, r in waiting if r.get("queued") and isinstance(r.get("ahead"), int)]
+    if not ahead:
+        return ""
+    n = max(ahead)
+    return (f" Other videos are using the renderers: {n} {'is' if n == 1 else 'are'} ahead of this one, so it waits its "
+            "turn; tell the person it is queued.")
 
 
 def audio_facts(a):

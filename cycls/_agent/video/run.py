@@ -161,7 +161,7 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     if state == "pending":
         what = "the frames" if kind == "look" else "the browser check and the frames"
         return (f"{head} The renderer is still starting or busy, so {what} are not ready yet (about "
-                f"{r.get('eta_s', 60)} s more). Call `look` for them."), [], True
+                f"{r.get('eta_s', 60)} s more).{report.queue_text([(None, r)])} Call `look` for them."), [], True
     if state != "done":
         return f"{head} The check could not run: {r.get('error') or state}.", [], True
     parts = [head]
@@ -345,8 +345,8 @@ async def _render(workspace, root, chat, name, quality):
     if waiting:
         left = ", ".join(j["shape"] or "the main size" for j, _ in waiting)
         eta = max(r.get("eta_s", 60) for _, r in waiting)
-        return (f"Still rendering {rel} ({left}; about {eta} s more). Call `render` again with the same name "
-                "to collect it — it keeps running; do not change the composition meanwhile.")
+        return (f"Still rendering {rel} ({left}; about {eta} s more).{report.queue_text(waiting)} Call `render` again "
+                "with the same name to collect it — it keeps running; do not change the composition meanwhile.")
     for j, r in zip(jobs, results):
         if r.get("state") != "done":
             files.render_done(root, chat, j["slot"], None)
@@ -399,6 +399,10 @@ async def _render(workspace, root, chat, name, quality):
         text += " " + report.audio_facts(v["audio"])
     if v.get("faults"):
         text += f" (The renderer noted: {', '.join(v['faults'])}.)"
+    if results[0].get("ai_voice"):
+        text += (" Its voice is AI-generated" + (", and the MP4 says so in its metadata" if v.get("labelled") else "")
+                 + ": when the person posts it, YouTube, TikTok and Instagram ask for a realistic AI voice to be "
+                 "labelled — say so once when you hand it over.")
     sound = dubbing.for_words(jobs[0]["sound"], dubbing.dubbed_ids(html))
     if sound:
         await asyncio.to_thread(files.save_sound, root, target, sound)
@@ -654,7 +658,8 @@ async def _voice(workspace, root, chat, name, text, voice_id, language):
     r = await video.wait(workspace, token, BUDGET["voice"])
     if r.get("state") == "pending":
         return (f"Still reading {name} aloud (about {r.get('eta_s', 30)} s more; the first voice-over of a session also "
-                "loads the voice). Call voice again with the same name and text to collect it.")
+                f"loads the voice).{report.queue_text([(None, r)])} Call voice again with the same name and text to "
+                "collect it.")
     if r.get("state") != "done":
         files.voice_done(root, chat, name)
         return _err(f"the voice-over failed: {r.get('error') or r.get('state')}.")
@@ -782,8 +787,8 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
         r = await video.wait(workspace, token, BUDGET["dub"])
         if r.get("state") == "pending":
             return (f"Still reading the {to} dub of {name} ({len(slots)} sentences; about {r.get('eta_s', 60)} s more, and "
-                    "the first voice of a session also loads the voice). Call dub again with the same name and to to "
-                    "collect it.")
+                    f"the first voice of a session also loads the voice).{report.queue_text([(None, r)])} Call dub again "
+                    "with the same name and to to collect it.")
         if r.get("state") != "done":
             files.voice_done(root, chat, slot_name)
             return _err(f"the dub failed: {r.get('error') or r.get('state')}.")

@@ -1634,3 +1634,51 @@ def test_the_kits_fonts_go_with_a_composition_that_names_them(monkeypatch, tmp_p
     assert set(sent["fonts"]) <= set(sent["files"])
     _run({"action": "write", "name": "plain", "html": COMP}, _ws(tmp_path))
     assert svc.submitted[-1]["fonts"] is None                               # named by nothing: not sent
+
+
+# ---- many organisations: the queue, the AI voice; the speaker followed ----------------------------
+
+def test_a_job_queued_behind_other_videos_says_so(monkeypatch, tmp_path):
+    from cycls._agent.video import report
+    assert report.queue_text([(None, {"state": "pending"})]) == ""
+    assert "2 are ahead of this one" in report.queue_text([(None, {"queued": True, "ahead": 2}),
+                                                           (None, {"queued": True, "ahead": 1})])
+    assert "1 is ahead" in report.queue_text([(None, {"queued": True, "ahead": 1})])
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    svc.state = "pending"
+    original = svc.wait
+
+    async def queued(ws, token, budget):
+        r = await original(ws, token, budget)
+        return {**r, "queued": True, "position": 3, "ahead": 2}
+    monkeypatch.setattr(video, "wait", queued)
+    out = _run({"action": "write", "name": "q", "html": COMP}, _ws(tmp_path))
+    assert "2 are ahead of this one" in _text(out)
+    assert "2 are ahead of this one" in _run({"action": "render", "name": "q"}, _ws(tmp_path))
+
+
+def test_a_render_with_an_ai_voice_says_so(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _run({"action": "write", "name": "v", "html": COMP}, _ws(tmp_path))
+    svc.result = {"state": "done", "kind": "render", "ai_voice": True,
+                  "video": {"bytes": 8, "duration": 4.0, "labelled": True}}
+    out = _run({"action": "render", "name": "v"}, _ws(tmp_path))
+    text = out["_model"] if isinstance(out, dict) else out
+    assert "Its voice is AI-generated, and the MP4 says so in its metadata" in str(text)
+    svc.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 4.0}}
+    out = _run({"action": "render", "name": "v"}, _ws(tmp_path))
+    assert "AI-generated" not in str(out["_model"] if isinstance(out, dict) else out)
+
+
+def test_the_footage_reply_says_when_the_one_talking_is_followed():
+    from cycls._agent.video import report
+    info = {"duration": 30.0, "width": 1920, "height": 1080, "shots": [[0, 30]],
+            "focus": {"points": [[0, 0.3, 0.4]], "seen": 0.95, "most": 2, "follows": "speaker", "changes": 4}}
+    text = report.footage_text("uploads/two.mp4", info)
+    assert "the one talking is followed, cut to as they take turns, 4 times" in text
+    info["focus"]["follows"] = "largest"
+    assert "the largest is followed" in report.footage_text("uploads/two.mp4", info)
