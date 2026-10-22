@@ -677,6 +677,16 @@ async def _voice(workspace, root, chat, name, text, voice_id, language):
     return report.voice_text(words, rel, warnings=r.get("warnings") or [], voice_id=voice_id)
 
 
+_LANGUAGE_NAMES = {"arabic": "ar", "عربي": "ar", "العربية": "ar", "عربية": "ar", "english": "en", "انجليزي": "en",
+                   "إنجليزي": "en", "الإنجليزية": "en", "الانجليزية": "en"}
+
+
+def _language(raw):
+    """A language as the model gives it — ar, AR, ar-SA, Arabic, العربية — as its code."""
+    s = str(raw or "").strip().lower()
+    return _LANGUAGE_NAMES.get(s) or (s.split("-")[0] if s.split("-")[0] in ("ar", "en") else s)
+
+
 async def _keep_lines(root, rows, to, lines):
     """A translation sent with `dub`, kept with the words like `subtitles` keeps one: rows are the
     sentences heard (dub.plan), the lines one for each, in their order. → why not, or None."""
@@ -713,7 +723,7 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
         html = (root / rel).read_text(encoding="utf-8")
     except FileNotFoundError:
         return _err(f"there is no {rel}; `write` it first.")
-    to = str(to or "").strip().lower()
+    to = _language(to)
     if to not in ("ar", "en"):
         return _err("to: ar or en, the language to dub the video into.")
     voice_id = voice_id or "default"
@@ -993,6 +1003,13 @@ async def _exec_video(inp, workspace, ctx=None):
                 out["_model"][-1]["text"] += note
             return out
         name = files.clean_name(inp.get("name"))
+        if not name and action not in ("write", "template"):
+            # A call that leaves the name out (weaker models do, after a long `lines`) means this
+            # chat's video when there is one: its latest.
+            mine = files.load(root, chat).get("names") or []
+            if mine:
+                name = mine[-1]
+                note = f"\n(name was left out: {name}, this chat's latest video, was used.)" + note
         if not name:
             return _err("name is required: the video's name, e.g. launch-reel.")
         rel = files.composition(name)
@@ -1103,7 +1120,7 @@ async def _exec_video(inp, workspace, ctx=None):
             return out
 
         if action == "subtitles":
-            out = await _translate(root, name, inp.get("to"), inp.get("lines"))
+            out = await _translate(root, name, _language(inp.get("to")) if inp.get("to") else None, inp.get("lines"))
             return out + note
 
         if action == "dub":

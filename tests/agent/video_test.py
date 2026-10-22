@@ -1682,3 +1682,24 @@ def test_the_footage_reply_says_when_the_one_talking_is_followed():
     assert "the one talking is followed, cut to as they take turns, 4 times" in text
     info["focus"]["follows"] = "largest"
     assert "the largest is followed" in report.footage_text("uploads/two.mp4", info)
+
+
+# ---- what a weaker model leaves out ----------------------------------------------------------------
+
+def test_a_call_without_a_name_means_this_chats_latest_video(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    ws = _ws(tmp_path)
+    assert _run({"action": "look"}, ws).startswith("Error: name is required")          # this chat made none
+    _run({"action": "write", "name": "first", "html": COMP}, ws)
+    _run({"action": "write", "name": "second", "html": COMP}, ws)
+    out = _run({"action": "look"}, ws)
+    assert "second, this chat's latest video, was used" in _text(out)
+    assert svc.submitted[-1]["html"] == COMP
+    assert _run({"action": "write", "html": COMP}, ws).startswith("Error: name is required")   # never for a new file
+
+
+def test_a_language_is_taken_as_the_model_writes_it():
+    assert [vrun._language(x) for x in ("ar", "AR", "ar-SA", "Arabic", "العربية", "en", "English", "en-GB", "fr")] == \
+        ["ar", "ar", "ar", "ar", "ar", "en", "en", "en", "fr"]
