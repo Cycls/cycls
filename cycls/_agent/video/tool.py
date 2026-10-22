@@ -34,7 +34,7 @@ _SHORT = _PURPOSE + (
 
 _ACTIONS_TEXT = """ACTIONS
 - guide: load these instructions (done) and start the renderer; lists the formats, fonts and the videos already here.
-- write {name, html}: save the whole composition as videos/<name>.video.html and check it. Or {name, path} to adopt a composition you wrote with the editor. Saved even when the checks find errors.
+- write {name, html}: save the whole composition as videos/<name>.video.html and check it. When the workspace has a brand kit (the guide names it), every video uses its colours, fonts and logo unless the person asks otherwise. Or {name, path} to adopt a composition you wrote with the editor. Saved even when the checks find errors.
 - edit {name, changes: [{old, new, all?}]}: exact find and replace in the saved composition; every change applies or none does. Same checks as write. Prefer it to rewriting the whole file.
 - template {name, template, vars}: make the composition from one of the templates above with your words, numbers and images (the brand kit fills the colours and fonts you leave out), then the same checks as write.
 - look {name, at?: [seconds], zoom?, size?}: the frames at those times (up to 9), zoom a CSS selector or "x,y,w,h" to look closely; size: one of the video's sizes alone (SEVERAL SIZES above). With no times, the file on disk is checked again.

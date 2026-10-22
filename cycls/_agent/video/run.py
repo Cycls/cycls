@@ -226,26 +226,35 @@ def _shown(rel, name, clean, version=None):
     return ui
 
 
-def _with_brand(root, template, given):
-    """The workspace brand kit for the colours and fonts the model left out: the template's own
-    defaults stay where the kit says nothing, or names a font the catalogue lacks."""
-    from ..design.brand import _load_brand
+def _catalogue():
+    """The contract's fonts and templates as last fetched, or the built-in copy's fonts."""
     from .contract import cached
     from .fallback import FALLBACK
 
-    brand = _load_brand(root) or {}
-    if not brand:
+    c = cached() or {}
+    return c.get("fonts") or FALLBACK.get("fonts") or [], c.get("templates")
+
+
+def _with_brand(root, template, given):
+    """The workspace brand kit for the colours, fonts and logo the model left out (brand.py): the
+    template's own defaults stay where the kit says nothing, or names a font the catalogue lacks."""
+    from . import brand
+
+    fonts, templates = _catalogue()
+    k = brand.kit(root, fonts)
+    if not k:
         return given
-    c = cached() or FALLBACK
-    fonts = {f["family"] for f in c.get("fonts") or []}
-    takes = next((t["vars"] for t in (cached() or {}).get("templates") or [] if t.get("id") == template), None)
-    out = dict(given)
-    for var, value in (("accent", brand.get("accent") or brand.get("primary")),
-                       ("heading_font", brand.get("heading") if brand.get("heading") in fonts else None),
-                       ("body_font", brand.get("body") if brand.get("body") in fonts else None)):
-        if value and var not in out and (takes is None or var in takes):
-            out[var] = value
-    return out
+    takes = next((t["vars"] for t in templates or [] if t.get("id") == template), None)
+    arabic = str(given.get("lang") or "").startswith("ar") or str(given.get("dir") or "").lower() == "rtl"
+    return {**brand.template_vars(k, takes, fonts, arabic), **given}
+
+
+def _brand_hint(root, html):
+    """A save that leaves the workspace's brand kit out is told so (brand.hint)."""
+    from . import brand
+
+    line = brand.hint(root, html, _catalogue()[0])
+    return f"\n{line}" if line else ""
 
 
 def _result(text, blocks, note="", ui=None):
@@ -271,6 +280,10 @@ async def _guide(workspace, root, loaded):
     if c.get("fallback"):
         lines.append(f"(The service's contract could not be used — {c['fallback']} — so the built-in copy is.)")
     lines.append("Videos here: " + (", ".join(f"{n}{' (rendered)' if mp4 else ''}" for n, mp4 in have) if have else "none yet."))
+    from . import brand
+    kit = brand.note(brand.kit(root, c["fonts"]), c["fonts"])
+    if kit:
+        lines.append(kit)
     if loaded is None:   # no harness swaps this tool's description: the instructions come in the reply
         lines.append("\n" + c["text"])
     else:
@@ -987,7 +1000,8 @@ async def _exec_video(inp, workspace, ctx=None):
             name, rel, named = await _save(root, chat, name, html, "video-write")
             text, blocks, clean = await _checks(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
-            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}", blocks, note, _shown(rel, name, clean))
+            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}{_brand_hint(root, html)}", blocks, note,
+                           _shown(rel, name, clean))
 
         if action == "voice":
             language = inp.get("language")
@@ -1014,7 +1028,8 @@ async def _exec_video(inp, workspace, ctx=None):
             name, rel, named = await _save(root, chat, name, html, "video-template")
             text, blocks, clean = await _checks(workspace, root, rel, html)
             return _result(f"Made {rel} from the {which} template ({len(html) / 1024:.1f} KB).{named} It is an ordinary "
-                           f"composition now: change it with `edit`.\n{text}", blocks, note, _shown(rel, name, clean))
+                           f"composition now: change it with `edit`.\n{text}{_brand_hint(root, html)}", blocks, note,
+                           _shown(rel, name, clean))
 
         if action == "edit":
             changes = _read_changes(inp.get("changes"))
@@ -1043,8 +1058,8 @@ async def _exec_video(inp, workspace, ctx=None):
                                         "it again, then edit.")
             files.remember(root, chat, name)
             text, blocks, clean = await _checks(workspace, root, rel, new)
-            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}", blocks,
-                           note, _shown(rel, name, clean, version))
+            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}"
+                           f"{_brand_hint(root, new)}", blocks, note, _shown(rel, name, clean, version))
 
         if action == "look":
             try:

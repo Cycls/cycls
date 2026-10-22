@@ -1501,3 +1501,72 @@ def test_a_dub_still_reading_is_collected_by_the_next_call(monkeypatch, tmp_path
     monkeypatch.setattr(video, "wait", real_wait)
     _run({"action": "dub", "name": "hi", "to": "ar"}, _ws(tmp_path))
     assert len(fd.calls) == 1 and (tmp_path / "videos" / "hi-ar.video.html").exists()
+
+
+# ---- the brand kit in every video --------------------------------------------------------------
+
+def _kit(root, logo=True):
+    (root / "brand").mkdir(exist_ok=True)
+    (root / "brand" / "brand.yaml").write_text(
+        'primary_color: "#0C2340"\naccent_color: "#f5a623"\nbackground_color: "#0b1020"\ntext_color: "#ffffff"\n'
+        'font_heading: "Playfair Display"\nfont_body: "Brand Sans"\n', encoding="utf-8")
+    if logo:
+        (root / "brand" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
+
+
+def test_the_brand_kit_is_read_for_video_and_said_in_the_guide(monkeypatch, tmp_path):
+    from cycls._agent.video import brand
+    fonts = FALLBACK["fonts"]
+    assert brand.kit(tmp_path, fonts) is None and brand.note(None) == ""
+    _kit(tmp_path)
+    k = brand.kit(tmp_path, fonts)
+    assert k["colours"] == {"primary": "#0c2340", "accent": "#f5a623", "background": "#0b1020", "text": "#ffffff"}
+    assert k["heading"] == ("Playfair Display", True) and k["body"] == ("Brand Sans", False)
+    assert k["logo"] == "brand/logo.png"
+    line = brand.note(k, fonts)
+    assert line.startswith("Brand kit (brand/brand.yaml): use it in every video")
+    assert "headings in Playfair Display" in line and "Brand Sans is not a video font" in line
+    assert "Arabic text in an Arabic family" in line and '<img src="brand/logo.png">' in line
+
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    monkeypatch.setattr(contract, "get", lambda wait=None: asyncio.sleep(0, result={**FALLBACK, "fallback": None}))
+    assert "Brand kit (brand/brand.yaml)" in _run({"action": "guide"}, _ws(tmp_path))
+
+
+def test_a_video_that_leaves_the_brand_out_is_told_so(monkeypatch, tmp_path):
+    from cycls._agent.video import brand
+    _kit(tmp_path)
+    assert "none of the workspace brand kit's colours (#0c2340" in brand.hint(tmp_path, COMP)
+    assert brand.hint(tmp_path, COMP.replace("Hi", '<b style="color:#F5A623">Hi</b>')) == ""     # a brand colour, any case
+    assert brand.hint(tmp_path, COMP.replace("Hi", '<img src="brand/logo.png">')) == ""
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    out = _run({"action": "write", "name": "plain", "html": COMP}, _ws(tmp_path))
+    assert "Brand: this video uses none of the workspace brand kit's" in _text(out)
+    out = _run({"action": "write", "name": "on-brand", "html": COMP.replace("Hi", '<i style="color:#0c2340">Hi</i>')},
+               _ws(tmp_path))
+    assert "Brand:" not in _text(out)
+
+
+def test_a_template_takes_the_kits_colours_fonts_and_logo_where_it_has_them():
+    from cycls._agent.video import brand
+    fonts = FALLBACK["fonts"]
+    k = {"colours": {"primary": "#0c2340", "accent": "#f5a623", "background": "#0b1020", "text": "#ffffff"},
+         "heading": ("Playfair Display", True), "body": ("Cairo", True), "logo": "brand/logo.svg"}
+    announcement = {"accent", "accent2", "background", "text", "heading_font", "body_font", "logo", "headline"}
+    assert brand.template_vars(k, announcement, fonts) == {
+        "accent": "#f5a623", "accent2": "#0c2340", "background": "#0b1020", "text": "#ffffff",
+        "heading_font": "Playfair Display", "body_font": "Cairo", "logo": "brand/logo.svg"}
+    deck = {"accent", "background", "text", "heading_font", "slides"}
+    assert set(brand.template_vars(k, deck, fonts)) == {"accent", "background", "text", "heading_font"}
+    # The catalogue not at hand: only what every template takes.
+    assert set(brand.template_vars(k, None, fonts)) == {"accent", "background", "text", "heading_font"}
+    # An Arabic template keeps an Arabic family: a Latin-only brand font is not given.
+    ar = brand.template_vars(k, announcement, fonts, arabic=True)
+    assert "heading_font" not in ar and ar["body_font"] == "Cairo"
+    # Background without its text colour is a contrast guess: neither is given.
+    half = {**k, "colours": {"accent": "#f5a623", "background": "#ffffff"}}
+    assert "background" not in brand.template_vars(half, announcement, fonts)
