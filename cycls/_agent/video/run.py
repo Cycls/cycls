@@ -1013,6 +1013,12 @@ async def _exec_video(inp, workspace, ctx=None):
     action = str(inp.get("action") or "").lower().strip()
     loaded = VIDEO_LOADED.get()
     note = _LOADED_NOTE if loaded is False and action != "guide" else ""
+    # What each call carried, without its content: argument names, and the few short choices that
+    # change what is made (a voice or a language the model meant may be missing or misplaced).
+    from ..logs import log
+    log("video_call", chat_id=chat, action=action[:20], keys=sorted(str(k)[:20] for k in inp)[:20],
+        voice=str(inp.get("voice"))[:20] if "voice" in inp else None, to=str(inp.get("to"))[:12] if "to" in inp else None,
+        lines=len(inp["lines"]) if isinstance(inp.get("lines"), list) else None)
     if action not in ACTIONS:
         return _err(f"action must be one of {', '.join(ACTIONS)}.")
     if not video.offered(workspace):
