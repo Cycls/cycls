@@ -331,10 +331,46 @@ again the next time `footage` asks for it (the store says "none" for facts witho
 Checked on the dev service: an off-centre speaker in a wide clip, in a vertical video — reframed he
 fills the frame, the centre crop showed the camera behind him and half his face.
 
+**Whoever is talking** (2026-10-22, `faces.py` version 2): when two or more faces of similar size share a
+shot of a clip with words, the crop follows the one speaking — their mouths read again 8 times a second over
+the speech, each against their own stillness — and cuts (never pans) to the other when they take a turn of a
+second or more, held at least 2 s, 0.1 s before their first word; a short "yeah" is not followed. The facts
+say `follows: "speaker"` and how many `changes`, and the footage reply says "the one talking is followed".
+One face, or no words: as before. Measured on a real two-person interview: on the speaker 98% of the time
+(the largest face: 46%), no wrong cut; on the dev service a two-shot of real read speech in a vertical video
+cut to each speaker at the right moment. Clips made ready before keep their largest-face track.
+
 No service change for several sizes. Checked on the dev service: a wide title card with a voice-over and word captions,
 `data-sizes="vertical square"`, two rules of its own — three clean checks, three sheets (the
 vertical one with the title centred and the captions higher, its own rule), three MP4s (1920x1080,
 1080x1920, 1080x1080, about 0.5 MB each).
+
+## Many organisations
+
+What opening Video beyond one organisation needs (2026-10-22). Built:
+
+- **Turns on the GPUs** (the service, `slots.py`): jobs take tickets, served first come first served across
+  organisations; an organisation holding a renderer while another waits gets at most 3 jobs in its turn, then
+  the renderer goes to whoever waited longest (still one organisation per container, stopped between them). A
+  queued job's state says `queued`, `position`, `ahead`, `eta_s`; check, render, voice and dub replies say how
+  many videos are ahead and to tell the person. A job that waited past its limit says others were using every
+  renderer and that the file is saved.
+- **How many renderers is a setting** (`gpu_slots` in the service's settings Dict, default 2, at most 8), read
+  every 30 s; no deploy to change it.
+- **Ceilings**: the whole service a day (`service_gpu_s_day`, default 24 GPU hours: "Video is busy today…"),
+  each organisation and person as before, and per organisation overrides (`tenant_overrides`, by tenant hash).
+- **An AI voice is labelled**: a render whose sound has a voice-over or a dub carries `comment`/`description`
+  "This video contains an AI-generated voice (text-to-speech)." and IPTC's `DigitalSourceType`
+  (`compositeWithTrainedAlgorithmicMedia`) in an XMP box (checked with ffprobe on a dev render); the render
+  reply says so and asks the agent to mention that platforms want such voices labelled. Re-encoding uploads
+  drop these tags; the voices' inaudible watermark survives them.
+- **The canvas follows `VIDEO_ORGS`** (see What the agent needs).
+
+Not built, for the people deciding: which organisations (VIDEO_ORGS is an environment variable: adding one is
+a super-dev deploy); how many renderers and what daily ceiling to pay for; the voices — both built-in voices
+are the same unnamed speaker's (Chatterbox's `conds.pt`), with no signed release, and NAMAA's training data has
+no provenance statement yet (cycls-video `docs/licences.md`); terms that say videos may carry an AI voice;
+two music tracks whose artist also sells them (Content ID claims possible).
 
 ## The brand kit
 
