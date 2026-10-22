@@ -52,7 +52,7 @@ def _key(html, images, files_info, bundle):
     return h.hexdigest()[:32]
 
 
-async def _video_response(root, file_path, subject):
+async def _video_response(root, file_path, subject, ws_id=None):
     from cycls._agent import video
     from cycls._agent.design.store import version_of
     from cycls._agent.video import media
@@ -69,6 +69,12 @@ async def _video_response(root, file_path, subject):
            "render": {"path": mp4, "exists": (root / mp4).is_file()}}
     if not video.configured():
         out["reason"] = "Video is not configured here."
+        return out
+    # Video is per organisation (VIDEO_ORGS): elsewhere a composition is a file, not a preview, and
+    # the canvas offers no Edit (`editor`).
+    out["editor"] = video.offered(types.SimpleNamespace(subject=subject, ws=ws_id))
+    if not out["editor"]:
+        out["reason"] = "Video is not switched on for this organisation."
         return out
     images, image_files, problems = await asyncio.to_thread(media.collect, html, root)
     audio, audio_files, words, more = await asyncio.to_thread(media.collect_audio, html, root)
@@ -97,7 +103,8 @@ async def _video_response(root, file_path, subject):
     hit = cache / f"{key}.json"
     if hit.is_file():
         try:
-            return {**json.loads(hit.read_text(encoding="utf-8")), "version": out["version"], "render": out["render"]}
+            return {**json.loads(hit.read_text(encoding="utf-8")), "version": out["version"], "render": out["render"],
+                    "editor": True}
         except ValueError:
             pass
     ws = types.SimpleNamespace(subject=subject)

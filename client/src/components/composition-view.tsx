@@ -13,6 +13,7 @@ export interface CompositionManifest {
   reason: string | null;
   version?: string;
   render?: { path: string; exists: boolean };
+  editor?: boolean;    // Video is offered to this organisation: false hides Edit
 }
 
 export function parseManifest(data: string | null): CompositionManifest | null {
@@ -70,7 +71,7 @@ export default function CompositionView({ data, name, openFile, onDownload, onEd
 
   return (
     <div className="relative flex h-full w-full flex-col bg-black">
-      {onEdit && (
+      {onEdit && m.editor !== false && (
         <button type="button" onClick={onEdit} title={t("videoEditHint")} data-testid="video-edit"
                 className="absolute start-3 top-3 z-10 rounded-full border border-white/15 bg-black/60 px-3 py-1 text-xs text-white/90 backdrop-blur transition-colors hover:text-white cursor-pointer">
           {editOpen ? t("videoEditorBack") : t("videoEdit")}

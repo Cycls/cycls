@@ -129,4 +129,11 @@ describe("Edit, into the video editor", () => {
     fireEvent.click(screen.getByTestId("video-edit"));
     expect(onEdit).toHaveBeenCalledOnce();
   });
+
+  it("is not offered where the organisation has no Video", () => {
+    const off = JSON.stringify({ html: null, reason: "Video is not switched on for this organisation.", editor: false });
+    const { container } = render(<CompositionView data={off} name="launch.video.html" onEdit={vi.fn()} />);
+    expect(container.querySelector('[data-testid="video-edit"]')).toBeNull();
+    expect(container.textContent).toContain("Video is not switched on for this organisation.");
+  });
 });

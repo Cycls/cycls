@@ -588,6 +588,14 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
     f.write_text(COMP.replace("Hi", "Away"), encoding="utf-8")
     assert "paused" in asyncio.run(_video_response(tmp_path, f, "org1:u"))["reason"]
 
+    # Another organisation: the file, not a preview (no compile at the door), and no Edit on the canvas.
+    monkeypatch.setattr(video, "compile", errors)
+    other = asyncio.run(_video_response(tmp_path, f, "org2:u"))
+    assert other["html"] is None and other["editor"] is False and "not switched on" in other["reason"]
+    assert asyncio.run(_video_response(tmp_path, f, "org2:u", "t-team"))["editor"] is False
+    monkeypatch.setenv("VIDEO_ORGS", "org1,t-team")
+    assert asyncio.run(_video_response(tmp_path, f, "org2:u", "t-team"))["editor"] is True
+
 
 def test_a_template_is_filled_with_the_brand_kit_for_what_was_left_out(monkeypatch, tmp_path):
     _on(monkeypatch)

@@ -740,7 +740,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                                           request.query_params.get("page"))
         # A Video composition plays from the page the video service builds of it (video_routes.py).
         if request.query_params.get("as") == "player" and _composition(file_path.name):
-            return JSONResponse(await _video_response(ws.root, file_path, ws.subject), headers=_NO_CACHE)
+            return JSONResponse(await _video_response(ws.root, file_path, ws.subject, getattr(ws, "ws", None)),
+                                headers=_NO_CACHE)
         # ?as=slides previews a presentation as a slide viewer — a JSON manifest
         # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
         # the deck slide-by-slide rather than as a flat PDF.
