@@ -677,7 +677,8 @@ async def _voice(workspace, root, chat, name, text, voice_id, language):
     return report.voice_text(words, rel, warnings=r.get("warnings") or [], voice_id=voice_id)
 
 
-_LANGUAGE_NAMES = {"arabic": "ar", "عربي": "ar", "العربية": "ar", "عربية": "ar", "english": "en", "انجليزي": "en",
+_LANGUAGE_NAMES = {"arabic": "ar", "عربي": "ar", "العربية": "ar", "عربية": "ar", "saudi": "ar", "saudi arabic": "ar",
+                   "سعودي": "ar", "english": "en", "انجليزي": "en",
                    "إنجليزي": "en", "الإنجليزية": "en", "الانجليزية": "en"}
 
 
@@ -685,6 +686,23 @@ def _language(raw):
     """A language as the model gives it — ar, AR, ar-SA, Arabic, العربية — as its code."""
     s = str(raw or "").strip().lower()
     return _LANGUAGE_NAMES.get(s) or (s.split("-")[0] if s.split("-")[0] in ("ar", "en") else s)
+
+
+_SAUDI = ("saudi", "sa", "ar-sa", "saudi arabic", "najdi", "سعودي", "سعودية", "السعودية", "لهجة سعودية")
+
+
+def _dub_voice(inp):
+    """The voice a dub asks for, wherever the model put it: `voice` (or voice_id, dialect, accent), as a word
+    ("Saudi", "سعودي"), or a Saudi `to` (ar-SA). None when it names none."""
+    raw = next((inp.get(k) for k in ("voice", "voice_id", "dialect", "accent") if inp.get(k)), None)
+    s = str(raw or "").strip().lower()
+    if s in ("default", "standard", "msa", "fusha", "فصحى"):
+        return "default"
+    if s in _SAUDI or "saudi" in s or "سعود" in s:
+        return "saudi"
+    if not s and str(inp.get("to") or "").strip().lower() in _SAUDI:
+        return "saudi"
+    return s or None
 
 
 async def _keep_lines(root, rows, to, lines):
@@ -1136,7 +1154,7 @@ async def _exec_video(inp, workspace, ctx=None):
             return out + note
 
         if action == "dub":
-            out = await _dub(workspace, root, chat, name, inp.get("to"), inp.get("voice"), inp.get("lines"), note)
+            out = await _dub(workspace, root, chat, name, inp.get("to"), _dub_voice(inp), inp.get("lines"), note)
             return out + note if isinstance(out, str) else out
 
         if action == "restore":

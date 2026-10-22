@@ -1734,3 +1734,13 @@ def test_a_dub_asked_again_points_at_the_voice_and_never_dubs_the_dub(monkeypatc
     monkeypatch.setattr(video, "compile", compile_dub)
     err = _run({"action": "dub", "name": "hi-ar", "to": "ar"}, ws)
     assert "it is the ar dub of videos/hi.video.html" in err and "call dub with name hi, to ar" in err
+
+
+def test_a_dubs_voice_is_found_wherever_the_model_puts_it():
+    v = vrun._dub_voice
+    assert v({"voice": "saudi"}) == "saudi" and v({"voice": "Saudi"}) == "saudi" and v({"voice": "سعودي"}) == "saudi"
+    assert v({"voice_id": "saudi"}) == "saudi" and v({"dialect": "Saudi Arabic"}) == "saudi" and v({"accent": "Najdi"}) == "saudi"
+    assert v({"to": "ar-SA"}) == "saudi" and v({"to": "saudi"}) == "saudi"
+    assert v({"to": "ar"}) is None and v({}) is None
+    assert v({"voice": "default", "to": "ar-SA"}) == "default" and v({"voice": "MSA"}) == "default"
+    assert vrun._language("saudi") == "ar" and vrun._language("ar-SA") == "ar"
