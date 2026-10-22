@@ -20,23 +20,30 @@ _HEX = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b")
 def kit(root, fonts=()):
     """The kit as a video uses it, or None when the workspace has none.
     `fonts` is the contract's catalogue ([{family, scripts}]).
-    → {"colours": {role: hex}, "heading", "body": (family, in the catalogue?), "logo": path or None}."""
+    → {"colours": {role: hex}, "heading", "body": (family, in the catalogue?, a font file of the
+    kit's?), "files": the kit's own font families (fonts.families), "logo": path or None}."""
+    from . import fonts as kit_fonts
+
     b = _load_brand(root) or {}
     palette = _brand_palette(root)
     logo = next((f"brand/{n}" for n in LOGOS if (Path(root) / "brand" / n).is_file()), None)
+    files = kit_fonts.families(root)
     colours = {k: v for k, v in palette.items() if v}
     for role in ("primary", "accent"):
         if b.get(role) and role not in colours:
             colours[role] = b[role]
-    if not colours and not b.get("heading") and not b.get("body") and not logo:
+    if not colours and not b.get("heading") and not b.get("body") and not logo and not files:
         return None
     names = {f["family"].lower(): f["family"] for f in fonts or []}
+    own = {f.lower(): f for f in files}
 
     def font(name):
         if not name:
             return None
-        return (names.get(name.lower(), name), name.lower() in names)
-    return {"colours": colours, "heading": font(b.get("heading")), "body": font(b.get("body")), "logo": logo}
+        key = name.lower()
+        return (names.get(key) or own.get(key) or name, key in names, key in own and key not in names)
+    return {"colours": colours, "heading": font(b.get("heading")), "body": font(b.get("body")), "files": files,
+            "logo": logo}
 
 
 def note(k, fonts=()):
@@ -51,13 +58,21 @@ def note(k, fonts=()):
         f = k.get(role)
         if not f:
             continue
-        if f[1]:
-            parts.append(f"{label} in {f[0]}")
+        if f[1] or f[2]:
+            parts.append(f"{label} in \"{f[0]}\"")
         else:
-            parts.append(f"{label}: the brand's font {f[0]} is not a video font, so use the catalogue family "
-                         "closest to it")
-    if arabic and (k.get("heading") or k.get("body")):
-        parts.append(f"Arabic text in an Arabic family ({', '.join(arabic[:3])}…)")
+            parts.append(f"{label}: the brand's font {f[0]} is not a video font and the kit has no file of it, so use "
+                         "the catalogue family closest to it")
+    files = k.get("files") or {}
+    if files:
+        own = []
+        for fam, info in files.items():
+            weights = "/".join(str(w) for w in info["weights"])
+            own.append(f"\"{fam}\" ({weights}{', with Arabic' if info['arabic'] else ', Latin only'})")
+        parts.append("the brand's own font files (brand/fonts), to name in font-family exactly so, each with a "
+                     "catalogue family after it in the stack: " + ", ".join(own))
+    if arabic and (k.get("heading") or k.get("body") or files):
+        parts.append(f"Arabic text in a family that has Arabic ({', '.join(arabic[:3])}…)")
     if k["logo"]:
         parts.append(f"the logo <img src=\"{k['logo']}\"> (on the opening or the closing scene, or small in a corner)")
     return ("Brand kit (brand/brand.yaml): use it in every video unless the person asks otherwise — "

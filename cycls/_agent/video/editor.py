@@ -208,6 +208,7 @@ def render(workspace, root, rel, quality="standard"):
 
 async def _render(workspace, root, rel, quality, key):
     from cycls._agent import video
+    from . import fonts as kit_fonts
     from . import run
 
     state = _renders[key]
@@ -218,10 +219,11 @@ async def _render(workspace, root, rel, quality, key):
         images, image_files, problems = await asyncio.to_thread(media.collect, html, root)
         audio, audio_files, words, more = await asyncio.to_thread(media.collect_audio, html, root)
         footage, clips = await asyncio.to_thread(media.collect_footage, html, root)
+        fonts, font_files = await asyncio.to_thread(kit_fonts.for_html, root, html)
         problems += more + clips
         if problems:
             raise ValueError(problems[0])
-        sent = {**image_files, **audio_files}
+        sent = {**image_files, **audio_files, **font_files}
         # The main size and each other size the root lists (sizes.py), one job each, at once.
         shapes, problems = sizes.declared(html)
         if problems:
@@ -233,7 +235,8 @@ async def _render(workspace, root, rel, quality, key):
                                      f"{'|' + shape if shape else ''}".encode()).hexdigest()
             try:
                 job = await video.submit(workspace, "render", h, images, sent, params={"quality": quality},
-                                         key=job_key, audio=audio, words=words, footage=footage)
+                                         key=job_key, audio=audio, words=words, footage=footage,
+                                         **({"fonts": fonts} if fonts else {}))
             except video.Refused as e:
                 if shape:
                     e.findings = [{**f, "message": f"At {shape}: {f.get('message')}"} for f in e.findings]

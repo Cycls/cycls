@@ -201,10 +201,12 @@ def _footage_meta(footage):
     return {"footage": {path: f["sha"] for path, f in footage.items()}, **({"footage_words": said} if said else {})}
 
 
-async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
-    """Prepare and lint on CPU; with `preview`, the page the canvas plays."""
+async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None,
+                  fonts=None):
+    """Prepare and lint on CPU; with `preview`, the page the canvas plays. `fonts`: the brand fonts
+    the composition names ({hashed file: {family, weight, style, arabic}}, video/fonts.py)."""
     meta = {"html": html, "images": images or {}, "preview": preview, "audio": audio or {}, "words": words or {},
-            **_footage_meta(footage)}
+            **_footage_meta(footage), **({"fonts": fonts} if fonts else {})}
     resp = await _request("POST", "/v1/compile", workspace=workspace, retry=True, files=_parts(meta, files),
                           timeout=httpx.Timeout(120.0, connect=15.0))
     if resp.status_code != 200:
@@ -213,10 +215,10 @@ async def compile(workspace, html, images=None, files=None, *, preview=False, au
 
 
 async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
-                 footage=None):
+                 footage=None, fonts=None):
     """Start a review, look or render. → {token, eta_s, times, sound}. A repeated `key` returns the same job."""
     meta = {"kind": kind, "html": html, "images": images or {}, "params": params or {}, "audio": audio or {},
-            "words": words or {}, **_footage_meta(footage)}
+            "words": words or {}, **_footage_meta(footage), **({"fonts": fonts} if fonts else {})}
     headers = {"Idempotency-Key": key} if key else {}
     resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, files),
                           headers=headers, timeout=httpx.Timeout(120.0, connect=15.0))

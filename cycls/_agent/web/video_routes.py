@@ -79,6 +79,8 @@ async def _video_response(root, file_path, subject, ws_id=None):
     images, image_files, problems = await asyncio.to_thread(media.collect, html, root)
     audio, audio_files, words, more = await asyncio.to_thread(media.collect_audio, html, root)
     footage, clips = await asyncio.to_thread(media.collect_footage, html, root)
+    from cycls._agent.video import fonts as kit_fonts
+    fonts, font_files = await asyncio.to_thread(kit_fonts.for_html, root, html)
     problems += more + clips
     if problems:
         out["reason"] = problems[0]
@@ -96,6 +98,8 @@ async def _video_response(root, file_path, subject, ws_id=None):
             stat[path] = images.get(path) or audio.get(path)
     for hashed, w in words.items():
         stat[f"words:{hashed}"] = hashlib.sha256(json.dumps(w, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    for hashed in fonts:      # a brand font's file named by its bytes: a new file is a fresh page
+        stat[f"font:{hashed}"] = hashed
     from cycls._agent.video import contract
     bundle = (contract.cached() or {}).get("bundle") or ""
     cache = root / _VIDEO_CACHE
@@ -109,8 +113,8 @@ async def _video_response(root, file_path, subject, ws_id=None):
             pass
     ws = types.SimpleNamespace(subject=subject)
     try:
-        r = await video.compile(ws, html, images, {**image_files, **audio_files}, preview=True, audio=audio, words=words,
-                                footage=footage)
+        r = await video.compile(ws, html, images, {**image_files, **audio_files, **font_files}, preview=True, audio=audio,
+                                words=words, footage=footage, **({"fonts": fonts} if fonts else {}))
     except video.Unavailable as e:
         out["reason"] = f"The video service is unavailable: {e}"
         return out

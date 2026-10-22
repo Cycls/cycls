@@ -311,9 +311,9 @@ class FakeService:
         return COMP.replace("Hi", variables.get("title", "Hi"))
 
     async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
-                     footage=None):
+                     footage=None, fonts=None):
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key,
-                               "audio": audio, "words": words, "files": files, "footage": footage})
+                               "audio": audio, "words": words, "files": files, "footage": footage, "fonts": fonts})
         if self.refuse:
             raise video.Refused("fix first", self.refuse)
         if self.over:
@@ -1529,12 +1529,12 @@ def test_the_brand_kit_is_read_for_video_and_said_in_the_guide(monkeypatch, tmp_
     _kit(tmp_path)
     k = brand.kit(tmp_path, fonts)
     assert k["colours"] == {"primary": "#0c2340", "accent": "#f5a623", "background": "#0b1020", "text": "#ffffff"}
-    assert k["heading"] == ("Playfair Display", True) and k["body"] == ("Brand Sans", False)
+    assert k["heading"] == ("Playfair Display", True, False) and k["body"] == ("Brand Sans", False, False)
     assert k["logo"] == "brand/logo.png"
     line = brand.note(k, fonts)
     assert line.startswith("Brand kit (brand/brand.yaml): use it in every video")
-    assert "headings in Playfair Display" in line and "Brand Sans is not a video font" in line
-    assert "Arabic text in an Arabic family" in line and '<img src="brand/logo.png">' in line
+    assert 'headings in "Playfair Display"' in line and "Brand Sans is not a video font and the kit has no file" in line
+    assert "Arabic text in a family that has Arabic" in line and '<img src="brand/logo.png">' in line
 
     _on(monkeypatch)
     FakeService(monkeypatch)
@@ -1578,3 +1578,59 @@ def test_a_template_takes_the_kits_colours_fonts_and_logo_where_it_has_them():
     # Background without its text colour is a contrast guess: neither is given.
     half = {**k, "colours": {"accent": "#f5a623", "background": "#ffffff"}}
     assert "background" not in brand.template_vars(half, announcement, fonts)
+
+
+def _ttf(family, weight=400, italic=False, arabic=False):
+    """A minimal TrueType file: a name table (the family), OS/2 (weight, italic) and a format-4 cmap."""
+    import struct
+    s = family.encode("utf-16-be")
+    name = struct.pack(">HHH", 0, 1, 18) + struct.pack(">HHHHHH", 3, 1, 0x409, 1, len(s), 0) + s
+    os2 = bytearray(78)
+    struct.pack_into(">H", os2, 4, weight)
+    struct.pack_into(">H", os2, 62, 1 if italic else 0)
+    code = 0x0627 if arabic else 0x41
+    ends, starts, deltas = [code, 0xFFFF], [code, 0xFFFF], [1 - code, 1]
+    sub = (struct.pack(">HHHHHHH", 4, 0, 0, 4, 0, 0, 0) + struct.pack(">2H", *ends) + b"\0\0"
+           + struct.pack(">2H", *starts) + struct.pack(">2h", *deltas) + struct.pack(">2H", 0, 0))
+    cmap = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 1, 12) + sub
+    tables = sorted({"OS/2": bytes(os2), "cmap": cmap, "name": name}.items())
+    out, at = b"", 12 + 16 * len(tables)
+    head = struct.pack(">IHHHH", 0x00010000, len(tables), 0, 0, 0)
+    for tag, data in tables:
+        head += struct.pack(">4sIII", tag.encode("latin-1"), 0, at + len(out), len(data))
+        out += data + b"\0" * (-len(data) % 4)
+    return head + out
+
+
+def test_a_font_file_is_read_for_its_family_weight_style_and_arabic():
+    from cycls._agent.video import fonts
+    assert fonts.read(_ttf("Brand Sans", 700)) == {"family": "Brand Sans", "weight": 700, "style": "normal", "arabic": False}
+    assert fonts.read(_ttf("خط الهوية", 400, italic=True, arabic=True)) == {
+        "family": "خط الهوية", "weight": 400, "style": "italic", "arabic": True}
+    assert fonts.read(b"<svg>") is None and fonts.read(b"\x00\x01\x00\x00broken") is None
+
+
+def test_the_kits_fonts_go_with_a_composition_that_names_them(monkeypatch, tmp_path):
+    from cycls._agent.video import brand, fonts
+    (tmp_path / "brand" / "fonts").mkdir(parents=True)
+    (tmp_path / "brand" / "fonts" / "BrandSans-Bold.ttf").write_bytes(_ttf("Brand Sans", 700))
+    (tmp_path / "brand" / "fonts" / "BrandSans-Regular.ttf").write_bytes(_ttf("Brand Sans", 400))
+    (tmp_path / "brand" / "fonts" / "notes.txt").write_text("not a font")
+    assert fonts.families(tmp_path) == {"Brand Sans": {"weights": [400, 700], "arabic": False}}
+    assert fonts.for_html(tmp_path, COMP) == ({}, {})
+    named = COMP.replace("<head></head>", '<head><style>h1{font-family:"Brand Sans", Inter}</style></head>')
+    meta, files = fonts.for_html(tmp_path, named)
+    assert sorted(m["weight"] for m in meta.values()) == [400, 700] and set(meta) == set(files)
+    assert all(n.endswith(".ttf") and len(n) == 36 for n in files)
+    line = brand.note(brand.kit(tmp_path, FALLBACK["fonts"]), FALLBACK["fonts"])
+    assert '"Brand Sans" (400/700, Latin only)' in line and "brand/fonts" in line
+
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _run({"action": "write", "name": "branded", "html": named}, _ws(tmp_path))
+    sent = svc.submitted[-1]
+    assert sorted(f["weight"] for f in sent["fonts"].values()) == [400, 700]
+    assert set(sent["fonts"]) <= set(sent["files"])
+    _run({"action": "write", "name": "plain", "html": COMP}, _ws(tmp_path))
+    assert svc.submitted[-1]["fonts"] is None                               # named by nothing: not sent

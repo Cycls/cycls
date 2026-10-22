@@ -87,12 +87,20 @@ def _sha(html, images_files, words=None, footage=None):
 
 
 def _media(html, root):
-    """The images, audio and footage a composition names, ready to send.
-    → (images, audio, files, words, footage, problems)."""
+    """The images, audio, footage and brand fonts a composition names, ready to send.
+    → (images, audio, files, words, footage, problems, fonts)."""
+    from . import fonts as kit_fonts
+
     images, image_files, problems = media.collect(html, root)
     audio, audio_files, words, more = media.collect_audio(html, root)
     footage, clips = media.collect_footage(html, root)
-    return images, audio, {**image_files, **audio_files}, words, footage, problems + more + clips
+    fonts, font_files = kit_fonts.for_html(root, html)
+    return images, audio, {**image_files, **audio_files, **font_files}, words, footage, problems + more + clips, fonts
+
+
+def _fonts_kw(fonts):
+    """The brand fonts for a request, only when there are some (video/fonts.py)."""
+    return {"fonts": fonts} if fonts else {}
 
 
 async def _save(root, chat, name, html, reason):
@@ -122,7 +130,7 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     sound map, the reminder to look). → (text, sheet blocks, lint passed)."""
     from cycls._agent import video
 
-    images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
+    images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
     if problems:
         return "The images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
     # Keyed, so a retry after a dropped connection is the same job, not a second one.
@@ -130,7 +138,7 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
                          f"{json.dumps(params or {}, sort_keys=True)}".encode()).hexdigest()
     try:
         job = await video.submit(workspace, kind, html, images, sent, params=params, key=key, audio=audio, words=words,
-                                 footage=footage)
+                                 footage=footage, **_fonts_kw(fonts))
     except video.Refused as e:
         text = report.findings_text(e.findings, title="Lint")
         sound = report.sound_text(dubbing.for_reading(e.sound, dubbing.dubbed_ids(html)))
@@ -305,7 +313,7 @@ async def _render(workspace, root, chat, name, quality):
     shapes, problems = sizes.declared(html)
     if problems:
         return _err(" ".join(problems))
-    images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
+    images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
     if problems:
         return _err("the images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
     jobs = []      # {shape, slot, sha, token, sound, collected}
@@ -320,7 +328,7 @@ async def _render(workspace, root, chat, name, quality):
         key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{slot}|{sha}|{quality}".encode()).hexdigest()
         try:
             job = await video.submit(workspace, "render", h, images, sent, params={"quality": quality}, key=key,
-                                     audio=audio, words=words, footage=footage)
+                                     audio=audio, words=words, footage=footage, **_fonts_kw(fonts))
         except video.Refused as e:
             where = f" at {shape}" if shape else ""
             return (report.findings_text(e.findings, title=f"Not rendered{where} — lint")
@@ -710,10 +718,11 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
         return _err("the saudi voice speaks Arabic: dub into ar, or use the default voice.")
 
     async def planned():
-        images, audio, sent, words, footage, problems = await asyncio.to_thread(_media, html, root)
+        images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
         if problems:
             return None, "The images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems)
-        c = await video.compile(workspace, html, images, sent, audio=audio, words=words, footage=footage)
+        c = await video.compile(workspace, html, images, sent, audio=audio, words=words, footage=footage,
+                                **_fonts_kw(fonts))
         if not c.get("ok"):
             return None, (report.findings_text(c.get("findings") or [], title="Lint")
                           + f"\nFix {rel} with `edit` before dubbing it.")
