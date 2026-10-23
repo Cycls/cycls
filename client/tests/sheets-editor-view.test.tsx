@@ -1,17 +1,41 @@
 // Cycls Sheets in the canvas: a file opens in the editor only when the workspace has it; the editor is
-// framed with the theme and language, and only its own origin and frame are heard.
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+// framed with the theme and language, gets the workbook once it says it is ready, and only its own
+// origin and frame are heard.
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { OfficeEditorApi } from "../src/hooks/use-files";
+import type { OfficeEditorApi, SheetsOpened } from "../src/hooks/use-files";
 import { SheetsEditorView, SheetsOrPreview } from "../src/components/sheets-editor-view";
 
 afterEach(cleanup);
+
+const OPENED: SheetsOpened = {
+  version: "abc123",
+  modified: new Date().toISOString(),
+  snapshot: { id: "book", sheetOrder: ["s1"] },
+  notices: [{ kind: "chart", message: "1 chart on \"Sales\" stays in the file" }],
+  activeSheet: "s1",
+};
 
 const api = (answer: Awaited<ReturnType<OfficeEditorApi["sheets"]>> | Error): OfficeEditorApi => ({
   sheets: vi.fn(async () => {
     if (answer instanceof Error) throw answer;
     return answer;
   }),
+  sheetsOpen: vi.fn(async () => OPENED),
+  pdf: vi.fn(async () => "blob:pdf"),
+});
+
+function frameWith(posted: Array<[unknown, string]>) {
+  const frame = document.querySelector("iframe")!;
+  Object.defineProperty(frame, "contentWindow", {
+    value: { postMessage: (m: unknown, o: string) => posted.push([m, o]) },
+    configurable: true,
+  });
+  return frame;
+}
+
+const say = (origin: string, source: unknown, data: Record<string, unknown>) => act(() => {
+  window.dispatchEvent(new MessageEvent("message", { origin, source: source as Window, data: { source: "cycls-sheets", ...data } }));
 });
 
 describe("Cycls Sheets in the canvas", () => {
@@ -26,35 +50,47 @@ describe("Cycls Sheets in the canvas", () => {
     expect(await screen.findByText("preview")).toBeTruthy();
   });
 
-  test("a workspace with Sheets frames the editor with the theme and language", async () => {
+  test("a workspace with Sheets frames the editor with the theme and language, under the file's header", async () => {
     const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
-    render(<SheetsOrPreview path="b.xlsx" name="b.xlsx" api={a} preview={<p>preview</p>} />);
+    render(<SheetsOrPreview path="reports/b.xlsx" name="b.xlsx" api={a} preview={<p>preview</p>} />);
     await waitFor(() => expect(document.querySelector("iframe")).not.toBeNull());
     const src = new URL(document.querySelector("iframe")!.getAttribute("src")!);
     expect(src.origin + src.pathname).toBe("https://office.test/sheets/");
     expect(src.searchParams.get("embed")).toBe("cycls");
     expect(["light", "dark"]).toContain(src.searchParams.get("theme"));
-    expect(a.sheets).toHaveBeenCalledWith("b.xlsx");
+    expect(a.sheets).toHaveBeenCalledWith("reports/b.xlsx");
     expect(screen.queryByText("preview")).toBeNull();
+    expect(screen.getByText("b.xlsx")).toBeTruthy();
+    expect(screen.getByText("/ reports")).toBeTruthy();
   });
 
-  test("only the editor's own origin and frame are heard; replies go to that origin only", async () => {
-    render(<SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" />);
-    const frame = document.querySelector("iframe")!;
+  test("only the editor's own origin and frame are heard; the workbook goes to that origin once it is ready", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    render(<SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" api={a} />);
     const posted: Array<[unknown, string]> = [];
-    Object.defineProperty(frame, "contentWindow", {
-      value: { postMessage: (m: unknown, o: string) => posted.push([m, o]) },
-      configurable: true,
-    });
-    const send = (origin: string, source: unknown) => act(() => {
-      window.dispatchEvent(new MessageEvent("message", { origin, source: source as Window, data: { source: "cycls-sheets", type: "ready" } }));
-    });
-    send("https://evil.test", frame.contentWindow);
-    send("https://office.test", window);
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalledWith("b.xlsx"));
+    say("https://evil.test", frame.contentWindow, { type: "ready" });
+    say("https://office.test", window, { type: "ready" });
     expect(posted).toHaveLength(0);
-    send("https://office.test", frame.contentWindow);
-    await waitFor(() => expect(posted.length).toBeGreaterThan(0));
+
+    say("https://office.test", frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(posted.map(([m]) => (m as { type: string }).type)).toContain("load"));
     expect(posted.every(([, origin]) => origin === "https://office.test")).toBe(true);
-    expect(posted.map(([m]) => (m as { type: string }).type).sort()).toEqual(["locale", "theme"]);
+    const load = posted.find(([m]) => (m as { type: string }).type === "load")![0] as Record<string, unknown>;
+    expect(load).toMatchObject({ target: "cycls-sheets", name: "b.xlsx", snapshot: OPENED.snapshot, activeSheet: "s1", readonly: true });
+    expect(load.doc).toBe("b.xlsx@abc123");
+    expect(posted.map(([m]) => (m as { type: string }).type)).toEqual(expect.arrayContaining(["theme", "locale"]));
+  });
+
+  test("the header lists what is kept but not shown, and Open offers Excel and PDF", async () => {
+    const download = vi.fn();
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    render(<SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" api={a} onDownload={download} />);
+    fireEvent.click(await screen.findByText("ⓘ 1"));
+    expect(screen.getByText(OPENED.notices[0].message)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Open/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Excel/ }));
+    expect(download).toHaveBeenCalled();
   });
 });

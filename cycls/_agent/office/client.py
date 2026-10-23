@@ -23,6 +23,14 @@ class Unavailable(RuntimeError):
     """The service is not configured, unreachable, or refused the key."""
 
 
+class Refused(RuntimeError):
+    """The service read the request and said no: not an Excel file, too large, broken inside."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
 def configured():
     return bool(os.environ.get("OFFICE_URL"))
 
@@ -65,10 +73,10 @@ def _headers():
     return h
 
 
-async def _call(method, path, **kw):
+async def _call(method, path, headers_extra=None, **kw):
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
-            r = await client.request(method, f"{_base()}{path}", headers=_headers(), **kw)
+            r = await client.request(method, f"{_base()}{path}", headers={**_headers(), **(headers_extra or {})}, **kw)
     except httpx.HTTPError as e:
         raise Unavailable(f"the office service is unreachable ({type(e).__name__})") from e
     if r.status_code in (401, 403):
@@ -87,4 +95,22 @@ async def health():
 async def smoke():
     """The engine's own check, run on the service: a workbook opened, computed, edited and recomputed."""
     r = await _call("POST", "/v1/engine/smoke")
+    return r.json()
+
+
+def _refused(r):
+    try:
+        message = r.json().get("error") or r.text
+    except ValueError:
+        message = r.text
+    return Refused(str(message)[:300] or f"the office service answered {r.status_code}", r.status_code)
+
+
+async def read_xlsx(data, name=None):
+    """An .xlsx file's bytes → {workbook, notices, activeSheet, stats}: what Cycls Sheets opens."""
+    params = {"name": name} if name else None
+    r = await _call("POST", "/v1/xlsx/read", content=bytes(data), params=params,
+                    headers_extra={"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+    if r.status_code >= 400:
+        raise _refused(r)
     return r.json()

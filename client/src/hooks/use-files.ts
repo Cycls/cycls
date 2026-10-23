@@ -62,8 +62,19 @@ export type VideoEditorApi = {
 
 // Cycls Sheets (and Cycls Docs later): may this workspace open the file in the editor, and where from.
 export type OfficeOpen = { editor: true; url: string; name: string } | { editor: false; reason: string };
+export type SheetsNotice = { kind: string; sheet?: string; message: string };
+// What the editor opens: the workbook as the service read it (cached by version).
+export type SheetsOpened = {
+  version: string;
+  modified?: string;
+  snapshot: Record<string, unknown>;
+  notices: SheetsNotice[];
+  activeSheet?: string;
+};
 export type OfficeEditorApi = {
   sheets: (path: string) => Promise<OfficeOpen>;
+  sheetsOpen: (path: string) => Promise<SheetsOpened>;
+  pdf: (path: string) => Promise<string>;   // a blob URL of the file as PDF (the office-render service)
 };
 
 export function useFiles(baseUrl: string = "") {
@@ -258,6 +269,13 @@ export function useFiles(baseUrl: string = "") {
   const officeEditor = useMemo<OfficeEditorApi>(() => ({
     sheets: async (filePath) =>
       (await api(`/office/sheets?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
+    sheetsOpen: async (filePath) => {
+      const res = await api(`/office/sheets/open?path=${encodeURIComponent(filePath)}`, { silent: true });
+      const body = (await res.json()) as SheetsOpened;
+      return { ...body, modified: res.headers.get("X-Modified") ?? body.modified };
+    },
+    pdf: async (filePath) =>
+      URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
   }), [api]);
 
   // null where a design opens alone, or on a server without the route.

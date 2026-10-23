@@ -125,3 +125,81 @@ def test_the_client_says_what_went_wrong(monkeypatch):
     _mock(monkeypatch, down)
     with pytest.raises(office.Unavailable, match="unreachable"):
         asyncio.run(office.health())
+
+
+# ---- opening a workbook for the editor -------------------------------------------------------
+
+def test_open_reads_once_then_serves_the_cache(monkeypatch, tmp_path):
+    import gzip
+    import json
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("SHEETS_ORGS", "org1")
+    (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04 workbook")
+    calls = []
+
+    async def read_xlsx(data, name=None):
+        calls.append((data, name))
+        return {"workbook": {"id": "book", "name": name, "sheetOrder": ["s1"]}, "notices": [{"kind": "chart", "message": "kept"}],
+                "activeSheet": "s1", "stats": {"cells": 3}}
+
+    monkeypatch.setattr(office, "read_xlsx", read_xlsx)
+    c = _app(_ws(tmp_path))
+    first = c.get("/office/sheets/open", params={"path": "b.xlsx"})
+    assert first.status_code == 200 and first.headers["x-version"] and first.headers["x-modified"]
+    body = first.json()                       # the client decoded the gzip
+    assert body["snapshot"]["name"] == "b" and body["activeSheet"] == "s1" and body["notices"][0]["kind"] == "chart"
+    assert body["version"] == first.headers["x-version"]
+    cached = list((tmp_path / ".cache" / "sheets").glob("*.json.gz"))
+    assert len(cached) == 1 and json.loads(gzip.decompress(cached[0].read_bytes()))["version"] == body["version"]
+
+    again = c.get("/office/sheets/open", params={"path": "b.xlsx"})
+    assert again.json() == body and len(calls) == 1          # the second open is the cache
+
+    (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04 changed")  # a new version is read again
+    assert c.get("/office/sheets/open", params={"path": "b.xlsx"}).json()["version"] != body["version"]
+    assert len(calls) == 2
+
+
+def test_open_says_why_it_cannot(monkeypatch, tmp_path):
+    (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04")
+    c = _app(_ws(tmp_path))
+    assert c.get("/office/sheets/open", params={"path": "b.xlsx"}).status_code == 403     # not switched on
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("SHEETS_ORGS", "*")
+
+    async def refuse(data, name=None):
+        raise office.Refused("not a zip (an Office file is one)", 422)
+
+    monkeypatch.setattr(office, "read_xlsx", refuse)
+    r = c.get("/office/sheets/open", params={"path": "b.xlsx"})
+    assert r.status_code == 422 and "not a zip" in r.json()["detail"]
+
+    async def down(data, name=None):
+        raise office.Unavailable("the office service is unreachable (ConnectError)")
+
+    monkeypatch.setattr(office, "read_xlsx", down)
+    assert c.get("/office/sheets/open", params={"path": "b.xlsx"}).status_code == 503
+
+    from cycls._agent.web import office_routes
+    monkeypatch.setattr(office_routes, "MAX_BYTES", 2)
+    assert c.get("/office/sheets/open", params={"path": "b.xlsx"}).status_code == 413
+    assert c.get("/office/sheets", params={"path": "b.xlsx"}).json() == {"editor": False, "reason": "too-large"}
+
+
+def test_read_xlsx_posts_the_bytes_and_maps_a_refusal(monkeypatch):
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.content == b"bad":
+            return httpx.Response(422, json={"error": "not a zip"})
+        return httpx.Response(200, json={"workbook": {"id": "book"}, "notices": [], "stats": {}})
+
+    _mock(monkeypatch, handler)
+    assert asyncio.run(office.read_xlsx(b"PK..", name="b"))["workbook"]["id"] == "book"
+    assert seen[0].url.path == "/v1/xlsx/read" and seen[0].url.params["name"] == "b"
+    with pytest.raises(office.Refused, match="not a zip") as e:
+        asyncio.run(office.read_xlsx(b"bad"))
+    assert e.value.status == 422

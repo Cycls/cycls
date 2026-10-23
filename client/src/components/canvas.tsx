@@ -14,6 +14,8 @@ import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { SheetsOrPreview } from "./sheets-editor-view";
+import { officeGlyphFor } from "./file-glyph";
+import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
@@ -487,7 +489,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isSpreadsheet(fileKind(file))) {
     if (!content) return null;
     return officeEditor && !shared
-      ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} preview={<SpreadsheetView url={content} name={file.name} />} />
+      ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} preview={<SpreadsheetView url={content} name={file.name} />} />
       : <SpreadsheetView url={content} name={file.name} />;
   }
   if (is3d(fileKind(file))) {
@@ -632,7 +634,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
               >
                 {f.icon || f.iconSrc || f.letter
                   ? <AppIcon app={f} className="size-3.5 rounded-[3px]" textClassName="text-[13px]" />
-                  : tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
+                  : officeGlyphFor(f.name, "size-3.5 shrink-0") ?? (tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />)}
                 <span className="min-w-0 flex-1 truncate">{f.name}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); closeTab(f.path); }}
@@ -966,6 +968,10 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   designHost?: DesignHost;
 }) {
   const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
+  // The header's two places a document view may fill (canvas-header-slot.ts).
+  const [slotStart, setSlotStart] = useState<HTMLElement | null>(null);
+  const [slotEnd, setSlotEnd] = useState<HTMLElement | null>(null);
+  const headerSlots = useMemo(() => ({ start: slotStart, end: slotEnd }), [slotStart, slotEnd]);
   const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl);
   const onReload = useCallback(() => setBump((n) => n + 1), []);
   // The agent changed this file mid-turn (a Video edit): fetch it again now, not when the turn ends.
@@ -1123,11 +1129,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           ))}
           <span className="min-w-0 truncate font-medium text-foreground">{shownName(file.name)}</span>
           {kind && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline" data-testid="design-kind">· {kind.label}</span>}
+          <span ref={setSlotStart} className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground empty:hidden sm:flex" data-testid="canvas-header-start" />
         </div>
         {lang && lang !== "text" && (
           <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{lang}</span>
         )}
         <div className="flex-1" />
+        <div ref={setSlotEnd} className="flex shrink-0 items-center gap-2 empty:hidden" data-testid="canvas-header-end" />
         {editing ? (
           <>
             <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer px-2 py-1">
@@ -1235,11 +1243,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           <>
             {/* Hidden, not unmounted, under a preview once it has been opened: it keeps its state and saves. */}
             {editorOn && <div className={previewing ? "invisible absolute inset-0" : "h-full"} inert={previewing} aria-hidden={previewing || undefined}>
+              <CanvasHeaderSlot.Provider value={headerSlots}>
               <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} listFolders={listFolders}
                          fetchConnector={fetchConnector}
                          appData={appData}
                          designEditorUrl={designEditorUrl} designHost={designHost} videoEditor={videoEditor} officeEditor={officeEditor} reloadFile={reloadFile} onReload={onReload}
                          onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
+              </CanvasHeaderSlot.Provider>
             </div>}
             {previewing && (() => {
               const pictures = preview ? parseDeck(preview) : null;
