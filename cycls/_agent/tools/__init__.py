@@ -28,8 +28,8 @@ from ..design.extract import (_DIRECTION_MARKS, _PDF_CUT_DPI, _PDF_LOOK_DPI, _PD
     _PDF_TABLE_ROWS, _PDF_TEXT_ALL, _PDF_TEXT_PAGE, _SHAPED, _SHAPED_ARABIC, _laid_out_tables, _pdf_page,
     _pdf_parts, _run_tool)
 from ..design.report import _OUTLINE_STYLE, _edit_names, _layout_check, _outline_text, _page_changes
-from ..design.files import (_DECK_EXTS, _DESIGN_EXTS, _dedupe_design_name, _designs_there, _rendered_copy,
-    _save_pages, _write_beside)
+from ..design.files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _find_design, _free_design, _rendered_copy,
+    _save_pages, _stem_of, _write_beside)
 from ..design.actions import (_BLOCK_KINDS, _DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _document_source,
     _edits_hold, _edits_since_render, _exec_design_file, _exec_document, _exec_slides, _render_document,
     _sections_text, _seen_pages, _to_the_room)
@@ -51,6 +51,14 @@ READ_MAX = 50_000        # chars per read (~25k tokens) — attachments inline t
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _DOC_EXTS = {"pdf"}
+
+# Documents are read as text by a deployed Cycls function (Cycls/cycls-parser); point it at your own, or set it
+# empty to read them as before — which is also what `read` does whenever the parser is unavailable.
+PARSER = os.environ.get("CYCLS_PARSER", "cycls-parser")
+_PARSED_EXTS = {"pdf", "doc", "docx", "docm", "ppt", "pptx", "pptm", "pps", "ppsx", "ppsm",
+                "xls", "xlsx", "xlsm", "xlsb", "odt", "ods", "odp", "rtf", "epub"}
+_PARSE_MAX = 50 * 1024 * 1024
+_PARSE_TIMEOUT = 120   # seconds — a 200-page PDF takes about 10
 
 _BASH_TOOL = {
     "type": "custom",
@@ -86,10 +94,11 @@ _READ_TOOL = {
         "Read a file from the workspace.\n\n"
         "Usage:\n"
         "- Reads text files with line numbers (cat -n format, 1-indexed).\n"
-        "- Reads images (PNG, JPG, GIF, WebP) and small PDFs visually — you will see their contents.\n"
-        "- For LARGE PDFs (over 3MB): you MUST provide the `pages` parameter, e.g. pages='1-5'. "
-        "The tool will render those pages as images. Maximum 20 pages per read. "
-        "If you don't know how many pages the PDF has, the error message will tell you.\n"
+        "- Reads images (PNG, JPG, GIF, WebP) visually — you will see their contents.\n"
+        "- Reads documents (PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB) as Markdown text. "
+        "A long one shows its beginning and keeps the full text in .tmp/, to continue with offset or search with rg.\n"
+        "- `pages` (e.g. pages='1-5') shows PDF pages as images instead: for scans, charts, or checking a page. "
+        "Maximum 20 pages per read. A PDF with no text layer is shown as images, or asks for `pages` when over 3MB.\n"
         "- Returns up to 50,000 characters per call; a longer file ends with the offset to continue from.\n"
         "- When you already know which part of the file you need, use offset and limit to read only that part.\n"
         "- Only reads files, not directories. Use `ls` via bash for directories.\n"
@@ -100,7 +109,7 @@ _READ_TOOL = {
         "path": {"type": "string", "description": "Relative path to read (e.g. src/main.py)"},
         "offset": {"type": "integer", "description": "Start line, 1-indexed (default: 1)"},
         "limit": {"type": "integer", "description": "Max lines to read. Omit to read as much as fits."},
-        "pages": {"type": "string", "description": "Page range for large PDFs, e.g. '1-5' or '3'. Required for PDFs over 3MB. Max 20 pages."},
+        "pages": {"type": "string", "description": "PDF pages to see as images, e.g. '1-5' or '3'. Max 20 pages."},
     }, "required": ["path"]}
 }
 
@@ -249,7 +258,9 @@ _BROWSER_TOOL = {
         "Drive a REAL web browser for things a plain fetch can't do: pages "
         "behind JavaScript, logins, search boxes, forms, multi-step flows. The "
         "page stays OPEN between calls this turn — work step by step:\n"
-        "- open {url}        go to a page\n"
+        "- open {url}        go to a page; or a workspace .html file by its path (e.g. deck.html), to see a page you "
+        "wrote. The browser runs on another machine and gets only that file, so its images must be inlined, and "
+        "file:// or localhost addresses never reach it\n"
         "- read              get the page text + a NUMBERED list of the "
         "clickable/typable elements\n"
         "- click {ref}       click element number `ref` from the last read\n"
@@ -276,7 +287,7 @@ _BROWSER_TOOL = {
                    "enum": ["open", "read", "click", "type", "press", "back",
                             "screenshot", "download", "evaluate"],
                    "description": "What to do."},
-        "url": {"type": "string", "description": "For `open`/`download`: the full http(s) URL."},
+        "url": {"type": "string", "description": "For `open`: an http(s) URL, or a workspace .html file's path. For `download`: the full http(s) URL."},
         "ref": {"type": "integer", "description": "For `click`/`type`/`download`: the element number from the last `read`."},
         "text": {"type": "string", "description": "For `type`: the text to enter."},
         "key": {"type": "string", "description": "For `press`: the key, e.g. 'Enter'."},
@@ -590,14 +601,41 @@ async def _exec_web_fetch(inp):
     return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
 
 
-async def _exec_read(inp, workspace, catalog=None):
+async def _parsed(path, workspace, chat_id):
+    """A document as the parser reads it: Markdown, its warnings first, a long one kept whole in .tmp/. None
+    when the parser is unavailable or finds no text (a scan), and `read` goes on as it did before."""
+    import cycls
+    try:
+        parse = cycls.remote(PARSER, timeout=_PARSE_TIMEOUT)
+        doc = await asyncio.to_thread(lambda: parse(path.read_bytes(), path.name, mode="markdown"))
+        body = doc["content"].strip()
+    except Exception as e:
+        log("parser", chat_id=chat_id, error=f"{type(e).__name__}: {e}"[:300])
+        return None
+    if not body: return None   # an error, or nothing to read
+    text = "".join(f"[{w}]\n" for w in doc["warnings"]) + (
+        f"[{doc['page_count']} pages. To see one as an image (a scan, a chart, a number to check), read with pages='N'.]\n\n"
+        if path.suffix.lower() == ".pdf" else "") + body
+    if len(text) <= spill.SPILL_AT: return text
+    shown = text[:max(text.rfind("\n", 0, spill.SPILL_AT), 0) or spill.SPILL_AT]
+    lines = shown.count("\n") + 1
+    if not (kept := spill.save(text, workspace, chat_id, f"{path.stem}-{uuid.uuid4().hex[:6]}.md")):
+        return f"{shown}\n\n[Showing {len(shown):,} of {len(text):,} characters.]"
+    return (f"{shown}\n\n[Showing {len(shown):,} of {len(text):,} characters, the first {lines:,} lines. The full text is "
+            f"in {kept.relative_to(workspace)}: continue with read at offset={lines + 1}, or search it with rg.]")
+
+
+async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {inp['path']} does not exist"
     if path.is_dir(): return f"Error: {inp['path']} is a directory"
     ext, size = path.suffix.lower().lstrip("."), path.stat().st_size
 
-    if ext == "pdf" and size > pdf.EXTRACT_SIZE_THRESHOLD:
+    if PARSER and ext in _PARSED_EXTS and not inp.get("pages") and size <= _PARSE_MAX:
+        if text := await _parsed(path, workspace, chat_id): return text
+
+    if ext == "pdf" and (inp.get("pages") or size > pdf.EXTRACT_SIZE_THRESHOLD):   # `pages` asks to see them, at any size
         if not (pages_spec := inp.get("pages")):
             count = await pdf.page_count(path)
             hint = f"{count} pages" if count else "unknown page count"
@@ -962,6 +1000,33 @@ async def _browser_read(s):
     return _browser_snapshot_text(await s.snapshot())
 
 
+# A workspace page in the remote browser: written into a blank tab (no site's origin, so none of its cookies),
+# returning once the page has loaded, web fonts and scripts included, or after 15 s.
+_WRITE_PAGE = ("() => new Promise((done) => { document.open(); document.write(%s); document.close(); "
+               "if (document.readyState === 'complete') return done(); addEventListener('load', () => done()); "
+               "setTimeout(done, 15000); })")
+_PAGE_EXTS = {".html", ".htm", ".svg"}
+
+
+def _workspace_page(url, workspace):
+    """The workspace file an `open` names (a path, /workspace/…, file://…), None for a web address, or an
+    Error: the browser runs on another machine, so it can reach neither a file path nor this sandbox."""
+    if url.startswith(("http://", "https://")):
+        host = (url.split("//", 1)[1].split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]).strip("[]")
+        if host not in ("localhost", "127.0.0.1", "0.0.0.0", "::1"): return None
+        return ("Error: the browser runs on another machine and cannot reach this sandbox. To see a page you "
+                "wrote, open it by its workspace path, e.g. deck.html.")
+    raw = url.removeprefix("file://")
+    try: path = _resolve_path(raw, workspace.root)
+    except ValueError as e: return f"Error: {e}"
+    if not path.is_file():
+        named = url.startswith(("file:", "/")) or path.suffix.lower() in _PAGE_EXTS
+        return f"Error: {raw} is not a file in the workspace" if named else None
+    if path.suffix.lower() not in _PAGE_EXTS:
+        return f"Error: only an .html or .svg page opens in the browser; use read for {path.name}"
+    return path
+
+
 async def _exec_browser(inp, workspace, chat_id=None):
     """Drive the shared browser service one action at a time. State lives in the
     remote page (which persists between calls), so every navigational action
@@ -971,13 +1036,20 @@ async def _exec_browser(inp, workspace, chat_id=None):
     subject = getattr(workspace, "subject", None)
     # Forward the first navigation's URL so the service can route this session to
     # the proxy by domain (per-site routing). Only `open` carries a target URL.
-    nav_url = inp.get("url") if action == "open" else None
+    url = str(inp.get("url") or "")
+    page = _workspace_page(url, workspace) if action == "open" and url else None
+    if isinstance(page, str): return page
+    nav_url = url if action == "open" and not page else None
     try:
         async with await browser.session(subject, nav_url=nav_url, chat_id=chat_id) as s:
             if action == "open":
-                if not inp.get("url"):
+                if not url:
                     return "Error: `open` needs a `url`."
-                await s.goto(inp["url"])
+                if page:
+                    await s.goto("about:blank")
+                    await s.evaluate(_WRITE_PAGE % json.dumps(page.read_text(encoding="utf-8", errors="replace")))
+                else:
+                    await s.goto(url)
                 return await _browser_read(s)
             if action == "read":
                 return await _browser_read(s)
@@ -1058,7 +1130,7 @@ _TOOLS = {
                                    "transcribe again with the same path to collect it."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None)),
+    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None)),
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),

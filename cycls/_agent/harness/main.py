@@ -20,7 +20,8 @@ from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
-from ..design.tool import DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded, design_tool, design_wanted
+from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded,
+                           design_tool, design_wanted)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
 from ..transcribe.client import configured as transcribe_configured
@@ -233,7 +234,7 @@ AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aa
                   ".aiff", ".3gp")
 
 
-async def _ingest(content, workspace, vision=True, video=False, transcribe=False):
+async def _ingest(content, workspace, vision=True, video=False, transcribe=False, chat_id=None):
     """Resolve attachment refs in an incoming user message to inline blocks,
     framed with the filename so the model knows what the user attached.
     Reuses `_exec_read` as the single source of truth for path → content.
@@ -262,7 +263,7 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
                         "with this path first." + (" If only what is said in it is wanted (a transcript, a "
                         "summary), the Transcribe tool writes it down." if transcribe else "") + "]"})
                     continue
-                result = await _exec_read({"path": fname}, workspace)
+                result = await _exec_read({"path": fname}, workspace, chat_id=chat_id)
                 if isinstance(result, str) and result.startswith("Error:"):
                     out.append({"type": "text", "text":
                         f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
@@ -365,17 +366,19 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if "Video" in allowed_tools and not video_offered(workspace):
         allowed_tools = [t for t in allowed_tools if t != "Video"]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
-    incoming = context.messages.raw[-1]
-    content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
-                            transcribe="Transcribe" in allowed_tools and transcribe_configured())
-    if mentions:
-        titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
-                  for s in mcp_servers or [] if s._connector}
-        content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
-    if selection := getattr(context, "selection", None):
-        content = _with_selection(content, selection)
-    await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
-                           selection=selection)
+    if not session.replay:   # a replay runs the saved turn again, as it was
+        incoming = context.messages.raw[-1]
+        content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
+                                transcribe="Transcribe" in allowed_tools and transcribe_configured(),
+                                chat_id=session.chat_id)
+        if mentions:
+            titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
+                      for s in mcp_servers or [] if s._connector}
+            content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
+        if selection := getattr(context, "selection", None):
+            content = _with_selection(content, selection)
+        await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
+                               selection=selection, connectors=mentions)
     messages = session.messages
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
@@ -408,6 +411,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             if t is design_tool(True):
                 tools_list[i], design_loaded = design_tool(False), False
     DESIGN_LOADED.set(design_loaded)
+    DESIGN_FOLDER.set(getattr(context, "folder", "") or "")
     # Video is short in every request until the chat uses it; its contract joins it then (ondemand).
     demand = await ondemand.start(tools_list, messages)
     if skill_catalog is not None and not any(t.get("name") == "skill" for t in tools_list):   # even with none yet: it is how the first is made

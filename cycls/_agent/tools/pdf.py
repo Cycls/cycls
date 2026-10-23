@@ -3,7 +3,7 @@ import asyncio, base64, pathlib, re, tempfile
 
 MAX_PAGES_PER_READ = 20
 EXTRACT_SIZE_THRESHOLD = 3 * 1024 * 1024  # 3 MB
-DPI = 72
+DPI = 150   # a page is looked at when its text is not enough: a scan, a chart, Arabic small print
 
 async def page_count(path):
     """Return PDF page count via pdfinfo, or None if unavailable."""

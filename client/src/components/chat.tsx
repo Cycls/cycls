@@ -1,12 +1,12 @@
 import type { PollApi } from "../lib/polls";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { motion, LayoutGroup, AnimatePresence, useMotionValue, useSpring, useTransform, useReducedMotion, type MotionValue } from "framer-motion";
+import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
-import { editWorkingPath, ext } from "./canvas-utils";
+import { editWorkingPath, ext, isDesignEditor } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
@@ -129,15 +129,18 @@ interface Queued {
 }
 
 const RAIL_ICON_W = 44;   // folded rail: icon strip only
+// Switching workspace remounts Chat: each one keeps the chat and canvas tabs it had open, for when it's back.
+const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean }>();
 
-export function Chat({ chat, onShare, files, account, config }: {
+export function Chat({ chat, onShare, files, account, config, view = "" }: {
   chat: ChatApi;
   onShare?: (audience: string) => Promise<string>;
   files?: FilesPanelProps;
   account?: AccountInfo | null;
   config?: AppConfig | null;
+  view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -281,9 +284,12 @@ export function Chat({ chat, onShare, files, account, config }: {
   // Typing hushes every surface — prompt, tip, survey — until the next turn.
   const [hushed, setHushed] = useState(false);
   useEffect(() => { setHushed(false); }, [turnsDone]);
-  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>([]);
-  const [canvasActive, setCanvasActive] = useState<string | null>(null);
-  const [canvasHidden, setCanvasHidden] = useState(false);
+  const [was] = useState(() => kept.get(view));
+  const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>(was?.tabs ?? []);
+  const [canvasActive, setCanvasActive] = useState<string | null>(was?.active ?? null);
+  const [canvasHidden, setCanvasHidden] = useState(was?.hidden ?? false);
+  useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden }); },
+    [view, chatId, canvasTabs, canvasActive, canvasHidden]);
   // "Add selection": the visible design's selection, and the one attached to the draft.
   const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
   const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
@@ -313,11 +319,16 @@ export function Chat({ chat, onShare, files, account, config }: {
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
   const openFileInCanvas = useCallback((path: string, name?: string, ident?: Partial<CanvasFile>) => {
-    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? tabs
+    setCanvasTabs((tabs) => (tabs.some((f) => f.path === path) ? (ident ? tabs.map((f) => (f.path === path ? { ...f, ...ident } : f)) : tabs)
       : [...tabs, { ...ident, path, name: name || path.split("/").pop() || path }]));
     setCanvasActive(path);
     setCanvasHidden(false);
   }, []);
+
+  // The agent's turn is over: the designs it worked on show as their previews again.
+  useEffect(() => {
+    if (!isStreaming) setCanvasTabs((tabs) => (tabs.some((f) => f.live) ? tabs.map((f) => (f.live ? { ...f, live: false } : f)) : tabs));
+  }, [isStreaming]);
 
   // A deliverable being written opens the canvas in a working state — the
   // path arrives in the live edit step's streamed args. Desktop only.
@@ -414,9 +425,12 @@ export function Chat({ chat, onShare, files, account, config }: {
         setWorkingPaths((ws) => ws.filter((x) => x !== done));
         const app = appsRef.current.find((a) => a.entry === ev.path);
         if (app) openApp(app);
-        else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined);
+        // A design the agent is making opens live: the person watches it in the editor until the turn ends.
+        else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined, isDesignEditor(ev.path) ? { live: true } : undefined);
       } else if (ev.action === "design_command" && typeof ev.path === "string" && typeof ev.script === "string") {
-        // A live agent edit of an open design: DesignEditorView replays it.
+        // A live agent edit of an open design: DesignEditorView replays it, in the editor while the agent works.
+        const live = ev.path;
+        setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
         window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
@@ -557,9 +571,11 @@ export function Chat({ chat, onShare, files, account, config }: {
     return [...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
   }, [account, connectors, searchFiles]);
 
+  // When Stop gives a prompt back, Send takes Stop's place: a double click must not send it again.
+  const givenBackRef = useRef(0);
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
-    if (!text) return;
+    if (!text || Date.now() - givenBackRef.current < 600) return;
     // A file still uploading holds the send (useHeldSend), in the composer where it can be
     // seen and edited; it comes back through here when the uploads finish.
     if (uploading(attachments)) {
@@ -572,6 +588,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
     const selection = attachedSel;
     if (selection) { extra = { ...extra, selection }; setAttachedSel(null); }
+    if (files?.path) extra = { ...extra, folder: files.path };   // where a design named without a folder is saved
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -591,7 +608,7 @@ export function Chat({ chat, onShare, files, account, config }: {
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
     if (selection) void flushDesignEditor(selection.path, 1500).then(go);
     else go();
-  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend]);
+  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
 
   // Drain on the falling edge of `isStreaming` — one message per edge, and the
   // send it triggers raises the flag again, so the rest follow in order.
@@ -645,6 +662,21 @@ export function Chat({ chat, onShare, files, account, config }: {
     requestAnimationFrame(() => textareaRef.current?.focus());
     track("queued_message_edited", { chat_id: chatId });
   }, [chatId]);
+
+  // Stopped before the reply began: the prompt comes back to the composer, after anything typed
+  // since, with its files, its selection and its @-pills.
+  useEffect(() => {
+    setRestoreHandler((sent) => {
+      givenBackRef.current = Date.now();
+      setInput((cur) => (cur ? `${cur} ${sent.text}` : sent.text));
+      if (sent.attachments?.length) setAttachments((cur) => [...cur, ...sent.attachments!]);
+      if (sent.extra?.selection) setAttachedSel(sent.extra.selection);
+      const named = sent.extra?.connectors ?? [];
+      if (named.length) setPills((ps) => [...ps, ...(connectors ?? []).filter((c) => named.includes(c.name) && !ps.some((p) => p.name === c.name))]);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    });
+    return () => setRestoreHandler(null);
+  }, [setRestoreHandler, connectors]);
 
   const dropQueued = useCallback((id: string) => {
     queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
@@ -725,9 +757,10 @@ export function Chat({ chat, onShare, files, account, config }: {
   };
 
   // Restored-open panel (workspace/org switch remounts Chat): load the
-  // active tab's data, same as the click path would have.
+  // active tab's data, same as the click path would have, and the chat that was open here.
   useEffect(() => {
     if (filesOpen) selectTab(filesTab);
+    if (was?.chat) onLoadChat(was.chat).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -924,7 +957,6 @@ export function Chat({ chat, onShare, files, account, config }: {
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
     connectors: connectors?.filter((c) => c.connected),
-    approveSwitch: !!connectors?.length,
     onOpenConnectors: account && connectors?.length ? () => openConnectors("plus") : undefined,
     onOpenSkills: account ? () => openConnectors("plus", undefined, "skills") : undefined,
     onToggleConnector: (c: Connector, on: boolean) => {
@@ -1874,61 +1906,22 @@ function FollowUpChip({ text, onAccept, onDismiss }: {
 // Footer link into the trash — Finder/Drive style, from where the loss happened.
 type DockEntry = { icon: IconName; label: string; count?: number; onClick: () => void };
 
-// The panel's dock: one row of shortcuts at its foot. Tiles grow as the pointer nears them.
+// The panel's foot: its shortcuts in one row, each an icon and its name.
 function PanelDock({ items }: { items: DockEntry[] }) {
-  const pointer = useMotionValue(Infinity);
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-24 items-end justify-center bg-gradient-to-t from-background via-background/70 to-transparent pb-3">
-      <div
-        onMouseMove={(e) => pointer.set(e.clientX)}
-        onMouseLeave={() => pointer.set(Infinity)}
-        className="pointer-events-auto flex items-end gap-1 rounded-[18px] border border-black/[0.06] bg-white/70 p-1.5 shadow-[0_12px_32px_-12px_rgb(0_0_0/0.3)] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[0_12px_32px_-12px_rgb(0_0_0/0.9)]"
-      >
-        {items.map((it) => <DockTile key={it.label} {...it} pointer={pointer} />)}
-      </div>
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex gap-1 bg-gradient-to-t from-background via-background/90 to-transparent px-3 pb-3 pt-10">
+      {items.map(({ icon, label, count, onClick }) => (
+        <button
+          key={label}
+          onClick={onClick}
+          className="pointer-events-auto flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+        >
+          <Icon name={icon} className="size-4" strokeWidth={1.8} />
+          {label}
+          {!!count && <span className="rounded-full bg-foreground/[0.08] px-1.5 text-[11px] leading-4 tabular-nums">{count}</span>}
+        </button>
+      ))}
     </div>
-  );
-}
-
-function DockTile({ icon, label, count, onClick, pointer }: DockEntry & { pointer: MotionValue<number> }) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const still = useReducedMotion();
-  const [tip, setTip] = useState(false);
-  const size = useSpring(useTransform(pointer, (x) => {
-    const r = ref.current?.getBoundingClientRect();
-    const d = r ? Math.abs(x - r.left - r.width / 2) : Infinity;
-    return still ? 32 : 32 + 12 * Math.max(0, 1 - d / 80);
-  }), { mass: 0.1, stiffness: 200, damping: 14 });
-  return (
-    <motion.button
-      ref={ref}
-      onClick={onClick}
-      aria-label={label}
-      style={{ width: size, height: size }}
-      onHoverStart={() => setTip(true)}
-      onHoverEnd={() => setTip(false)}
-      onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }}
-      onBlur={() => setTip(false)}
-      className="relative flex cursor-pointer items-center justify-center rounded-[13px] text-muted-foreground transition-colors hover:bg-foreground/[0.07] hover:text-foreground"
-    >
-      <AnimatePresence>
-        {tip && (
-          <motion.span
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            transition={{ duration: 0.12 }}
-            className="pointer-events-none absolute bottom-full z-10 mb-2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background"
-          >
-            {label}
-          </motion.span>
-        )}
-      </AnimatePresence>
-      <Icon name={icon} className="size-[45%]" strokeWidth={1.8} />
-      {!!count && (
-        <span className="absolute -end-1 -top-1 min-w-4 rounded-full bg-foreground px-1 text-center text-[10px] font-medium leading-4 text-background">{count}</span>
-      )}
-    </motion.button>
   );
 }
 

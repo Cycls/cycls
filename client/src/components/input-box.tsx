@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { t, getLang, setLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { Icon } from "./icon";
-import { cn, autoApprove, setAutoApprove } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { ConnectorIcon, Switch, connectorLabel, type Connector } from "./connectors-dialog";
 
 export type MentionHit = { name: string; path: string; connector?: Connector };
@@ -73,7 +73,6 @@ export function InputBox({
   onOpenConnectors,
   onOpenSkills,
   onToggleConnector,
-  approveSwitch,
   onAddConnector,
   placeholder,
   selection,
@@ -110,7 +109,6 @@ export function InputBox({
   onOpenConnectors?: () => void;
   onOpenSkills?: () => void;
   onToggleConnector?: (c: Connector, on: boolean) => void;   // the person's own on/off, kept across chats
-  approveSwitch?: boolean;   // the deployment has connectors: show Auto / Manual
   onAddConnector?: (c: Connector) => void;
   placeholder?: string;
   held?: boolean;               // send was pressed while a file uploads: it goes when the uploads finish
@@ -391,7 +389,6 @@ export function InputBox({
           {(onOpenFilePicker || onOpenFiles) && (
             <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} onToggleConnector={onToggleConnector} disabled={isStreaming} />
           )}
-          {approveSwitch && <ApproveMode disabled={isStreaming} />}
           <button
             type="button"
             onClick={(e) => {
@@ -482,37 +479,6 @@ function MicButton({ listening, transcribing, disabled, onStart, onStop, onCance
         <line x1="8" y1="23" x2="16" y2="23" strokeLinecap="round" />
       </svg>
     </button>
-  );
-}
-
-// Auto: a connector's writes run, the destructive still ask. Manual: every write asks. Remembered per device.
-function ApproveMode({ disabled }: { disabled?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [auto, setAuto] = useState(autoApprove);
-  const choose = (on: boolean) => (e: React.MouseEvent) => { e.stopPropagation(); setAutoApprove(on, "composer"); setAuto(on); setOpen(false); };
-  const row = (on: boolean, icon: "forward" | "hand", title: string, hint: string) => (
-    <button onClick={choose(on)} className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-start transition-colors hover:bg-secondary/80">
-      <Icon name={icon} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1"><span className="block text-sm text-foreground">{title}</span><span className="block text-xs text-muted-foreground">{hint}</span></span>
-      {auto === on && <Icon name="check" className="mt-0.5 size-4 shrink-0" />}
-    </button>
-  );
-  return (
-    <div className="relative">
-      <button type="button" onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }} disabled={disabled} aria-label={t(auto ? "autoApprove" : "manualApprove")}
-        className={`flex h-8 items-center gap-1.5 rounded-2xl px-2.5 text-xs transition ${disabled ? "cursor-not-allowed text-muted-foreground opacity-30" : "cursor-pointer text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
-        <Icon name={auto ? "forward" : "hand"} className="size-4" />{t(auto ? "auto" : "manual")}
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute start-0 bottom-full z-50 mb-2 w-64 rounded-lg border border-border bg-background py-1 shadow-lg">
-            {row(true, "forward", t("autoApprove"), t("autoApproveHint"))}
-            {row(false, "hand", t("manualApprove"), t("manualApproveHint"))}
-          </div>
-        </>
-      )}
-    </div>
   );
 }
 

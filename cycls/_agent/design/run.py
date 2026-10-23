@@ -1,16 +1,16 @@
 """The Design tool's executor: render, script, edit, inspect and extract here; slide, section,
 file and comment actions in actions.py."""
-import asyncio, base64, json, os, pathlib, re
-from ..paths import _safe_filename
+import asyncio, base64, json, pathlib, re
+from ..paths import _resolve_path
 from . import skill
-from .tool import DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
+from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
 from .extract import _pdf_parts
 from .report import _edit_names, _layout_check, _outline_text
-from .files import _DECK_EXTS, _DESIGN_EXTS, _dedupe_design_name, _save_pages
-from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comments_note, _document_source, _exec_comments,
+from .files import _DECK_EXTS, _DESIGN_EXTS, _designs_there, _find_design, _free_design, _opened, _save_pages, _stem_of
+from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comments_note, _exec_comments,
     _exec_design_file, _exec_document, _exec_slides, _render_document, _sections_text, _to_the_room)
 
 
@@ -43,19 +43,50 @@ def _nudged(out, line):
 
 
 async def _exec_design(inp, workspace):
-    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). A render
-    in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
-    out = await _run_design(inp, workspace)
+    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). The workspace's
+    own fonts (brand/fonts) reach the service first, and the call that first gives them says their family; a
+    render in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
+    from cycls._agent import design
+    said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))
+    out = await _design_call(inp, workspace)
     if str(inp.get("action") or "render").lower() == "render" and not DESIGN_SKILLED.get():
         spec = inp.get("spec") if isinstance(inp.get("spec"), dict) else inp
         want = json.dumps(["design-direction", _skill_for(spec)])
         out = _nudged(out, f"No design skill is loaded in this chat: {{\"action\": \"skill\", \"skill\": {want}}} holds the "
                            f"looks, the layouts and how to change this design in few calls — load it before the next change.")
+    if said and isinstance(out, str):
+        return f"{said}\n\n{out}"
+    if said and isinstance(out, dict) and "_model" in out:
+        m = out["_model"]
+        return {**out, "_model": [{"type": "text", "text": said}, *m] if isinstance(m, list) else f"{said}\n\n{m}"}
     return out
 
 
-async def _run_design(inp, workspace):
-    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens)."""
+_FONT_KEYS = ("font", "headerFont", "heading", "body", "arHeading", "arBody")
+
+
+async def _font_files(v, root, user_id):
+    """A font named by its file anywhere in the workspace (a .ttf / .otf path) → given to the service and named by
+    the family and weight the file says, so that design draws with it."""
+    from cycls._agent import design
+    if isinstance(v, list):
+        return [await _font_files(x, root, user_id) for x in v]
+    if not isinstance(v, dict):
+        return v
+    out = {}
+    for k, x in v.items():
+        if k in _FONT_KEYS and isinstance(x, str) and x.lower().endswith((".ttf", ".otf")):
+            if not (path := _resolve_path(x, root)).is_file():
+                raise RuntimeError(f"there is no font file {x} in the workspace")
+            got, _ = await design.give_font(path, user_id)
+            if isinstance(got, str):
+                raise RuntimeError(f"the font file {x} can't be used: {got}")
+            x = f"{got['family']} {got['style']}"
+        out[k] = await _font_files(x, root, user_id)
+    return out
+
+
+async def _design_call(inp, workspace):
     from cycls._agent import design
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
@@ -94,6 +125,10 @@ async def _run_design(inp, workspace):
                         if key == "spec" else "")
                 return (f"Error: `{key}` came as text that isn't valid JSON — {why}. Nothing was done. "
                         f"Send `{key}` again as an object, with that put right.{more}")
+    try:
+        inp = await _font_files(inp, workspace.root, getattr(workspace, "subject", None))
+    except (RuntimeError, ValueError) as e:
+        return f"Error: {e}. Nothing was done."
     action = (inp.get("action") or "render").lower()
     # a design written beside `spec` rather than under it
     if action == "render" and inp.get("spec") is None:
@@ -103,16 +138,24 @@ async def _run_design(inp, workspace):
     fmt = (inp.get("format") or "png").lower()
     if fmt not in _DESIGN_EXTS:
         return f"Error: unknown format {fmt!r} (png, jpg, webp, svg, pptx)."
-    scale = inp.get("scale") or 2
-    name = _safe_filename(inp.get("name") or "design", "design").rsplit(".", 1)[0] or "design"
+    # `name` is the design's path without `.fig`; with no folder in it, the folder the person has open
+    folder = DESIGN_FOLDER.get()
+    if action == "extract" and not inp.get("name") and isinstance(inp.get("path"), str):
+        name = _stem_of(inp["path"].rsplit(".", 1)[0])                     # its parts beside the PDF
+    elif action in ("render", "script", "extract"):
+        name = _stem_of(inp.get("name") or "design", folder)
+    else:
+        name = _find_design(workspace.root, inp.get("name") or "design", folder)
+    try:
+        _resolve_path(f"{name}.fig", workspace.root)
+    except ValueError as e:
+        return f"Error: a design can't be saved at {name}.fig — {e}. Nothing was done."
     subject = getattr(workspace, "subject", None)
     if action in _SLIDE_ACTIONS:
         return await _exec_slides(action, inp, workspace, name)
     if action in _DOCUMENT_ACTIONS:
         return await _exec_document(action, inp, workspace, name)
     if action == "extract":
-        if not inp.get("name") and isinstance(inp.get("path"), str):
-            name = _safe_filename(pathlib.PurePosixPath(inp["path"].replace("\\", "/")).stem or "pdf", "pdf")
         return await _pdf_parts(inp, workspace, name)
     if action in _FILE_ACTIONS:
         return await _exec_design_file(action, inp, workspace, name)
@@ -122,11 +165,11 @@ async def _run_design(inp, workspace):
         from cycls._agent.design import assets
         return await assets.listing(inp, subject)
     if action in ("edit", "inspect"):
-        rel = f"designs/{name}.fig"
+        rel = f"{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
         if not fig_path.is_file():
-            return (f"Error: {rel} doesn't exist — `{action}` works on a design you rendered; "
-                    f"`render` creates one.")
+            return (f"Error: {rel} doesn't exist — `{action}` works on a design you rendered (`render` creates one). "
+                    f"The designs here: {_designs_there(workspace.root)}.")
     page = str(inp.get("page") or "").strip() or None
     if action == "inspect":
         try:
@@ -138,7 +181,8 @@ async def _run_design(inp, workspace):
         text = _outline_text(rel, o["frames"], o["pages"], o["page"])
         if pinned := await _comments_note(workspace, rel, o):
             text += "\n\n" + pinned
-        doc = await asyncio.to_thread(_document_source, workspace.root, name)
+        keep = o.get("keep") or {}
+        doc = keep.get("document") if keep.get("kind") == "document" and isinstance(keep.get("document"), dict) else None
         return f"{_sections_text(name, doc)}\n\n{text}" if doc else text
     # The service applies an edit to the .fig headless first, so a failure reaches the model and a
     # success is saved with or without an open editor; the UI event then replays it live there.
@@ -182,8 +226,7 @@ async def _run_design(inp, workspace):
         from cycls._agent.design import refresh
         pages, ended = r.get("pages") or [], r.get("page") or ""
         made_page = any(isinstance(op, dict) and op.get("op") in ("page_add", "page_duplicate") for op in ops or [])
-        # re-export the image beside it; a page the edit made gets its own
-        refresh.schedule(workspace.root, rel, subject, ensure=True, pages=made_page)
+        refresh.schedule(workspace.root, rel, subject)        # its preview, made ready
         ui = {"type": "ui", "action": "design_command", "path": rel, "script": r.get("script") or script,
               "version": version}   # an open editor's later saves base on this version
         if len(pages) > 1 or made_page:
@@ -194,15 +237,9 @@ async def _run_design(inp, workspace):
         if intent := inp.get("intent"):
             ui["intent"] = str(intent)[:80]   # shown on the live "Super" cursor
         await _to_the_room(workspace.root, rel, ui)
-        if len(pages) > 1:
-            place = next((n for n, p in enumerate(pages, 1) if p["name"] == ended), 1)
-            image = f"designs/{refresh.page_file(name, place, 'png')}"
-            on = (f" on page {json.dumps(ended, ensure_ascii=False)} — the design's pages are now "
-                  + ", ".join(json.dumps(p["name"], ensure_ascii=False) for p in pages))
-        else:
-            image, on = f"designs/{name}.png etc.", ""
-        ack = (f"Edit applied and saved to {rel}{on}; the image beside it ({image}) "
-               f"re-exports in a few seconds. If the design is open in the editor, the Super "
+        on = (f" on page {json.dumps(ended, ensure_ascii=False)} — the design's pages are now "
+              + ", ".join(json.dumps(p["name"], ensure_ascii=False) for p in pages)) if len(pages) > 1 else ""
+        ack = (f"Edit applied and saved to {rel}{on}. If the design is open in the editor, the Super "
                f"cursor replays the change live there." + _edit_names(r) + _layout_check(r.get("lint"), "png"))
         for credit in credits:
             ack += f" {credit}."
@@ -229,7 +266,7 @@ async def _run_design(inp, workspace):
                                                         "data": base64.b64encode(r["preview"]).decode()}},
                            {"type": "text", "text": ack}],
                 "_ui": ui}
-    notes, size = [], None
+    notes = []
     try:
         if action == "render":
             if not isinstance(inp.get("spec"), dict):
@@ -251,92 +288,49 @@ async def _run_design(inp, workspace):
             if err:
                 return err
             notes = [*mended, *notes, *(f"{c}." for c in credits)]
+            # what it is, kept in the .fig: a deck keeps the settings its added slides are laid out with
             if isinstance(spec.get("deck"), dict):
-                n_frames, size = len(spec["deck"]["slides"]), spec["deck"]["size"]
+                from cycls._agent.design.deck import settings_of
+                n_frames, keep = len(spec["deck"]["slides"]), {"kind": "deck", "deck": settings_of(spec["deck"])}
             elif isinstance(spec.get("pages"), list):
-                if fmt in _DECK_EXTS:   # a page is an image: rendered as png, not refused
-                    notes.append(f"A design of several pages renders to an image a page, so it was rendered as png, not {fmt} — "
-                                 f"each page is downloaded as PDF or PowerPoint from the canvas.")
-                    fmt = "png"
-                n_frames, size = 1, None
+                n_frames, keep = 1, {"kind": "design"}
             else:
-                frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
-                n_frames, size = len(frames), frames[0].get("size")
-            # several raster frames = a carousel; a long deck's rest come back on contact sheets
-            carousel = n_frames > 1 and fmt not in _DECK_EXTS
-            long = n_frames > _DESIGN_QA_SLIDES and not carousel
-            r = await design.render(spec, fmt=fmt, scale=scale, user_id=subject, every=carousel,
+                n_frames = len(spec["frames"]) if isinstance(spec.get("frames"), list) and spec["frames"] else 1
+                keep = {"kind": "deck" if fmt in _DECK_EXTS else "carousel" if n_frames > 1 else "post"}
+            # the file is the design: its picture is only looked at, so it's drawn small; a long deck's rest on contact sheets
+            long = n_frames > _DESIGN_QA_SLIDES and keep["kind"] == "deck"
+            r = await design.render(spec, fmt="png", scale=1, user_id=subject, keep=keep,
                                     **({"sheets": True, "lead": _DESIGN_QA_SLIDES} if long else {}))
             notes = [*notes, *r.notes]
         elif action == "script":
             if not inp.get("script"):
                 return "Error: `script` needs a `script` string ending in console.log('__FRAME__'+id)."
-            r = await design.evaluate(inp["script"], fmt=fmt, scale=scale, user_id=subject)
+            keep = {"kind": "deck" if fmt in _DECK_EXTS else "post"}
+            r = await design.evaluate(inp["script"], fmt="png", scale=1, user_id=subject, keep=keep)
         else:
             return f"Error: unknown design action {action!r} (render or script)."
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
         return f"Error: design {action} failed — {type(e).__name__}: {e}"
-    image, fig, preview, lint = r.image, r.fig, r.preview, r.lint
+    fig, preview, lint = r.fig, r.preview, r.lint
     if len(r.pages) > 1:
         return await _save_pages(r, name, fmt, workspace, notes)
     count = max(len(r.previews), len(r.slides), 1)
-
+    kind = "carousel" if keep["kind"] == "post" and count > 1 else keep["kind"]
     # never clobber an earlier design: launch → launch-2 → …
-    requested = name
-    name = _dedupe_design_name(pathlib.Path(workspace.root) / "designs", name, fmt)
     root = pathlib.Path(workspace.root)
-    (root / "designs").mkdir(parents=True, exist_ok=True)
-    if len(r.images) > 1:
-        saved = [f"designs/{name}-slide-{n}.{fmt}" for n in range(1, len(r.images) + 1)]
-        for rel_n, data in zip(saved, r.images):
-            await asyncio.to_thread((root / rel_n).write_bytes, data)
-        rel = saved[0]
-    else:
-        saved = [rel := f"designs/{name}.{fmt}"]
-        await asyncio.to_thread((root / rel).write_bytes, image)
-    fig_rel = f"designs/{name}.fig"   # the editable source of truth
+    requested, name = name, await asyncio.to_thread(_free_design, root, name)
+    fig_rel = f"{name}.fig"
+    await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread((root / fig_rel).write_bytes, fig)
-    if count > 1:
-        # the deck document the viewer opens; titles, notes and transitions live in the .fig
-        deck = {"type": "cycls.deck", "version": 1, "fig": fig_rel, "size": size,
-                "slides": count, "exports": saved}
-        if action == "render" and isinstance(spec.get("deck"), dict):
-            from cycls._agent.design.deck import settings_of
-            deck["settings"] = settings_of(spec["deck"])      # what a new slide is laid out with
-            if r.dir and "dir" not in deck["settings"]:
-                deck["settings"]["dir"] = r.dir                  # its bilingual slides' direction
-        await asyncio.to_thread((root / f"designs/{name}.deck.json").write_text,
-                                json.dumps(deck, indent=2), "utf-8")
-    note = (f" (named '{name}' so it doesn't overwrite the existing '{requested}')"
-            if name != requested else "")
-    kb = (sum(map(len, r.images)) if len(saved) > 1 else len(image)) // 1024
-    if len(saved) > 1:
-        what = f"Carousel saved ({count} slides: {saved[0]} … {saved[-1]}, {kb} KB{note})"
-    elif count > 1:
-        what = f"Deck saved ({rel}, {count} slides, {kb} KB{note})"
-    else:
-        what = f"Design saved ({rel}, {kb} KB{note})"
-    # open the editable .fig in the editor; the image only when none is wired up
-    editor = bool(os.environ.get("DESIGN_EDITOR_URL"))
-    if count > 1:
-        deck_rel = f"designs/{name}.deck.json"
-        downloads = "its images (a .zip), PowerPoint or PDF" if len(saved) > 1 else "PowerPoint, PDF or its images"
-        ack = (f"{what}. It's OPEN in the deck viewer ({deck_rel}) — say \"the deck viewer\", not the "
-               f"design editor. There the user can page through it, Present it full screen (with the "
-               f"speaker notes), and download it as {downloads}"
-               f"{'; the viewer has an Edit button that opens the design editor' if editor else ''}. "
-               f"Editable source: {fig_rel}; change it with Design edit.")
-        ui = {"type": "ui", "action": "open_canvas", "path": deck_rel, "name": f"{name}.deck.json"}
-    elif editor:
-        ack = (f"{what}; its editable source {fig_rel} is now OPEN in the in-canvas editor — "
-               f"the user can edit it live. Tell them they can tweak it directly there, or ask "
-               f"you to change it (colors, copy, layout) and you'll apply it with Design edit.")
-        ui = {"type": "ui", "action": "open_canvas", "path": fig_rel, "name": f"{name}.fig"}
-    else:
-        ack = f"{what}, opened on the canvas. Editable source: {fig_rel}."
-        ui = {"type": "ui", "action": "open_canvas", "path": saved[0], "name": saved[0].rsplit("/", 1)[-1]}
+    from cycls._agent.design import refresh
+    refresh.schedule(workspace.root, fig_rel, subject)        # its preview, made ready
+    note = (f", named '{name}' so it doesn't overwrite the existing '{requested}'" if name != requested else "")
+    what = (f"{'Deck' if kind == 'deck' else 'Carousel'} saved ({count} slide{'s' if count != 1 else ''}{note})" if count > 1 or kind == "deck"
+            else f"Design saved{f' ({note[2:]})' if note else ''}")
+    ack, ui = _opened(fig_rel, what)
+    ack += " Change it with Design edit — or, slide by slide, add_slide / update_slide." if count > 1 or kind == "deck" else " Change it with Design edit."
     for line in notes:
         ack += " " + line
     ack += _layout_check(lint, fmt if count == 1 else "pptx")
@@ -372,10 +366,10 @@ async def _run_design(inp, workspace):
                 "each other (title position, margins, palette, fonts). If anything is off, fix it "
                 f"now with {fix} (ops take `frame`, the slide index from 0), then present.")
         return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
-    look, media = (preview, "image/jpeg") if preview else (image, _DESIGN_QA_TYPES.get(fmt))
+    look, media = (preview, "image/jpeg") if preview else (r.image, _DESIGN_QA_TYPES.get("png"))
     if not media or len(look) > _DESIGN_QA_MAX:
         return {"_model": ack, "_ui": ui}
-    shown = "The first slide is attached" if count > 1 or fmt in _DECK_EXTS else "The render is attached"
+    shown = "The first slide is attached" if count > 1 or kind == "deck" else "The render is attached"
     ack += (f" {shown} — QA it before you present: headline clearly dominant; "
             "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
             "aligned, nothing overlapping or cut off; copy exactly right (spelling, names, "

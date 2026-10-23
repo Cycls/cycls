@@ -4,8 +4,6 @@ from pathlib import Path
 from fastapi import HTTPException
 from cycls._agent.paths import MANAGED
 
-from cycls._agent.design import refresh as design_refresh
-
 
 # FileResponse sets ETag/Last-Modified but no Cache-Control, and heuristic
 # freshness (browsers, iOS URLCache) then serves stale bytes after a write.
@@ -50,17 +48,12 @@ def _safe_path(workspace, rel):
 
 
 def _free_rel(root, rel):
-    """A name for a new file that overwrites nothing (`rel`, else `<stem>-2`, …), clear of images a re-export replaces."""
-    from cycls._agent.design.files import _dedupe_design_name
-    path = Path(rel)
-    root = Path(root)
-    if rel.startswith("designs/") and path.suffix.lower() == ".fig":
-        return (path.parent / f"{_dedupe_design_name(root / path.parent, path.stem, 'png')}.fig").as_posix()
+    """A name for a new file that overwrites nothing: `rel`, else `<stem>-2`, …"""
+    path, root = Path(rel), Path(root)
     stem, suffix = (path.name[:-len(path.suffix)], path.suffix) if path.suffix else (path.name, "")
-    taken = lambda cand: (root / cand).exists() or design_refresh.managed(root, cand)
-    if not taken(rel):
+    if not (root / rel).exists():
         return rel
     n = 2
-    while taken(cand := (path.parent / f"{stem}-{n}{suffix}").as_posix()):
+    while (root / (cand := (path.parent / f"{stem}-{n}{suffix}").as_posix())).exists():
         n += 1
     return cand

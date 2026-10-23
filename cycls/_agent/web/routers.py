@@ -91,12 +91,9 @@ def to_ui_messages(raw):
                     if msg.get("cards") and out and out[-1]["role"] == "assistant":
                         out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
                     continue
-                text = state.user_text(msg)
-            elif isinstance(c, str):
-                text = c
-            else:
+            elif not isinstance(c, str):
                 continue
-            ui = {"role": "user", "content": text}
+            ui = {"role": "user", "content": state.user_text(msg)}
             if msg.get("attachments"):
                 ui["attachments"] = msg["attachments"]
             if msg.get("selection"):   # the model read it as a line; the person sees a chip
@@ -286,15 +283,14 @@ def chats_router(ws_dep):
 
     @r.delete("/chats/{chat_id}/last-exchange")
     async def truncate_last_exchange(chat_id: str, expect: Optional[str] = None, ws: Workspace = ws_dep):
-        """Drop the last user turn and everything after it — the persistence
-        half of `regenerate`. The FE then re-sends the same message, so the
-        run that follows is an ordinary send. `?expect=<sha256 of its text>` (retry)
-        drops only that turn, and not one that ended well; else `{ok: false}`."""
+        """Drop the last user turn and everything after it: the web takes back a prompt
+        stopped before its reply began; the mobile app regenerates by re-sending after it
+        (the web replays instead, `/chat` with `regenerate`). `?expect=<sha256 of what was
+        typed>` drops only that turn, and not one that ended well; else `{ok: false}`."""
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
-        # This is the one route that still deletes and renumbers every turn file.
-        # Under a live run that moves the slots it is appending to — the exact way
-        # two production chats lost turns (docs/notes/runs.md).
+        # Under a live run this would delete the turns it is appending
+        # (docs/notes/runs.md).
         status = state.run_status(await state.get_run(ws, chat_id))
         if status == "running":
             raise HTTPException(status_code=409, detail="This chat is still working on your last message.")
@@ -379,8 +375,6 @@ _PUBLIC = ("name", "path", "type", "size", "modified", "kind")
 
 
 def _kind(name):
-    if name.lower().endswith(".deck.json"):
-        return "deck"                      # a design deck's document: the deck viewer
     if _composition(name):
         return "composition"               # a Video composition: the player (?as=player), not a page
     return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
@@ -734,7 +728,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
-        # a design deck (its deck document or .fig): ?as=slides|pptx|pdf|images|png
+        # a design (.fig): ?as=slides|pptx|pdf|images|png
         if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
             return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject,
                                           request.query_params.get("page"))
@@ -836,8 +830,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                 return JSONResponse(status_code=412, content={
                     "detail": f"This {what} changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
-        # re-export the images beside an edited design; a new one (`dedupe`) gets its .png
-        design_refresh.schedule(ws.root, rel, ws.subject, ensure=dedupe)
+        design_refresh.schedule(ws.root, rel, ws.subject)   # a design's preview, made ready
         return reply
 
     @r.post("/files-batch/{path:path}")
@@ -922,12 +915,6 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             except OSError as e:   # never fail a rename that already happened
                 log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
             if dest.suffix.lower() == ".fig" and Path(rel).suffix.lower() == ".fig":
-                # …and the files kept beside it
-                from cycls._agent.design import refresh
-                try:
-                    await asyncio.to_thread(refresh.follow, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
-                except OSError as e:
-                    log("warn", message=f"the files beside {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
                 await _comments(ws, "move", Path(rel).as_posix(), Path(dst).as_posix())   # …and what was said about it
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
@@ -1186,8 +1173,8 @@ def _poll_key(deck):
 
 def _poll_deck(value):
     deck = str(value or "")
-    if not deck.endswith((".deck.json", ".fig")) or ".." in deck.split("/") or deck.startswith("/") or len(deck) > 400:
-        raise HTTPException(400, "deck must be a deck document path")
+    if not deck.endswith(".fig") or ".." in deck.split("/") or deck.startswith("/") or len(deck) > 400:
+        raise HTTPException(400, "deck must be a design's path")
     return deck
 
 
@@ -1548,7 +1535,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     def _shared_deck(row):
         path = (row or {}).get("path", "")
-        if not (path.startswith("file/") and path.endswith((".deck.json", ".fig"))):
+        if not (path.startswith("file/") and path.endswith(".fig")):
             raise HTTPException(404, "This link isn't a deck")
         return path[5:]
 

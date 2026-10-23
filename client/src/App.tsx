@@ -21,7 +21,7 @@ import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
 import { IconButton } from "./components/icon";
-import { Star } from "./components/message";
+import { Star } from "./components/cycls-star";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
 import { PublicHome } from "./components/public-home";
 import { SharedView } from "./components/shared-view";
@@ -37,7 +37,8 @@ import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics"
 import { initAffiliate } from "./lib/affiliate";
 import { setPeople } from "./lib/people";
 
-function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null): FilesPanelProps {
+function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null,
+                         author?: Record<string, string | undefined>): FilesPanelProps {
   return {
     entries: f.entries, path: f.path, loading: f.loading,
     onNavigate: f.list,
@@ -68,7 +69,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     appData: f.appData,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
-    onShareFile: withShare ? f.shareFile : undefined,
+    onShareFile: withShare ? (p: string, audience: string) => f.shareFile(p, audience, author) : undefined,
     onListTrash: f.listTrash,
     onRestoreTrash: f.restoreTrash,
     onPurgeTrash: f.purgeTrash,
@@ -108,10 +109,11 @@ function ChatAppKeyed({ config }: { config: AppConfig | null }) {
     () => wsEnabled ? { id: effectiveWs, switch: switchWorkspace } : undefined,
     [wsEnabled, effectiveWs, switchWorkspace]);
   if (!isLoaded) return null;
-  return <ChatApp key={`${orgKey}:${effectiveWs || "personal"}`} config={config} workspace={workspace} />;
+  const view = `${orgKey}:${effectiveWs || "personal"}`;
+  return <ChatApp key={view} view={view} config={config} workspace={workspace} />;
 }
 
-function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: WorkspaceSelection }) {
+function ChatApp({ config, workspace, view }: { config: AppConfig | null; workspace?: WorkspaceSelection; view: string }) {
   const chat = useChat();
   const { user } = useUser();
   const files = useFiles();
@@ -185,17 +187,16 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     if (id) chat.loadChat(id).catch(() => stripParam("id"));
   }, [authLoaded, chat]);
 
-  const handleShare = async (audience: string = "public") => {
-    const authorFields = user ? {
-      author_name: user.fullName || user.firstName || "",
-      author_image_url: user.imageUrl,
-      ...(organization && {
-        author_org_name: organization.name,
-        author_org_image_url: organization.imageUrl,
-      }),
-    } : {};
-    return await chat.share(audience, authorFields);
-  };
+  // Who shared it, shown on the shared page: a chat and a file carry the same.
+  const authorFields = user ? {
+    author_name: user.fullName || user.firstName || "",
+    author_image_url: user.imageUrl,
+    ...(organization && {
+      author_org_name: organization.name,
+      author_org_image_url: organization.imageUrl,
+    }),
+  } : {};
+  const handleShare = async (audience: string = "public") => await chat.share(audience, authorFields);
 
   // The organisation's members by account id: the workspace menu's member list, and the names a
   // design's history gives a teammate's change (the sign-in token carries none).
@@ -253,9 +254,10 @@ function ChatApp({ config, workspace }: { config: AppConfig | null; workspace?: 
     <Chat
       chat={chat}
       onShare={handleShare}
-      files={filesPanelProps(files, true, organization ? { id: organization.id, name: organization.name } : null)}
+      files={filesPanelProps(files, true, organization ? { id: organization.id, name: organization.name } : null, authorFields)}
       account={account}
       config={config}
+      view={view}
     />
   );
 }
@@ -300,7 +302,7 @@ function popParams(): string {
   return params.toString() ? `/?${params}` : "/";
 }
 
-function SharedViewAuthed() {
+function SharedViewAuthed({ agent }: { agent?: string }) {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   // Share URL: /shared/<subject>/<token>. Subject is `<org_id>:<user_id>` for
   // org-context owners, plain `<user_id>` otherwise. Mint the viewer's token
@@ -308,9 +310,11 @@ function SharedViewAuthed() {
   // the viewer currently has active.
   const subject = window.location.pathname.split("/")[2] || "";
   const orgId = subject.includes(":") ? subject.split(":")[0] : null;
+  // Someone outside that org can't have its token: they go as themselves, so the server can say the
+  // link isn't theirs instead of asking them, already signed in, to sign in again.
   const fetchToken = useCallback(async () => {
-    try { return await getToken(orgId ? { organizationId: orgId } : undefined); }
-    catch { return null; }
+    if (orgId) try { const tk = await getToken({ organizationId: orgId }); if (tk) return tk; } catch { /* not a member */ }
+    try { return await getToken(); } catch { return null; }
   }, [getToken, orgId]);
   // An org-scoped share is unreadable until we know who the viewer is; without
   // this the page just said "private or expired" and left them there. Same
@@ -320,7 +324,7 @@ function SharedViewAuthed() {
   if (!isLoaded) return null;
   if (signingIn && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
   return (
-    <SharedView getToken={fetchToken} signedIn={!!isSignedIn}
+    <SharedView getToken={fetchToken} signedIn={!!isSignedIn} agent={agent}
                 onSignIn={() => setSigningIn(true)} />
   );
 }
@@ -713,13 +717,14 @@ export default function App() {
   }
   if (window.location.pathname.startsWith("/shared/")) {
     if (loading) return null;
+    const agent = config?.pass_metadata?.[lang]?.name || config?.pass_metadata?.en?.name;
     // Org-scoped shares need the viewer's bearer (see shared-view.tsx). Wrap
     // in ClerkProvider so signed-in viewers can attach a token; anonymous
     // visitors still see public shares without auth.
-    if (!clerkKey) return <SharedView />;
+    if (!clerkKey) return <SharedView agent={agent} />;
     return (
       <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }}>
-        <SharedViewAuthed />
+        <SharedViewAuthed agent={agent} />
       </ClerkProvider>
     );
   }

@@ -22,8 +22,12 @@ so nothing here ever clears or summarizes it.
 
 - **`read`** returns at most 50,000 characters (~25k tokens), cuts lines at 2,000, and
   ends with `[Stopped at line N of M. Continue with offset=N+1.]`. Attachments are
-  inlined through `read`, so the same cap bounds them. Files over 3 MB are refused (use
-  bash); large PDFs need `pages`, 20 per read. Images and PDFs go as base64 blocks.
+  inlined through `read`, so the same cap bounds them. Documents (PDF, Office, ODF, RTF,
+  EPUB) go to the deployed parser (`CYCLS_PARSER`, default `cycls-parser`) and come back
+  as Markdown; past 20,000 characters the model gets the beginning and the full text waits
+  in `.tmp/{chat_id}/`. When the parser is unavailable or finds no text, `read` works as
+  before: files over 3 MB are refused (use bash), large PDFs need `pages`, 20 per read.
+  Images, and PDFs asked for with `pages`, go as base64 blocks.
 - **Every other string result** of 20,000 characters or more spills to
   `.tmp/{chat_id}/` and the model gets a preview (`spill.py`, 48h TTL). `read` and
   `skill` never spill; list-shaped results (MCP multi-part, images) don't either.
@@ -172,7 +176,8 @@ files). The model sees:
 ```
 
 `Session` clamps both on load. `truncate_last_exchange` clamps them on disk too — a stale
-index past the new length would stub or hide the turns appended after it.
+index past the cut would stub or hide the turns appended after it, or the one a regenerate
+runs again.
 
 ## Checking it in production
 

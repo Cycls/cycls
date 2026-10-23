@@ -54,7 +54,7 @@ def _laid_out_tables(page):
 
 async def _pdf_parts(inp, workspace, name):
     """A PDF's text by page (reading order; tables from the layout) and its pictures saved to
-    designs/<name>-assets/, via poppler. With `page`, `_pdf_page`."""
+    <name>-assets/ (beside the PDF, unless `name` says where), via poppler. With `page`, `_pdf_page`."""
     import hashlib, tempfile, unicodedata
     src = inp.get("path") or inp.get("src")
     if not isinstance(src, str) or not src.strip():
@@ -83,7 +83,7 @@ async def _pdf_parts(inp, workspace, name):
             return 'Error: `pages` is the pages to read — a number, or a range like "5-8".'
     only = ("-f", str(span[0]), "-l", str(span[1])) if span else ()
     root = pathlib.Path(workspace.root)
-    assets_rel = f"designs/{name}-assets"
+    assets_rel = f"{name}-assets"
     letters = lambda t: _SHAPED.sub(lambda m: unicodedata.normalize("NFKC", m[0]), _DIRECTION_MARKS.sub("", t))
     try:
         _, info = await _run_tool("pdfinfo", str(path), timeout=20)
@@ -186,7 +186,7 @@ async def _pdf_parts(inp, workspace, name):
 
 
 async def _pdf_page(inp, workspace, name, path, src):
-    """One PDF page drawn to look at, or with `area` a drawn figure cut out to designs/<name>-assets/."""
+    """One PDF page drawn to look at, or with `area` a drawn figure cut out to <name>-assets/."""
     import tempfile
     page, area = inp.get("page"), inp.get("area")
     how = "`area` is [left, top, width, height], each a part of the page from 0 to 1 — e.g. [0.1, 0.25, 0.8, 0.3]"
@@ -240,7 +240,7 @@ async def _pdf_page(inp, workspace, name, path, src):
                 f"(its top-left quarter is [0, 0, 0.5, 0.5]).")
         media = "image/jpeg"
     else:
-        folder = pathlib.Path(workspace.root) / "designs" / f"{name}-assets"
+        folder = pathlib.Path(workspace.root) / f"{name}-assets"
 
         def save():
             folder.mkdir(parents=True, exist_ok=True)
@@ -248,7 +248,7 @@ async def _pdf_page(inp, workspace, name, path, src):
             (folder / f"figure-{n}.png").write_bytes(data)
             return n
         n = await asyncio.to_thread(save)
-        rel, size = f"designs/{name}-assets/figure-{n}.png", _image_size(data) or (0, 0)
+        rel, size = f"{name}-assets/figure-{n}.png", _image_size(data) or (0, 0)
         text = (f"Saved {rel} ({size[0]}×{size[1]}) — page {page} of {src}, cut at {[round(v, 3) for v in (x, y, w, h)]}. "
                 f"Check it holds the whole figure and nothing beside it; if it doesn't, cut again with the area put right. "
                 f"Use it in a document as {{\"image\": \"{rel}\", \"caption\": \"…\"}}.")

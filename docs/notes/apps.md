@@ -178,15 +178,20 @@ posts back. The frame never sees a token, a URL or a workspace path it did not a
 |  | before | now |
 |---|---|---|
 | first `get` | `cycls:read data/state.json` → `GET /files/…` → `JSON.parse` the whole file | `cycls:data {op:"list"}` → `GET /apps/<slug>/data` → rows |
-| `set` | mutate memory, mark dirty, wait 250 ms | unchanged |
+| `set` | mutate memory, mark dirty, wait 250 ms | mutate memory, send at once (one write per key on its way) |
 | the flush | **re-read** the file, merge the dirty keys onto it, `PUT` the whole object back | one `{op:"put", key, value}` per dirty key, in parallel |
 | a delete | drop the key, rewrite the whole file | `{op:"delete", key}` |
 | two writers | last full write wins unless the merge catches it | collide only on the same key |
 | audiences | one, shared by everyone | three — see the slot section |
 
 The merge existed only because the whole file was rewritten; per-key rows make it unnecessary, so it
-is gone. What is *not* gone: there is still no compare-and-swap, so two writers on one key inside
-the same 250 ms window still lose one.
+is gone. What is *not* gone: `set` has no compare-and-swap, so two writers on one key still lose one.
+
+Until 2026-10-20 `set` waited 250 ms to batch a burst, with a flush on `pagehide`, and that lost the
+last write on every close. A mobile WebView runs no timer in the background and fires no `pagehide`
+when its sheet closes. On web, the flush's message waited on a promise that a removed frame never
+runs, behind a port the canvas had already closed. `set` now sends at once, with one write per key
+on its way: a burst costs its first value and its latest, and they cannot land out of order.
 
 `cycls.read`/`write`/`save` are untouched — those are files, and `canWrite` still allows `data/`
 only.
@@ -222,7 +227,7 @@ bundle rendered blank in production.
 `src/ui/appShim.ts` is the shim above with the transport swapped and nothing else: app → host goes
 over `ReactNativeWebView.postMessage` when that global exists, host → app is a `message` event the
 native side dispatches carrying a JSON string, and `receive` parses a string before reading it. The
-shelves, the 250 ms flush, `update`'s CAS retry and the `truncated` throw are copied verbatim — a
+shelves, `set`'s write at once, `update`'s CAS retry and the `truncated` throw are copied verbatim — a
 diff that ignores comments shows only those transport lines, which is the point: a stale copy is how
 the two hosts start disagreeing about what an app may reach.
 
@@ -439,8 +444,8 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 - CAS exists (`put(gen=…)` → `ifGenerationMatch`) but is opt-in, and only app data uses it. Chats
   and the agent KV stay last-write-wins on purpose: both are `{slot}/{user}`, one person per shelf,
   so there is no second writer to lose to.
-- A flush that fails rejects the pending `set`, so a tab closing on a dead connection can still lose
-  its last 250 ms.
+- A write that fails rejects its `set` and nothing retries it, so an app that does not await `set`
+  loses that value without a word.
 
 **App data**
 - A list is capped at 10,000 rows. It says so (`truncated`) and `cycls.get` throws rather than lie,
@@ -452,7 +457,7 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   it is paced; a prefix is the only thing that makes it cheaper.
 - `who=` costs a `resolve_role()` — one or two more object reads per request, uncached.
 - A non-admin write to a shared shelf reads `app.json` to check `write: admin`. One small gcsfuse
-  read per write, and writes are debounced, so it is not hot — but it is not free either.
+  read per write, and a burst on one key is two writes, so it is not hot, but it is not free either.
 - `cycls.users` has no "list the members" verb — it lists rows, so a member who has written nothing
   is invisible to an admin view.
 
@@ -461,10 +466,8 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   `cycls.read` and every `cycls.get` rejects — an app that needs its data shows nothing in a share.
 - On mobile the app is staged to a `file://` URI in a WebView with `originWhitelist: ["*"]`, and
   Android truncates `loadData` past roughly 2 MB — a 2.4 MB bundle rendered blank in production.
-- The mobile host has not been ported: it sends no MessagePort (so that frame still talks on the
-  window) and knows nothing of `cycls:data`, so `cycls.set` there still writes `state.json` as a
-  file. **Nothing reads it.** With no seed, a phone user's writes are invisible to the web and to
-  the agent until the port lands — the strongest reason to do it. `~/Desktop/code/mobile-app`.
+- The mobile host (`~/Desktop/code/mobile-app`, `src/ui/AppView.tsx`) speaks `cycls:data` but sends
+  no MessagePort, so that frame talks on the window.
 
 **The build**
 - `_collect_source` skips binaries, so an app cannot ship an image file; icons must be data URIs.

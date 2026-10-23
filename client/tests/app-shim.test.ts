@@ -151,20 +151,23 @@ describe("the injected cycls api", () => {
     await expect(p).rejects.toThrow("nope");
   });
 
-  // One row per key: two writers now collide only on the same key, where the
-  // whole-file rewrite this replaced lost everything the other had changed.
-  it("coalesces a burst of sets into one write per key", async () => {
+  // A set() leaves at once, with no timer a closed or backgrounded WebView would never run. One write per
+  // key is on its way at a time, so a burst sends its first value and then its latest, never out of order.
+  it("sends each set at once, and a burst on one key as its first and latest value", async () => {
     const { api, posted, deliver } = load("apps/burnup");
     const done = Promise.all([api.set("a", 1), api.set("b", 2), api.set("a", 3)]);
     await new Promise((r) => setTimeout(r, 0));
     const list = posted.find((m) => m.type === "cycls:data")!;
     deliver({ type: "cycls:data:result", id: list.id, ok: true, result: { rows: [] } });
     await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));   // load resolves, then the flush timer
-    const puts = posted.filter((m) => m.op === "put");
-    expect(puts.map((m) => [m.key, m.value])).toEqual([["a", 3], ["b", 2]]);
-    puts.forEach((m) => deliver({ type: "cycls:data:result", id: m.id, ok: true, result: { ok: true } }));
+    const puts = () => posted.filter((m) => m.op === "put");
+    expect(puts().map((m) => [m.key, m.value])).toEqual([["a", 1], ["b", 2]]);
+    puts().forEach((m) => deliver({ type: "cycls:data:result", id: m.id, ok: true, result: { ok: true } }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(puts().map((m) => [m.key, m.value])).toEqual([["a", 1], ["b", 2], ["a", 3]]);
+    deliver({ type: "cycls:data:result", id: puts()[2].id, ok: true, result: { ok: true } });
     await expect(done).resolves.toBeDefined();
+    await expect(api.flush()).resolves.toBeUndefined();
   });
 
   it("carries a delete through as its own row", async () => {
@@ -174,7 +177,6 @@ describe("the injected cycls api", () => {
     const list = posted.find((m) => m.type === "cycls:data")!;
     deliver({ type: "cycls:data:result", id: list.id, ok: true, result: { rows: [{ key: "gone", value: 1 }] } });
     await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));   // load resolves, then the flush timer
     const del = posted.find((m) => m.op === "delete")!;
     expect(del.key).toBe("gone");
     deliver({ type: "cycls:data:result", id: del.id, ok: true, result: { ok: true } });

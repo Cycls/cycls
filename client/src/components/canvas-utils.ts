@@ -44,9 +44,11 @@ const OFFICE_EXTS = new Set([
 ]);
 export const isOffice = (name: string) => OFFICE_EXTS.has(ext(name));
 
-// .fig opens in the design editor when one is configured, else the download card.
+// A design is one .fig: a preview of what it is, and the design editor to change it.
 const DESIGN_EXTS = new Set(["fig"]);
 export const isDesignEditor = (name: string) => DESIGN_EXTS.has(ext(name));
+// What a person calls a file: a design by its name, without ".fig" — an extension nobody knows.
+export const shownName = (name: string) => name.replace(/\.fig$/i, "");
 
 // Mirrors the server's presets (cycls/_agent/tools _DESIGN_SIZES); `label` is an i18n key.
 export const DESIGN_PRESETS = [
@@ -58,14 +60,12 @@ export const DESIGN_PRESETS = [
   { key: "a4-poster", label: "designA4", size: [1240, 1754] },
 ] as const;
 
-// designs/<name>.deck.json opens the deck viewer: check it before the .json code path.
-export const isDeck = (name: string) => name.toLowerCase().endsWith(".deck.json");
 // A Video composition (videos/<name>.video.html) plays from the page the video service builds of it
-// (?as=player); as a raw page it is a blank frame. Checked before the html path, as a deck is before json.
+// (?as=player); as a raw page it is a blank frame. Checked before the html path.
 export const isComposition = (name: string) => name.toLowerCase().endsWith(".video.html");
-// "deck", not "json", on a deck's extension tile; "video" on a composition's.
+// The word on a file's extension tile: "design", not "fig"; "video" on a composition's.
 export const tileExt = (name: string) =>
-  (isDeck(name) ? "deck" : isComposition(name) ? "video" : name.includes(".") ? name.split(".").pop() || "" : "");
+  (isDesignEditor(name) ? "design" : isComposition(name) ? "video" : name.includes(".") ? name.split(".").pop() || "" : "");
 
 export const is3d = (name: string) => ["glb", "gltf"].includes(ext(name));
 
@@ -81,7 +81,7 @@ const TINTS: Record<string, string> = {
   fig: "#af52de",
 };
 export const extTint = (name: string): string | undefined =>
-  (isDeck(name) ? TINTS.fig : isComposition(name) ? TINTS.mp4 : TINTS[ext(name)]);
+  (isComposition(name) ? TINTS.mp4 : TINTS[ext(name)]);
 // Wash + label styles for an extension tile; undefined → neutral (bg-secondary).
 export const tintTile = (name: string) => {
   const c = extTint(name);
@@ -116,7 +116,7 @@ export const codeLang = (name: string): string | null => {
 // for servers predating it and for files not yet listed (mid-upload rows).
 export const isRenderable = (name: string, kind?: string) =>
   kind ? kind !== "opaque"
-       : isComposition(name) || isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || isDeck(name) || is3d(name) || codeLang(name) != null;
+       : isComposition(name) || isMd(name) || isHtml(name) || isPdf(name) || isImage(name) || isAudio(name) || isVideo(name) || isSpreadsheet(name) || isDocx(name) || isPresentation(name) || isOffice(name) || isDesignEditor(name) || is3d(name) || codeLang(name) != null;
 
 // Deliverable target of a live edit step — from the finished label or the
 // streamed partial-JSON args. Helper scripts never open the canvas.

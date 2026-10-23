@@ -1,7 +1,6 @@
-"""Slide ops on a deck, shared by the Design tool and the deck viewer's `/deck` route. A deck is
-`designs/<name>.fig` plus `<name>.deck.json`, whose `settings` lay out new slides to match the rest."""
+"""Slide ops on a deck, shared by the Design tool and the canvas's slide changes. A deck is one `.fig`:
+the settings its added slides are laid out with are kept in it (`keep.deck`, written when it is rendered)."""
 import asyncio
-import json
 from pathlib import Path
 
 from . import refresh
@@ -17,7 +16,7 @@ def lock(fig_path):
 
 
 def settings_of(deck):
-    """A deck's settings as the deck document keeps them: image slots back to workspace paths."""
+    """A deck's settings as its file keeps them: image slots back to workspace paths."""
     def strip(v):
         if isinstance(v, dict):
             if (isinstance(v.get("image"), str) or isinstance(v.get("svg"), str)) and "type" not in v:
@@ -29,11 +28,17 @@ def settings_of(deck):
     return strip({k: deck.get(k) for k in ("theme", "look", "size", "footer", "logo", "transition", "dir") if deck.get(k) is not None})
 
 
-def paths(root, name):
-    """(fig path, fig rel, deck document path, deck rel) for design `name`."""
-    root = Path(root)
-    return (root / "designs" / f"{name}.fig", f"designs/{name}.fig",
-            root / "designs" / f"{name}.deck.json", f"designs/{name}.deck.json")
+async def settings(fig, user_id=None):
+    """What a slide added to design `fig` (bytes) is laid out with → (settings, the outline's frames): the deck's
+    own, else its first slide's size."""
+    from cycls._agent import design
+    o = await design.outline(fig, user_id=user_id)
+    kept = (o.get("keep") or {}).get("deck")
+    out = dict(kept) if isinstance(kept, dict) else {}
+    size = ((o.get("frames") or [{}])[0] or {}).get("size")
+    if "size" not in out and isinstance(size, list) and len(size) == 2:
+        out["size"] = size
+    return out, o.get("frames") or []
 
 
 def _intent(ops):
@@ -45,21 +50,12 @@ def _intent(ops):
     return labels.get(op.get("op"), "change the slides").format(n=(n + 1) if isinstance(n, int) else "")
 
 
-def read_doc(deck_path):
-    try:
-        doc = json.loads(deck_path.read_text("utf-8"))
-        return doc if isinstance(doc, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-async def apply_ops(root, name, ops, user_id=None, preview=False, by="agent"):
-    """Run slide `ops` (service form, 0-based) on design `name` → the service's result; the .fig,
-    its exports and the deck document follow. Raises FileNotFoundError, design.Unavailable, RuntimeError."""
+async def apply_ops(root, fig_rel, ops, user_id=None, preview=False, by="agent"):
+    """Run slide `ops` (service form, 0-based) on design `fig_rel` → the service's result; its preview follows.
+    Raises FileNotFoundError, design.Unavailable, RuntimeError."""
     from cycls._agent import design
     from .store import Stale, read_fig, write_fig
-    fig_path, fig_rel, deck_path, _ = paths(root, name)
-    async with lock(fig_path):
+    async with lock(Path(root) / fig_rel):
         for attempt in (1, 2):
             data, base = await asyncio.to_thread(read_fig, root, fig_rel)
             if data is None:
@@ -73,13 +69,4 @@ async def apply_ops(root, name, ops, user_id=None, preview=False, by="agent"):
                 if attempt == 2:
                     raise RuntimeError("the design changed while the slides were being changed — try again")
     refresh.schedule(root, fig_rel, user_id)
-    count = len(r.get("slides") or [])
-    if count:
-        doc = await asyncio.to_thread(read_doc, deck_path)
-        if count > 1 or doc:
-            doc = {"type": "cycls.deck", "version": 1, "fig": fig_rel, **doc, "slides": count}
-            doc.setdefault("exports", [])
-            part = deck_path.with_name(f".{deck_path.name}.part")
-            await asyncio.to_thread(part.write_text, json.dumps(doc, indent=2), "utf-8")
-            await asyncio.to_thread(part.replace, deck_path)
     return r

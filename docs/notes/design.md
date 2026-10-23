@@ -9,10 +9,30 @@ SDK ships only a thin client (`cycls/_agent/design`) and the built-in `Design`
 tool. Same split as office-render and the browser tool: the heavy dependency lives
 in one service, not in every image.
 
-The agent and the human meet at one shared file — `designs/<name>.fig`. The agent
-**generates** it (and can **edit** it live), and the human **hand-edits** the same
-file in the editor embedded in the canvas — see
+The agent and the human meet at one shared file — `<name>.fig`, wherever it belongs in
+the workspace. The agent **generates** it (and can **edit** it live), and the human
+**hand-edits** the same file in the editor embedded in the canvas — see
 [Editing](#editing--the-in-canvas-editor) below.
+
+**A design is one file** (since 21 October 2026). Nothing is written beside the `.fig`:
+- **What it is** is kept in it: the render's `keep` — `{kind: post | carousel | deck | document |
+  design, deck?: its settings, document?: its source}` — goes into the `.fig` as plugin data on
+  the first page's frames (cycls-design, "the caller's record"), and `inspect`, `/slides` and
+  `/apply` give it back. So a slide added to a one-slide deck is laid out in the deck's theme, a
+  section action reads the document's source from the file, and the viewer knows a document.
+  (Before, a second file did this — `designs/<name>.deck.json` — and exports were kept beside the
+  design and re-exported on every save; both are gone, and what is written below of them is history.)
+- **Anywhere.** `name` is the design's path without `.fig`: a bare name is saved in the folder the
+  person has open in Files (the chat request's `folder`, `DESIGN_FOLDER`), else at the top; an old
+  design is still found in `designs/`. A new design from Files is made in the folder in view.
+- **Downloads are made on demand** (`?as=pdf|pptx|images|png`, and the `.fig` itself); `export` writes
+  a file only when the agent needs one to send — a copy, over nothing.
+- **People see the name and what it is** ("Launch · Deck · 8 slides"), never `.fig`. A design opens as
+  its preview; Edit loads the editor. While the agent's turn is working on it the tab is the editor
+  (`live`), where its changes land; when the turn ends it is the preview again — unless the person
+  clicked into the editor meanwhile.
+- **The preview is made ready** after each save (`design/refresh.py`: debounced, the slide manifest
+  into the cache), sized to ~1920 px on the long side by the service (`/slides` `fit`).
 
 Enable it by putting `"Design"` in an agent's `allowed_tools` and pointing
 `DESIGN_URL` (+ optional `DESIGN_SECRET`) at a deployed `cycls-design` service; set
@@ -58,7 +78,7 @@ agent's live `edit` changed it under their cursor.
         │  POST /render {spec}  ───────────▶  compile spec → Figma plugin API
         │  POST /eval   {script}             → export png/jpg/webp/svg/pptx/pdf
         ▼                                     → return image + editable .fig
-   save designs/<name>.<fmt> + .fig ◀────────  (stateless: files live in the
+   save <name>.fig (what it is kept in it) ◀──  (stateless: files live in the
    open_canvas → user sees it                  agent's workspace)
 ```
 
@@ -128,6 +148,13 @@ Fontsource. The service's `fonts.ts` makes that dependable before every render:
   (cached per process). A weight the family lacks falls back to its Regular with a
   note; an unknown family is a 422 naming it — never blank text. `/apply` checks the
   fonts an edit leaves on the page the same way.
+- **A workspace's own fonts.** The `.ttf` / `.otf` files in `brand/fonts/` — and any one a design
+  names by its path, as a `font` or a theme's `heading` / `body` (`run._font_files`) — reach the
+  service (`POST /fonts`) on a Design call (`client.give_font`): their sha256 first, once a process,
+  and the file itself only when the service has never had it. The service reads the family and
+  weight from the file and keeps it beside its baked faces, on a volume, so renders, PDFs and
+  the editor's `/font` find it like any other; one on Google Fonts is refused. The first call
+  to give a font tells the model its family name.
 
 The service returns `notes` for what it changed; the SDK appends them to the ack.
 
@@ -276,16 +303,15 @@ not acted on.
   fonts exactly as in the PNG), with the slide's words laid over it invisibly — every
   line as the renderer laid it out, in its own embedded font — so they search,
   select and copy; pages are PowerPoint's size (13.333 in wide).
-- `format: "png" | "jpg" | "webp"` — a **carousel**: every slide saved as its own
-  image, `designs/<name>-slide-1.png`, `-slide-2.png`, …
+- `format: "png" | "jpg" | "webp"` — a **carousel**: every slide downloads as its own
+  image (`?as=images`, `<name>-slide-1.png`, `-slide-2.png`, … in a zip).
 - Mixed frame sizes are refused (PowerPoint takes the first slide's size and
   letterboxes the rest).
 
 A slide's `id` names its frame; its title, notes and transition ride on the frame
 as plugin data in the `.fig`, so they survive edits, reorders and re-exports, and
-`inspect` lists them. A multi-frame render also writes `designs/<name>.deck.json` —
-`{type: "cycls.deck", version, fig, size, slides, exports, settings?}` — the deck
-document the canvas opens to view and present it.
+`inspect` lists them. What the design is — and, for a deck of layouts, the settings its
+added slides are laid out with — is kept in the `.fig` too (see "A design is one file").
 
 **Decks of layouts** are the normal way to make a presentation. The model fills slots;
 the service (`cycls-design/src/layouts.js`) lays them out:
@@ -309,11 +335,11 @@ the primary as the hero, the accent where it reads on white, the brand fonts,
 slide: a slide whose words are two-thirds Arabic is right-to-left, two-thirds Latin
 left-to-right, and a bilingual slide (an Arabic headline over English bullets) or one of
 only numbers follows the deck's `dir` — the model's, else what most of the deck's words
-are. The service returns that `dir` and the deck document keeps it in its settings, so a
-slide added or rebuilt later turns the same way as the rest. The SDK
+are. The service writes that `dir` into the deck's kept settings, so a slide added or
+rebuilt later turns the same way as the rest. The SDK
 (`_prepare_deck`) resolves image slots — a slide's `image`, a team member's `photo`,
 the deck and footer logos — from workspace paths to bytes, and keeps the deck's
-settings (images back to paths) in the deck document so a later slide matches. Each
+settings (images back to paths, its `look` too) in the file so a later slide matches. Each
 frame keeps its layout `source` (image bytes out), which `inspect` shows. A test
 renders a compact deck in every theme and fails on any layout-check finding.
 
@@ -366,25 +392,18 @@ Pages panel), and Cycls works on **one page at a time**, named by its name:
   own size, a carousel's frames one size); an `edit` adds, copies, renames or removes
   one with the `page_add {name, spec}` / `page_duplicate` / `page_rename` /
   `page_delete` ops; or the person adds one in the editor. A deck of layouts is not a
-  page — it is a design of its own, with its deck document.
+  page — it is a design of its own.
 - **The agent.** `inspect {name, page?}` and `edit {name, page?, ops}` are about one
   page (the first when none is named); a design of several lists them in every
   outline. A render of several pages comes back with every page to look at, each
   labelled, and a layout check whose findings name their page. "Add selection" says
-  which page the person is on (`[Selected in designs/x.fig page "Story" › …]`).
-- **The files.** One `designs/<name>.fig`. The first page's image is the design's own
-  `<name>.<fmt>`; the others are `<name>-page-2.<fmt>`, `-page-3`, … by their place
-  (`refresh.page_file`), like a carousel's `-slide-N`. A render of pages writes them
-  all; `refresh` keeps them in step: once a design has any page image in a format, each
-  page has one (a page added gets its own, one removed loses it — a page with no frame
-  has none), and a page's `.pdf` / `.pptx` is re-exported where it exists. A design
-  whose pages were all made by hand has none until one is asked for (an export, or an
-  agent's page op).
+  which page the person is on (`[Selected in x.fig page "Story" › …]`).
+- **The files.** One `<name>.fig`; each page downloads on its own.
 - **The routes.** `?as=slides|pptx|pdf|images|png` take `&page=<name>` — the first page
   without it — cached per page beside the design's other renders (a save drops them
   all); the slides manifest carries `pages: [{name, frames}]` and `page`. A named
   page's download is `<name>-<page>.<ext>`. `POST /design/export {path, format, page?}`
-  writes the page's own file (`<name>-page-<n>.<fmt>`). A page that is gone is a 404.
+  writes the page's own file (`<name>-<page>.<fmt>`, over nothing). A page that is gone is a 404.
 - **The canvas.** The editor says which pages a design has and the one in view (`pages`,
   below); a design opens on the page it was left on (this browser's `localStorage`).
   **Preview** is of the page in view, with the pages as tabs when there are several —
@@ -428,10 +447,9 @@ the pages make themselves.
   cover's, the logo, an `image` block's (also inside `columns`), a `nodes` area's and a
   hand-built page's — into slots that carry the image's own size (`w`, `h`: the page
   sizes a figure from its shape). `"stock": "<query>"` works as everywhere else.
-- **The files.** `designs/<name>.pdf` (the deliverable), `designs/<name>.fig` (its
-  pages, editable) and `designs/<name>.deck.json` — a deck document with `kind:
-  "document"`, the paper `size`, and `document`: the source as the agent wrote it (paths,
-  not image bytes).
+- **The file.** `<name>.fig` — its pages, editable — keeps `kind: "document"` and
+  `document`: the source as the agent wrote it (paths, not image bytes). The PDF is what
+  the person downloads (`?as=pdf`), made from the `.fig` as it is.
 - **Changing one.** A small fix on one page — a word, a colour — is an ordinary `edit`
   (ops with `frame`: the page, from 0). Anything that changes the length is made on the
   document itself — **`update_section {name, number, section}`** (just the keys that
@@ -452,18 +470,18 @@ the pages make themselves.
   document's spec — it used to cost a refused call).
 - **Hand edits are not laid out over.** A document's pages are made from its source, so
   a re-render (`replace`, or any section action) would drop what was changed on them
-  since — by hand in the editor, or by an `edit`. The deck document keeps `rendered`, the
-  version of the `.fig` as it was rendered, and a copy of that `.fig` is kept in
-  `.cache/design/<hash>.rendered.fig`. Before a re-render the tool compares: same version
+  since — by hand in the editor, or by an `edit`. A copy of the `.fig` as it was rendered
+  is kept in `.cache/design/<hash>.rendered.fig` (its pages' hashes beside it, `.rendered.json`,
+  what the model has seen). Before a re-render the tool compares: the same bytes
   → render. Different → the two saves are outlined with every text whole (`/inspect
   {full}`) and compared (`_edits_since_render`, `_page_changes`): a text's new wording
   (shown from where it parts from the old), the nodes moved or restyled, the ones added or
   removed, page by page. The tool then **does not render** and says so; the model folds
   the wording into what it sends, tells the user what can't be kept, and repeats with
   `discard_edits: true` — the edited pages are kept as a version either way. A save that
-  changed nothing (the editor writing the file again) is not an edit; a document with no
-  kept copy still holds, without the details; one rendered before `rendered` existed
-  renders as before.
+  changed nothing (the editor writing the file again) is not an edit; one whose pages
+  can't be compared still holds, without the details; a document with no kept copy has
+  nothing to compare with and renders as before.
 - **No cover.** `"cover": false` for a one-page CV, a letter, an invoice, a brief: a
   title block heads page 1 (`kind`, `title`, `subtitle`, `meta`), sections run on under
   compact headings, a single page has no page number, and a few lines too many for the
@@ -492,7 +510,7 @@ the pages make themselves.
 - **From an existing PDF.** `extract {path, name?}` takes a PDF apart to be redesigned
   (`_pdf_parts`, poppler's `pdftotext` and `pdfimages`): its text page by page (capped —
   the Read tool shows the rest) and its pictures — photographs and figures of 200 px or
-  more, each once — saved into `designs/<name>-assets/`. The model then writes it as a
+  more, each once — saved into `<name>-assets/` beside the PDF (or where `name` says). The model then writes it as a
   document that uses them. What real PDFs taught it (a two-column paper, a tax form, an
   Arabic declaration made in Word, a scan):
   - **Reading order.** The words are read in reading order. "As laid out" set a
@@ -541,20 +559,19 @@ the pages make themselves.
   order they were given; and a bullet or a table cell that opens with a Latin word
   (`Figma و…`) still reads from the right. The PDF's text copies whole — two letters
   drawn as one glyph are both there — and without the direction marks.
-- **The canvas.** The deck document opens the **page viewer** — the deck viewer, told
-  `kind: "document"` by the slides manifest: "Pages", **PDF first** in Download, and no
-  moving, duplicating or deleting a page (its number and the contents would be wrong).
-  Edit opens the pages in the design editor, as for a deck.
+- **The canvas.** Its preview is the **page viewer** — the deck viewer, told
+  `kind: "document"` by the slides manifest (the file's own record): "Pages", **PDF first**
+  in Download, and no moving, duplicating or deleting a page (its number and the contents
+  would be wrong). Edit opens the pages in the design editor, as for a deck.
 - **The PDF.** Real text in its own embedded fonts, A4 (or the paper asked for), a few
   KB a text page, an outline of the sections, a contents page whose rows are links.
-  `?as=pdf` on the deck document writes it from the `.fig`, so it is what was last saved.
+  `?as=pdf` writes it from the `.fig`, so it is what was last saved.
 
 ## Two smaller things
 
-- **A renamed design takes its files with it.** `PATCH /files/<x>.fig` moved the `.fig`
-  alone and left its image, its slides' and pages' images, its PDF and its deck document
-  under the old name. `refresh.follow` now moves them too (never over a file already
-  there) and rewrites the deck document's `fig` / `exports`.
+- **A renamed design is its file moved.** `PATCH /files/<x>.fig` moves the `.fig`, its
+  history and its comments; there is nothing beside it to follow (a file with a name
+  like it is someone's own).
 - **A deploy of the service is not a failed design.** For a few minutes after
   cycls-design is deployed its instances are swapped under the requests in flight: a
   connection is dropped with no answer ("Server disconnected…"), or refused, or the
@@ -570,39 +587,44 @@ the pages make themselves.
 
 ## Two channels + the canvas
 
-`_exec_design` (`_agent/design/run.py`) saves the render to `designs/<name>.<fmt>` and
-the editable source to `designs/<name>.fig`, then returns the two-channel result
-the loop already understands: the model reads a short ack (plus the render itself,
-for self-QA), and the client gets an
-`open_canvas` event for the render (the same event the Canvas tool and browser
-screenshots use). PNGs render inline; a `.pptx` deck shows in the slide viewer when
-office-render is configured, else a download card.
+`_exec_design` (`_agent/design/run.py`) saves the render as `<name>.fig` — what it is
+kept in it — then returns the two-channel result the loop already understands: the
+model reads a short ack (plus the render itself, for self-QA), and the client gets an
+`open_canvas` event for the `.fig` (the same event the Canvas tool and browser
+screenshots use).
 
-**Decks open in the deck viewer.** A multi-frame render opens its
-`designs/<name>.deck.json` (`DeckView`, `client/src/components/deck-view.tsx`): a
+**A design's tab** opens as its preview; **Edit | Preview** in its header swaps in the
+design editor (loaded the first time it is wanted, then kept under the preview). A
+design the agent opens or edits during its turn is `live`: the tab is the editor while
+the turn runs, and the preview when it ends — unless the person clicked into the editor
+meanwhile. The header says what it is ("· Deck · 8 slides", from the manifest's `kind`
+and count), and ⋮ downloads a deck as PDF, PowerPoint or images, a single design as PNG
+or PDF, and the design file itself last.
+
+**A deck previews in the deck viewer** (`DeckView`, `client/src/components/deck-view.tsx`): a
 filmstrip beside the current slide and its speaker notes, or a grid of every slide;
 **Present**; **Download** — the whole deck as PowerPoint or PDF, or every slide as a
 PNG in one zip (`<name>-slide-<n>.png`; listed first for a carousel, which is posted
-as images), exported on demand; and **Edit**, which swaps in the design editor on the
-deck's `.fig`. The owner also shapes the deck here, without the editor or the agent:
+as images), exported on demand. The owner also shapes the deck here, without the editor or the agent:
 drag a card in the grid to move it, **Duplicate**, **Delete**, **Add slide** (`+` in
 the toolbar: after the slide in view; "Add slide after" in a card's menu) and the
 **speaker notes**, written in the box under the stage and saved on leaving it (Escape
 leaves them as they were; the keys that page the deck stay in the box). An added slide
 is one to start from, made the way the deck's own are (`_new_slide_op`): a deck of
-layouts — its deck document has `settings` — gets a `bullets` slide in the deck's
+layouts — its file keeps the deck's settings — gets a `bullets` slide in the deck's
 theme, titled "New slide" in the person's language; a hand-built deck has no theme
 to follow, so it gets a blank slide the colour of the slide before it, its title in
 a colour that shows on it. A document's pages are not changed one by one (they are
 numbered, and listed in its contents), and a shared deck is read-only: neither has
 these. Its content is
-the slide manifest from `GET /files/<deck>?as=slides` — the server resolves the
-deck document to its `.fig` (inside the workspace), asks the service's `/slides`
-for every slide as a JPEG plus its name / title / notes / transition, and caches the
-manifest in `.cache/design/` keyed by the `.fig`'s path + mtime + size, so an edit is
-a fresh render. `?as=pptx` / `?as=pdf` / `?as=images` (the zip) / `?as=png` (the first
-frame) export the same way; a file share of the deck document serves them all, so a
-shared deck presents. An agent `edit` of the deck while the viewer (not the editor)
+the slide manifest from `GET /files/<x>.fig?as=slides` — the server asks the service's
+`/slides` for every slide as a JPEG (its long side fitted to ~1920 px) plus its name /
+title / notes / transition and the file's record, and caches the manifest in
+`.cache/design/` keyed by the `.fig`'s path + mtime + size, so an edit is a fresh render —
+made ready in the background after each save (`refresh.py`), and one render however many
+ask for it at once. `?as=pptx` / `?as=pdf` / `?as=images` (the zip) / `?as=png` (the first
+frame) export the same way; a file share of the `.fig` serves them all, so a shared deck
+presents. An agent `edit` of the deck while the viewer (not the editor)
 is open refetches the manifest.
 
 **A design where there is no editor** — a shared page, an examples card, a deployment
@@ -610,8 +632,8 @@ without `DESIGN_EDITOR_URL` — shows as what it looks like. The canvas fetches 
 `.fig`'s slide manifest (`?as=slides`) instead of its bytes (`useFileContent`'s
 `designAsPictures`): one frame is a picture with **Download image** (`?as=png`), several
 are the read-only deck viewer. With the design service down it is the download card. `.fig` files are
-kind `design` and `.deck.json` kind `deck` in the Files panel, so neither downloads
-on click.
+kind `design` in the Files panel, shown by name (no `.fig`) on a design tile, so they open
+rather than download on click.
 
 **Present mode** (`present-mode.tsx`) is a portal on `document.body` that asks for
 real fullscreen: one slide at a time, each entering with its own transition (fade /
@@ -662,7 +684,7 @@ opens the **editor embedded in an iframe** (`DesignEditorView`), so the
 human edits the exact design the agent rendered. The editor is a static app on its
 **own origin** (a patched editor build, loaded with `?embed=cycls`); the SDK
 ships only the small React embed component and threads the `design_editor_url`
-config value to it. Two directions meet at the shared `designs/<name>.fig`:
+config value to it. Two directions meet at the shared `<name>.fig`:
 
 - **Human edits** — the canvas fetches the `.fig` bytes, posts them into the editor
   (`load`), and writes the editor's saved bytes back to the workspace
@@ -670,10 +692,10 @@ config value to it. Two directions meet at the shared `designs/<name>.fig`:
   no service call. The agent picks up the human's edits on its next turn. One editor
   edits **one design** — see "One design, in the workspace" below.
 - **Agent edits** — the `edit` action first runs the script on the saved
-  `designs/<name>.fig` through the service's `POST /apply` (the same engine
+  `<name>.fig` through the service's `POST /apply` (the same engine
   plugin API, headless). A script that throws — a node it looks up isn't there —
   is the model's error, verbatim, and nothing changes; a success is written back
-  to the `.fig` and its image re-exported (`design/refresh`), whether or not an
+  to the `.fig` (its preview made ready, `design/refresh`), whether or not an
   editor is open. Only then does the `design_command` UI event go out: the FE
   relays the script over `postMessage` to the open editor, which *replays* it on
   the live canvas the human is watching (the Super cursor). If that replay fails
@@ -697,33 +719,15 @@ chat.tsx ──▶ CustomEvent("cycls:design-command") ──▶ DesignEditorVie
                                  load .fig in  ·  apply script live  ·  save .fig back
                                                         │  PUT /files
                                                         ▼
-                                         designs/<name>.fig (workspace)
+                                         <name>.fig (workspace)
                                                         │  design/refresh (debounced)
-                                                        ▼  POST /export {fig, format, width}
-                                         designs/<name>.png|…|pptx|pdf (+ -slide-N) re-exported
+                                                        ▼  POST /slides {fig, fit}
+                                         its preview, cached in .cache/design/
 ```
 
-**The image follows the `.fig`.** A render saves `designs/<name>.<fmt>` beside the
-`.fig`, but every edit after that — the human's or the agent's `edit`, including a
-self-QA fix — lands only in the `.fig`. Left alone, the image goes stale: a
-download, a `read`, or a bash `cp` into an email or a deck gets the pre-edit
-design. So the `PUT /files` route hands every save to `design/refresh.schedule`,
-which, for a `designs/*.fig` (only there — a user's own `logo.fig` + `logo.png`
-elsewhere is never touched), re-exports each image **already beside it** through
-the service's `POST /export` once the saves go quiet (2 s debounce; the editor
-saves in bursts while someone drags, and a newer save cancels an export in
-flight). A raster sends its old pixel width, and the service sets the scale to
-width ÷ frame width, so a @1x render stays @1x. A deck's `.pptx` / `.pdf` re-exports
-whole (notes and transitions come from the `.fig`); a carousel's `-slide-N` images
-re-export together, and a slide deleted since loses its image. A design with nothing
-beside it — a copy made in the editor, a version opened as a copy — gets `<name>.png`:
-a new `.fig` (`?dedupe=1`) and an agent `edit` schedule with `ensure=True`, which
-survives the save the editor makes right after opening it; a deck or a carousel keeps
-only its own files. Best effort: a failure logs and
-leaves the old image — it never fails the save. Eager rather than on-read,
-because the sandbox reads the file straight off the volume where no hook can
-intercept it. The `edit` ack tells the model the image catches up a few seconds
-after the save.
+Nothing is written beside the `.fig` (it used to keep its image, slides and PDF beside it,
+re-exported on every save): a person downloads what they need from the canvas, made from
+the file as it is, and the agent `export`s a copy when it needs a file to send.
 
 ### One design, in the workspace
 
@@ -749,15 +753,14 @@ Cycls tab opened, and everything it makes lands in the workspace.
 - **New design** — the canvas `+` (with size presets: square, portrait, story,
   slide, X post, A4 poster), the Files panel's menu, or File › New design in the
   editor (`newDesign {size}` → the current frame's size). `POST /design/new` renders
-  one blank frame through the service and writes `designs/<name>.fig` + `.png`, like
-  a render — the refresh keeps the image current and the agent edits it by name.
+  one blank frame through the service and writes `<name>.fig` in the folder in view,
+  like a render — the agent edits it by name.
   It opens in its own Cycls tab. (Ctrl/⌘+N rarely reaches the page: browsers keep it.)
 - **Exports and copies go to the workspace.** The editor's exports (File › Export
   selection, the Export panel, Ctrl+Shift+E — PNG, JPG, WebP, SVG, PDF) come to
   Cycls as `export {files}`, one file each, written beside the design as
-  `<design>-<export name>` with `PUT /files?dedupe=1`: never over an existing file,
-  and never on a name the refresh keeps for the design's own images
-  (`refresh.managed`). "Save a copy…" asks for a name and writes a new `.fig` beside
+  `<design>-<export name>` with `PUT /files?dedupe=1`: never over an existing file.
+  "Save a copy…" asks for a name and writes a new `.fig` beside
   it, then opens it. No downloads or file pickers from inside the editor.
 - **Edit | Preview.** A design open in the canvas has one switch in its header
   (`EditPreviewSwitch`, `deck-view.tsx`): **Edit** is the editor; **Preview** is what the
@@ -765,18 +768,17 @@ Cycls tab opened, and everything it makes lands in the workspace.
   the slides (filmstrip, grid, notes, Present, downloads). Preview saves what's unsaved
   first, then reads the slide manifest (`?as=slides`); the editor stays mounted
   underneath, hidden and inert, so Edit is back at once with nothing reloaded, and an
-  agent edit made meanwhile shows in the preview. A deck opened as its `.deck.json` has
-  the same switch (it opens on Preview; Edit swaps the editor in).
+  agent edit made meanwhile shows in the preview. A design opens on Preview, and the
+  editor is loaded the first time Edit is pressed — or the agent works on it (`live`).
 - **A PDF is made by Cycls.** The editor's own PDF is SVG → jsPDF with no fonts
   embedded, so Arabic and web fonts come out wrong; the design service's is each page's
   own render with a text layer. So File › Export selection › **PDF** (and **Export PDF**
   in the docked pane's menu) sends `exportAs {doc, format}`: the host flushes the
   editor and calls `POST /design/export {path, format: "pdf" | "png"}`, which exports
-  the saved file through the service and writes it beside the design — under
-  `designs/` as `<name>.pdf`, the design's own image (replaced; the refresh keeps it in
-  step from then on), elsewhere under a free name — and a toast offers to open it. The
-  canvas ⋮ menu of a design downloads it as **PNG**, **PDF** or the `.fig`
-  (`?as=png|pdf`, after a flush), and the no-editor view has both downloads too.
+  the saved file through the service and writes it beside the design under a free name,
+  and a toast offers to open it. The canvas ⋮ menu of a design downloads a deck as **PDF**,
+  **PowerPoint** or **images**, a single design as **PNG** or **PDF**, and the `.fig` last
+  (`?as=…`, after a flush); the no-editor view has its downloads too.
 - **Brand kit.** With each `load`, Cycls sends `GET /brand` — the named colours of
   `brand/brand.yaml` (primary, secondary, accent, background, text, neutral; only
   those it names) and its heading/body fonts. The editor adds them as a **Brand**
@@ -1006,7 +1008,6 @@ and resolves (`comments`), so "address the comments on the deck" is one request.
   version, me}`; asked again with `?v=<version>` → `{unchanged, version}`. `POST
   /comments/<design>` `{text, frame, x, y, page?, frame_name?, name?}` pins one; with
   `?id=<thread>`, `{op: reply | resolve | reopen | edit | delete | move, …}` changes it.
-  A deck document's comments are its `.fig`'s: one conversation, whichever was opened.
   The author's id is the signed-in person's, never the request's; their name is what
   the browser calls them (the server has no directory of names). Anyone in the
   workspace answers, resolves and reopens — an answer reopens a resolved thread; the
@@ -1137,9 +1138,9 @@ every name is still importable from where it used to be.
 | `actions.py` | Slide actions, a document's section actions, the file actions (export, rename, copy, delete, versions), and a document rendered. |
 | `prepare.py` | What the model wrote, made ready for the service: a spec and its pages, a deck of layouts, a document, a slide, an edit's ops. With `brand.py` (colours, the brand kit) and `images.py` (a workspace image placed; the bounds on what is sent and shown). |
 | `extract.py` | A PDF taken apart to be made again as a document. |
-| `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's files (a free name, the pages of a render written out). |
+| `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's file (its name as a path, a free one, the canvas opening it). |
 | `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
-| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` · `assets.py` | Slide ops on a saved deck · versions and the base a save names · the exports kept beside a design · rooms and passes · stock photos · the media library (a named asset fetched and placed; the `assets` listing). |
+| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` · `assets.py` | Slide ops on a saved deck (its settings read from the file) · versions and the base a save names · a design's preview made ready after a save · rooms and passes · stock photos · the media library (a named asset fetched and placed; the `assets` listing). |
 | `comments.py` | What people pinned on a design: the record, its changes, where a pin is now, and where the record goes when the design does. |
 
 `cycls/_agent/web/design_routes.py` holds a design as the app is served it (its slides
@@ -1233,12 +1234,11 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   again from the spec it remembered — a second design (`launch-2`), without what had
   been changed by hand since. `export {name, format, page?}` makes the file from the
   saved `.fig` as it is (a deck as png / jpg: an image a slide; `page`: that page's
-  file), beside the design, where the refresh keeps it in step. And the tool handles a
-  design as a file, which bash could only half do (a `mv` left its images and deck
-  document behind): `rename`, `duplicate` (a copy to change freely — it gets its own
-  image), `delete` (to the trash, each file restorable), `versions` and `restore`
-  (what the design is now is kept first; people in it together open it again). What
-  is kept beside a design is `refresh.beside`, and goes with it (`refresh.follow`).
+  file), beside the design, over nothing — a copy, not kept in step. And the tool handles a
+  design as a file: `rename` (a bare new name stays in its folder; a path moves it),
+  `duplicate` (a copy to change freely), `delete` (to the trash, restorable), `versions`
+  and `restore` (what the design is now is kept first; people in it together open it
+  again). A design is one file, so its history and comments are all that follow it.
 - **The tool's instructions, only when a chat designs** (`DESIGN_INSTRUCTIONS=on-demand`;
   off unless set). The Design tool's definition is 28,800 characters — nearly half of
   the fixed part of every request, in every chat. On production over three weeks, 76
@@ -1246,7 +1246,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   demand, a chat carries a SHORT form (2,200 characters: what the tool is for, every
   parameter by name, and "call `guide` first") until it designs — which
   `tools.design_wanted` reads back from the transcript each turn, as connectors are
-  found: the chat has called the tool, the person names a file under `designs/` or
+  found: the chat has called the tool, the person names a `.fig` or
   has part of one selected, or their words ask for one (English and Arabic; wide on
   purpose — a chat that matches and never designs pays what every chat paid before).
   Otherwise the model asks: `design {action: "guide"}` loads it, and any other call

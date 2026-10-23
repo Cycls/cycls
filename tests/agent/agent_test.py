@@ -185,6 +185,30 @@ def test_history_saved_after_each_tool_round(agent_env):
     assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]
 
 
+def test_a_replay_runs_the_saved_turn_not_the_request(agent_env):
+    """Regenerate: the model gets the turn as it was saved, its attachment read when it was
+    sent, not the request's copy of the message, and the turn is not saved twice."""
+    from cycls._agent.state import append_messages
+    ws, ctx = agent_env
+    saved = {"role": "user", "content": [{"type": "text", "text": "summarize"},
+                                         {"type": "text", "text": "[Attached: attachments/n.txt]"},
+                                         {"type": "text", "text": "     1\tTHE FILE"}],
+             "attachments": [{"name": "n.txt", "path": "attachments/n.txt"}]}
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, [saved], 0))
+    ctx.replay = True
+    ctx.messages.raw = [{"role": "user", "content": "summarize"}]
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(iter([_make_response([_text_block("a new answer")])]), calls=calls)
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    assert "THE FILE" in json.dumps(calls[0]["messages"]), "the model was not given the saved turn"
+    history = _read_history(ctx)
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[0] == saved
+
+
 def test_history_survives_crash_after_first_tool_round(agent_env):
     """Crash during round 2 streaming — round 1 history should already be on disk."""
     ws, ctx = agent_env
@@ -391,6 +415,77 @@ def test_exec_read_binary_file(tmp_path):
     result = asyncio.run(_exec_read({"path": "data.bin"}, str(ws)))
     assert "Error" in result
     assert "binary" in result
+
+
+def _parser(monkeypatch, reply):
+    """The deployed parser, stubbed: `reply` is its result dict, or an exception it raises."""
+    import cycls
+    from cycls._agent import tools
+    calls = []
+    def parse(data, filename, mode):
+        calls.append((filename, mode))
+        if isinstance(reply, Exception): raise reply
+        return {"mode": mode, "page_count": 3, "warnings": [], "error": None, **reply}
+    monkeypatch.setattr(tools, "PARSER", "cycls-parser")
+    monkeypatch.setattr(cycls, "remote", lambda name, **_: parse)
+    return calls
+
+
+def test_exec_read_parses_documents_to_markdown(tmp_path, monkeypatch):
+    """Word, PowerPoint, Excel and PDFs come back as the parser's Markdown, its warnings first."""
+    calls = _parser(monkeypatch, {"content": "# التقرير\n\n| a | b |", "warnings": ["page 2: verify"]})
+    (tmp_path / "report.docx").write_bytes(b"PK")
+    (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4")
+
+    assert asyncio.run(_exec_read({"path": "report.docx"}, str(tmp_path))) == "[page 2: verify]\n# التقرير\n\n| a | b |"
+    pdf = asyncio.run(_exec_read({"path": "report.pdf"}, str(tmp_path)))
+    assert "3 pages" in pdf and "pages='N'" in pdf and pdf.endswith("| a | b |")
+    assert calls == [("report.docx", "markdown"), ("report.pdf", "markdown")]
+
+
+def test_exec_read_keeps_a_long_document_in_tmp(tmp_path, monkeypatch):
+    """Past the spill size the model gets the beginning, and the whole text waits in .tmp/ to continue from."""
+    body = "\n".join(f"line {i} " + "x" * 90 for i in range(1, 501))
+    _parser(monkeypatch, {"content": body})
+    (tmp_path / "book.epub").write_bytes(b"PK")
+
+    out = asyncio.run(_exec_read({"path": "book.epub"}, str(tmp_path), chat_id="c1"))
+    assert len(out) < len(body) and out.startswith("line 1 ")
+    kept = next((tmp_path / ".tmp" / "c1").glob("book-*.md"))
+    assert kept.read_text() == body and str(kept.relative_to(tmp_path)) in out
+    nxt = int(out.rsplit("offset=", 1)[1].split(",")[0])
+    assert asyncio.run(_exec_read({"path": str(kept.relative_to(tmp_path)), "offset": nxt, "limit": 1}, str(tmp_path))) \
+        .split("\t", 1)[1].startswith(f"line {nxt} ")
+
+
+def test_exec_read_falls_back_when_the_parser_cannot_help(tmp_path, monkeypatch):
+    """Unavailable, failing, or finding no text (a scan): `read` does what it did before the parser."""
+    (tmp_path / "scan.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
+    (tmp_path / "notes.docx").write_bytes(b"\x80\x81" * 50)
+    for reply in (OSError("unreachable"), {"content": "", "error": "malformed document"}, {"content": "  "}):
+        _parser(monkeypatch, reply)
+        assert asyncio.run(_exec_read({"path": "scan.pdf"}, str(tmp_path)))[0]["type"] == "document"
+        assert "binary" in asyncio.run(_exec_read({"path": "notes.docx"}, str(tmp_path)))
+
+
+def test_exec_read_pages_render_a_small_pdf_too(tmp_path, monkeypatch):
+    """`pages` is how a model without PDF support sees one: a small PDF sent whole again would be stubbed again."""
+    from cycls._agent.tools import pdf
+    seen = []
+    async def extract(path, first, last):
+        seen.append((path.name, first, last)); return [{"type": "image", "source": {}}]
+    monkeypatch.setattr(pdf, "extract", extract)
+    (tmp_path / "small.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
+    assert asyncio.run(_exec_read({"path": "small.pdf", "pages": "1-2"}, str(tmp_path)))[0]["type"] == "image"
+    assert seen == [("small.pdf", 1, 2)]
+
+
+def test_exec_read_pages_skip_the_parser(tmp_path, monkeypatch):
+    """`pages` asks to see the PDF, so it is rendered, never parsed."""
+    calls = _parser(monkeypatch, {"content": "text"})
+    (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4")
+    asyncio.run(_exec_read({"path": "doc.pdf", "pages": "1"}, str(tmp_path)))
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

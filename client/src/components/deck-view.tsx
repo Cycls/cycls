@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DropdownMenu } from "./files";
-import { DesignPresenceRow } from "./design-presence";
-import { DesignEditorView, canFullscreen, designEditorComments, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
+import { flushDesignEditor, reloadDesignEditors } from "./design-editor-view";
 import { PresentMode } from "./present-mode";
 import { CommentButtons, CommentLayer, CommentsList, useCommentCounts } from "./comments";
 import { useComments } from "../lib/comments";
 import type { DeckPoll, PollApi } from "../lib/polls";
-import type { WriteFile } from "../hooks/use-files";
 import { saveBlob } from "./canvas-utils";
 import { useSlideNav } from "../hooks/use-slide-nav";
 import { useEscape } from "../hooks/use-escape";
@@ -14,7 +12,7 @@ import { track } from "../lib/analytics";
 import { t } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
-// A multi-slide design on the canvas. `data` is its slide manifest (?as=slides on the deck or .fig).
+// A multi-slide design on the canvas. `data` is its slide manifest (?as=slides on the .fig).
 
 // Slide numbers are 1-based.
 export type DeckOp =
@@ -57,7 +55,7 @@ export interface DeckManifest {
   fig?: string;
   pages?: { name: string; frames: number }[];   // the design's pages (variants); a manifest is one of them
   page?: string;
-  kind?: string;   // "document": flowing paper pages, like a report
+  kind?: string;   // what the design is (its file's record): "document" (flowing paper pages), "deck", "carousel", "post"…
 }
 
 export function PageTabs({ pages, page, onPick }: { pages: string[]; page: string; onPick: (page: string) => void }) {
@@ -100,15 +98,12 @@ export function EditPreviewSwitch({ previewing, onEdit, onPreview }: {
   );
 }
 
-const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.deck\.json$|\.fig$/i, "");
+const baseName = (path: string) => (path.split("/").pop() || path).replace(/\.fig$/i, "");
 
-export function DeckView({ data, path, openFile, writeFile, designEditorUrl, designHost, onReload, onSlideOp: changeSlides, pollsFor, onPage }: {
+export function DeckView({ data, path, openFile, onReload, onSlideOp: changeSlides, pollsFor, onPage }: {
   data: string;
-  path: string;                 // the deck document (or .fig) this manifest is of
-  openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads, the editor's .fig
-  writeFile?: WriteFile;
-  designEditorUrl?: string;     // with writeFile + openFile: Edit opens the design editor
-  designHost?: DesignHost;      // what the editor asks of Cycls (new designs, copies, exports, brand)
+  path: string;                 // the design (.fig) this manifest is of
+  openFile?: (path: string, silent?: boolean) => Promise<string>;   // authed blob URL: downloads
   onReload?: () => void;        // refetch the manifest (the deck was edited)
   onSlideOp?: (op: DeckOp) => Promise<void>;   // the owner reorders / duplicates / deletes in the grid
   pollsFor?: (deck: string) => PollApi;        // the owner's: poll slides run live when presented
@@ -122,7 +117,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   const [mode, setMode] = useState<"stage" | "grid">("stage");
   const [presenting, setPresenting] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);   // the .fig's blob URL while editing
   const [busy, setBusy] = useState(false);            // a slide change is on its way
   const [drag, setDrag] = useState<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
@@ -135,7 +129,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
   // A document's pages are numbered in its contents: no per-page edits.
   const onSlideOp = deck?.kind === "document" ? undefined : changeSlides;
   const name = baseName(fig || path);
-  const canEdit = !!(designEditorUrl && writeFile && openFile && fig);
   const hasNotes = !!deck?.notes?.some((n) => n && n.trim());
   // A comment pin names its slide, so it is found again after a reorder.
   const picture = useRef<HTMLImageElement>(null);
@@ -160,13 +153,13 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
 
   // An agent edit is saved server-side before its event arrives: just refetch.
   useEffect(() => {
-    if (!fig || !onReload || editing) return;
+    if (!fig || !onReload) return;
     const onCommand = (e: Event) => {
       if ((e as CustomEvent<{ path?: string }>).detail?.path === fig) onReload();
     };
     window.addEventListener("cycls:design-command", onCommand);
     return () => window.removeEventListener("cycls:design-command", onCommand);
-  }, [fig, onReload, editing]);
+  }, [fig, onReload]);
 
   if (!deck || count === 0) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("deckUnavailable")}</div>;
@@ -196,10 +189,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
     ...(paper ? [] : [pdf]),
     ...(w <= h && !paper ? [] : [images]),
   ];
-  const edit = async () => {
-    if (!canEdit || !fig) return;
-    try { setEditing(await openFile!(fig)); } catch { /* the toast already said why */ }
-  };
   // An editor open on this .fig saves first and reloads after, so its next save doesn't undo the change.
   const slideOp = async (op: DeckOp) => {
     if (!onSlideOp || busy) return;
@@ -215,42 +204,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
       setBusy(false);
     }
   };
-  // Flush first so the reloaded slides carry unsaved edits.
-  const doneEditing = async () => {
-    if (fig) await flushDesignEditor(fig, 5000);
-    if (editing) URL.revokeObjectURL(editing);
-    setEditing(null);
-    onReload?.();
-  };
-
-  if (editing && fig && canEdit) {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
-          <span className="min-w-0 truncate">{fig}</span>
-          <div className="flex-1" />
-          <DesignPresenceRow path={fig} />
-          {/* An editor that can't pin comments sends them back to the viewer's slides. */}
-          <CommentButtons path={fig} onComment={(adding) => { if (adding && !designEditorComments(fig)) void doneEditing(); }}
-                          onList={() => { if (!designEditorComments(fig)) void doneEditing(); }} />
-          <EditPreviewSwitch previewing={false} onEdit={() => {}} onPreview={() => void doneEditing()} />
-          {canFullscreen() && (
-            <button onClick={() => fullscreenDesignEditor(fig)} aria-label={t("fullScreen")} title={t("fullScreen")}
-                    className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer">
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25v-4.5h4.5m7.5 0h4.5v4.5m0 7.5v4.5h-4.5m-7.5 0h-4.5v-4.5" />
-              </svg>
-            </button>
-          )}
-        </div>
-        <div className="min-h-0 flex-1">
-          <DesignEditorView url={editing} path={fig} name={`${name}.fig`} editorUrl={designEditorUrl!}
-                            writeFile={writeFile!} reload={() => openFile!(fig)} host={designHost} />
-        </div>
-      </div>
-    );
-  }
-
   const addSlide = (after: number) => void slideOp({ op: "add", number: after, title: t("newSlideTitle"), text: t("newSlideText") });
   const tool = "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors cursor-pointer";
   const note = deck.notes?.[nav.active]?.trim();
@@ -301,7 +254,6 @@ export function DeckView({ data, path, openFile, writeFile, designEditorUrl, des
             )}
           </div>
         )}
-        {canEdit && <EditPreviewSwitch previewing onEdit={() => void edit()} onPreview={() => {}} />}
         <button onClick={() => present(mode === "stage" ? nav.active : 0)}
                 className={cn(tool, "bg-foreground text-background hover:opacity-90")}>
           <svg className="size-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>

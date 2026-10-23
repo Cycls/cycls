@@ -176,12 +176,11 @@ def test_asking_again_with_the_version_costs_nothing(tmp_path):
     assert client.get(url, params={"v": now["version"]}).json()["unchanged"] is True
 
 
-def test_a_deck_document_and_its_design_are_one_conversation(tmp_path):
+def test_comments_are_on_a_design_and_nothing_else(tmp_path):
     client = _client(tmp_path)
-    url = _design(client, "pitch")
-    client.put("/files/designs/pitch.deck.json", content=json.dumps({"type": "cycls.deck", "fig": "designs/pitch.fig"}).encode())
-    t = _pin(client, "/comments/designs/pitch.deck.json", "slide 2 is thin", frame=1)
-    assert [x["id"] for x in _threads(client, url)] == [t["id"]]
+    _design(client, "pitch")
+    client.put("/files/designs/notes.json", content=b"{}")
+    assert client.get("/comments/designs/notes.json").status_code == 404
 
 
 def test_two_people_writing_at_once_both_land(tmp_path, monkeypatch):

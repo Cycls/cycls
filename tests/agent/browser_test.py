@@ -267,6 +267,10 @@ class _FakeSession:
         self.calls.append(("screenshot", full_page))
         return b"\x89PNG\r\n\x1a\nfake"
 
+    async def evaluate(self, script):
+        self.calls.append(("evaluate", script))
+        return {"result": "null", "truncated": False}
+
 
 def _use_fake(monkeypatch):
     fake = _FakeSession()
@@ -298,6 +302,27 @@ def test_open_navigates_and_reads(tmp_path, monkeypatch):
     assert ("goto", "http://x/") in fake.calls          # navigated
     assert sess.subject == "org_1:user_1"               # subject passed for attribution
     assert '[1] button "Go"' in out                     # returns a fresh read
+
+
+def test_open_a_workspace_page_writes_it_into_a_blank_tab(tmp_path, monkeypatch):
+    """The browser is on another machine: a page the agent wrote is sent to it, never named by a path."""
+    fake, sess = _use_fake(monkeypatch)
+    (tmp_path / "deck").mkdir()
+    (tmp_path / "deck" / "deck.html").write_text("<h1>من أنا</h1>", encoding="utf-8")
+    for url in ("deck/deck.html", "/workspace/deck/deck.html", "file:///workspace/deck/deck.html"):
+        fake.calls.clear()
+        out = asyncio.run(_exec_browser({"action": "open", "url": url}, _ws(tmp_path)))
+        assert fake.calls[0] == ("goto", "about:blank") and fake.calls[1][0] == "evaluate"
+        assert json.dumps("<h1>من أنا</h1>") in fake.calls[1][1] and sess.nav_url is None
+        assert '[1] button "Go"' in out
+
+
+def test_open_refuses_what_the_remote_browser_cannot_reach(tmp_path, monkeypatch):
+    fake, _ = _use_fake(monkeypatch)
+    (tmp_path / "notes.pdf").write_bytes(b"%PDF")
+    for url in ("http://localhost:8899/deck.html", "http://127.0.0.1/", "file:///workspace/gone.html", "notes.pdf"):
+        assert asyncio.run(_exec_browser({"action": "open", "url": url}, _ws(tmp_path))).startswith("Error")
+    assert fake.calls == []
 
 
 def test_click_and_type_by_ref(tmp_path, monkeypatch):

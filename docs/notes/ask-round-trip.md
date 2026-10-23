@@ -87,11 +87,9 @@ user      [tool_result tool_use_id=a1 "Asked the user 1 question. End your turnâ
 
 - `POST /chats/{id}/answer` replaces that last `tool_result`'s content with the
   user's answers and re-enters `_run` without appending a new user turn.
-- Rewriting a stored message means `state.replace_messages` (wipe + contiguous
-  rewrite) â€” the same primitive `truncate_last_exchange` uses, for the same
-  reason: turn files are `{turn:06d}` and `Session._saved` is
-  `len(messages)`, so an in-place edit that changed the count would let the
-  next append clobber a live turn.
+- Rewriting a stored message is a write to its own turn file. Nothing
+  renumbers: `Session.open` appends at `turn_end`, and `truncate_last_exchange`
+  (regenerate) deletes only the tail after the turn it keeps.
 - `ask` loses `terminal=True`, or gains a "resumable" variant of it. Everything
   else in the loop stays as-is.
 

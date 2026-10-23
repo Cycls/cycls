@@ -45,7 +45,7 @@ describe("useSlideNav", () => {
 
 describe("DeckView", () => {
   it("shows the current slide, its notes, and pages", () => {
-    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    render(<DeckView data={manifest(3)} path="designs/pitch.fig" />);
     expect(screen.getByTestId("deck-counter").textContent).toBe("1 / 3");
     expect(screen.getByText("Welcome everyone")).toBeTruthy();
     fireEvent.keyDown(screen.getByTestId("deck-view"), { key: "ArrowRight" });
@@ -53,7 +53,7 @@ describe("DeckView", () => {
   });
 
   it("switches to a grid and back to the slide picked", () => {
-    const { container } = render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    const { container } = render(<DeckView data={manifest(3)} path="designs/pitch.fig" />);
     fireEvent.click(screen.getByRole("button", { name: "Grid" }));
     const cards = container.querySelectorAll("img[alt^='Slide']");
     expect(cards.length).toBe(3);
@@ -62,15 +62,15 @@ describe("DeckView", () => {
   });
 
   it("clamps when a refetch has fewer slides", () => {
-    const { rerender } = render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    const { rerender } = render(<DeckView data={manifest(3)} path="designs/pitch.fig" />);
     fireEvent.keyDown(screen.getByTestId("deck-view"), { key: "End" });
-    rerender(<DeckView data={manifest(2)} path="designs/pitch.deck.json" />);
+    rerender(<DeckView data={manifest(2)} path="designs/pitch.fig" />);
     expect(screen.getByTestId("deck-counter").textContent).toBe("2 / 2");
   });
 
   it("refetches when an agent edit lands on its .fig", () => {
     const onReload = vi.fn();
-    render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" onReload={onReload} />);
+    render(<DeckView data={manifest(2)} path="designs/pitch.fig" onReload={onReload} />);
     act(() => { window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: "designs/other.fig" } })); });
     expect(onReload).not.toHaveBeenCalled();
     act(() => { window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: { path: "designs/pitch.fig" } })); });
@@ -79,10 +79,10 @@ describe("DeckView", () => {
 
   it("downloads the whole deck on demand", async () => {
     const openFile = vi.fn(async () => "blob:deck");
-    render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={openFile} />);
+    render(<DeckView data={manifest(2)} path="designs/pitch.fig" openFile={openFile} />);
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "PDF" })); });
-    expect(openFile).toHaveBeenCalledWith("designs/pitch.deck.json?as=pdf");
+    expect(openFile).toHaveBeenCalledWith("designs/pitch.fig?as=pdf");
   });
 
   it("the slides of one page of several download as that page", async () => {
@@ -105,7 +105,7 @@ describe("DeckView", () => {
     expect(openFile).toHaveBeenCalledWith("designs/reel.deck.json?as=images");
     cleanup();
 
-    render(<DeckView data={manifest(2, { sizes: [[1920, 1080], [1920, 1080]] })} path="designs/pitch.deck.json" openFile={openFile} />);
+    render(<DeckView data={manifest(2, { sizes: [[1920, 1080], [1920, 1080]] })} path="designs/pitch.fig" openFile={openFile} />);
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     const [pptx, images] = ["PowerPoint (.pptx)", "Images (.zip)"].map((name) => screen.getByRole("button", { name }));
     expect(pptx.compareDocumentPosition(images) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();   // a deck: after
@@ -132,65 +132,21 @@ describe("DeckView", () => {
   });
 
   it("one page is \"1 page\", one slide \"1 slide\"", () => {
-    render(<DeckView data={manifest(1, { kind: "document", sizes: [[1240, 1754]] })} path="designs/cv.deck.json" />);
+    render(<DeckView data={manifest(1, { kind: "document", sizes: [[1240, 1754]] })} path="designs/cv.fig" />);
     expect(screen.getByText("1 page")).toBeTruthy();
     expect(screen.queryByText("1 pages")).toBeNull();
     cleanup();
-    render(<DeckView data={manifest(1)} path="designs/one.deck.json" />);
+    render(<DeckView data={manifest(1)} path="designs/one.fig" />);
     expect(screen.getByText("1 slide")).toBeTruthy();
   });
 
-  it("Edit is offered only with an editor and a workspace to write to", () => {
-    const { rerender } = render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "b"} />);
+  it("has no editor of its own: Edit is the design's, in the canvas header", () => {
+    render(<DeckView data={manifest(2)} path="designs/pitch.fig" openFile={async () => "b"} />);
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-    rerender(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "b"}
-                       writeFile={async () => {}} designEditorUrl="https://ed.example" />);
-    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
-  });
-
-  it("Edit and Preview are one switch: into the editor, and back to the slides", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
-    URL.revokeObjectURL = vi.fn();
-    const onReload = vi.fn();
-    render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "blob:fig"}
-                     writeFile={async () => {}} designEditorUrl="https://ed.example" onReload={onReload} />);
-    const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
-    expect(pressed("Preview")).toBe("true");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
-    expect(document.querySelector("iframe")).toBeTruthy();
-    expect(pressed("Edit")).toBe("true");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Preview" })); await new Promise((r) => setTimeout(r, 0)); });
-    expect(screen.getByTestId("deck-view")).toBeTruthy();
-    expect(document.querySelector("iframe")).toBeNull();
-    expect(onReload).toHaveBeenCalled();                                    // the slides, as edited
-    vi.unstubAllGlobals();
-  });
-
-  it("a deck's editor has Full screen too, on the editor's own box", async () => {
-    // A deck opened in the viewer and switched to Edit had no way to full screen: the
-    // button was only in the canvas header of a design opened as its .fig.
-    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
-    URL.revokeObjectURL = vi.fn();
-    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
-    const request = vi.fn(async () => {});
-    Object.defineProperty(Element.prototype, "requestFullscreen", { configurable: true, value: request });
-    try {
-      render(<DeckView data={manifest(2)} path="designs/pitch.deck.json" openFile={async () => "blob:fig"}
-                       writeFile={async () => {}} designEditorUrl="https://ed.example" />);
-      expect(screen.queryByRole("button", { name: "Full screen" })).toBeNull();   // the viewer has Present for that
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Edit" })); });
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Full screen" })); });
-      expect(request).toHaveBeenCalledOnce();
-      expect(request.mock.instances[0]).toBe(document.querySelector("iframe")!.parentElement);   // the editor's box
-    } finally {
-      delete (document as unknown as Record<string, unknown>).fullscreenEnabled;
-      delete (Element.prototype as unknown as Record<string, unknown>).requestFullscreen;
-      vi.unstubAllGlobals();
-    }
   });
 
   it("Present opens present mode on the current slide, and returns to where it ended", () => {
-    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    render(<DeckView data={manifest(3)} path="designs/pitch.fig" />);
     fireEvent.keyDown(screen.getByTestId("deck-view"), { key: "ArrowRight" });
     fireEvent.click(screen.getByRole("button", { name: /Present/ }));
     expect(screen.getByTestId("present-counter").textContent).toBe("2 / 3");
@@ -203,7 +159,7 @@ describe("DeckView", () => {
   it("the owner reorders by drag, duplicates and deletes (with a confirm) from the grid", async () => {
     const onSlideOp = vi.fn(async () => {});
     const onReload = vi.fn();
-    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={onReload} />);
+    render(<DeckView data={manifest(3)} path="designs/pitch.fig" onSlideOp={onSlideOp} onReload={onReload} />);
     fireEvent.click(screen.getByRole("button", { name: "Grid" }));
     const cards = screen.getAllByTestId("grid-slide");
     const dt = { effectAllowed: "", setData: () => {}, getData: () => "" };
@@ -226,11 +182,11 @@ describe("DeckView", () => {
   it("the owner adds a slide after the one in view, and is taken to it", async () => {
     const onSlideOp = vi.fn(async () => {});
     const onReload = vi.fn();
-    const { rerender } = render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={onReload} />);
+    const { rerender } = render(<DeckView data={manifest(3)} path="designs/pitch.fig" onSlideOp={onSlideOp} onReload={onReload} />);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add slide" })); });
     expect(onSlideOp).toHaveBeenLastCalledWith({ op: "add", number: 1, title: "New slide", text: "Add your text" });
     expect(onReload).toHaveBeenCalled();
-    rerender(<DeckView data={manifest(4)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={onReload} />);
+    rerender(<DeckView data={manifest(4)} path="designs/pitch.fig" onSlideOp={onSlideOp} onReload={onReload} />);
     expect(screen.getByTestId("deck-counter").textContent).toBe("2 / 4");
     // From the grid: after any slide.
     fireEvent.click(screen.getByRole("button", { name: "Grid" }));
@@ -241,7 +197,7 @@ describe("DeckView", () => {
 
   it("the owner writes a slide's speaker notes: saved on leaving the box, and only when they changed", async () => {
     const onSlideOp = vi.fn(async () => {});
-    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" onSlideOp={onSlideOp} onReload={() => {}} />);
+    render(<DeckView data={manifest(3)} path="designs/pitch.fig" onSlideOp={onSlideOp} onReload={() => {}} />);
     const box = screen.getByRole("textbox", { name: "Speaker notes" }) as HTMLTextAreaElement;
     expect(box.value).toBe("Welcome everyone");
     fireEvent.blur(box);
@@ -258,21 +214,21 @@ describe("DeckView", () => {
   });
 
   it("a shared deck shows its notes to read, with nothing to write in and no slide to add", () => {
-    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    render(<DeckView data={manifest(3)} path="designs/pitch.fig" />);
     expect(screen.queryByRole("textbox", { name: "Speaker notes" })).toBeNull();
     expect(screen.getByText("Welcome everyone")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add slide" })).toBeNull();
   });
 
   it("a shared deck (no slide ops) shows no slide actions", () => {
-    render(<DeckView data={manifest(3)} path="designs/pitch.deck.json" />);
+    render(<DeckView data={manifest(3)} path="designs/pitch.fig" />);
     fireEvent.click(screen.getByRole("button", { name: "Grid" }));
     expect(screen.queryByRole("button", { name: "Slide actions" })).toBeNull();
     expect(screen.getAllByTestId("grid-slide")[0].getAttribute("draggable")).toBe("false");
   });
 
   it("a bad manifest says so", () => {
-    render(<DeckView data="not json" path="designs/pitch.deck.json" />);
+    render(<DeckView data="not json" path="designs/pitch.fig" />);
     expect(screen.getByText("Couldn't show this deck.")).toBeTruthy();
     expect(parseDeck('{"slides":["a","b"]}')!.count).toBe(2);
   });

@@ -14,7 +14,7 @@ def _norm_hex(c):
 
 
 def _load_brand(root):
-    """`brand/brand.yaml` as {primary, accent, heading, body}, or None without a primary or a font.
+    """`brand/brand.yaml` as {primary, accent, heading, body, latin}, or None without a primary or a font.
     Flat and nested keys are matched by pattern: the SDK carries no YAML dependency."""
     try:
         text = (pathlib.Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
@@ -33,7 +33,8 @@ def _load_brand(root):
 
     primary = pick("primary_color", "primary")
     brand = {"primary": primary, "accent": pick("accent_color", "accent") or primary,
-             "heading": font("font_heading", "heading"), "body": font("font_body", "body")}
+             "heading": font("font_heading", "heading"), "body": font("font_body", "body"),
+             "latin": font("font_latin", "latin")}      # the face for Latin text, when heading and body are an Arabic one
     return brand if primary or brand["heading"] or brand["body"] else None
 
 

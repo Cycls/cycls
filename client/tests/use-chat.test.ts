@@ -4,7 +4,7 @@
  * rebuild on loadChat. Streaming/fetch behavior is mocked at the test
  * level since it's bigger surface; for now these are pure-state tests.
  */
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import { useChat } from "../src/hooks/use-chat";
 import { track } from "../src/lib/analytics";
@@ -254,60 +254,94 @@ function sseTurn(chatId: string, text: string): any {
   };
 }
 
-describe("regenerate() — rewind the last exchange, then re-send it", () => {
-  // A complete SSE turn: the server hands back a chat id, then some text.
+const sha = async (text: string) => (await import("node:crypto")).createHash("sha256").update(text).digest("hex");
+type Call = { url: string; method?: string; body?: any };
+const record = (calls: Call[], url: any, init: any) =>
+  calls.push({ url: String(url), method: init?.method, body: init?.body ? JSON.parse(init.body) : undefined });
+const posts = (calls: Call[]) => calls.filter((c) => c.method === "POST" && c.url.includes("/chat"));
 
-  test("truncates on the server BEFORE re-sending, and replaces the exchange", async () => {
-    const calls: { url: string; method?: string }[] = [];
-    const fetchMock = vi.fn(async (url: any, init: any) => {
-      calls.push({ url: String(url), method: init?.method });
-      if (String(url).includes("last-exchange")) return { ok: true, json: async () => ({ ok: true }) };
-      return sseTurn("c1", "second answer");
-    });
-    global.fetch = fetchMock as any;
+describe("regenerate() — one request, and the server runs its saved turn again", () => {
+  test("names the turn in one POST, deletes nothing itself, and replaces the reply", async () => {
+    const calls: Call[] = [];
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      record(calls, url, init);
+      return sseTurn("c1", posts(calls).length === 1 ? "first answer" : "second answer");
+    }) as any;
 
     const { result } = renderHook(() => useChat("http://api.test"));
     await act(async () => { await result.current.send("hello"); });
-    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
-
+    const before = calls.length;
     await act(async () => { await result.current.regenerate(); });
-    // regenerate defers the re-send by a macrotask so the truncated messages
-    // commit (and messagesRef catches up) before send() reads them.
-    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
 
-    const truncateAt = calls.findIndex((c) => c.url.includes("last-exchange"));
-    const resendAt = calls.findIndex((c, i) => i > truncateAt && c.url.includes("/chat"));
-    expect(truncateAt).toBeGreaterThanOrEqual(0);
-    expect(calls[truncateAt].method).toBe("DELETE");
-    expect(calls[truncateAt].url).toContain("/chats/c1/last-exchange");
-    // Ordering is the invariant: re-sending first would double the history.
-    expect(resendAt).toBeGreaterThan(truncateAt);
-
-    // One exchange, not two — the old assistant turn was replaced.
+    const after = calls.slice(before);
+    expect(after.some((c) => c.method === "DELETE")).toBe(false);
+    expect(posts(after)).toHaveLength(1);
+    expect(posts(after)[0].url).toContain("/chat?id=c1");
+    expect(posts(after)[0].body.regenerate).toBe(await sha("hello"));
     expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
-    expect(result.current.messages[0].content).toBe("hello");
+    expect(result.current.messages[1].parts?.[0]?.text).toBe("second answer");
   });
 
-  test("a failed truncate aborts rather than duplicating history", async () => {
-    const fetchMock = vi.fn(async (url: any) => {
-      if (String(url).includes("last-exchange")) {
-        return { ok: false, status: 500, statusText: "boom", clone: () => ({ json: async () => ({}) }) };
-      }
-      return sseTurn("c1", "answer");
-    });
-    global.fetch = fetchMock as any;
+  test("the button's work is visible at once, and a second click sends nothing", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const calls: Call[] = [];
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      record(calls, url, init);
+      if (posts(calls).length === 1) return sseTurn("c1", "first answer");
+      const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n', 'data: {"type":"text","text":"again"}\n\n'];
+      let i = 0;
+      return { ok: true, body: { getReader: () => ({ read: async () => {
+        if (i === 1) await gate;
+        return i < chunks.length ? { done: false, value: new TextEncoder().encode(chunks[i++]) } : { done: true, value: undefined };
+      } }) } };
+    }) as any;
 
     const { result } = renderHook(() => useChat("http://api.test"));
     await act(async () => { await result.current.send("hello"); });
-    const sends = () => fetchMock.mock.calls.filter((c: any) => c[1]?.method === "POST").length;
-    const before = sends();
+    let pending: Promise<void> | undefined;
+    act(() => { pending = result.current.regenerate(); });
+    expect(result.current.isStreaming).toBe(true);   // the regenerate button is not shown while streaming
+    expect(result.current.messages[1].parts).toEqual([]);   // the old answer is gone at once
+    expect(result.current.regenerate()).toBeUndefined();
+    release();
+    await act(async () => { await pending; });
+    expect(posts(calls)).toHaveLength(2);
+  });
 
+  test("keeps a design selection, on the bubble and in the request", async () => {
+    const calls: Call[] = [];
+    global.fetch = vi.fn(async (url: any, init: any) => { record(calls, url, init); return sseTurn("c1", "ok"); }) as any;
+    const sel = { path: "designs/a.fig", nodes: [{ name: "cta", type: "TEXT" }] } as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("make it red", undefined, "keyboard", { selection: sel }); });
     await act(async () => { await result.current.regenerate(); });
-    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
 
-    // The DELETE 500s, so no re-send follows and history is untouched.
-    expect(sends()).toBe(before);
-    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(posts(calls)[1].body.selection).toEqual(sel);
+    expect(result.current.messages[0].selection).toEqual(sel);
+  });
+
+  test("a chat that moved on is refused with its reason, and not retried", async () => {
+    const calls: Call[] = [];
+    const detail = "This chat changed since it was opened. Reload it to see the latest.";
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      record(calls, url, init);
+      if (posts(calls).length === 1) return sseTurn("c1", "answer");
+      if (init?.method === "POST") {
+        const body = { error: "chat_changed", detail };
+        return { ok: false, status: 409, json: async () => body, clone: () => ({ json: async () => body }) };
+      }
+      throw new TypeError("failed to fetch");   // the run poll
+    }) as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+    await act(async () => { await result.current.regenerate(); });
+
+    expect(posts(calls)).toHaveLength(2);
+    const last = result.current.messages[result.current.messages.length - 1];
+    expect(last.parts).toEqual([{ type: "callout", callout: detail, style: "warning" }]);
   });
 
   test("no-ops on an empty chat", async () => {
@@ -320,30 +354,26 @@ describe("regenerate() — rewind the last exchange, then re-send it", () => {
 });
 
 
-describe("retry() — the failed turn is dropped on the server, then sent once", () => {
-  // "hello" answers; "make a deck" reaches the server, which stores it, and then the
-  // connection fails before a byte comes back — twice (send's own one retry).
-  function failingSecondTurn() {
-    const calls: { url: string; method?: string }[] = [];
-    let deckPosts = 0;
-    const fetchMock = vi.fn(async (url: any, init: any) => {
-      const u = String(url);
-      calls.push({ url: u, method: init?.method });
-      if (u.includes("last-exchange")) return { ok: true, json: async () => ({ ok: true }) };
-      if (init?.method === "POST" && u.includes("/chat")) {
+describe("retry() — one request, and the server replays the failed turn if it has it", () => {
+  // "hello" answers; `failing` reaches the server and then the connection fails
+  // before a byte comes back, twice (send's own one retry).
+  function failingTurn(failing: string) {
+    const calls: Call[] = [];
+    let tries = 0;
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      record(calls, url, init);
+      if (init?.method === "POST" && String(url).includes("/chat")) {
         const text = JSON.parse(init.body).messages[0].content;
-        if (text === "make a deck" && ++deckPosts <= 2) throw new TypeError("failed to fetch");
+        if (text === failing && ++tries <= 2) throw new TypeError("failed to fetch");
         return sseTurn("c1", `answer to ${text}`);
       }
       throw new TypeError("failed to fetch");   // the run poll: still no connection
-    });
-    global.fetch = fetchMock as any;
+    }) as any;
     return calls;
   }
 
-  test("DELETE …/last-exchange?expect=<sha256 of the text> comes before the one re-send", async () => {
-    const { createHash } = await import("node:crypto");
-    const calls = failingSecondTurn();
+  test("names the turn in the one re-send, with no DELETE before it", async () => {
+    const calls = failingTurn("make a deck");
     const { result } = renderHook(() => useChat("http://api.test"));
     await act(async () => { await result.current.send("hello"); });
     await act(async () => { await result.current.send("make a deck"); });
@@ -352,37 +382,111 @@ describe("retry() — the failed turn is dropped on the server, then sent once",
 
     const before = calls.length;
     await act(async () => { await result.current.retry(); });
-    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
 
     const after = calls.slice(before);
-    const dropAt = after.findIndex((c) => c.url.includes("last-exchange"));
-    expect(dropAt).toBeGreaterThanOrEqual(0);
-    expect(after[dropAt].method).toBe("DELETE");
-    expect(after[dropAt].url).toContain(
-      `/chats/c1/last-exchange?expect=${createHash("sha256").update("make a deck").digest("hex")}`);
-    const resends = after.map((c, n) => (c.method === "POST" ? n : -1)).filter((n) => n >= 0);
-    expect(resends.length).toBe(1);
-    expect(resends[0]).toBeGreaterThan(dropAt);
-
+    expect(after.some((c) => c.method === "DELETE")).toBe(false);
+    expect(posts(after)).toHaveLength(1);
+    expect(posts(after)[0].body.retry).toBe(await sha("make a deck"));
     expect(result.current.messages.map((m) => m.content)).toEqual(
       ["hello", "answer to hello", "make a deck", "answer to make a deck"]);
   });
 
-  test("a refused drop (the chat is still working) sends nothing", async () => {
-    const calls = failingSecondTurn();
+  test("an approval goes again as it was, its approval with it, never as a replay", async () => {
+    const calls = failingTurn("Approved: Send it");
     const { result } = renderHook(() => useChat("http://api.test"));
     await act(async () => { await result.current.send("hello"); });
-    await act(async () => { await result.current.send("make a deck"); });
-    const inner = global.fetch as any;
-    global.fetch = vi.fn(async (url: any, init: any) => (String(url).includes("last-exchange")
-      ? { ok: false, status: 409, statusText: "Conflict", clone: () => ({ json: async () => ({ detail: "busy" }) }) }
-      : inner(url, init))) as any;
+    await act(async () => { await result.current.send("Approved: Send it", undefined, "confirm", { approvals: ["k1"] }); });
 
     const before = calls.length;
     await act(async () => { await result.current.retry(); });
-    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
-    expect(calls.slice(before).filter((c) => c.method === "POST").length).toBe(0);
-    expect(result.current.messages.map((m) => m.content).slice(0, 3)).toEqual(["hello", "answer to hello", "make a deck"]);
+
+    const resend = posts(calls.slice(before));
+    expect(resend).toHaveLength(1);
+    expect(resend[0].body.approvals).toEqual(["k1"]);
+    expect(resend[0].body.retry).toBeUndefined();
+  });
+});
+
+
+describe("stop() before the reply began — the prompt goes back to the composer at once", () => {
+  // The send streams its chat id (and `text`, if given), then hangs until Stop aborts it. The
+  // stop request answers `stop` once released; `saved` is the chat the server then holds.
+  function stoppable(opts: { text?: string; stop: any; saved?: any[] }) {
+    const calls: Call[] = [];
+    let release!: () => void;
+    const answered = new Promise<void>((r) => { release = r; });
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      record(calls, url, init);
+      const u = String(url);
+      if (u.includes("/stop")) { await answered; return { ok: true, status: 202, json: async () => opts.stop }; }
+      if (u.includes("/chats/"))
+        return { ok: true, status: 200, json: async () => ({
+          messages: opts.saved ?? [], next: (opts.saved ?? []).length, open: null, run: "stopped" }) };
+      const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                      ...(opts.text ? [`data: ${JSON.stringify({ type: "text", text: opts.text })}\n\n`] : [])];
+      let i = 0;
+      return { ok: true, body: { getReader: () => ({ read: () => i < chunks.length
+        ? Promise.resolve({ done: false, value: new TextEncoder().encode(chunks[i++]) })
+        : new Promise((_, reject) => init.signal.addEventListener("abort",
+            () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })))) }) } };
+    }) as any;
+    return { calls, release: () => release() };
+  }
+
+  async function sendThenStop(result: any, release: () => void, ready: () => void) {
+    let pending: Promise<void> | undefined, stopping: Promise<void> | undefined;
+    act(() => { pending = result.current.send("draft this", undefined, "keyboard", { connectors: ["gdrive"] }); });
+    await waitFor(ready);
+    act(() => { stopping = result.current.stop(); });
+    return async () => { await act(async () => { release(); await stopping; await pending; }); };
+  }
+
+  test("is back before the stop request answers, and the run is asked to drop it", async () => {
+    const { calls, release } = stoppable({ stop: { stopping: true, taken_back: true } });
+    const restored: any[] = [];
+    const { result } = renderHook(() => useChat("http://api.test"));
+    result.current.setRestoreHandler((s) => restored.push(s));
+
+    const finish = await sendThenStop(result, release, () => expect(result.current.chatId).toBe("c1"));
+    expect(restored.map((s) => [s.text, s.extra?.connectors])).toEqual([["draft this", ["gdrive"]]]);
+    expect(result.current.messages).toEqual([]);
+    await finish();
+
+    expect(calls.find((c) => c.url.includes("/stop"))?.body).toEqual({ take_back: await sha("draft this") });
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    expect(calls.some((c) => c.url.includes("/chats/c1") && !c.url.includes("/stop")), "no poll: it was taken back").toBe(false);
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.messages).toEqual([]);
+  });
+
+  test("a reply already showing stays, and nothing is taken back", async () => {
+    const { calls, release } = stoppable({ text: "half an ans", stop: { stopping: true } });
+    const restored: any[] = [];
+    const { result } = renderHook(() => useChat("http://api.test"));
+    result.current.setRestoreHandler((s) => restored.push(s));
+
+    const finish = await sendThenStop(result, release, () => expect(result.current.messages[1]?.parts).toHaveLength(1));
+    await finish();
+
+    expect(restored).toEqual([]);
+    expect(calls.find((c) => c.url.includes("/stop"))?.body).toBeUndefined();
+    expect(result.current.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  test("a run that kept a reply after all shows it, the prompt with it", async () => {
+    const saved = [{ role: "user", content: "draft this" },
+                   { role: "assistant", content: "half […]", parts: [{ type: "text", text: "half […]" }] }];
+    const { release } = stoppable({ stop: { stopping: true, taken_back: false }, saved });
+    const restored: any[] = [];
+    const { result } = renderHook(() => useChat("http://api.test"));
+    result.current.setRestoreHandler((s) => restored.push(s));
+
+    const finish = await sendThenStop(result, release, () => expect(result.current.chatId).toBe("c1"));
+    await finish();
+
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    expect(result.current.messages[1].content).toBe("half […]");
+    expect(restored).toHaveLength(1);
   });
 });
 

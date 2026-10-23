@@ -2,7 +2,9 @@
 DESIGN_URL turns it on (unset: no Design tool); DESIGN_SECRET is the optional Bearer secret."""
 import asyncio
 import base64
+import hashlib
 import os
+import pathlib
 from typing import NamedTuple
 
 import httpx
@@ -72,6 +74,47 @@ async def _post(path, body, user_id=None):
     return data
 
 
+_given = {}        # a font file's sha256 → its face as the service named it, or why it can't be used (this process)
+
+
+async def give_font(path, user_id=None):
+    """A font file given to the service — its sha256 first, the file itself only if the service never had it →
+    (its face {"family", "style"}, or why it can't be used; new to this process?). Unavailable passes."""
+    data = await asyncio.to_thread(pathlib.Path(path).read_bytes)
+    if (sha := hashlib.sha256(data).hexdigest()) in _given:
+        return _given[sha], False
+    try:
+        r = await _post("/fonts", {"sha": sha}, user_id)
+        if r.get("need"):                               # a file the service has never had: sent once, ever
+            r = await _post("/fonts", {"sha": sha, "data": base64.b64encode(data).decode()}, user_id)
+        _given[sha] = {"family": r["family"], "style": r["style"]}
+    except Unavailable:
+        raise
+    except RuntimeError as e:                           # the service read it and said no: not asked again
+        _given[sha] = str(e)
+    return _given[sha], True
+
+
+async def add_fonts(root, user_id=None):
+    """A workspace's brand fonts (brand/fonts/*.ttf|.otf) given to the service: its designs, PDFs and editor draw
+    with them from then on → what was newly given, said for the model ('' for nothing)."""
+    faces, bad = {}, []
+    for p in sorted(pathlib.Path(root, "brand", "fonts").glob("*")):
+        if p.suffix.lower() not in (".ttf", ".otf"):
+            continue
+        try:
+            got, new = await give_font(p, user_id)
+        except Unavailable:
+            continue                                    # given on a later call
+        if new and isinstance(got, dict):
+            faces.setdefault(got["family"], []).append(got["style"])
+        elif new:
+            bad.append(f"brand/fonts/{p.name} ({got})")
+    ready = "; ".join(f"{f} ({', '.join(s)})" for f, s in faces.items())
+    return " ".join(filter(None, [f"The workspace's own fonts are ready for designs: {ready}. Name them by that family." if ready else "",
+                                  f"Not usable as fonts: {'; '.join(bad)}." if bad else ""]))
+
+
 class Rendered(NamedTuple):
     """A render. `image` is the output (pptx/pdf: the whole deck, else the first frame), `fig` the editable
     source, `preview`/`previews` @1x JPEGs for QA, `lint` [{frame, node, issue, fix}], `pages` [{name, frames}].
@@ -107,6 +150,11 @@ def _pages(data):
             for p in data.get("pages") or [] if isinstance(p, dict)]
 
 
+def _kept(data):
+    """Our record of a design, as the .fig keeps it (render's `keep`) → a dict ({} when it has none)."""
+    return data.get("keep") if isinstance(data.get("keep"), dict) else {}
+
+
 def _paged(body, page):
     """`page` — a page's name, or its place from 0 — onto a request (none: the first)."""
     if page is not None and page != "":
@@ -137,10 +185,13 @@ def _decode(data):
         [int(n) for n in data["preview_of"]] if isinstance(data.get("preview_of"), list) else None)
 
 
-async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None, lead=None):
+async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None, lead=None, keep=None):
     """Render a spec (`{size, fill, nodes}`, `{frames}` or `{pages}`) → a Rendered. `every`: every frame
-    in a raster `fmt`; `sheets`: contact sheets past twelve frames; `known`: previews of changed frames only."""
+    in a raster `fmt`; `sheets`: contact sheets past twelve frames; `known`: previews of changed frames only;
+    `keep`: our record of the design (`kind`, a deck's settings, a document's source), kept in the .fig."""
     body = {"spec": spec, "format": fmt, "scale": scale, "preview": True}
+    if keep:
+        body["keep"] = keep
     if every:
         body["every"] = True
     if sheets:
@@ -176,14 +227,15 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             "added": [str(n) for n in data.get("added") or [] if isinstance(n, str)],
             "resolved": [[str(p[0]), str(p[1])] for p in data.get("resolved") or []
                          if isinstance(p, list) and len(p) == 2],
-            "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)]}
+            "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)],
+            "keep": _kept(data)}
 
 
 async def outline(fig, user_id=None, page=None, full=False):
     """One page of a `.fig` → {frames: [{slide, name, size, nodes}], pages, page}: nodes by name, measured.
     `full`: every text whole, not its first lines."""
     data = await _post("/inspect", _paged({"fig": base64.b64encode(fig).decode(), **({"full": True} if full else {})}, page), user_id)
-    return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or "")}
+    return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or ""), "keep": _kept(data)}
 
 
 async def inspect(fig, user_id=None, page=None):
@@ -241,17 +293,19 @@ async def asset(name, kind=None, pick=0, user_id=None):
     return dict(data.get("asset") or {}), base64.b64decode(data["data_base64"])
 
 
-async def evaluate(script, fmt="png", scale=2, user_id=None):
+async def evaluate(script, fmt="png", scale=2, user_id=None, keep=None):
     """Escape hatch: run a raw plugin-API script (it must log `__FRAME__<id>`) → a Rendered."""
-    return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True}, user_id))
+    return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True,
+                                         **({"keep": keep} if keep else {})}, user_id))
 
 
-async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None):
-    """One page of a deck, slide by slide → {images, sizes, meta, format, pages, page}, for the deck viewer."""
-    body = _paged({"fig": base64.b64encode(fig).decode(), "scale": scale, "format": fmt}, page)
+async def slides(fig, scale=1, fmt="jpg", user_id=None, page=None, fit=None):
+    """One page of a deck, slide by slide → {images, sizes, meta, format, pages, page, keep}, for the deck viewer.
+    `fit`: the scale that sets the first slide's long side at that many pixels (at most 2×), instead of `scale`."""
+    body = _paged({"fig": base64.b64encode(fig).decode(), "scale": scale, "format": fmt, **({"fit": fit} if fit else {})}, page)
     data = await _post("/slides", body, user_id)
     return {"images": _b64s(data.get("slides")),
             "sizes": [list(s) for s in data.get("sizes") or []],
             "meta": [dict(m) for m in data.get("meta") or [] if isinstance(m, dict)],
             "format": data.get("format") or fmt,
-            "pages": _pages(data), "page": str(data.get("page") or "")}
+            "pages": _pages(data), "page": str(data.get("page") or ""), "keep": _kept(data)}

@@ -135,9 +135,10 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `turn_completed` | the run ends — from the stream when it carried the turn to the end (`detached: false`), otherwise from the poll (`detached: true`, `status`). Once per run: the poll reports only a run it saw running or one whose stream just dropped | `tools` {name: count}, `tool_calls`, `duration_s`, `produced_artifact`, `errored`, `stopped`, `origin` — the shape of the work, without per-tool-call volume. **2026-09-21 → 2026-10-12, web:** the poll re-reported the last run on every refocus of a finished chat (detached `done` ran ~10 per chat), so turn counts in that window are ~2.7× high — use `detached = false` there |
 | `context_compacted` | the loop compacted the chat's context — its `ui` event `compacted` ([compaction.md](compaction.md)) | `tier` (1 old tool results stubbed, 2 summarized), `reason` (`trigger` / `cold` / `overflow`), `tokens` (the prompt that set it off), `ok` (false when the summary failed and old turns were dropped). The server logs the same as a `compaction` row, which also covers runs no client watched |
 | `generation_stopped` | user hits stop mid-stream | impatience / runaway signal |
+| `prompt_restored` | Stop before any of the reply showed: the prompt went straight back to the composer, and the run was asked to drop it from the chat | `taken_back` (false when the run kept a reply after all, or never saved the prompt). How often people stop to change what they asked |
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
 | `run_failed` | a run ended `failed` or `interrupted` — seen live (`via: stream`) or found by the poll after the stream dropped (`via: poll`); once per run | `status`, `reason` (`error`; `budget` — the 45-minute cap; `shutdown`; `lost` — its heartbeat stopped, the container died), `error_id` — the reference the person was shown, and the `error_id` of the server's `error` log row with the stack. The real error rate; a dropped connection is not one (below) |
-| `run_busy` | send refused with 409 — the chat already has a run | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
+| `run_busy` | send refused with 409 — the chat already has a run, or a regenerate named a turn that is no longer the chat's last | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
 
@@ -153,7 +154,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
-| `deck_opened` | a design deck opens in the deck viewer (a multi-slide Design render, or its `.deck.json` from Files / a share) | `slides` — are decks being made and looked at? |
+| `deck_opened` | a design of several slides opens in the deck viewer (its preview, from the canvas, Files or a share) | `slides` — are decks being made and looked at? |
 | `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
 | `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |
 | `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |
@@ -185,6 +186,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `share_created` / `share_create_failed` / `share_deleted` | owner mints/revokes | `message_count` |
 | `share_viewed` / `share_view_failed` | share data loads on /shared/… (404s don't count) | `type`, `example` (gallery vs organic — two different funnels), `artifacts`, `signed_in`, `referrer` |
 | `share_fork_clicked` | continue-this-conversation pill | |
+| `share_cta_clicked` | the Try Cycls (or, signed in, Open Cycls) button on a shared file's bar | `signed_in` |
 | `share_forked` | fork API succeeds | loop closed. Viewer is anonymous until sign-in — same-device journeys stitch, cross-device shows as two people |
 
 ### Agent interventions

@@ -3,11 +3,11 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon, IconButton } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isComposition, isRenderable, saveBlob, extTint } from "./canvas-utils";
+import { isHtml, isComposition, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
 import { AppBanner } from "./app-banner";
 import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
-import { t } from "../lib/i18n";
+import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn } from "../lib/utils";
 
@@ -32,10 +32,13 @@ interface FileShare extends Author {
   url: string;
 }
 
-export function SharedView({ getToken, signedIn, onSignIn }: {
+// Arabic translates a shared page and never mirrors it: every root is left to right, and the text inside
+// (messages, documents, names, the date) takes its own direction.
+export function SharedView({ getToken, signedIn, onSignIn, agent }: {
   getToken?: () => Promise<string | null>;
   signedIn?: boolean;
   onSignIn?: () => void;
+  agent?: string;   // the agent's name in the reader's language, for the way in
 } = {}) {
   const [data, setData] = useState<ChatShare | FileShare | null>(null);
   const [error, setError] = useState<{ message: string; signIn: boolean } | null>(null);
@@ -62,10 +65,11 @@ export function SharedView({ getToken, signedIn, onSignIn }: {
         );
         // 401 is the recoverable one: the link is fine, we just don't know who
         // you are. 403 means we do, and it isn't for you.
-        if (res.status === 401) throw new Error("SIGN_IN");
-        if (res.status === 403) throw new Error("This link isn't shared with your account");
-        if (res.status === 404) throw new Error("This link doesn't exist");
-        if (!res.ok) throw new Error("Couldn't load this share");
+        // Signed in already, a 401 is no reason to ask again.
+        if (res.status === 401 && !signedIn) throw new Error("SIGN_IN");
+        if (res.status === 401 || res.status === 403) throw new Error(t("shareNotYours"));
+        if (res.status === 404) throw new Error(t("shareNotFound"));
+        if (!res.ok) throw new Error(t("shareLoadFailed"));
         const d = (await res.json()) as ChatShare | FileShare;
         if (cancelled) return;
         setData(d);
@@ -91,7 +95,7 @@ export function SharedView({ getToken, signedIn, onSignIn }: {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg === "SIGN_IN"
-          ? { message: "Sign in to view this", signIn: true }
+          ? { message: t("shareSignInToView"), signIn: true }
           : { message: msg, signIn: false });
         track("share_view_failed", { share_url: window.location.href, error: msg });
       } finally {
@@ -103,31 +107,35 @@ export function SharedView({ getToken, signedIn, onSignIn }: {
 
   if (loading) {
     return (
-      <div className="flex h-dvh items-center justify-center">
-        <div className="text-muted-foreground text-sm">Loading...</div>
+      <div dir="ltr" className="flex h-dvh flex-col bg-background">
+        <ShareBar signedIn={signedIn} agent={agent} />
+        <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">{t("loading")}</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-3">
+      <div dir="ltr" className="flex h-dvh flex-col bg-background">
+      <ShareBar signedIn={signedIn} agent={agent} />
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <div className="text-muted-foreground text-sm">{error.message}</div>
         {error.signIn && onSignIn && (
           <button
             onClick={onSignIn}
             className="cursor-pointer rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background"
           >
-            Sign in
+            {t("signIn")}
           </button>
         )}
+      </div>
       </div>
     );
   }
 
   if (!data) return null;
-  if (data.type === "file") return <SharedFile share={data} getToken={getToken} />;
-  return <SharedChat share={data} getToken={getToken} />;
+  if (data.type === "file") return <SharedFile share={data} getToken={getToken} signedIn={signedIn} agent={agent} />;
+  return <SharedChat share={data} getToken={getToken} signedIn={signedIn} agent={agent} />;
 }
 
 // Canvas artifacts the conversation produced, in order — same derivation the
@@ -145,7 +153,7 @@ export function canvasArtifacts(messages: Message[]) {
 // every artifact pre-opened as a tab (same strip as the owner's canvas), the
 // final one active. A floating "continue" pill rides the scroll — the page's
 // one conversion affordance is never out of sight.
-function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Promise<string | null> }) {
+function SharedChat({ share, getToken, signedIn, agent }: { share: ChatShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string }) {
   const params = new URLSearchParams(window.location.search);
   // Curated example (?example=1): product showcase, not user content — no
   // author chrome. Regular shares keep their attribution.
@@ -192,9 +200,8 @@ function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Pr
   );
 
   return (
-    <div className="h-dvh flex flex-col bg-background">
-      <ShareHeader />
-      <div className="shrink-0 h-12" />
+    <div dir="ltr" className="h-dvh flex flex-col bg-background">
+      <ShareBar signedIn={signedIn} agent={agent} />
       <AppBanner />
 
       <div className="flex min-h-0 flex-1">
@@ -222,7 +229,7 @@ function SharedChat({ share, getToken }: { share: ChatShare; getToken?: () => Pr
         {pane && (isDesktop ? (
           <div className="w-[52%] max-w-[880px] min-h-0 shrink-0 p-2 pl-0 sm:p-3 sm:pl-0">{pane}</div>
         ) : (
-          <div className="fixed inset-0 z-40 bg-background p-2 pt-14">{pane}</div>
+          <div className="fixed inset-x-0 bottom-0 top-12 z-40 bg-background p-2">{pane}</div>
         ))}
       </div>
     </div>
@@ -253,7 +260,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
     // with & so we don't emit a broken double-'?' URL.
     const q = shareQuery && p.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
     const res = await fetch(`${shareBase}/file/${p}${q}`, { headers });
-    if (!res.ok) throw new Error("Couldn't load this file");
+    if (!res.ok) throw new Error(t("fileLoadFailed"));
     return res;
   }, [getToken, shareBase, shareQuery]);
   const readFile = useCallback(async (p: string) => (await authedFetch(p)).text(), [authedFetch]);
@@ -303,8 +310,8 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
           <button
             onClick={openInTab}
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
-            aria-label="Open in new tab"
-            title="Open in new tab"
+            aria-label={t("openInTab")}
+            title={t("openInTab")}
           >
             <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-7.5 3L21 3m0 0h-5.25M21 3v5.25" />
@@ -314,8 +321,8 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
         <button
           onClick={download}
           className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
-          aria-label="Download"
-          title="Download"
+          aria-label={t("download")}
+          title={t("download")}
         >
           <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
@@ -324,8 +331,8 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
         <button
           onClick={onClose}
           className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
-          aria-label="Close"
-          title="Close"
+          aria-label={t("close")}
+          title={t("close")}
         >
           <Icon name="x" className="size-4" />
         </button>
@@ -341,7 +348,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
               onClick={download}
               className="mt-1 rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
             >
-              Download {name}
+              {t("download")} {name}
             </button>
           </div>
         )}
@@ -354,7 +361,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
 // read-only and over the token-scoped /share/.../file/ transport (public =
 // no bearer; org = viewer's bearer). Unrenderable types (docx/xlsx/zip) get a
 // name-preserving download instead of a corrupt blob.
-function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Promise<string | null> }) {
+function SharedFile({ share, getToken, signedIn, agent }: { share: FileShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string }) {
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
   const renderable = isRenderable(name) && !isComposition(name);   // a shared composition is a download
@@ -369,7 +376,7 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
     // p may already carry a query (Office ?as=pdf); merge shareQuery in with &.
     const q = shareQuery && p.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
     const res = await fetch(`${shareBase}/file/${p}${q}`, { headers });
-    if (!res.ok) throw new Error("Couldn't load this file");
+    if (!res.ok) throw new Error(t("fileLoadFailed"));
     return res;
   }, [getToken, shareBase, shareQuery]);
 
@@ -386,75 +393,98 @@ function SharedFile({ share, getToken }: { share: FileShare; getToken?: () => Pr
     if (content == null) return;
     window.open(URL.createObjectURL(new Blob([content], { type: "text/html" })), "_blank");
   };
+  const action = "flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
 
+  // The file is the page: one bar above it, and nothing around it.
   return (
-    <div className="h-dvh flex flex-col bg-background">
-      <ShareHeader />
-      <div className="shrink-0 h-12" />
-      <AppBanner />
-
-      <div className="flex-1 min-h-0 flex flex-col px-2 pb-2 sm:px-3 sm:pb-3">
-        <div className="flex-1 min-h-0 flex flex-col rounded-xl border border-border overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-border px-4 sm:px-6 py-3">
-            <span className="min-w-0 truncate text-sm font-medium text-foreground">{name}</span>
-            <div className="flex-1" />
-            {isHtml(name) && !isComposition(name) && content != null && (
-              <button
-                onClick={openInTab}
-                className="flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              >
-                Open in new tab
-                <svg className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-7.5 3L21 3m0 0h-5.25M21 3v5.25" />
-                </svg>
-              </button>
-            )}
+    <div dir="ltr" className="flex h-dvh flex-col bg-background">
+      <ShareBar name={shownName(name)} author={share} signedIn={signedIn} agent={agent}>
+        {isHtml(name) && !isComposition(name) && content != null && (
+          <button onClick={openInTab} className={action} title={t("openInTab")}>
+            <Icon name="arrow-up-right" className="size-4" /><span className="hidden sm:inline">{t("openInTab")}</span>
+          </button>
+        )}
+        <button onClick={download} className={action} aria-label={t("download")} title={t("download")}>
+          <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+        </button>
+      </ShareBar>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {renderable ? (
+          <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />
+            <p className="text-sm text-foreground">{name}</p>
+            <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
             <button
               onClick={download}
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-              aria-label="Download"
-              title="Download"
+              className="mt-1 rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
             >
-              <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-              </svg>
+              {t("download")} {name}
             </button>
           </div>
-          <div className="flex-1 overflow-hidden">
-            {renderable ? (
-              <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} />
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-                <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />
-                <p className="text-sm text-foreground">{name}</p>
-                <p className="text-xs text-muted-foreground">Preview isn't available for this file type.</p>
-                <button
-                  onClick={download}
-                  className="mt-1 rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                >
-                  Download {name}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="shrink-0"><ShareFooter /></div>
+        )}
       </div>
     </div>
   );
 }
 
-function ShareHeader() {
+// The one bar a shared page has: the logo, what is shared and by whom, its actions, and the way into Cycls.
+// A chat share passes no name: the conversation names itself below the bar.
+function ShareBar({ name, author, signedIn, agent, children }: {
+  name?: string; author?: Author; signedIn?: boolean; agent?: string; children?: React.ReactNode;
+}) {
   return (
-    <header className="pointer-events-none fixed top-0 right-0 left-0 z-50 h-12">
-      <div className="pointer-events-auto mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
-        <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
-          <CyclsLogo className="h-5 fill-muted-foreground" />
-        </a>
-        <div className="flex-1" />
-        <IconButton name="moon" onClick={() => toggleDark("shared_view")} label="Toggle theme" />
-      </div>
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 sm:gap-3 sm:px-4">
+      <a href="https://cycls.ai" className="shrink-0 text-foreground hover:opacity-80 transition-opacity" aria-label="Cycls">
+        <CyclsLogo className="h-5 fill-muted-foreground" />
+      </a>
+      {name && <span className="min-w-0 truncate text-sm font-medium text-foreground" dir="auto">{name}</span>}
+      {author && <span className="hidden shrink-0 sm:flex"><Byline author={author} small /></span>}
+      <div className="flex-1" />
+      {children}
+      <span className={cn(name && "hidden sm:inline-flex")}>
+        <IconButton name="moon" onClick={() => toggleDark("shared_view")} label={t("toggleTheme")} />
+      </span>
+      <a href="/" onClick={() => track("share_cta_clicked", { share_url: window.location.href, signed_in: !!signedIn })}
+        className="shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background hover:opacity-90 transition-opacity">
+        {t(signedIn ? "openAgent" : "tryAgent").replace("{name}", agent || "Cycls")}
+      </a>
     </header>
+  );
+}
+
+// Who shared it and when: the org's avatar and the person's, overlapping, each naming itself on hover
+// (an initial when there is no photo), then the date in the page's language.
+function Byline({ author, small }: { author: Author; small?: boolean }) {
+  const faces = ([[author.author_org_image_url, author.author_org_name], [author.author_image_url, author.author_name]] as const)
+    .filter(([img, who]) => img || who);
+  const date = author.shared_at && new Date(author.shared_at).toLocaleDateString(getLang() === "ar" ? "ar" : "en", { month: "short", day: "numeric", year: "numeric" });
+  if (!faces.length && !date) return null;
+  return (
+    <span dir="ltr" className="flex items-center gap-2 text-xs text-muted-foreground">
+      {faces.length > 0 && (
+        <span className={cn("flex items-center", small ? "-space-x-2" : "-space-x-3")}>
+          {faces.map(([img, who], i) => (
+            <span key={i} className="group relative">
+              <span className={cn(small ? "size-5" : "size-6", "flex items-center justify-center rounded-full bg-secondary bg-cover text-[10px] font-medium text-foreground ring-2 ring-background")}
+                style={img ? { backgroundImage: `url("${img}")` } : undefined}>
+                {!img && who?.trim().charAt(0).toUpperCase()}
+              </span>
+              {who && (
+                <span dir="auto" className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground opacity-0 shadow-lg transition-opacity delay-300 group-hover:opacity-100">
+                  {who}
+                </span>
+              )}
+            </span>
+          ))}
+        </span>
+      )}
+      {faces.length > 0 && date && <span>·</span>}
+      {date && <span dir="auto">{date}</span>}
+    </span>
   );
 }
 
@@ -463,7 +493,7 @@ function ShareFooter() {
     <div className="w-full max-w-3xl mx-auto px-6 pt-8 pb-10">
       <div className="flex justify-center">
         <a href="https://cycls.ai" className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors">
-          <span className="text-[10px]">Made in</span>
+          <span className="text-[10px]">{t("madeIn")}</span>
           <CyclsLogo className="h-[13px] fill-current" />
         </a>
       </div>
@@ -471,71 +501,13 @@ function ShareFooter() {
   );
 }
 
-function ShareChrome({
-  title,
-  author_name: authorName,
-  author_image_url: authorImageUrl,
-  author_org_name: authorOrgName,
-  author_org_image_url: authorOrgImageUrl,
-  shared_at: sharedAt,
-  hideAuthor,
-}: Author & { title?: string; hideAuthor?: boolean }) {
+function ShareChrome({ title, hideAuthor, ...author }: Author & { title?: string; hideAuthor?: boolean }) {
   // Curated examples show as product, not as someone's share.
-  if (hideAuthor) {
-    if (!title) return null;
-    return (
-      <div className="w-full max-w-3xl px-6 py-10 text-center">
-        <h1 className="font-display text-xl font-medium tracking-tight text-foreground">{title}</h1>
-      </div>
-    );
-  }
-  const hasAuthor = !!(authorName || authorImageUrl || authorOrgName || authorOrgImageUrl);
-  if (!title && !hasAuthor && !sharedAt) return null;
+  if (!title && hideAuthor) return null;
   return (
     <div className="w-full max-w-3xl px-6 py-10 text-center">
-      {title && <h1 className="font-display text-xl font-medium tracking-tight text-foreground">{title}</h1>}
-      <div className="flex items-center justify-center gap-2 mt-3">
-        {hasAuthor && (
-          <div className="flex items-center -space-x-3">
-            {authorOrgImageUrl && (
-              <div className="relative group">
-                <div
-                  className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-                  style={{ backgroundImage: `url(${authorOrgImageUrl})`, backgroundSize: "cover" }}
-                />
-                {authorOrgName && (
-                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
-                    <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
-                      <p className="font-medium text-foreground">{authorOrgName}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {authorImageUrl && (
-              <div className="relative group">
-                <div
-                  className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
-                  style={{ backgroundImage: `url(${authorImageUrl})`, backgroundSize: "cover" }}
-                />
-                {authorName && (
-                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity delay-300 z-50">
-                    <div className="rounded-lg border border-border bg-background px-3 py-2 shadow-lg text-xs whitespace-nowrap">
-                      <p className="font-medium text-foreground">{authorName}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        {hasAuthor && <span className="text-xs text-muted-foreground">·</span>}
-        {sharedAt && (
-          <span className="text-xs text-muted-foreground">
-            {new Date(sharedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-          </span>
-        )}
-      </div>
+      {title && <h1 className="font-display text-xl font-medium tracking-tight text-foreground" dir="auto">{title}</h1>}
+      {!hideAuthor && <div className="mt-3 flex justify-center"><Byline author={author} /></div>}
     </div>
   );
 }

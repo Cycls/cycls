@@ -113,7 +113,7 @@ const SHIM = `<script>(function(){
     };
   }
 
-  var kv = null, loading = null, timer = null, pending = null, settle = null, dirty = new Set(), clipped = false;
+  var kv = null, loading = null, flying = {}, clipped = false;
 
   // Concurrent callers share one list, or a later one would clobber the
   // mutations an earlier set() already made.
@@ -133,35 +133,30 @@ const SHIM = `<script>(function(){
     return loading;
   }
 
-  function schedule(){
-    if (!pending) {
-      pending = new Promise(function(res, rej){ settle = { res: res, rej: rej }; });
-      pending.catch(function(){});   // a set() nobody awaits must not warn
-    }
-    clearTimeout(timer);
-    timer = setTimeout(flush, 250);
-    return pending;
-  }
-
-  // One row per key, so a burst of set()s costs one write each and two writers
-  // only collide on the same key — the whole-file rewrite this replaced lost
-  // everything another tab or the agent had changed.
-  async function flush(){
-    clearTimeout(timer);
-    if (!pending) return;
-    var s = settle, mine = dirty;
-    pending = null; settle = null; dirty = new Set();
-    try {
-      await Promise.all(Array.from(mine).map(function(k){
-        return Object.prototype.hasOwnProperty.call(kv, k)
+  // A set() leaves at once. A WebView that closes or goes to the background runs no timer, and a frame
+  // being removed runs no promise, so a write held back to batch was a write lost. One write per key is on
+  // its way at a time: set()s behind it send only the latest value once it lands, so a burst costs two
+  // writes and they cannot arrive out of order. One row per key, so two writers collide only on the same
+  // key, where the whole-file rewrite this replaced lost everything another tab or the agent had changed.
+  function persist(k){
+    if (flying[k]) { flying[k].again = true; return flying[k].done; }
+    var f = flying[k] = { again: false };
+    f.done = (async function(){
+      do {
+        f.again = false;
+        await (Object.prototype.hasOwnProperty.call(kv, k)
           ? data({ op: 'put', key: k, value: kv[k] })
-          : data({ op: 'delete', key: k });
-      }));
-      s.res();
-    } catch (e) { s.rej(e); }
+          : data({ op: 'delete', key: k }));
+      } while (f.again);
+    })().finally(function(){ delete flying[k]; });
+    f.done.catch(function(){});   // a set() nobody awaits must not warn
+    return f.done;
   }
 
-  addEventListener('pagehide', function(){ flush(); });
+  // Every write still on its way, landed.
+  function flush(){
+    return Promise.all(Object.keys(flying).map(function(k){ return flying[k].done; })).then(function(){});
+  }
 
   var api = {
     ctx: null,
@@ -185,8 +180,7 @@ const SHIM = `<script>(function(){
     set: async function(key, value){
       var s = await load();
       if (value === undefined) delete s[key]; else s[key] = value;
-      dirty.add(key);
-      return schedule();
+      return persist(key);
     },
     // Read-modify-write that does not lose a concurrent one: the write carries
     // the version it read, and a 412 means someone got there first, so re-read

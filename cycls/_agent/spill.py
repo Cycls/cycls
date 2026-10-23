@@ -31,19 +31,27 @@ def _size(n):
     return f"{n / 1024:.0f} KB" if n < 1 << 20 else f"{n / (1 << 20):.1f} MB"
 
 
+def save(text, root, chat_id, name):
+    """*text* written to .tmp/{chat_id}/{name}: its path, or None with no chat or when the write fails."""
+    if not chat_id:
+        return None
+    try:
+        d = Path(root) / DIR / chat_id
+        d.mkdir(parents=True, exist_ok=True)
+        (path := d / name).write_text(text)
+        _sweep(Path(root) / DIR)
+    except OSError:
+        return None
+    return path
+
+
 def spill(text, root, chat_id, name):
     """The model-facing replacement for *text* — or *text* itself when it is
     small, has no chat to belong to, or the write fails."""
-    if len(text) < SPILL_AT or not chat_id:
+    if len(text) < SPILL_AT:
         return text
-    try:
-        ext, count, sample = _describe(text)
-        d = Path(root) / DIR / chat_id
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{name}.{ext}"
-        path.write_text(text)
-        _sweep(Path(root) / DIR)
-    except OSError:
+    ext, count, sample = _describe(text)
+    if not (path := save(text, root, chat_id, f"{name}.{ext}")):
         return text
     return (f"Saved {_size(len(text))} to {path.relative_to(root)} ({count}). Preview:\n{sample}\n"
             "Analyse it with bash (jq, rg, python) — don't read the whole file.")
