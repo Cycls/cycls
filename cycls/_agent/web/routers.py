@@ -2269,7 +2269,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(video_router(ws_dep, _catalog_drop))
-    app.include_router(office_router(ws_dep))
+    app.include_router(office_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:

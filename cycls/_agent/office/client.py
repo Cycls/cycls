@@ -106,6 +106,29 @@ def _refused(r):
     return Refused(str(message)[:300] or f"the office service answered {r.status_code}", r.status_code)
 
 
+async def patch_xlsx(original, snapshot_gz):
+    """The original .xlsx and the editor's workbook (gzip JSON) → {unchanged, bytes, summary}.
+    Only what differs is written into the file; `bytes` is None when nothing does."""
+    r = await _call("POST", "/v1/xlsx/patch", files={
+        "file": ("workbook.xlsx", bytes(original), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "snapshot": ("snapshot.json.gz", bytes(snapshot_gz), "application/gzip"),
+    })
+    if r.status_code >= 400:
+        raise _refused(r)
+    if r.headers.get("content-type", "").startswith("application/json"):
+        body = r.json()
+        return {"unchanged": True, "bytes": None, "summary": body.get("summary") or {}}
+    summary = {}
+    if raw := r.headers.get("x-patch-summary"):
+        import base64
+        import json
+        try:
+            summary = json.loads(base64.b64decode(raw))
+        except ValueError:
+            summary = {}
+    return {"unchanged": False, "bytes": r.content, "summary": summary}
+
+
 async def read_xlsx(data, name=None):
     """An .xlsx file's bytes → {workbook, notices, activeSheet, stats}: what Cycls Sheets opens."""
     params = {"name": name} if name else None

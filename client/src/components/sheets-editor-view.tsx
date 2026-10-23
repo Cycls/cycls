@@ -6,6 +6,7 @@ import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { SheetGlyph } from "./file-glyph";
 import { LoadingBar } from "./loading-bar";
+import { cn } from "../lib/utils";
 
 // Cycls Sheets in the canvas: a header (where the file is, when it changed, Open ⌄) over the editor,
 // which the cycls-office service serves into an iframe.
@@ -14,8 +15,11 @@ import { LoadingBar } from "./loading-bar";
 // editor's exact origin only; editor → Cycls {source: "cycls-sheets", type, …}, heard only from that
 // origin and that frame.
 //   Cycls → editor   load {doc, name, snapshot, activeSheet, readonly}   theme   locale   readonly
+//                    written {doc, id, ok}   flush {id}   save
 //   editor → Cycls   ready {protocol, features}   loaded {doc}   error {doc, message}
-// This step opens files to view; saving and the agent's edits come with patch-back.
+//                    dirty {doc, dirty}   saved {doc, id, snapshot}   flushed {id, ok}
+// A save writes the editor's workbook back into the .xlsx through the service (only what differs
+// changes) and keeps the replaced version; a file changed elsewhere since it was opened asks first.
 
 /** Asks once per file whether this workspace opens it in Cycls Sheets; otherwise shows `preview`. */
 export function SheetsOrPreview({ path, name, api, preview, onDownload }: {
@@ -70,7 +74,14 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
   const [failed, setFailed] = useState(false);
   const [menu, setMenu] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
+  type Status = "saved" | "saving" | "dirty" | "error";
+  const [status, setStatus] = useState<Status>("saved");
+  const [conflict, setConflict] = useState<string | null>(null);   // the file's newer version
+  const editable = !!api;
   const doc = useRef("");
+  const version = useRef("");       // what the next save names as its base
+  const forceNext = useRef(false);  // "Keep mine": the next save writes over the newer file
+  const saving = useRef<Promise<void> | null>(null);
   // Never "*": anything sent goes to the editor's origin or nowhere.
   const origin = (() => {
     try {
@@ -113,6 +124,13 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
       if (msg.type === "ready") setReady(true);
       else if (msg.type === "loaded" && msg.doc === doc.current) setLoaded(true);
       else if (msg.type === "error" && msg.doc === doc.current) setFailed(true);
+      else if (msg.type === "dirty" && msg.doc === doc.current) {
+        const d = (msg as { dirty?: boolean }).dirty;
+        setStatus((now) => (now === "saving" ? now : d ? "dirty" : "saved"));
+      } else if (msg.type === "saved" && msg.doc === doc.current) {
+        const { id, snapshot } = msg as { id?: string; snapshot?: unknown };
+        if (typeof id === "string" && snapshot) void save(id, snapshot);
+      }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -122,9 +140,54 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
   useEffect(() => {
     if (!ready || !opened) return;
     doc.current = `${path}@${opened.version}`;
+    version.current = opened.version;
     setLoaded(false);
-    post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: true });
-  }, [ready, opened, path, name, post]);
+    setStatus("saved");
+    setConflict(null);
+    post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable });
+  }, [ready, opened, path, name, post, editable]);
+
+  // One save at a time; the editor sends the next once this one is answered.
+  const save = async (id: string, snapshot: unknown) => {
+    if (!api) return;
+    const forDoc = doc.current;
+    const run = (async () => {
+      setStatus("saving");
+      try {
+        const force = forceNext.current;
+        const r = await api.sheetsSave(path, version.current, snapshot, force);
+        if (forDoc !== doc.current) return;
+        if ("conflict" in r) {
+          setConflict(r.conflict);
+          setStatus("error");
+          post({ type: "written", doc: forDoc, id, ok: false });
+          return;
+        }
+        forceNext.current = false;
+        version.current = r.version;
+        setConflict(null);
+        setStatus("saved");
+        post({ type: "written", doc: forDoc, id, ok: true });
+      } catch {
+        setStatus("error");
+        post({ type: "written", doc: forDoc, id, ok: false });
+      }
+    })();
+    saving.current = run;
+    await run;
+  };
+
+  const loadLatest = () => {
+    if (!api) return;
+    setConflict(null);
+    setOpened(null);
+    api.sheetsOpen(path).then(setOpened).catch(() => setFailed(true));
+  };
+  const keepMine = () => {
+    forceNext.current = true;
+    setConflict(null);
+    post({ type: "save" });
+  };
 
   useEffect(() => { if (ready) post({ type: "theme", theme: dark ? "dark" : "light" }); }, [dark, ready, post]);
   useEffect(() => { if (ready) post({ type: "locale", lang }); }, [lang, ready, post]);
@@ -169,7 +232,10 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
           )}
         </div>
       )}
-      <span className="shrink-0 rounded-md bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t("sheetsViewOnly")}</span>
+      <span className={cn("shrink-0 rounded-md px-2 py-0.5 text-xs", status === "error" ? "bg-red-500/10 text-red-600" : "bg-secondary text-muted-foreground")}
+            data-testid="sheets-status">
+        {!editable ? t("sheetsViewOnly") : status === "saving" ? t("sheetsSaving") : status === "dirty" ? t("sheetsUnsaved") : status === "error" ? t("sheetsSaveFailed") : t("sheetsSaved")}
+      </span>
       <div className="relative">
         <button onClick={() => setMenu((v) => !v)} aria-haspopup="menu" aria-expanded={menu}
                 className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 py-1 text-xs font-medium hover:bg-secondary">
@@ -217,6 +283,13 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
           {startItems && <span className="hidden sm:inline">{startItems}</span>}
           <div className="flex-1" />
           {endItems}
+        </div>
+      )}
+      {conflict !== null && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-amber-500/10 px-3 py-2 text-xs" role="alert">
+          <span className="flex-1">{t("sheetsChangedElsewhere")}</span>
+          <button onClick={loadLatest} className="cursor-pointer rounded-md bg-foreground px-2.5 py-1 font-medium text-background hover:opacity-90">{t("sheetsLoadLatest")}</button>
+          <button onClick={keepMine} className="cursor-pointer rounded-md border border-border px-2.5 py-1 font-medium hover:bg-secondary">{t("sheetsKeepMine")}</button>
         </div>
       )}
       <div className="relative min-h-0 flex-1">

@@ -203,3 +203,90 @@ def test_read_xlsx_posts_the_bytes_and_maps_a_refusal(monkeypatch):
     with pytest.raises(office.Refused, match="not a zip") as e:
         asyncio.run(office.read_xlsx(b"bad"))
     assert e.value.status == 422
+
+
+# ---- saving -------------------------------------------------------------------------------------
+
+def test_save_patches_through_the_service_and_keeps_versions(monkeypatch, tmp_path):
+    import gzip
+    import json
+
+    from cycls._agent.design.store import version_of
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("SHEETS_ORGS", "org1")
+    original = b"PK\x03\x04 original workbook"
+    (tmp_path / "b.xlsx").write_bytes(original)
+    sent = []
+
+    async def patch_xlsx(data, snapshot_gz):
+        snap = json.loads(gzip.decompress(snapshot_gz))
+        sent.append((data, snap))
+        if snap.get("same"):
+            return {"unchanged": True, "bytes": None, "summary": {"cellsWritten": 0}}
+        return {"unchanged": False, "bytes": b"PK\x03\x04 patched " + json.dumps(snap).encode(), "summary": {"cellsWritten": 1}}
+
+    monkeypatch.setattr(office, "patch_xlsx", patch_xlsx)
+    c = _app(_ws(tmp_path))
+    v0 = version_of(original)
+
+    same = c.put("/office/sheets/save", params={"path": "b.xlsx", "base": v0}, content=gzip.compress(b'{"same": true}'))
+    assert same.status_code == 200 and same.json() == {"version": v0, "unchanged": True, "summary": {"cellsWritten": 0}}
+    assert (tmp_path / "b.xlsx").read_bytes() == original
+
+    saved = c.put("/office/sheets/save", params={"path": "b.xlsx", "base": v0}, content=b'{"edit": 1}')   # plain JSON is gzipped here
+    assert saved.status_code == 200 and saved.json()["unchanged"] is False
+    v1 = saved.json()["version"]
+    assert v1 != v0 and (tmp_path / "b.xlsx").read_bytes().startswith(b"PK\x03\x04 patched")
+    assert sent[-1] == (original, {"edit": 1})
+    assert list((tmp_path / ".versions").rglob("*")), "the replaced version is kept"
+
+    stale = c.put("/office/sheets/save", params={"path": "b.xlsx", "base": v0}, content=gzip.compress(b'{"edit": 2}'))
+    assert stale.status_code == 412 and stale.json()["version"] == v1
+    kept = c.put("/office/sheets/save", params={"path": "b.xlsx", "base": v0, "force": "true"}, content=gzip.compress(b'{"edit": 2}'))
+    assert kept.status_code == 200 and b'"edit": 2' in (tmp_path / "b.xlsx").read_bytes()
+
+
+def test_save_says_why_it_cannot(monkeypatch, tmp_path):
+    (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04")
+    c = _app(_ws(tmp_path))
+    assert c.put("/office/sheets/save", params={"path": "b.xlsx"}, content=b"{}").status_code == 403
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("SHEETS_ORGS", "*")
+    assert c.put("/office/sheets/save", params={"path": "b.xlsx"}, content=b"").status_code == 400
+
+    async def refuse(data, snapshot_gz):
+        raise office.Refused("the workbook sent is not a workbook snapshot", 422)
+
+    monkeypatch.setattr(office, "patch_xlsx", refuse)
+    r = c.put("/office/sheets/save", params={"path": "b.xlsx"}, content=b"{}")
+    assert r.status_code == 422 and "not a workbook snapshot" in r.json()["detail"]
+
+    async def down(data, snapshot_gz):
+        raise office.Unavailable("the office service is unreachable (ConnectError)")
+
+    monkeypatch.setattr(office, "patch_xlsx", down)
+    assert c.put("/office/sheets/save", params={"path": "b.xlsx"}, content=b"{}").status_code == 503
+    assert (tmp_path / "b.xlsx").read_bytes() == b"PK\x03\x04"
+
+
+def test_patch_xlsx_sends_both_parts_and_reads_the_answer(monkeypatch):
+    import base64
+    import json
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if b"same" in request.content:
+            return httpx.Response(200, json={"unchanged": True, "summary": {"cellsWritten": 0}})
+        summary = base64.b64encode(json.dumps({"cellsWritten": 2}).encode()).decode()
+        return httpx.Response(200, content=b"PK new", headers={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "x-patch-summary": summary})
+
+    _mock(monkeypatch, handler)
+    out = asyncio.run(office.patch_xlsx(b"PK old", b"same"))
+    assert out == {"unchanged": True, "bytes": None, "summary": {"cellsWritten": 0}}
+    out = asyncio.run(office.patch_xlsx(b"PK old", b"edit"))
+    assert out == {"unchanged": False, "bytes": b"PK new", "summary": {"cellsWritten": 2}}
+    assert seen[-1].url.path == "/v1/xlsx/patch" and b'name="file"' in seen[-1].content and b'name="snapshot"' in seen[-1].content

@@ -4,11 +4,17 @@
                                     → {editor: true, url, name} or {editor: false, reason}
     GET /office/sheets/open?path=   the workbook the editor opens (gzip JSON):
                                     {version, modified, snapshot, notices, activeSheet, stats}
+    PUT /office/sheets/save?path=&base=&force=
+                                    the editor's workbook (JSON, gzip) written back into the file:
+                                    only what differs changes (patch-back on the service), the
+                                    replaced version is kept → {version, unchanged, summary};
+                                    412 {version} when the file changed since `base`
 
 The browser frames the editor from `url`; whether an organisation has Sheets is answered here, per
 workspace (SHEETS_ORGS), so the setting never leaks to the page. The service reads the file; what it
 read is kept beside the workspace's other caches (.cache/sheets/<version>.json.gz), so opening the
-same file again costs nothing. Saving and the agent's edits join this router with patch-back.
+same file again costs nothing. A save goes through the same versioned write as a design
+(design/store.py write_fig): the base check, the version history, one write at a time per file.
 """
 import asyncio
 import gzip
@@ -20,6 +26,8 @@ from pathlib import Path
 SHEETS_EXTS = (".xlsx", ".xlsm")
 SHEETS_CACHE = ".cache/sheets"
 MAX_BYTES = 20 * 1024 * 1024     # larger workbooks keep the read-only preview
+MAX_SNAPSHOT = 64 * 1024 * 1024  # an editor's workbook as sent (gzip)
+GZIP_MAGIC = bytes([0x1F, 0x8B])
 _KEEP = 24                       # cached reads kept per workspace
 
 
@@ -37,13 +45,16 @@ def _write_cache(cache_dir, version, body):
         pass
 
 
-def office_router(ws_dep):
-    from fastapi import APIRouter, HTTPException, Response
+def office_router(ws_dep, required_auth=None, changed=None):
+    from fastapi import APIRouter, Depends, HTTPException, Request, Response
+    from fastapi.responses import JSONResponse
 
-    from cycls._agent.design.store import version_of
+    from cycls._agent.design.store import Stale, read_fig, version_of, write_fig
     from cycls._agent.office import client as office
-    from cycls._agent.web.shared import _safe_path
+    from cycls._agent.web.shared import _safe_path, person
     from cycls._app.db import Workspace
+
+    user_dep = required_auth if required_auth is not None else Depends(lambda: None)
 
     r = APIRouter()
 
@@ -101,5 +112,44 @@ def office_router(ws_dep):
         return Response(body, media_type="application/json", headers={
             "Content-Encoding": "gzip", "Cache-Control": "no-store", "X-Version": version, "X-Modified": modified,
         })
+
+    @r.put("/office/sheets/save")
+    async def sheets_save(path: str, request: Request, base: str = "", force: bool = False,
+                          ws: Workspace = ws_dep, user=user_dep):
+        file_path = _sheet_file(ws, path)
+        if not office.offered(ws, "sheets"):
+            raise HTTPException(403, "Cycls Sheets is not switched on for this workspace.")
+        body = await request.body()
+        if not body:
+            raise HTTPException(400, "Send the workbook (JSON, gzip).")
+        if len(body) > MAX_SNAPSHOT:
+            raise HTTPException(413, "The workbook sent is too large.")
+        snapshot_gz = body if body[:2] == GZIP_MAGIC else gzip.compress(body, 6)
+        rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+        from cycls._agent.design.deck import lock
+        async with lock(file_path):     # one read → patch → write at a time per file
+            data, version = await asyncio.to_thread(read_fig, ws.root, rel)
+            if data is None:
+                raise HTTPException(404, "There is no such file.")
+            if base and base != version and not force:
+                return JSONResponse(status_code=412, content={
+                    "detail": "This workbook changed since it was opened.", "version": version})
+            try:
+                result = await office.patch_xlsx(data, snapshot_gz)
+            except office.Unavailable as e:
+                raise HTTPException(503, str(e))
+            except office.Refused as e:
+                raise HTTPException(422, f"The workbook could not be saved: {e}")
+            if result["unchanged"]:
+                return {"version": version, "unchanged": True, "summary": result["summary"]}
+            try:
+                new = await write_fig(ws.root, rel, result["bytes"], base=version, by="user",
+                                      reason="keep" if force else "save", force=force, who=person(user, ws))
+            except Stale as e:
+                return JSONResponse(status_code=412, content={
+                    "detail": "This workbook changed since it was opened.", "version": e.current})
+        if changed is not None:
+            changed(ws.root)
+        return {"version": new, "unchanged": False, "summary": result["summary"]}
 
     return r

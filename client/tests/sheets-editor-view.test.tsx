@@ -23,6 +23,7 @@ const api = (answer: Awaited<ReturnType<OfficeEditorApi["sheets"]>> | Error): Of
   }),
   sheetsOpen: vi.fn(async () => OPENED),
   pdf: vi.fn(async () => "blob:pdf"),
+  sheetsSave: vi.fn(async () => ({ version: "v2", unchanged: false })),
 });
 
 function frameWith(posted: Array<[unknown, string]>) {
@@ -78,7 +79,7 @@ describe("Cycls Sheets in the canvas", () => {
     await waitFor(() => expect(posted.map(([m]) => (m as { type: string }).type)).toContain("load"));
     expect(posted.every(([, origin]) => origin === "https://office.test")).toBe(true);
     const load = posted.find(([m]) => (m as { type: string }).type === "load")![0] as Record<string, unknown>;
-    expect(load).toMatchObject({ target: "cycls-sheets", name: "b.xlsx", snapshot: OPENED.snapshot, activeSheet: "s1", readonly: true });
+    expect(load).toMatchObject({ target: "cycls-sheets", name: "b.xlsx", snapshot: OPENED.snapshot, activeSheet: "s1", readonly: false });
     expect(load.doc).toBe("b.xlsx@abc123");
     expect(posted.map(([m]) => (m as { type: string }).type)).toEqual(expect.arrayContaining(["theme", "locale"]));
   });
@@ -92,5 +93,50 @@ describe("Cycls Sheets in the canvas", () => {
     fireEvent.click(screen.getByRole("button", { name: /Open/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Excel/ }));
     expect(download).toHaveBeenCalled();
+  });
+});
+
+describe("saving from Cycls Sheets", () => {
+  async function opened(a: OfficeEditorApi) {
+    render(<SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" api={a} />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalled());
+    say("https://office.test", frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(posted.some(([m]) => (m as { type: string }).type === "load")).toBe(true));
+    const doc = (posted.find(([m]) => (m as { type: string }).type === "load")![0] as { doc: string }).doc;
+    return { posted, frame, doc };
+  }
+  const types = (posted: Array<[unknown, string]>) => posted.map(([m]) => (m as { type: string }).type);
+
+  test("a save goes to the file with the version it was opened at, and the editor hears it was written", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    const { posted, frame, doc } = await opened(a);
+    say("https://office.test", frame.contentWindow, { type: "dirty", doc, dirty: true });
+    expect(await screen.findByText("Unsaved changes")).toBeTruthy();
+    say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "1", snapshot: { sheetOrder: ["s1"] } });
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenCalledWith("b.xlsx", "abc123", { sheetOrder: ["s1"] }, false));
+    await waitFor(() => expect(posted.some(([m]) => (m as { type: string; ok?: boolean }).type === "written" && (m as { ok?: boolean }).ok)).toBe(true));
+    expect(await screen.findByText("Saved")).toBeTruthy();
+
+    // The next save names the version the last one made.
+    say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "2", snapshot: { sheetOrder: ["s1"], n: 2 } });
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "v2", { sheetOrder: ["s1"], n: 2 }, false));
+  });
+
+  test("a file changed elsewhere asks; Keep mine saves over it", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    (a.sheetsSave as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ conflict: "v9" });
+    const { posted, frame, doc } = await opened(a);
+    say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "1", snapshot: { sheetOrder: ["s1"] } });
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText("Couldn't save")).toBeTruthy();
+    expect(posted.some(([m]) => (m as { type: string; ok?: boolean }).type === "written" && (m as { ok?: boolean }).ok === false)).toBe(true);
+
+    fireEvent.click(screen.getByText("Keep mine"));
+    expect(types(posted)).toContain("save");
+    say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "2", snapshot: { sheetOrder: ["s1"] } });
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "abc123", { sheetOrder: ["s1"] }, true));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });

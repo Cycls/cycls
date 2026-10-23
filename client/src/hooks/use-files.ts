@@ -75,7 +75,17 @@ export type OfficeEditorApi = {
   sheets: (path: string) => Promise<OfficeOpen>;
   sheetsOpen: (path: string) => Promise<SheetsOpened>;
   pdf: (path: string) => Promise<string>;   // a blob URL of the file as PDF (the office-render service)
+  // The editor's workbook written back into the file (only what differs changes). A file changed since
+  // `base` answers {conflict: <its version>} instead.
+  sheetsSave: (path: string, base: string, workbook: unknown, force?: boolean) => Promise<SheetsSaved>;
 };
+export type SheetsSaved = { version: string; unchanged: boolean } | { conflict: string };
+
+async function gzipJson(value: unknown): Promise<Blob> {
+  const json = new Blob([JSON.stringify(value)], { type: "application/json" });
+  if (typeof CompressionStream === "undefined") return json;
+  return new Response(json.stream().pipeThrough(new CompressionStream("gzip"))).blob();
+}
 
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -276,6 +286,22 @@ export function useFiles(baseUrl: string = "") {
     },
     pdf: async (filePath) =>
       URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
+    sheetsSave: async (filePath, base, workbook, force) => {
+      const q = new URLSearchParams({ path: filePath });
+      if (base) q.set("base", base);
+      if (force) q.set("force", "true");
+      try {
+        const res = await api(`/office/sheets/save?${q}`, { method: "PUT", body: await gzipJson(workbook), silent: true });
+        track("file_saved", { path: filePath });
+        return (await res.json()) as { version: string; unchanged: boolean };
+      } catch (err) {
+        if ((err as { status?: number }).status === 412) {
+          const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
+          return { conflict: typeof now === "string" ? now : "" };
+        }
+        throw err;
+      }
+    },
   }), [api]);
 
   // null where a design opens alone, or on a server without the route.
