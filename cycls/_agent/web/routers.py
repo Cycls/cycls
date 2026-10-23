@@ -22,6 +22,7 @@ from cycls._agent.tools import tool_step, detailed, excerpt, skills
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
+from cycls._agent.web.office_routes import office_router
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -2268,6 +2269,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(video_router(ws_dep, _catalog_drop))
+    app.include_router(office_router(ws_dep))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:

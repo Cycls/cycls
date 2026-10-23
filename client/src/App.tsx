@@ -57,6 +57,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     brand: f.brand,
     fetchVersioned: f.fetchVersioned,
     videoEditor: f.videoEditor,
+    officeEditor: f.officeEditor,
     designLive: f.designLive,
     listVersions: f.listVersions,
     versionBlob: f.versionBlob,

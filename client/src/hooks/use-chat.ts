@@ -101,6 +101,7 @@ export interface AppConfig {
   examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
   video_editor?: boolean;      // the video editor is configured (VIDEO_EDITOR_URL); POST /video/editor says if it is offered
+  sheets_editor?: boolean;     // Cycls Sheets is configured (OFFICE_URL); GET /office/sheets says if it is offered
   voice_warm?: boolean;        // the mic goes to the cycls-transcribe service: warm a listener as recording starts
   design_editor_url?: string;   // base URL of the embedded design editor for .fig files (env DESIGN_EDITOR_URL)
 }

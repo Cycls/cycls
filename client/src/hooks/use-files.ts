@@ -60,6 +60,12 @@ export type VideoEditorApi = {
   readText: (path: string) => Promise<{ text: string; version: string }>;
 };
 
+// Cycls Sheets (and Cycls Docs later): may this workspace open the file in the editor, and where from.
+export type OfficeOpen = { editor: true; url: string; name: string } | { editor: false; reason: string };
+export type OfficeEditorApi = {
+  sheets: (path: string) => Promise<OfficeOpen>;
+};
+
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [path, setPath] = useState("");
@@ -249,6 +255,11 @@ export function useFiles(baseUrl: string = "") {
     },
   }), [api]);
 
+  const officeEditor = useMemo<OfficeEditorApi>(() => ({
+    sheets: async (filePath) =>
+      (await api(`/office/sheets?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
+  }), [api]);
+
   // null where a design opens alone, or on a server without the route.
   const designLive = useCallback(async (filePath: string) => {
     try {
@@ -368,7 +379,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, officeEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

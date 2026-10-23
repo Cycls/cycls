@@ -25,7 +25,7 @@ import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
-import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, VideoEditorApi, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
@@ -99,6 +99,7 @@ export interface FilesPanelProps {
   brand?: () => Promise<BrandKit | null>;                        // for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
   videoEditor?: VideoEditorApi;                                  // the video editor's routes (sessions, renders)
+  officeEditor?: OfficeEditorApi;                                // Cycls Sheets: may a file open in the editor
   designLive?: (path: string) => Promise<DesignLive | null>;     // a design's live room + this person's pass (null: it opens alone)
   listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
@@ -1407,6 +1408,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           designEditorUrl={config?.design_editor_url}
           designHost={designHost}
           videoEditor={config?.video_editor ? files?.videoEditor : undefined}
+          officeEditor={config?.sheets_editor ? files?.officeEditor : undefined}
           onNewDesign={(preset) => void createDesign(preset, "canvas")}
         />
         </CommentsContext.Provider>

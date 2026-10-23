@@ -63,6 +63,11 @@ class Config(BaseModel):
         # Video at all is answered per workspace by POST /video/editor.
         if os.environ.get("VIDEO_EDITOR_URL") and os.environ.get("VIDEO_URL"):
             data["video_editor"] = True
+        # Cycls Sheets, on the cycls-office service; whether an organisation has it is answered per
+        # workspace by GET /office/sheets.
+        from cycls._agent.office import client as _office
+        if _office.configured() and _office.editor_url():
+            data["sheets_editor"] = True
         # The microphone hears first on the cycls-transcribe service: the browser warms a listener as
         # it starts recording (POST /transcribe/warm), so a cold GPU starts while the person speaks.
         # (ElevenLabs, the other engine, has nothing to warm.)

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
-import type { VideoEditorApi, WriteFile } from "../hooks/use-files";
+import type { OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
 import { createPortal } from "react-dom";
@@ -13,6 +13,7 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { SheetsOrPreview } from "./sheets-editor-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
@@ -376,7 +377,7 @@ function VideoComposition({ file, content, openFile, onDownload, onReload, video
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, videoEditor, reloadFile, onReload, onDownload, onShare }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, videoEditor, officeEditor, reloadFile, onReload, onDownload, onShare }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -391,6 +392,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
   designHost?: DesignHost;
   videoEditor?: VideoEditorApi;   // when set, a video has Edit (the video editor)
+  officeEditor?: OfficeEditorApi;   // when set, an .xlsx may open in Cycls Sheets (asked per file)
   onReload?: () => void;          // fetch the file again (a video's preview after its editor closes)
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onDownload?: () => void;
@@ -483,7 +485,10 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     );
   }
   if (isSpreadsheet(fileKind(file))) {
-    return content ? <SpreadsheetView url={content} name={file.name} /> : null;
+    if (!content) return null;
+    return officeEditor && !shared
+      ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} preview={<SpreadsheetView url={content} name={file.name} />} />
+      : <SpreadsheetView url={content} name={file.name} />;
   }
   if (is3d(fileKind(file))) {
     // model-viewer from CDN inside our own iframe shell — no npm dependency.
@@ -520,7 +525,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, videoEditor, onNewDesign }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, videoEditor, officeEditor, onNewDesign }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -553,6 +558,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   reloadKey?: number;  // bump to re-fetch the open document
   designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
   videoEditor?: VideoEditorApi;   // the video editor (config.video_editor): Edit on a video
+  officeEditor?: OfficeEditorApi;   // Cycls Sheets (config.sheets_editor)
   designHost?: DesignHost;
   onNewDesign?: (preset: string) => void;   // "New design" in the + menu
 }) {
@@ -694,6 +700,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   designEditorUrl={designEditorUrl}
                   designHost={designHost}
                   videoEditor={videoEditor}
+                  officeEditor={officeEditor}
                 />
               )}
             </div>
@@ -938,7 +945,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 }
 
 // Keyed by path from the parent: each open file keeps its own state.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor, officeEditor }: {
   file: CanvasFile;
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string, silent?: boolean) => Promise<string>;
@@ -955,6 +962,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   reloadKey?: number;
   designEditorUrl?: string;
   videoEditor?: VideoEditorApi;
+  officeEditor?: OfficeEditorApi;
   designHost?: DesignHost;
 }) {
   const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
@@ -1230,7 +1238,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} listFolders={listFolders}
                          fetchConnector={fetchConnector}
                          appData={appData}
-                         designEditorUrl={designEditorUrl} designHost={designHost} videoEditor={videoEditor} reloadFile={reloadFile} onReload={onReload}
+                         designEditorUrl={designEditorUrl} designHost={designHost} videoEditor={videoEditor} officeEditor={officeEditor} reloadFile={reloadFile} onReload={onReload}
                          onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
             </div>}
             {previewing && (() => {
