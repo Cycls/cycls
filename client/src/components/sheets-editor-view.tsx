@@ -128,8 +128,8 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
         const d = (msg as { dirty?: boolean }).dirty;
         setStatus((now) => (now === "saving" ? now : d ? "dirty" : "saved"));
       } else if (msg.type === "saved" && msg.doc === doc.current) {
-        const { id, snapshot } = msg as { id?: string; snapshot?: unknown };
-        if (typeof id === "string" && snapshot) void save(id, snapshot);
+        const { id, snapshot, ops } = msg as { id?: string; snapshot?: unknown; ops?: unknown[] };
+        if (typeof id === "string" && snapshot) void save(id, snapshot, Array.isArray(ops) ? ops : []);
       }
     };
     window.addEventListener("message", onMessage);
@@ -148,14 +148,14 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
   }, [ready, opened, path, name, post, editable]);
 
   // One save at a time; the editor sends the next once this one is answered.
-  const save = async (id: string, snapshot: unknown) => {
+  const save = async (id: string, snapshot: unknown, ops: unknown[]) => {
     if (!api) return;
     const forDoc = doc.current;
     const run = (async () => {
       setStatus("saving");
       try {
         const force = forceNext.current;
-        const r = await api.sheetsSave(path, version.current, snapshot, force);
+        const r = await api.sheetsSave(path, version.current, { snapshot, ops }, force);
         if (forDoc !== doc.current) return;
         if ("conflict" in r) {
           setConflict(r.conflict);

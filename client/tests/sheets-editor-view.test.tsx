@@ -115,13 +115,13 @@ describe("saving from Cycls Sheets", () => {
     say("https://office.test", frame.contentWindow, { type: "dirty", doc, dirty: true });
     expect(await screen.findByText("Unsaved changes")).toBeTruthy();
     say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "1", snapshot: { sheetOrder: ["s1"] } });
-    await waitFor(() => expect(a.sheetsSave).toHaveBeenCalledWith("b.xlsx", "abc123", { sheetOrder: ["s1"] }, false));
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenCalledWith("b.xlsx", "abc123", { snapshot: { sheetOrder: ["s1"] }, ops: [] }, false));
     await waitFor(() => expect(posted.some(([m]) => (m as { type: string; ok?: boolean }).type === "written" && (m as { ok?: boolean }).ok)).toBe(true));
     expect(await screen.findByText("Saved")).toBeTruthy();
 
     // The next save names the version the last one made.
     say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "2", snapshot: { sheetOrder: ["s1"], n: 2 } });
-    await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "v2", { sheetOrder: ["s1"], n: 2 }, false));
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "v2", { snapshot: { sheetOrder: ["s1"], n: 2 }, ops: [] }, false));
   });
 
   test("a file changed elsewhere asks; Keep mine saves over it", async () => {
@@ -136,7 +136,7 @@ describe("saving from Cycls Sheets", () => {
     fireEvent.click(screen.getByText("Keep mine"));
     expect(types(posted)).toContain("save");
     say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "2", snapshot: { sheetOrder: ["s1"] } });
-    await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "abc123", { sheetOrder: ["s1"] }, true));
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "abc123", { snapshot: { sheetOrder: ["s1"] }, ops: [] }, true));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 });

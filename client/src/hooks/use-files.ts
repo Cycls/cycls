@@ -77,7 +77,7 @@ export type OfficeEditorApi = {
   pdf: (path: string) => Promise<string>;   // a blob URL of the file as PDF (the office-render service)
   // The editor's workbook written back into the file (only what differs changes). A file changed since
   // `base` answers {conflict: <its version>} instead.
-  sheetsSave: (path: string, base: string, workbook: unknown, force?: boolean) => Promise<SheetsSaved>;
+  sheetsSave: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean) => Promise<SheetsSaved>;
 };
 export type SheetsSaved = { version: string; unchanged: boolean } | { conflict: string };
 
@@ -286,12 +286,12 @@ export function useFiles(baseUrl: string = "") {
     },
     pdf: async (filePath) =>
       URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
-    sheetsSave: async (filePath, base, workbook, force) => {
+    sheetsSave: async (filePath, base, payload, force) => {
       const q = new URLSearchParams({ path: filePath });
       if (base) q.set("base", base);
       if (force) q.set("force", "true");
       try {
-        const res = await api(`/office/sheets/save?${q}`, { method: "PUT", body: await gzipJson(workbook), silent: true });
+        const res = await api(`/office/sheets/save?${q}`, { method: "PUT", body: await gzipJson(payload), silent: true });
         track("file_saved", { path: filePath });
         return (await res.json()) as { version: string; unchanged: boolean };
       } catch (err) {
