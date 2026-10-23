@@ -285,6 +285,14 @@ there is no voice cloning (the dub is a built-in voice, and the reply tells the 
   On-screen titles are left for the agent to translate with `edit`.
 - **Again.** The same name, language, voice and slots is the same dub (`words.dub.key`); a dub cut off by Stop is
   collected by the next call (the chat's sidecar keeps its token, `dub:<name>`).
+- **The Saudi voice is asked for with `to: "ar-SA"`** (2026-10-22). On super-dev, DeepSeek V4.1 Flash never sent
+  `voice: "saudi"` on `dub` in a real chat — seven calls in a row, while saying it had (the `video_call` log line,
+  which records each call's argument names and its voice, language and number of lines, showed it) — though a
+  short probe of the same model did. `to` it always fills, so `ar-SA` (or a voice written as "Saudi", "سعودي",
+  `voice_id`, `dialect`) means the Saudi voice; every Arabic dub reply names the voice it was read in and how to
+  switch. Checked on production: the next chat's first `dub` call carried `to: "ar-SA"` and came back in NAMAA's
+  Saudi voice. A call with no name means the chat's latest video, never its own dub; a dub asked of a dub names
+  the video it came from.
 
 Checked on the dev service: an English voice-over video with an Arabic captions box, into Arabic (the boxes
 swapped as meant, one sentence too long reported and the next pushed 0.6 s, rendered at -16.7 LUFS with Arabic
