@@ -34,6 +34,7 @@ class Config(BaseModel):
     one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     mobile_app: Optional[dict] = None # {ios, android} store links — the phone banner
+    plans: Optional[dict] = None      # the plans window: {pay, currency, words} (Web.plans)
     max_upload: int = 512             # per-file upload cap in MB
     workspaces: Optional[str] = None  # multi-workspace mode: None off, else team-create policy ("member"|"admin")
     volume: str = "/workspace"

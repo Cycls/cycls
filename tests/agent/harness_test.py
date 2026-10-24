@@ -664,6 +664,21 @@ def test_registered_label_renders_the_step(monkeypatch):
     assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "SELECT 1"
 
 
+def test_a_picture_tool_names_its_shape_on_the_step(monkeypatch):
+    """`.on(picture=)` puts the shape of the picture on the step, live and on reload: the chat holds a frame of it."""
+    from cycls._agent import tools
+    from cycls._agent.harness.llm import LLM
+    monkeypatch.setattr(tools, "_custom_labels", {})
+    monkeypatch.setattr(tools, "_custom_pictures", {})
+    shape = lambda inp: inp.get("aspect_ratio")
+    assert LLM().on("paint", None, label=lambda inp: inp["prompt"], picture=shape)._pictures == {"paint": shape}
+    tools.register_labels({"paint": lambda inp: inp["prompt"]}, pictures={"paint": shape, "sketch": shape})
+    assert tools.tool_step("paint", {"prompt": "a cat", "aspect_ratio": "16:9"}) == \
+        {"tool_name": "paint", "step": "a cat", "picture": "16:9"}
+    assert tools.tool_step("sketch", {"prompt": "a dog"}) == {"tool_name": "sketch", "step": "a dog", "picture": "1:1"}
+    assert "picture" not in tools.tool_step("bash", {"command": "ls"})
+
+
 def test_llm_on_label_registers_via_run(monkeypatch):
     from cycls._agent import tools
     monkeypatch.setattr(tools, "_custom_labels", {})

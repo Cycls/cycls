@@ -1150,19 +1150,30 @@ def interrupted_note(name, reason):
             + (f" {row.interrupted}" if row and row.interrupted else ""))
 
 
-_custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}
+_custom_labels, _custom_names, _custom_owners, _custom_icons, _custom_pictures = {}, {}, {}, {}, {}
 _detailed = {"build_app"}   # step row carries Request/Response, and can show a failure; MCP tools join at runtime
 
 
-def register_labels(labels, names=None, owners=None, icons=None, details=()):
+def register_labels(labels, names=None, owners=None, icons=None, details=(), pictures=None):
     """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
-    acts with, an icon url, and whether the row opens into request and response. Registered by LLM.run() and by
-    MCP discovery so both live steps and the refetch projection render them."""
+    acts with, an icon url, whether the row opens into request and response, and the shape of a picture it makes.
+    Registered by LLM.run() and by MCP discovery so both live steps and the refetch projection render them."""
     _custom_labels.update(labels or {})
     _custom_names.update(names or {})
     _custom_owners.update(owners or {})
     _custom_icons.update(icons or {})
+    _custom_pictures.update(pictures or {})
     _detailed.update(details)
+
+
+def _picture(name, inp):
+    """A tool that makes a picture: its shape, for the frame the chat holds while it runs."""
+    if not (fn := _custom_pictures.get(name)):
+        return {}
+    try:
+        return {"picture": str(fn(inp) or "1:1")}
+    except Exception:
+        return {"picture": "1:1"}
 
 
 def detailed(name):
@@ -1184,7 +1195,7 @@ def tool_step(name, input):
     shown = _custom_names.get(name, name)
     if fn := _custom_labels.get(name):
         try:
-            return {"tool_name": shown, "step": str(fn(inp))}
+            return {"tool_name": shown, "step": str(fn(inp)), **_picture(name, inp)}
         except Exception:
             pass
     # No label. A connector's tool (it registered a display name) shows the `context` line its server asks the model
@@ -1198,7 +1209,7 @@ def tool_step(name, input):
         out["connector"] = _custom_owners[name]
     if name in _custom_icons:
         out["icon"] = _custom_icons[name]
-    return out
+    return {**out, **_picture(name, inp)}
 
 
 # ---- What a builtin risks (docs/notes/plugins-connectors.md, Approvals) ----

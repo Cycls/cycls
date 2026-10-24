@@ -75,10 +75,12 @@ return {
 }
 ```
 
-`_ui` is optional. The `_model` payload is what lands on disk, which is what
-makes citations survive a reload: `to_ui_messages` parses that same JSON back
-into the same `sources` part the live stream sent. One format, both paths, no
-prose to re-parse — the same discipline `step` follows.
+`_ui` is optional. A `ui` event never reaches the transcript, so the batch keeps
+what a reload needs on its own message, as `ui`: the `sources` (bounded) and,
+for a file the tool opened, the canvas card it stands as in the chat. That is
+what makes any tool's citations and pictures survive a reload. `web_search`'s
+`_model` is the same rows as JSON, which is how a chat saved before `ui` still
+gets its citations back.
 
 **3. A UI event — `{"type": "ui", ...}` with an optional `ack`** — for a tool
 whose whole effect is on the client (`canvas`, `suggest`, `ask`). The event is

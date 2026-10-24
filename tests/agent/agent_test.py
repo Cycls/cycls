@@ -1514,9 +1514,10 @@ def test_web_search_yields_sources_and_stores_json(agent_env):
     assert {"type": "sources", "sources": rows, "id": "s1"} in items   # the id threads them onto the search's own step
 
     history = _read_history(ctx)
-    result = next(b for m in history if m["role"] == "user" and isinstance(m["content"], list)
-                  for b in m["content"] if b.get("type") == "tool_result")
+    batch = next(m for m in history if m["role"] == "user" and isinstance(m["content"], list))
+    result = next(b for b in batch["content"] if b.get("type") == "tool_result")
     assert _json.loads(result["content"])["results"] == rows
+    assert batch["ui"] == [{"type": "sources", "id": "s1", "sources": rows}]   # kept, so any tool's come back
 
 
 def test_two_channel_tool_without_ui_still_answers_the_model(agent_env):
@@ -1937,6 +1938,21 @@ def test_a_tool_can_send_several_ui_events():
     assert [e["action"] for e in evs] == ["a", "b"] and all(e["id"] == "t1" for e in evs)
     assert _shape({"name": "design", "id": "t2"}, {"_model": "ok", "_ui": {"type": "ui", "action": "c"}}, True, {}, set())[1] == \
         [{"type": "ui", "action": "c", "id": "t2"}]
+
+
+def test_a_file_a_tool_opens_stands_in_the_chat_and_is_kept():
+    """A two-channel tool that opens a file gets the canvas tool's card, under its own id. The transcript keeps
+    that card and the tool's sources, bounded, since `ui` events never reach it: a reload shows both."""
+    from cycls._agent.harness.main import _shape, _kept
+    _, evs, _ = _shape({"name": "image", "id": "t1"},
+                       {"_model": "Saved a.png", "_ui": {"type": "ui", "action": "open_canvas", "path": "a.png"}},
+                       True, {}, set())
+    card = {"type": "step", "id": "t1:file", "tool_name": "Canvas", "step": "a.png", "ok": True}
+    assert evs[-1] == card and _kept(evs[0]) is None and _kept(card) == card
+    rows = [{"title": "T", "url": "https://x.sa/1", "quote": "q" * 5000, "status": "ساري", "extra": 1}, {"title": "no url"}]
+    assert _kept({"type": "sources", "id": "t2", "sources": rows}) == {"type": "sources", "id": "t2", "sources": [
+        {"title": "T", "url": "https://x.sa/1", "quote": "q" * 2000, "status": "ساري"}]}
+    assert _kept({"type": "sources", "id": "t3", "sources": [{"title": "no url"}]}) is None
 
 
 # ---------------------------------------------------------------------------

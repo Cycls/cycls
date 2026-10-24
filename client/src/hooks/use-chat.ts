@@ -14,6 +14,12 @@ export interface Source {
   title: string;
   url: string;
   snippet?: string;
+  // Any tool may say more about what it cites: the chip's words in place of the site's name, the words
+  // cited as the source has them, a short state ("In force"), and one line of context.
+  label?: string;
+  quote?: string;
+  status?: string;
+  note?: string;
 }
 
 export interface Part {
@@ -33,6 +39,7 @@ export interface Part {
   at?: number;       // when this tab first saw the step (not stored), for its elapsed time
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
+  picture?: string;  // a tool that makes a picture, from `.on(picture=…)`: its shape ("16:9")
   result?: string;   // a connector call's outcome, bounded — the block's Response
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
@@ -50,6 +57,10 @@ export interface Part {
   card?: Record<string, unknown>;   // a confirm card, standing in the conversation where its step was
   state?: string;   // its answer: waiting · approved · done · failed · declined · skipped
   remembered?: boolean;   // answered with "Don't ask again"
+  used?: number;     // a `usage` part: how much of a limit is used, of how much, per what ("month"), and the day it comes back
+  limit?: number;
+  per?: string;
+  resets?: string;
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
@@ -98,6 +109,10 @@ export interface AppConfig {
   suggestions?: boolean;
   affiliate?: string;
   mobile_app?: { ios?: string; android?: string } | null;   // store links for the phone banner
+  // Web.plans: the ways checkout takes payment (official marks), a local currency at a fixed rate, and plan and
+  // feature words in other languages by their billing slug.
+  plans?: { pay?: string[]; currency?: [string, number] | null;
+            words?: Record<string, Record<string, { name?: string; description?: string }>> | null } | null;
   max_upload?: number;   // per-file upload cap in MB
   explore_enabled?: boolean;
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
@@ -459,29 +474,16 @@ export function useChat(baseUrl: string = "") {
                   currentPart = { ...item, at: Date.now() };
                   parts.push(currentPart);
                 }
-              } else if (currentPart && currentPart.type === type) {
-                // Same type as current? Merge
-                if (item.row && currentPart.rows) {
-                  currentPart.rows.push(item.row);
-                } else if (
-                  type in item &&
-                  item[type as keyof Part] !== undefined
-                ) {
-                  const key = type as keyof Part;
-                  // A non-string payload is a whole value, not a delta — two
-                  // parallel searches each yield a complete `sources` array, and
-                  // concatenating them would stringify both into garbage.
-                  if (type === "step" || typeof item[key] !== "string") {
-                    currentPart = { ...item };
-                    parts.push(currentPart);
-                  } else {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    (currentPart as any)[key] =
-                      ((currentPart[key] as string) || "") +
-                      (item[key] as string);
-                  }
-                }
+              } else if (currentPart && currentPart.type === type && item.row && currentPart.rows) {
+                currentPart.rows.push(item.row);
+              } else if (currentPart && currentPart.type === type && type !== "step" && typeof item[type as keyof Part] === "string") {
+                // A string under the part's own name is a delta: text, thinking and code stream in pieces.
+                // Anything else is a whole part, and the next of a kind (two images, two searches) is its own.
+                const key = type as keyof Part;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (currentPart as any)[key] = ((currentPart[key] as string) || "") + (item[key] as string);
               } else {
+                if (type === "usage") uiHandlerRef.current?.({ ...item, action: "usage" } as unknown as UIAction);
                 // New part
                 currentPart = { ...item };
                 if (item.headers) currentPart.rows = [];

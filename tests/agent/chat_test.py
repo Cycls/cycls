@@ -473,6 +473,29 @@ def test_brave_search_result_projects_sources():
     assert out[1]["parts"][1]["sources"] == rows
 
 
+def test_any_tools_kept_sources_and_files_come_back_on_reload():
+    """The batch keeps what a tool showed in the chat: any tool's sources and the picture it opened come back
+    after a reload, where once only web search's did, and a search kept that way is not projected twice."""
+    import json
+    rows = [{"title": "نظام العمل", "url": "https://ncar.gov.sa/d/1", "label": "نظام العمل · م٧٧", "quote": "ما لم يتضمن العقد"}]
+    card = {"type": "step", "id": "I1:file", "tool_name": "Canvas", "step": "images/a.png", "ok": True}
+    web = [{"title": "W", "url": "https://w.com"}]
+    raw = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "L1", "name": "load_document", "input": {"id": "x"}},
+            {"type": "tool_use", "id": "I1", "name": "image", "input": {"path": "images/a.png"}},
+            {"type": "tool_use", "id": "S1", "name": "web_search", "input": {"query": "q"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "L1", "content": "# نظام العمل"},
+            {"type": "tool_result", "tool_use_id": "I1", "content": "Saved images/a.png"},
+            {"type": "tool_result", "tool_use_id": "S1", "content": json.dumps({"results": web})}],
+         "ui": [{"type": "sources", "id": "L1", "sources": rows}, card, {"type": "sources", "id": "S1", "sources": web}]},
+    ]
+    parts = to_ui_messages(raw)[0]["parts"]
+    assert [p["type"] for p in parts] == ["step", "step", "step", "sources", "step", "sources"]
+    assert parts[3]["sources"] == rows and parts[4] == card and parts[5]["sources"] == web
+
+
 def test_search_sources_skip_errors_and_junk():
     """An errored search, a non-JSON body, and a row with no URL all have to
     leave the transcript clean rather than render an empty chip row."""

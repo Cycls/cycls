@@ -148,7 +148,11 @@ def _shape(block, out, ok, handlers, mcp_names):
     if ok and isinstance(out, dict) and "_model" in out:
         # Two channels: `_model` lands in tool_result, `_ui` (one event or a list) goes to the client.
         ui = out.get("_ui")
-        return out["_model"], [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])], False
+        evs = [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])]
+        # A file the tool opened stands in the chat too, as the canvas tool's own card does.
+        evs += [{"type": "step", "id": f"{block['id']}:file", "tool_name": "Canvas", "step": e["path"], "ok": True}
+                for e in evs if e.get("action") == "open_canvas" and isinstance(e.get("path"), str)]
+        return out["_model"], evs, False
     if ok and isinstance(out, dict) and out.get("type") == "ui":
         # A UI tool drives the client; the model gets a short ack so tool_result
         # stays a valid string. `ack` overrides the wording and never ships.
@@ -163,6 +167,21 @@ def _shape(block, out, ok, handlers, mcp_names):
     return out, [], False
 
 
+_SOURCE = {"title": 300, "url": 2000, "snippet": 600, "label": 120, "quote": 2000, "status": 60, "note": 300}
+
+
+def _kept(ev):
+    """What of a tool's chat events the transcript keeps, since `ui` events never reach it: its sources, bounded,
+    and the card of a file it opened. Without this a reload shows neither."""
+    if not isinstance(ev, dict): return None
+    if ev.get("type") == "sources":
+        rows = [{k: v[:n] for k, n in _SOURCE.items() if isinstance(v := r.get(k), str) and v}
+                for r in ev.get("sources") or () if isinstance(r, dict) and isinstance(r.get("url"), str)]
+        return {"type": "sources", "id": ev.get("id"), "sources": rows[:20]} if rows else None
+    if ev.get("type") == "step" and str(ev.get("id", "")).endswith(":file"):
+        return ev
+
+
 async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace):
     """Take the batch back. `asyncio.wait` does not cancel what it waits on, so a
     bare cancel leaves tools running and their effects unrecorded. Cancel, give
@@ -172,7 +191,7 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
     for t in tasks:
         if not t.done(): t.cancel()
     await asyncio.wait(tasks, timeout=CANCEL_DRAIN)
-    results = []
+    results, kept = [], []
     for block, t in zip(blocks, tasks):
         if t.cancelled() or not t.done():
             content, failed = interrupted_note(block["name"], reason), True
@@ -180,13 +199,14 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
             out, _ = t.result()
             failed = isinstance(out, BaseException)
             if failed: out = f"Error: {_cause(out)}"
-            content, _, _ = _shape(block, out, not failed, handlers, mcp_names)
+            content, evs, _ = _shape(block, out, not failed, handlers, mcp_names)
+            kept += [k for e in evs if (k := _kept(e))]
         if isinstance(content, str) and block["name"] not in ("read", "skill"):
             content = spill.spill(content, workspace.root, session.chat_id,
                                   f"{block['name']}-{block['id'][-6:]}")
         results.append({"type": "tool_result", "tool_use_id": block["id"],
                         "content": content, "is_error": failed})
-    session.messages.append({"role": "user", "content": results})
+    session.messages.append({"role": "user", "content": results, **({"ui": kept} if kept else {})})
     await asyncio.shield(session.checkpoint())
 
 
@@ -600,7 +620,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                               handlers, mcp_names, workspace)
                 raise
 
-            results, terminal, waiting, cards = [], False, False, []
+            results, terminal, waiting, cards, kept = [], False, False, [], []
             for block, (out, ms) in zip(blocks, timed):
                 # `ok` routes the result; `good` is the outcome, and a returned error is one
                 ok = not isinstance(out, BaseException)
@@ -614,6 +634,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 if not ok: out = f"Error: {_cause(out)}"
                 content, evs, waits = _shape(block, out, ok, handlers, mcp_names)
                 for ev in evs: yield ev
+                kept += [k for e in evs if (k := _kept(e))]
                 if waits:
                     waiting = True   # the person has to answer before anything else can happen
                     cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
@@ -630,7 +651,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # A card is a `ui` event, which the transcript does not keep — so a
             # run that ends waiting looks finished after a reload, with nothing to
             # approve. Ride it on the message the batch already writes.
-            messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {})})
+            messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {}),
+                             **({"ui": kept} if kept else {})})
             await session.checkpoint()
             if waiting:
                 terminal = True

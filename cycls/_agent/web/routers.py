@@ -97,11 +97,14 @@ def to_ui_messages(raw):
                     # assistant turn that ran the search, where the live stream
                     # put them (after the search step, before the answer).
                     if out and out[-1]["role"] == "assistant":
-                        for b in c:
-                            if b.get("tool_use_id") not in search_ids or b.get("is_error"):
+                        kept = [p for p in msg.get("ui") or () if isinstance(p, dict)]   # any tool's sources and files
+                        stored = {p.get("id") for p in kept}
+                        for b in c:   # a search saved before the batch kept its own
+                            if b.get("tool_use_id") not in search_ids or b.get("tool_use_id") in stored or b.get("is_error"):
                                 continue
                             if rows := _search_rows(b.get("content")):
                                 out[-1]["parts"].append({"type": "sources", "sources": rows, "id": b.get("tool_use_id")})
+                        out[-1]["parts"] += kept
                     # A run that ended waiting on the person: the card is stored
                     # on the batch, because `ui` events never reach the
                     # transcript. Without this a reload shows a finished-looking

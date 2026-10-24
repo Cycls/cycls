@@ -533,6 +533,27 @@ describe("sources — citation parts from web search", () => {
     expect(sources[1].sources).toEqual(rows("argaam.com"));
   });
 
+  test("two pictures in a row are two parts, and the limit a reply reports reaches the chat", async () => {
+    // A part of the same kind used to merge as a text delta, and one with no string to merge was dropped.
+    global.fetch = vi.fn(async () =>
+      sseLines([
+        JSON.stringify({ type: "usage", used: 11, limit: 14, resets: "2027-01-01" }),
+        JSON.stringify({ type: "image", src: "https://img.test/1.png" }),
+        JSON.stringify({ type: "image", src: "https://img.test/2.png" }),
+        JSON.stringify({ type: "text", text: "Two takes." }),
+      ]),
+    ) as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    const seen = vi.fn();
+    act(() => result.current.setUIHandler(seen));
+    await act(async () => { await result.current.send("hi"); });
+
+    expect(result.current.messages[1].parts!.map((p: any) => p.src ?? p.type))
+      .toEqual(["usage", "https://img.test/1.png", "https://img.test/2.png", "text"]);
+    expect(seen).toHaveBeenCalledWith(expect.objectContaining({ action: "usage", used: 11, limit: 14 }));
+  });
+
   test("a sources part survives alongside the search step and the answer", async () => {
     global.fetch = vi.fn(async () =>
       sseLines([

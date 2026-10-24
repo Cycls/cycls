@@ -118,8 +118,9 @@ Yield these from app functions:
 - `{"type": "table", "headers": [...]}` / `{"row": [...]}` - Tables
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
-- `{"type": "image", "src": "...", "alt": "...", "caption": "..."}`
-- `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin
+- `{"type": "image", "src": "...", "alt": "...", "caption": "..."}` - pictures side by side make a grid; a workspace picture opens in the canvas
+- `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin, and by any tool as `_ui` with optional `label`, `quote`, `status`, `note`; they survive a reload
+- `{"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}` - a limit, sent with a reply: a line over the composer in its last fifth, a thank-you note in place of the reply once used up
 - `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history (also `open_canvas`, `suggest`, `ask` — see docs/tutorial.md)
 
 ## Environment Variables

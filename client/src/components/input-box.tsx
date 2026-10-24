@@ -369,7 +369,7 @@ export function InputBox({
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
         <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} onToggleConnector={onToggleConnector} disabled={isStreaming} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} onToggleConnector={onToggleConnector} />
           )}
           <button
             type="button"
@@ -379,8 +379,7 @@ export function InputBox({
               setLang(next);
               track("language_changed", { to: next, source: "composer" });
             }}
-            disabled={isStreaming}
-            className={`flex h-8 items-center justify-center rounded-full px-2.5 transition text-xs font-semibold ${isStreaming ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
+            className="flex h-8 cursor-pointer items-center justify-center rounded-full px-2.5 text-xs font-semibold text-muted-foreground transition hover:bg-secondary hover:text-foreground"
             aria-label="Toggle language"
           >
             {getLang() === "en" ? "عربي" : "En"}
@@ -400,7 +399,7 @@ export function InputBox({
           </div>
         ) : (
         <div className="flex items-center gap-1">
-          {voice && <MicButton listening={listening} transcribing={transcribing} disabled={isStreaming} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
+          {voice && <MicButton listening={listening} transcribing={transcribing} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
           {/* A filled composer stays sendable mid-run — the message queues and
               fires when the reply finishes — so send and stop sit side by
               side while streaming. Empty composer, streaming: stop only. */}
@@ -435,13 +434,12 @@ export function InputBox({
   );
 }
 
-function MicButton({ listening, transcribing, disabled, onStart, onStop, onCancel }: { listening: boolean; transcribing: boolean; disabled: boolean; onStart: () => void; onStop: () => void; onCancel: () => void }) {
+function MicButton({ listening, transcribing, onStart, onStop, onCancel }: { listening: boolean; transcribing: boolean; onStart: () => void; onStop: () => void; onCancel: () => void }) {
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); transcribing ? onCancel() : listening ? onStop() : onStart(); }}
-      disabled={disabled && !transcribing}
-      className={`flex size-8 items-center justify-center rounded-full transition ${disabled && !listening && !transcribing ? "text-muted-foreground opacity-30 cursor-not-allowed" : listening ? "bg-foreground text-background animate-pulse cursor-pointer" : transcribing ? "text-muted-foreground hover:text-foreground cursor-pointer" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
+      className={`flex size-8 items-center justify-center rounded-full transition ${listening ? "bg-foreground text-background animate-pulse cursor-pointer" : transcribing ? "text-muted-foreground hover:text-foreground cursor-pointer" : "text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"}`}
       aria-label={listening ? "Stop recording" : transcribing ? "Cancel transcription" : "Start recording"}
     >
       <svg className={`size-5${transcribing ? " animate-pulse [animation-duration:0.9s]" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -454,18 +452,18 @@ function MicButton({ listening, transcribing, disabled, onStart, onStop, onCance
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onOpenSkills, onToggleConnector, disabled }: {
+function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onOpenSkills, onToggleConnector }: {
   onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void; onOpenSkills?: () => void;
-  onToggleConnector?: (c: Connector, on: boolean) => void; disabled?: boolean;
+  onToggleConnector?: (c: Connector, on: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const btnClass = `flex size-8 items-center justify-center rounded-2xl transition ${disabled ? "text-muted-foreground opacity-30 cursor-not-allowed" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80 cursor-pointer"}`;
+  const btnClass = "flex size-8 cursor-pointer items-center justify-center rounded-2xl text-muted-foreground transition hover:bg-secondary/80 hover:text-foreground";
   const item = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
   const pick = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); setOpen(false); fn?.(); };
 
   if (!onOpenFiles && !onOpenConnectors && !onOpenSkills) {
     return onOpenFilePicker ? (
-      <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} disabled={disabled} className={btnClass} aria-label="Attach file">
+      <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} className={btnClass} aria-label="Attach file">
         <Icon name="paperclip" className="size-5" />
       </button>
     ) : null;
@@ -473,7 +471,7 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
 
   return (
     <>
-      <button type="button" onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }} disabled={disabled} className={btnClass} aria-label="Add">
+      <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(!open); }} className={btnClass} aria-label="Add">
         <Icon name="plus" className="size-5" />
       </button>
       {open && (

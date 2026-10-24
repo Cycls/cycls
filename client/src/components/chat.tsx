@@ -24,7 +24,8 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig, SendExtra, Part } from "../hooks/use-chat";
+import { UpgradeContext, UsageLine, nearLimit, usedUp } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
@@ -88,7 +89,7 @@ export interface FilesPanelProps {
   onRestoreTrash?: (id: string, kind: string, method: string) => Promise<string>;
   onPurgeTrash?: (id: string, kind: string) => Promise<void>;
   onEmptyTrash?: () => Promise<void>;
-  onOpenFile: (path: string) => Promise<string>;
+  onOpenFile: (path: string, silent?: boolean) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: WriteFile;   // binary too — the .fig editor writes raw bytes
   writeNew?: (path: string, data: BlobPart) => Promise<string>;  // never overwrites: the server picks a free name
@@ -373,10 +374,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
 
   const handleSubmitRef = useRef<(overrideText?: string, origin?: string) => void>(() => {});
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
-  const openPricing = useCallback((payer: "user" | "organization", source: string) => {
+  const [pricingWhy, setPricingWhy] = useState<string | undefined>();   // "limit" when the agent's limit opened it
+  const openPricing = useCallback((payer: "user" | "organization", source: string, why?: string) => {
     setPricingFor(payer);
-    track("plan_modal_opened", { payer_type: payer, source });
+    setPricingWhy(why);
+    track("plan_modal_opened", { payer_type: payer, source, ...(why ? { why } : {}) });
   }, []);
+  const upgrade = useCallback(() => openPricing(activeOrg ? "organization" : "user", "usage", usedUp(usageRef.current) ? "limit" : undefined),
+    [openPricing, activeOrg]);
+  const upgradeWith = useMemo(() => ({ upgrade, agent: meta?.name || name }), [upgrade, meta?.name, name]);
+  // The agent's limit, as its last reply reported it. The ref is read by the same stream's plans event.
+  const [usage, setUsage] = useState<Part | null>(null);
+  const usageRef = useRef<Part | null>(null);
   const closePricing = useCallback((method: string) => {
     setPricingFor((cur) => {
       if (cur) track("plan_modal_closed", { payer_type: cur, method });
@@ -392,11 +401,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useEffect(() => {
     if (!setUIHandler) return;
     setUIHandler((ev) => {
-      if (ev.action === "open_plan_modal") {
+      if (ev.action === "usage") {
+        usageRef.current = ev as unknown as Part;
+        setUsage(usageRef.current);
+      } else if (ev.action === "open_plan_modal") {
         // The agent blocked the user — a paywall, not a curious plans click.
-        track("paywall_shown", { reason: ev.reason || "unspecified" });
         if (ev.reason === "limit") track("limit_reached", {});
-        openPricing(activeOrg ? "organization" : "user", "agent_event");
+        // A limit opens the plans by itself once a period on this device; after that the note in the reply carries it.
+        const u = usageRef.current;
+        if (ev.reason === "limit" && usedUp(u) && once(`cycls_plans_shown:${name}:${u.resets ?? ""}`)) return;
+        track("paywall_shown", { reason: ev.reason || "unspecified" });
+        openPricing(activeOrg ? "organization" : "user", "agent_event", typeof ev.reason === "string" ? ev.reason : undefined);
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
         const done = ev.path;
         track("artifact_completed", { path: done, kind: ext(done) });
@@ -600,6 +615,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setTimeout(() => scrollToBottom(), 0);
   }, [isStreaming, onSend, scrollToBottom, chatId]);
 
+  // A picture in a message is a workspace file, fetched with the person's credentials. Silent: a picture since
+  // deleted shows its placeholder, not an error.
+  const openFileQuiet = files?.onOpenFile;
+  const resolveMedia = useMemo(() => (openFileQuiet ? (p: string) => openFileQuiet(p, true) : undefined), [openFileQuiet]);
+
   // Newest step on the transcript — a run this tab never streamed still has one.
   const currentStep = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -652,6 +672,21 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     });
     return () => setRestoreHandler(null);
   }, [setRestoreHandler, connectors]);
+
+  // "Send now": the message goes to the front, and a reply still running stops so it can go — the end of the run
+  // drains it, as it drains any queue. A held queue sends it at once.
+  const sendNow = useCallback((id: string) => {
+    const hit = queuedRef.current.find((m) => m.id === id);
+    if (!hit) return;
+    const rest = queuedRef.current.filter((m) => m.id !== id);
+    heldRef.current = false;
+    track("queued_message_sent", { chat_id: chatId, remaining: rest.length, now: true });
+    if (isStreaming) { queuedRef.current = [hit, ...rest]; setQueued(queuedRef.current); onStop(); return; }
+    queuedRef.current = rest;
+    setQueued(rest);
+    onSend(hit.text, hit.attachments, "queued", hit.extra);
+    setTimeout(() => scrollToBottom(), 0);
+  }, [chatId, isStreaming, onStop, onSend, scrollToBottom]);
 
   const dropQueued = useCallback((id: string) => {
     queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
@@ -1126,6 +1161,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       {/* rtl:flex-row-reverse keeps the canvas on the right in Arabic */}
       <div className="flex min-h-0 flex-1 rtl:flex-row-reverse">
       <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && rightExpanded && rightOpen && "hidden")}>
+      <UpgradeContext.Provider value={upgradeWith}>
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
@@ -1193,9 +1229,13 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                           ? onRegenerate : undefined
                       }
                       onOpenFile={openFileInCanvas}
+                      resolveMedia={resolveMedia}
                     />
                   );
-                })}</ApprovalContext.Provider>
+                })}
+                {runStatus === "interrupted" && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
+                  <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
+                )}</ApprovalContext.Provider>
                 </ConnectorsContext.Provider>
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
@@ -1236,15 +1276,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>
-                  {queued.map((m) => (
-                    <QueuedChip
-                      key={m.id}
-                      text={m.text}
-                      held={heldRef.current}
-                      onEdit={() => editQueued(m.id)}
-                      onDismiss={() => dropQueued(m.id)}
-                    />
-                  ))}
+                  {queued.length > 0 && (
+                    <MessageQueue items={queued} held={heldRef.current} onEdit={editQueued} onDrop={dropQueued} onSendNow={sendNow} />
+                  )}
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
                   {runStatus === "running" && !attached && (
@@ -1261,44 +1295,40 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     onDismiss={() => setFollowUp(null)}
                   />
                 )}
+                {nearLimit(usage) && <UsageLine usage={usage} />}
                 <InputBox {...inputProps} />
               </div>
             </div>
           </>
         ))}
       </LayoutGroup>
+      </UpgradeContext.Provider>
 
       {pricingFor && (
-        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
-          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
-            <div className="flex items-center justify-between px-6 pt-5 pb-3">
-              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                {pricingFor === "organization" ? (
-                  activeOrg ? (
-                    <>
-                      <span>{t("orgPlansFor")}</span>
-                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
-                        {activeOrg.imageUrl && (
-                          <div
-                            className="size-4 rounded-full bg-secondary shrink-0"
-                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-                          />
-                        )}
-                        {activeOrg.name}
-                      </span>
-                    </>
-                  ) : t("orgPlans")
-                ) : t("personalPlans")}
+        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-end justify-center pointer-events-none sm:items-center">
+          <div className="pointer-events-auto flex max-h-[92vh] w-full flex-col rounded-t-2xl border border-border bg-background pb-[env(safe-area-inset-bottom)] shadow-xl sm:w-[440px] sm:rounded-2xl sm:pb-0">
+            <div className="flex items-center justify-between gap-3 px-5 pt-4">
+              <h2 className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
+                {pricingFor === "organization" && (activeOrg ? (
+                  <>
+                    <span>{t("orgPlansFor")}</span>
+                    <span className="inline-flex min-w-0 items-center gap-1.5 rounded-lg bg-secondary px-2.5 py-1 font-medium text-foreground">
+                      {activeOrg.imageUrl && (
+                        <div className="size-4 shrink-0 rounded-full bg-secondary" style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }} />
+                      )}
+                      <span className="truncate">{activeOrg.name}</span>
+                    </span>
+                  </>
+                ) : t("orgPlans"))}
               </h2>
-              <button
-                onClick={() => closePricing("dismiss")}
-                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              >
-                <Icon name="x" className="w-4 h-4" />
+              <button onClick={() => closePricing("dismiss")} aria-label={t("close")}
+                      className="shrink-0 cursor-pointer text-muted-foreground transition-colors hover:text-foreground">
+                <Icon name="x" className="size-4" />
               </button>
             </div>
-            <div className="px-6 pb-5 overflow-y-auto">
-              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
+            <div className="overflow-y-auto px-5 pb-5 pt-1">
+              <PricingCards payerType={pricingFor} why={pricingWhy} usage={usage} agent={meta?.name || name} setup={config?.plans}
+                            onSelect={() => closePricing("select")} onLater={() => closePricing("not_now")} />
             </div>
           </div>
         </Popover>
@@ -1762,11 +1792,23 @@ function RunIndicator({ step, startedAt, onStop }: {
   );
 }
 
-function QueuedChip({ text, held, onEdit, onDismiss }: {
-  text: string;
+// Whether this device already did something under `key`, marking it done. With storage refused it never has.
+function once(key: string) {
+  try {
+    if (localStorage.getItem(key)) return true;
+    localStorage.setItem(key, "1");
+  } catch { /* private mode: every time */ }
+  return false;
+}
+
+// Messages written while the agent works, in the order they'll go: each can be edited (tap it), sent now, or
+// dropped. After Stop the queue holds until something is sent.
+function MessageQueue({ items, held, onEdit, onDrop, onSendNow }: {
+  items: { id: string; text: string }[];
   held: boolean;
-  onEdit: () => void;
-  onDismiss: () => void;
+  onEdit: (id: string) => void;
+  onDrop: (id: string) => void;
+  onSendNow: (id: string) => void;
 }) {
   return (
     <motion.div
@@ -1774,26 +1816,51 @@ function QueuedChip({ text, held, onEdit, onDismiss }: {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 4 }}
       transition={{ duration: 0.15 }}
-      className="mb-2 flex justify-end px-1"
+      className="mb-2 rounded-2xl border border-dashed border-border bg-secondary/30 px-2 py-1.5"
     >
-      <div className="flex max-w-full items-center gap-0.5 rounded-2xl border border-dashed border-border bg-secondary/40 py-1.5 ps-3.5 pe-1.5">
-        <button
-          onClick={onEdit}
-          title={held ? t("queuedHeld") : t("queuedHint")}
-          className="min-w-0 text-start text-sm leading-snug break-words text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          dir="auto"
-        >
-          {text}
-        </button>
-        <button
-          onClick={onDismiss}
-          className="shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-          aria-label={t("dismiss")}
-        >
-          <Icon name="x" className="size-3" />
-        </button>
+      <div className="flex items-center justify-between gap-3 px-1.5 pb-1 text-xs text-muted-foreground">
+        <span>{t("queueCount").replace("{n}", String(items.length))}</span>
+        <span className="truncate">{t(held ? "queueHeldNote" : "queueSendsAfter")}</span>
       </div>
+      <ul className="flex flex-col">
+        <AnimatePresence initial={false}>
+          {items.map((m) => (
+            <motion.li key={m.id} layout initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                       transition={{ duration: 0.15 }} className="flex items-center gap-1 rounded-xl py-0.5 ps-1.5 hover:bg-secondary/60">
+              <Icon name="arrow-right" className="size-3 shrink-0 text-muted-foreground/70 rtl:-scale-x-100" />
+              <button onClick={() => onEdit(m.id)} title={held ? t("queuedHeld") : t("queuedHint")} dir="auto"
+                      className="min-w-0 flex-1 cursor-pointer truncate text-start text-sm text-foreground/80 transition-colors hover:text-foreground">
+                {m.text}
+              </button>
+              <button onClick={() => onSendNow(m.id)}
+                      className="shrink-0 cursor-pointer rounded-full px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
+                {t("queueSendNow")}
+              </button>
+              <button onClick={() => onDrop(m.id)} aria-label={t("queueRemove")}
+                      className="shrink-0 cursor-pointer rounded-full p-1.5 text-muted-foreground/60 transition-colors hover:bg-secondary hover:text-foreground">
+                <Icon name="x" className="size-3" />
+              </button>
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ul>
     </motion.div>
+  );
+}
+
+// A run the server lost before it finished (a deploy, a crash, its time cap) ends the chat here, not in silence.
+function ContinueLine({ onContinue }: { onContinue: () => void }) {
+  return (
+    <div className="flex w-full max-w-3xl flex-wrap items-center gap-2.5 px-6 pb-4 text-[13px] text-muted-foreground">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="size-4" aria-hidden>
+        <path d="M12 21a9 9 0 100-18 9 9 0 000 18zM10 15V9m4 6V9" />
+      </svg>
+      <span>{t("runCutOff")}</span>
+      <button type="button" onClick={onContinue}
+              className="cursor-pointer rounded-full border border-border px-3 py-1.5 text-foreground transition-colors hover:bg-secondary">
+        {t("continueRun")}
+      </button>
+    </div>
   );
 }
 

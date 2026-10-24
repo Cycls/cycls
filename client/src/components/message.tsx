@@ -5,12 +5,13 @@ import { ThinkingPart } from "./parts/thinking-part";
 import { CodePart } from "./parts/code-part";
 import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
-import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
 import { ApprovalCard } from "./approval-card";
 import { GlowStar, Star } from "./cycls-star";
 import { StepGroup } from "./parts/step-group";
 import { FilePart } from "./parts/file-part";
+import { Gallery, IMAGE_FILE } from "./parts/gallery";
+import { UsageNote, usedUp } from "./usage";
 import { SelectionChip } from "./selection-chip";
 import { SourcesPart } from "./parts/sources-part";
 import { AttachmentBody } from "./attachment-body";
@@ -48,19 +49,12 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
           onRetry={part.style === "error" ? onRetry : undefined}
         />
       );
-    case "image":
-      return (
-        <ImagePart
-          key={index}
-          src={part.src || ""}
-          alt={part.alt}
-          caption={part.caption}
-        />
-      );
     case "sources":
       return <SourcesPart key={index} sources={part.sources || []} />;
     case "card":   // a confirm card, where the agent asked; other cards drive the composer
       return part.card?.action === "confirm" ? <ApprovalCard key={index} part={part} /> : null;
+    case "usage":   // only once nothing is left: before that it is the line over the message box
+      return <UsageNote key={index} usage={part} />;
     case "step":
       return (
         <StepPart
@@ -88,18 +82,21 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
 }
 
 // Successful canvas calls are deliverables — they render as file cards and
-// must never fold into a step group.
-function groupKind(p: Part) {
-  if (p.type === "step" && p.tool_name === "Canvas" && p.step && p.ok !== false) return "file";
+// must never fold into a step group. A picture is shown as itself, beside the
+// pictures next to it, and one a tool is still making holds its frame there.
+function groupKind(p: Part, live?: boolean) {
+  if (p.type === "step" && p.tool_name === "Canvas" && p.step && p.ok !== false) return IMAGE_FILE.test(p.step) ? "media" : "file";
+  if (p.type === "image" && p.src) return "media";
+  if (p.type === "step" && p.picture && live) return "media";
   return p.type;
 }
 
-function groupParts(parts: Part[]) {
+function groupParts(parts: Part[], live?: boolean) {
   const groups: { kind: string; items: Part[]; startIndex: number }[] = [];
   for (let i = 0; i < parts.length; i++) {
-    const kind = groupKind(parts[i]);
+    const kind = groupKind(parts[i], live);
     const last = groups[groups.length - 1];
-    if (kind === "step" && last?.kind === "step") {
+    if ((kind === "step" || kind === "media") && last?.kind === kind) {
       last.items.push(parts[i]);
     } else {
       groups.push({ kind, items: [parts[i]], startIndex: i });
@@ -114,6 +111,7 @@ export function MessageBubble({
   onRetry,
   onRegenerate,
   onOpenFile,
+  resolveMedia,
 }: {
   message: Message;
   isStreaming?: boolean;
@@ -122,6 +120,7 @@ export function MessageBubble({
   // would mean truncating the transcript back to it, which the API doesn't do.
   onRegenerate?: () => void;
   onOpenFile?: (path: string) => void;
+  resolveMedia?: (path: string) => Promise<string>;   // a workspace file → a URL its picture can show from
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -177,8 +176,11 @@ export function MessageBubble({
   // depend on the reader opening a step.
   const byCall = new Map<string, Source[]>();
   for (const p of parts) if (p.type === "sources" && p.id && p.sources?.length) byCall.set(p.id, p.sources);
+  // A picture a tool made shows as itself, so its step goes; one that failed keeps its row.
+  const made = new Set(parts.flatMap((p) => (p.type === "step" && p.id?.endsWith(":file") ? [p.id.slice(0, -5)] : [])));
   const rendered = parts
     .filter((p) => p.type !== "sources" && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")))
+    .filter((p) => !(p.type === "step" && p.picture && p.id && made.has(p.id)) && !(p.type === "usage" && !usedUp(p)))
     .map((p) => (p.type === "step" && p.id && byCall.has(p.id) ? { ...p, sources: byCall.get(p.id) } : p));
   const isEmpty = rendered.length === 0;
 
@@ -220,9 +222,11 @@ export function MessageBubble({
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {isEmpty && isStreaming && <Loader />}
 
-        {groupParts(rendered).map((group, gi, all) => {
+        {groupParts(rendered, isStreaming).map((group, gi, all) => {
           if (group.kind === "step")
             return <StepGroup key={gi} items={group.items} live={isStreaming && gi === all.length - 1} />;
+          if (group.kind === "media")
+            return <Gallery key={gi} items={group.items} resolve={resolveMedia} onOpenFile={onOpenFile} />;
           if (group.kind === "file")
             return <FilePart key={gi} path={group.items[0].step || ""} onOpen={onOpenFile} />;
           return group.items.map((part, i) =>

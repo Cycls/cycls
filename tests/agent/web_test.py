@@ -1589,6 +1589,23 @@ def test_mobile_app_links_reach_the_page(tmp_path):
         cycls.Web().mobile_app(android="com.cycls.app")
 
 
+def test_the_plans_window_setup_reaches_the_page():
+    """Web.plans: the ways checkout takes payment (only marks the SDK ships), a local currency at a fixed rate,
+    and plan words by slug, all in the browser's config."""
+    import cycls
+
+    @cycls.agent(web=cycls.Web().plans(pay=("apple_pay", "visa"), currency=("SAR", 3.75), words={"pro": {"ar": {"name": "برو"}}}),
+                 volumes={"/workspace": cycls.Volume("test-chats")})
+    async def my_agent(context):
+        yield "hi"
+    assert my_agent.config.public()["plans"] == {"pay": ["apple_pay", "visa"], "currency": ["SAR", 3.75],
+                                                 "words": {"pro": {"ar": {"name": "برو"}}}}
+    with pytest.raises(ValueError, match="no mark for"):
+        cycls.Web().plans(pay=("mada",))
+    with pytest.raises(ValueError, match="currency"):
+        cycls.Web().plans(currency=("riyal", 0))
+
+
 # ---- Files: catalog cache, @-search, kind, sort ----
 
 def _seed(tmp_path, tree):

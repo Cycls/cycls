@@ -15,6 +15,7 @@ from cycls._app.auth import JWT
 
 
 THEMES = ["default", "dev"]
+PAY_MARKS = {"apple_pay", "google_pay", "visa", "mastercard"}   # the official marks the plans window ships
 
 
 class PostHog:
@@ -78,6 +79,7 @@ class Web:
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
         self._mobile_app: Optional[dict] = None
+        self._plans: Optional[dict] = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
         self._workspaces: Optional[str] = None
@@ -283,6 +285,19 @@ class Web:
             if not v.startswith("https://"):
                 raise ValueError(f"not a store link: {v!r}")
         return self._copy(_mobile_app=links or None)
+
+    def plans(self, *, pay=(), currency=None, words=None):
+        """How the plans window shows what checkout sells. `pay`: the ways checkout takes payment, shown
+        under its button as each brand's official mark, in this order: "apple_pay", "google_pay", "visa",
+        "mastercard". List only what it takes. `currency`: ("SAR", 3.75) shows each price also in a local
+        currency, at that fixed rate. `words`: names, one-liners and features in other languages, by the
+        billing provider's slug for each plan and feature: {"pro": {"ar": {"name": "برو", "description": ...}}}."""
+        unknown = set(pay) - PAY_MARKS
+        if unknown:
+            raise ValueError(f"no mark for {sorted(unknown)}; known: {sorted(PAY_MARKS)}")
+        if currency is not None and not (isinstance(currency[0], str) and len(currency[0]) == 3 and currency[1] > 0):
+            raise ValueError(f'currency is ("SAR", 3.75): a code and a positive rate; got {currency!r}')
+        return self._copy(_plans={"pay": list(pay), "currency": list(currency) if currency else None, "words": words or None})
 
     def workspaces(self, create: str = "member"):
         """Enable multi-workspace mode (docs/workspaces.md): every user gets a
