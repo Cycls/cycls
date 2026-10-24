@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
-import { Icon, IconButton } from "./icon";
+import { Icon } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
 import { isHtml, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
 import { AppBanner } from "./app-banner";
@@ -9,7 +9,7 @@ import type { Message } from "../hooks/use-chat";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
-import { toggleDark, cn } from "../lib/utils";
+import { cn } from "../lib/utils";
 
 interface Author {
   author_name?: string;
@@ -108,7 +108,7 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
   if (loading) {
     return (
       <div dir="ltr" className="flex h-dvh flex-col bg-background">
-        <ShareBar signedIn={signedIn} agent={agent} />
+        <ShareBar signedIn={signedIn} agent={agent} onSignIn={onSignIn} />
         <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">{t("loading")}</div>
       </div>
     );
@@ -117,7 +117,7 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
   if (error) {
     return (
       <div dir="ltr" className="flex h-dvh flex-col bg-background">
-      <ShareBar signedIn={signedIn} agent={agent} />
+      <ShareBar signedIn={signedIn} agent={agent} onSignIn={onSignIn} />
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <div className="text-muted-foreground text-sm">{error.message}</div>
         {error.signIn && onSignIn && (
@@ -134,8 +134,8 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
   }
 
   if (!data) return null;
-  if (data.type === "file") return <SharedFile share={data} getToken={getToken} signedIn={signedIn} agent={agent} />;
-  return <SharedChat share={data} getToken={getToken} signedIn={signedIn} agent={agent} />;
+  if (data.type === "file") return <SharedFile share={data} getToken={getToken} signedIn={signedIn} agent={agent} onSignIn={onSignIn} />;
+  return <SharedChat share={data} getToken={getToken} signedIn={signedIn} agent={agent} onSignIn={onSignIn} />;
 }
 
 // Canvas artifacts the conversation produced, in order — same derivation the
@@ -153,7 +153,7 @@ export function canvasArtifacts(messages: Message[]) {
 // every artifact pre-opened as a tab (same strip as the owner's canvas), the
 // final one active. A floating "continue" pill rides the scroll — the page's
 // one conversion affordance is never out of sight.
-function SharedChat({ share, getToken, signedIn, agent }: { share: ChatShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string }) {
+function SharedChat({ share, getToken, signedIn, agent, onSignIn }: { share: ChatShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string; onSignIn?: () => void }) {
   const params = new URLSearchParams(window.location.search);
   // Curated example (?example=1): product showcase, not user content — no
   // author chrome. Regular shares keep their attribution.
@@ -201,7 +201,7 @@ function SharedChat({ share, getToken, signedIn, agent }: { share: ChatShare; ge
 
   return (
     <div dir="ltr" className="h-dvh flex flex-col bg-background">
-      <ShareBar signedIn={signedIn} agent={agent} />
+      <ShareBar signedIn={signedIn} agent={agent} onSignIn={onSignIn} />
       <AppBanner />
 
       <div className="flex min-h-0 flex-1">
@@ -361,7 +361,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
 // read-only and over the token-scoped /share/.../file/ transport (public =
 // no bearer; org = viewer's bearer). Unrenderable types (docx/xlsx/zip) get a
 // name-preserving download instead of a corrupt blob.
-function SharedFile({ share, getToken, signedIn, agent }: { share: FileShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string }) {
+function SharedFile({ share, getToken, signedIn, agent, onSignIn }: { share: FileShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string; onSignIn?: () => void }) {
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
   const renderable = isRenderable(name);
@@ -398,7 +398,7 @@ function SharedFile({ share, getToken, signedIn, agent }: { share: FileShare; ge
   // The file is the page: one bar above it, and nothing around it.
   return (
     <div dir="ltr" className="flex h-dvh flex-col bg-background">
-      <ShareBar name={shownName(name)} author={share} signedIn={signedIn} agent={agent}>
+      <ShareBar name={shownName(name)} author={share} signedIn={signedIn} agent={agent} onSignIn={onSignIn}>
         {isHtml(name) && content != null && (
           <button onClick={openInTab} className={action} title={t("openInTab")}>
             <Icon name="arrow-up-right" className="size-4" /><span className="hidden sm:inline">{t("openInTab")}</span>
@@ -431,11 +431,16 @@ function SharedFile({ share, getToken, signedIn, agent }: { share: FileShare; ge
   );
 }
 
-// The one bar a shared page has: the logo, what is shared and by whom, its actions, and the way into Cycls.
-// A chat share passes no name: the conversation names itself below the bar.
-function ShareBar({ name, author, signedIn, agent, children }: {
-  name?: string; author?: Author; signedIn?: boolean; agent?: string; children?: React.ReactNode;
+const CTA = "shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background hover:opacity-90 transition-opacity";
+
+// The one bar a shared page has: the logo, what is shared and by whom, its actions, and the way into Cycls:
+// "Sign in" for a visitor (the sign-in page, back to this share), "Go to <agent>" once signed in. A chat
+// share passes no name: the conversation names itself below the bar. No theme toggle: a shared page
+// follows the system.
+function ShareBar({ name, author, signedIn, agent, onSignIn, children }: {
+  name?: string; author?: Author; signedIn?: boolean; agent?: string; onSignIn?: () => void; children?: React.ReactNode;
 }) {
+  const clicked = () => track("share_cta_clicked", { share_url: window.location.href, signed_in: !!signedIn });
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 sm:gap-3 sm:px-4">
       <a href="https://cycls.ai" className="shrink-0 text-foreground hover:opacity-80 transition-opacity" aria-label="Cycls">
@@ -445,13 +450,13 @@ function ShareBar({ name, author, signedIn, agent, children }: {
       {author && <span className="hidden shrink-0 sm:flex"><Byline author={author} small /></span>}
       <div className="flex-1" />
       {children}
-      <span className={cn(name && "hidden sm:inline-flex")}>
-        <IconButton name="moon" onClick={() => toggleDark("shared_view")} label={t("toggleTheme")} />
-      </span>
-      <a href="/" onClick={() => track("share_cta_clicked", { share_url: window.location.href, signed_in: !!signedIn })}
-        className="shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background hover:opacity-90 transition-opacity">
-        {t(signedIn ? "openAgent" : "tryAgent").replace("{name}", agent || "Cycls")}
-      </a>
+      {signedIn || !onSignIn ? (
+        <a href="/" onClick={clicked} className={CTA}>
+          {t(signedIn ? "goToAgent" : "tryAgent").replace("{name}", agent || "Cycls")}
+        </a>
+      ) : (
+        <button onClick={() => { clicked(); onSignIn(); }} className={cn(CTA, "cursor-pointer")}>{t("signIn")}</button>
+      )}
     </header>
   );
 }
