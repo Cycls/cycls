@@ -137,3 +137,43 @@ async def read_xlsx(data, name=None):
     if r.status_code >= 400:
         raise _refused(r)
     return r.json()
+
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def sheets_read(data, name, target=None, raw=False, max_chars=None):
+    """The agent's read: the workbook outlined and a sheet or range as a grid (formulas → values)."""
+    import json
+    request = {"name": name, "target": target, "raw": bool(raw)}
+    if max_chars:
+        request["maxChars"] = int(max_chars)
+    r = await _call("POST", "/v1/sheets/read", files={
+        "file": (name or "workbook.xlsx", bytes(data), _XLSX),
+        "request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json"),
+    })
+    if r.status_code >= 400:
+        raise _refused(r)
+    return r.json()["text"]
+
+
+async def sheets_apply(data, name, edits, create=None):
+    """The agent's edits run through the engine and written into the file →
+    {unchanged, bytes, mutations, ops, report}. `create` ({sheet?, rightToLeft?}) starts a new workbook
+    and needs no `data`."""
+    import base64
+    import json
+    request = {"name": name, "edits": list(edits or [])}
+    if create is not None:
+        request["create"] = create
+    files = {"request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json")}
+    if data is not None:
+        files["file"] = (name or "workbook.xlsx", bytes(data), _XLSX)
+    r = await _call("POST", "/v1/sheets/apply", files=files)
+    if r.status_code >= 400:
+        raise _refused(r)
+    body = r.json()
+    return {"unchanged": bool(body.get("unchanged")),
+            "bytes": base64.b64decode(body["file"]) if body.get("file") else None,
+            "mutations": body.get("mutations") or [], "ops": body.get("ops") or [],
+            "report": body.get("report") or ""}

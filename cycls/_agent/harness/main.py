@@ -24,6 +24,7 @@ from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_
                            design_tool, design_wanted)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
+from ..office.client import offered as office_offered
 from ..transcribe.client import configured as transcribe_configured
 from ..tools import skills as skills_mod
 
@@ -155,8 +156,10 @@ def _with_selection(content, sel):
     """The person's design selection as a text block for the model (the chat shows a chip)."""
     def node(n):
         return f'{n["name"]} ({n["type"]})' + (f' "{n["text"]}"' if n.get("text") else "")
-    # A design of several pages says which one they are on; a video, where its playhead was ("at 4.2 s").
-    where = (sel["path"] + (f' page {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
+    # A design of several pages says which one they are on; a workbook, its sheet; a video, where its
+    # playhead was ("at 4.2 s").
+    part = "sheet" if sel["path"].lower().endswith(".xlsx") else "page"
+    where = (sel["path"] + (f' {part} {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
              + (f' at {sel["time"]:g} s' if sel.get("time") is not None else "")
              + (f' › {sel["frame"]}' if sel.get("frame") else ""))
     line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
@@ -365,6 +368,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # in offers it only to the organisations on VIDEO_ORGS (cycls/_agent/video/client.py).
     if "Video" in allowed_tools and not video_offered(workspace):
         allowed_tools = [t for t in allowed_tools if t != "Video"]
+    # Likewise Sheets: on for the organisations on SHEETS_ORGS (cycls/_agent/office/client.py).
+    if "Sheets" in allowed_tools and not office_offered(workspace, "sheets"):
+        allowed_tools = [t for t in allowed_tools if t != "Sheets"]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     if not session.replay:   # a replay runs the saved turn again, as it was
         incoming = context.messages.raw[-1]

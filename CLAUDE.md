@@ -76,7 +76,7 @@ cycls/
     │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py a design's preview made ready, live.py rooms, stock.py photos, assets.py the media library
     │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
     ├── transcribe/         # cycls Transcribe tool + the mic, two engines: ElevenLabs Scribe (elevenlabs.py) and the cycls-transcribe service on Modal GPUs (client.py: Cohere Transcribe Arabic, Whisper); TRANSCRIBE_ENGINE picks the first; usage.py the daily allowance; docs/notes/transcribe.md
-    ├── office/             # Cycls Sheets / Cycls Docs: thin client to the cycls-office service (its own repo; Univer engine), org gating (SHEETS_ORGS/DOCS_ORGS); docs/notes/office.md
+    ├── office/             # Cycls Sheets / Cycls Docs: thin client to the cycls-office service (its own repo; Univer engine), org gating (SHEETS_ORGS/DOCS_ORGS), the agent's `sheets` tool (sheets.py: read / edit / create, live replay via sheets_command); docs/notes/office.md
     ├── paths.py            # a path a tool was given, kept inside the workspace
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design and Video are imported from their packages; ondemand.py swaps a tool's whole form in on first use
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
@@ -160,6 +160,7 @@ tests/
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
 │   ├── video_test.py            # Video tool: client, signed contract, short/whole forms + the ondemand seam, executor, ?as=player
+│   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events

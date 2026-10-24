@@ -321,12 +321,12 @@ def _clean_folder(raw):
 
 
 def _clean_selection(raw):
-    """A selection in an open design or video {path: a .fig or .video.html in the workspace, frame,
-    nodes: [{name, type, text?}], page?, time?}, capped; else None."""
+    """A selection in an open design, video or workbook {path: a .fig, .video.html or .xlsx in the
+    workspace, frame, nodes: [{name, type, text?}], page? (a workbook's sheet), time?}, capped; else None."""
     if not isinstance(raw, dict):
         return None
     path = raw.get("path")
-    if (not isinstance(path, str) or not path.lower().endswith((".fig", ".video.html")) or len(path) > 300
+    if (not isinstance(path, str) or not path.lower().endswith((".fig", ".video.html", ".xlsx")) or len(path) > 300
             or path.startswith("/") or "\\" in path or ".." in path.split("/")):
         return None
     nodes = []

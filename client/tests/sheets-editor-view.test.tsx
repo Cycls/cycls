@@ -4,7 +4,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OfficeEditorApi, SheetsOpened } from "../src/hooks/use-files";
-import { SheetsEditorView, SheetsOrPreview } from "../src/components/sheets-editor-view";
+import { flushAllSheetsEditors, SheetsEditorView, SheetsOrPreview } from "../src/components/sheets-editor-view";
+import { designSelection } from "../src/components/design-editor-view";
 
 afterEach(cleanup);
 
@@ -138,5 +139,89 @@ describe("saving from Cycls Sheets", () => {
     say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "2", snapshot: { sheetOrder: ["s1"] } });
     await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "abc123", { snapshot: { sheetOrder: ["s1"] }, ops: [] }, true));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+});
+
+describe("the agent's edits in Cycls Sheets", () => {
+  const types = (posted: Array<[unknown, string]>) => posted.map(([m]) => (m as { type: string }).type);
+  const last = (posted: Array<[unknown, string]>, type: string) =>
+    [...posted].reverse().find(([m]) => (m as { type: string }).type === type)?.[0] as Record<string, unknown> | undefined;
+  async function opened(a: OfficeEditorApi, live = false) {
+    const view = render(<SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" api={a} live={live} />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalled());
+    say("https://office.test", frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(types(posted)).toContain("load"));
+    const doc = (last(posted, "load") as { doc: string }).doc;
+    say("https://office.test", frame.contentWindow, { type: "loaded", doc });
+    return { posted, frame, doc, view };
+  }
+  const command = (detail: Record<string, unknown>) => act(() => {
+    window.dispatchEvent(new CustomEvent("cycls:sheets-command", { detail: { path: "b.xlsx", reload: false, ...detail } }));
+  });
+
+  test("while the agent works the editor is read-only under a banner, and editable again after", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    const { posted, view } = await opened(a, true);
+    expect(last(posted, "load")).toMatchObject({ readonly: true });
+    expect(last(posted, "readonly")).toMatchObject({ readonly: true });
+    expect(screen.getByTestId("sheets-live")).toBeTruthy();
+    command({ mutations: [], intent: "Totals added" });
+    expect(await screen.findByText(/Totals added/)).toBeTruthy();
+
+    view.rerender(<SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" api={a} live={false} />);
+    await waitFor(() => expect(last(posted, "readonly")).toMatchObject({ readonly: false }));
+    expect(screen.queryByTestId("sheets-live")).toBeNull();
+  });
+
+  test("an edit is replayed in the editor; once applied, the next save bases on the agent's version", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    const { posted, frame, doc } = await opened(a);
+    const mutations = [{ id: "sheet.mutation.set-range-values", params: { unitId: "book" } }];
+    command({ mutations, version: "agent1" });
+    command({ path: "other.xlsx", mutations, version: "x" });    // another file's: not this editor's
+    const sent = posted.filter(([m]) => (m as { type: string }).type === "command");
+    expect(sent).toHaveLength(1);
+    expect(sent[0][0]).toMatchObject({ doc, mutations });
+    say("https://office.test", frame.contentWindow, { type: "applied", doc, id: (sent[0][0] as { id: string }).id, ok: true });
+    say("https://office.test", frame.contentWindow, { type: "saved", doc, id: "1", snapshot: { sheetOrder: ["s1"] } });
+    await waitFor(() => expect(a.sheetsSave).toHaveBeenCalledWith("b.xlsx", "agent1", { snapshot: { sheetOrder: ["s1"] }, ops: [] }, false));
+  });
+
+  test("an edit that does not replay, or one sent to reload, reopens the saved file", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    const { posted, frame, doc } = await opened(a);
+    expect(a.sheetsOpen).toHaveBeenCalledTimes(1);
+    command({ mutations: [{ id: "sheet.mutation.x", params: {} }], version: "agent1" });
+    const id = (last(posted, "command") as { id: string }).id;
+    say("https://office.test", frame.contentWindow, { type: "applied", doc, id, ok: false });
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalledTimes(2));
+    command({ mutations: [], reload: true });
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalledTimes(3));
+  });
+
+  test("what the person selects is offered to the composer, the sheet as its page", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    const { frame, doc, view } = await opened(a);
+    say("https://office.test", frame.contentWindow, { type: "selection", doc, sheet: "الميزانية",
+      ranges: [{ a1: "B8:E8" }, { a1: "B4", text: "47,000.00" }, { nope: 1 }] });
+    expect(designSelection("b.xlsx")).toEqual({ path: "b.xlsx", frame: null, page: "الميزانية",
+      nodes: [{ name: "B8:E8", type: "cells" }, { name: "B4", type: "cell", text: "47,000.00" }] });
+    say("https://office.test", frame.contentWindow, { type: "selection", doc: "other@v", sheet: "x", ranges: [{ a1: "A1" }] });
+    expect(designSelection("b.xlsx")?.page).toBe("الميزانية");     // another document's: not heard
+    view.unmount();
+    expect(designSelection("b.xlsx")).toBeNull();                   // closed: nothing selected there
+  });
+
+  test("before a message is sent, an open editor saves what is unsaved", async () => {
+    const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+    const { posted, frame } = await opened(a);
+    let done: boolean | undefined;
+    void flushAllSheetsEditors(2000).then((ok) => { done = ok; });
+    await waitFor(() => expect(types(posted)).toContain("flush"));
+    expect(done).toBeUndefined();
+    say("https://office.test", frame.contentWindow, { type: "flushed", id: (last(posted, "flush") as { id: string }).id, ok: true });
+    await waitFor(() => expect(done).toBe(true));
   });
 });

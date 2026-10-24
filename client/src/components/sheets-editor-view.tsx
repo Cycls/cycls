@@ -4,6 +4,7 @@ import { useDarkMode } from "../hooks/use-dark-mode";
 import type { OfficeEditorApi, OfficeOpen, SheetsOpened } from "../hooks/use-files";
 import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
+import { publishSelection } from "./design-editor-view";
 import { SheetGlyph } from "./file-glyph";
 import { LoadingBar } from "./loading-bar";
 import { cn } from "../lib/utils";
@@ -15,19 +16,47 @@ import { cn } from "../lib/utils";
 // editor's exact origin only; editor → Cycls {source: "cycls-sheets", type, …}, heard only from that
 // origin and that frame.
 //   Cycls → editor   load {doc, name, snapshot, activeSheet, readonly}   theme   locale   readonly
-//                    written {doc, id, ok}   flush {id}   save
+//                    written {doc, id, ok}   flush {id}   save   command {doc, id, mutations}
 //   editor → Cycls   ready {protocol, features}   loaded {doc}   error {doc, message}
-//                    dirty {doc, dirty}   saved {doc, id, snapshot}   flushed {id, ok}
+//                    dirty {doc, dirty}   saved {doc, id, snapshot, ops}   flushed {id, ok}
+//                    applied {doc, id, ok}   selection {doc, sheet, ranges: [{a1, text?}]}
+// The selection is offered to the composer like a design's ("Add selection"): the sheet is its page,
+// each range a node, so the agent reads "[Selected in budget.xlsx page "Sheet1": B8:E8 (cells)]".
 // A save writes the editor's workbook back into the .xlsx through the service (only what differs
 // changes) and keeps the replaced version; a file changed elsewhere since it was opened asks first.
+// The agent's `sheets` edits are already in the file when they arrive (a `sheets_command` from the
+// chat): the editor replays them, read-only while the agent works; one that does not replay reopens
+// the file.
+
+// Mounted editors by path: saved before a message is sent, so the agent reads what the person sees.
+type Handle = { flush: (ms: number) => Promise<boolean> };
+const editors = new Map<string, Set<Handle>>();
+export const flushSheetsEditor = (path: string, ms = 3000) =>
+  Promise.all([...(editors.get(path) ?? [])].map((h) => h.flush(ms))).then((oks) => oks.every(Boolean));
+export const sheetsEditorsOpen = () => editors.size > 0;
+export const flushAllSheetsEditors = (ms = 1500) =>
+  Promise.all([...editors.values()].flatMap((set) => [...set]).map((h) => h.flush(ms))).then((oks) => oks.every(Boolean));
+
+/** A `sheets_command` event from the chat: the agent's edit, already written to `path`. */
+export type SheetsCommand = { path: string; mutations: unknown[] | null; version?: string; intent?: string; reload: boolean };
+export function sheetsCommandDetail(ev: Record<string, unknown>): SheetsCommand {
+  return {
+    path: String(ev.path),
+    mutations: Array.isArray(ev.mutations) ? ev.mutations : null,
+    version: typeof ev.version === "string" ? ev.version : undefined,
+    intent: typeof ev.intent === "string" ? ev.intent.slice(0, 80) : undefined,
+    reload: ev.reload === true,
+  };
+}
 
 /** Asks once per file whether this workspace opens it in Cycls Sheets; otherwise shows `preview`. */
-export function SheetsOrPreview({ path, name, api, preview, onDownload }: {
+export function SheetsOrPreview({ path, name, api, preview, onDownload, live }: {
   path: string;
   name: string;
   api: OfficeEditorApi;
   preview: ReactNode;
   onDownload?: () => void;
+  live?: boolean;
 }) {
   const [open, setOpen] = useState<OfficeOpen | null>(null);
   useEffect(() => {
@@ -40,7 +69,7 @@ export function SheetsOrPreview({ path, name, api, preview, onDownload }: {
   }, [api, path]);
   if (!open) return <LoadingBar />;
   return open.editor
-    ? <SheetsEditorView url={open.url} path={path} name={name} api={api} onDownload={onDownload} fallback={preview} />
+    ? <SheetsEditorView url={open.url} path={path} name={name} api={api} onDownload={onDownload} fallback={preview} live={live} />
     : <>{preview}</>;
 }
 
@@ -56,13 +85,14 @@ function modifiedLabel(iso: string | undefined): string {
   return t("sheetsLastModified").replace("{time}", time);
 }
 
-export function SheetsEditorView({ url, path, name, api, onDownload, fallback }: {
+export function SheetsEditorView({ url, path, name, api, onDownload, fallback, live = false }: {
   url: string;
   path: string;
   name: string;
   api?: OfficeEditorApi;
   onDownload?: () => void;
   fallback?: ReactNode;
+  live?: boolean;     // the agent is working: read-only, its edits replayed
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const slots = useContext(CanvasHeaderSlot);
@@ -82,6 +112,14 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
   const version = useRef("");       // what the next save names as its base
   const forceNext = useRef(false);  // "Keep mine": the next save writes over the newer file
   const saving = useRef<Promise<void> | null>(null);
+  const loadedRef = useRef(false);
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const [intent, setIntent] = useState<string | null>(null);   // what the agent's last edit did
+  const seq = useRef(0);
+  const commands = useRef(new Map<string, string | undefined>());   // command id → the file's version after it
+  const flushes = useRef(new Map<string, (ok: boolean) => void>());
+  const reopenRef = useRef<() => void>(() => {});
   // Never "*": anything sent goes to the editor's origin or nowhere.
   const origin = (() => {
     try {
@@ -122,7 +160,27 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
       const msg = e.data as { source?: string; type?: string; doc?: string };
       if (msg?.source !== "cycls-sheets") return;
       if (msg.type === "ready") setReady(true);
-      else if (msg.type === "loaded" && msg.doc === doc.current) setLoaded(true);
+      else if (msg.type === "loaded" && msg.doc === doc.current) { loadedRef.current = true; setLoaded(true); }
+      else if (msg.type === "applied" && msg.doc === doc.current) {
+        const { id, ok } = msg as { id?: string; ok?: boolean };
+        if (typeof id !== "string" || !commands.current.has(id)) return;
+        const after = commands.current.get(id);
+        commands.current.delete(id);
+        if (ok && after) version.current = after;   // the open workbook is the file again
+        else if (!ok) reopenRef.current();
+      } else if (msg.type === "selection" && msg.doc === doc.current) {
+        const { sheet, ranges } = msg as { sheet?: unknown; ranges?: unknown };
+        if (typeof sheet !== "string" || !Array.isArray(ranges)) return;
+        const nodes = ranges
+          .filter((r): r is { a1: string; text?: unknown } => !!r && typeof (r as { a1?: unknown }).a1 === "string")
+          .slice(0, 5)
+          .map((r) => ({ name: r.a1.slice(0, 40), type: r.a1.includes(":") ? "cells" : "cell",
+                         ...(typeof r.text === "string" && r.text ? { text: r.text.slice(0, 80) } : {}) }));
+        publishSelection({ path, frame: null, page: sheet.slice(0, 80), nodes });
+      } else if (msg.type === "flushed") {
+        const { id, ok } = msg as { id?: string; ok?: boolean };
+        if (typeof id === "string") { flushes.current.get(id)?.(ok === true); flushes.current.delete(id); }
+      }
       else if (msg.type === "error" && msg.doc === doc.current) setFailed(true);
       else if (msg.type === "dirty" && msg.doc === doc.current) {
         const d = (msg as { dirty?: boolean }).dirty;
@@ -133,19 +191,73 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
       }
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [origin]);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      publishSelection({ path, frame: null, nodes: [] });   // closed: nothing selected here any more
+    };
+  }, [origin, path]);
 
   // Send the workbook once both sides are ready (and again if the file's version changes).
   useEffect(() => {
     if (!ready || !opened) return;
     doc.current = `${path}@${opened.version}`;
     version.current = opened.version;
+    commands.current.clear();
+    loadedRef.current = false;
     setLoaded(false);
     setStatus("saved");
     setConflict(null);
-    post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable });
+    post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable || liveRef.current });
   }, [ready, opened, path, name, post, editable]);
+
+  // While the agent works the person watches; editing comes back when the turn ends.
+  useEffect(() => {
+    if (!ready) return;
+    post({ type: "readonly", readonly: !editable || live });
+    if (!live) setIntent(null);
+  }, [live, ready, editable, post]);
+
+  // The file again, as saved (an edit that did not replay, or one too large to send).
+  const reopen = useCallback(() => {
+    if (!api) return;
+    api.sheetsOpen(path).then(setOpened).catch(() => setFailed(true));
+  }, [api, path]);
+  reopenRef.current = reopen;
+
+  // The agent's edits (from chat.tsx).
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const d = (e as CustomEvent<SheetsCommand>).detail;
+      if (!d || d.path !== path) return;
+      if (d.intent) setIntent(d.intent);
+      if (d.reload || !d.mutations || !loadedRef.current) { reopen(); return; }
+      const id = `c${++seq.current}`;
+      commands.current.set(id, d.version);
+      post({ type: "command", doc: doc.current, id, mutations: d.mutations });
+    };
+    window.addEventListener("cycls:sheets-command", onCommand);
+    return () => window.removeEventListener("cycls:sheets-command", onCommand);
+  }, [path, post, reopen]);
+
+  // Save what is unsaved now (before a message goes): true once it is in the file.
+  useEffect(() => {
+    const handle: Handle = {
+      flush: (ms) => new Promise<boolean>((resolve) => {
+        if (!loadedRef.current || !editable) return resolve(true);
+        const id = `f${++seq.current}`;
+        const timer = window.setTimeout(() => { flushes.current.delete(id); resolve(false); }, ms);
+        flushes.current.set(id, (ok) => { window.clearTimeout(timer); resolve(ok); });
+        post({ type: "flush", id });
+      }),
+    };
+    const set = editors.get(path) ?? new Set<Handle>();
+    set.add(handle);
+    editors.set(path, set);
+    return () => {
+      set.delete(handle);
+      if (!set.size) editors.delete(path);
+    };
+  }, [path, post, editable]);
 
   // One save at a time; the editor sends the next once this one is answered.
   const save = async (id: string, snapshot: unknown, ops: unknown[]) => {
@@ -178,10 +290,9 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
   };
 
   const loadLatest = () => {
-    if (!api) return;
     setConflict(null);
     setOpened(null);
-    api.sheetsOpen(path).then(setOpened).catch(() => setFailed(true));
+    reopen();
   };
   const keepMine = () => {
     forceNext.current = true;
@@ -283,6 +394,12 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback }:
           {startItems && <span className="hidden sm:inline">{startItems}</span>}
           <div className="flex-1" />
           {endItems}
+        </div>
+      )}
+      {live && editable && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-[#EF8733]/10 px-3 py-1.5 text-xs" role="status" data-testid="sheets-live">
+          <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-[#EF8733]" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate" dir="auto">{t("sheetsAgentEditing")}{intent ? <span className="text-muted-foreground"> · {intent}</span> : null}</span>
         </div>
       )}
       {conflict !== null && (

@@ -489,7 +489,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   if (isSpreadsheet(fileKind(file))) {
     if (!content) return null;
     return officeEditor && !shared
-      ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} preview={<SpreadsheetView url={content} name={file.name} />} />
+      ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} preview={<SpreadsheetView url={content} name={file.name} />} />
       : <SpreadsheetView url={content} name={file.name} />;
   }
   if (is3d(fileKind(file))) {

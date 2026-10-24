@@ -27,6 +27,7 @@ import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
+import { flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
@@ -434,6 +435,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
         window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
+      } else if (ev.action === "sheets_command" && typeof ev.path === "string") {
+        // A `sheets` edit, already in the file: an open Sheets editor replays it (read-only until the
+        // turn ends); a preview of the file fetches it again.
+        const live = ev.path;
+        setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
+        window.dispatchEvent(new CustomEvent("cycls:sheets-command", { detail: sheetsCommandDetail(ev) }));
+        window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        track("ui_action", { action: "sheets_command" });
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
@@ -607,7 +616,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     heldRef.current = false;
     // Save the selected design first, so the agent reads what the person sees.
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
-    if (selection) void flushDesignEditor(selection.path, 1500).then(go);
+    // Unsaved edits in an open Sheets editor too.
+    const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
+    if (saving.length) void Promise.all(saving).then(go);
     else go();
   }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
 

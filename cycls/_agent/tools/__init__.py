@@ -43,6 +43,7 @@ from ..video.tool import VIDEO_PROMPT, video_tool
 from ..transcribe.tool import TRANSCRIBE_TOOL, transcribe_step
 from ..transcribe.run import exec_transcribe
 from ..video.run import _exec_video, _video_step
+from ..office.sheets import SHEETS_PROMPT, SHEETS_TOOL, exec_sheets, sheets_step
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
@@ -444,6 +445,12 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import transcribe as _transcribe
             if _transcribe.configured():
                 tools.append(TRANSCRIBE_TOOL)
+        elif name == "Sheets":
+            # like Video: offered when the office service is configured (OFFICE_URL); who may use it
+            # (SHEETS_ORGS) is decided per run, where the organisation is known (harness/main.py)
+            from cycls._agent.office import client as _office
+            if _office.configured():
+                tools.append(SHEETS_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -1128,6 +1135,9 @@ _TOOLS = {
     "transcribe": Tool(lambda inp, ws, ctx=None, **_: exec_transcribe(inp, ws, ctx), transcribe_step,
                        interrupted="A transcription that was started keeps running on the service: call "
                                    "transcribe again with the same path to collect it."),
+    "sheets":     Tool(lambda inp, ws, ctx=None, **_: exec_sheets(inp, ws, ctx), sheets_step, prompt=SHEETS_PROMPT,
+                       interrupted="The file is as it was before this call, or has the whole edit: read it "
+                                   "before changing it again."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None)),
