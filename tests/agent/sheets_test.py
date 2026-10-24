@@ -197,6 +197,32 @@ def test_create_makes_a_new_workbook_and_opens_it(monkeypatch, tmp_path):
     assert "already exists" in again
 
 
+def test_create_without_rtl_reads_the_workbook_s_language(monkeypatch, tmp_path):
+    """DeepSeek dropped the optional `rtl` on a real create (super-dev, 2026-10-24) and needed a second call."""
+    _on(monkeypatch)
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"])["create"])
+        return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(),
+                                         "mutations": [], "ops": [], "report": ""})
+
+    _mock(monkeypatch, handler)
+    arabic_values = [{"op": "set_values", "target": "A1", "values": [["البند", "الربع الأول"]]}]
+    _run({"action": "create", "path": "a.xlsx", "ops": arabic_values}, _ws(tmp_path))
+    _run({"action": "create", "path": "b.xlsx", "target": "الميزانية", "ops": []}, _ws(tmp_path))
+    _run({"action": "create", "path": "c.xlsx", "target": "Budget", "ops": [{"op": "set_values", "target": "A1", "values": [["Item"]]}]}, _ws(tmp_path))
+    _run({"action": "create", "path": "d.xlsx", "rtl": False, "ops": arabic_values}, _ws(tmp_path))
+    assert [c["rightToLeft"] for c in seen] == [True, True, False, False]
+    assert seen[0]["sheet"] == "ورقة1" and seen[2]["sheet"] == "Budget"
+
+
+def test_notes_and_names_are_ops_the_tool_takes():
+    assert sheets._check_ops([{"op": "note", "target": "B3", "text": "راجع"}, {"op": "define_name", "target": "D2:D9", "name": "Total"}]) is None
+    items = sheets.SHEETS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
+    assert {"note", "define_name"} <= set(items["op"]["enum"]) and "text" in items
+
+
 @pytest.mark.parametrize("inp, says", [
     ({"action": "draw", "path": "b.xlsx"}, "action must be one of"),
     ({"action": "read", "path": ""}, "path"),

@@ -49,10 +49,12 @@ changes go through `sheets`, not openpyxl (pandas stays fine for analysis).
   formulas → values, about 8k characters at most; notices of what the file keeps but Sheets doesn't edit.
 - `edit` → `ops` run in order on the service in the same engine the editor runs: `set_values`, `set_formulas`,
   `format`, `clear`, `merge`/`unmerge`, `insert_rows`/`delete_rows`/`insert_cols`/`delete_cols`,
-  `add_sheet`/`rename_sheet`/`delete_sheet`, `freeze`, `column_width`, `sort`, `set_direction`. Under the file's
+  `add_sheet`/`rename_sheet`/`delete_sheet`, `freeze`, `column_width`, `sort`, `set_direction`, `note` (`text`; empty
+  removes it), `define_name` (`name`, Arabic names allowed). Under the file's
   lock: read → apply → `write_fig(by="agent")`; a save in the editor meanwhile makes it apply once more to the newer
   file. The reply reads the changed ranges back and lists formula errors.
 - `create` → a blank workbook (first sheet named by `target`, `rtl` for Arabic) and then `ops`; opens in the canvas.
+  Without `rtl`, an Arabic sheet name or Arabic values make it right to left (DeepSeek dropped the flag on super-dev).
 - Every call logs `sheets_call` with its argument names and op names.
 
 The `_ui` event `sheets_command {path, mutations, version, intent}` carries the engine's mutations. An open editor
@@ -87,6 +89,7 @@ never saved or undone and never marks the workbook dirty.
 
 ## Not built yet
 
-Notes and defined names edited in the editor are not written (shown as notices); pictures are kept but not shown;
-right-to-left drawing on the canvas (S4); comments and co-editing (S5); charts and pivots shown (S6); Docs (D1–D6).
-Nothing is deployed.
+Comments and co-editing (S5); charts and pivots shown (S6); Docs (D1–D6). Saved since 2026-10-24: notes, defined
+names, tables (with their Excel style shown), pictures (shown, moved, resized, deleted, added), cells inserted or
+deleted with a shift; right-to-left sheets drawn mirrored (S4). Deployed 2026-10-24: the cycls-office service and
+super-dev (SDK feat/office).

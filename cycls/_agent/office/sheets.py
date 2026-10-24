@@ -7,6 +7,7 @@ the file replays the same changes live (`sheets_command`).
 """
 import asyncio
 import json
+import re
 
 from ..design.deck import lock
 from ..design.store import Stale, read_fig, write_fig
@@ -16,7 +17,7 @@ from . import client
 ACTIONS = ("read", "edit", "create")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
        "insert_cols", "delete_cols", "add_sheet", "rename_sheet", "delete_sheet", "freeze", "column_width",
-       "sort", "set_direction")
+       "sort", "set_direction", "note", "define_name")
 _MAX_OPS = 200
 
 SHEETS_TOOL = {
@@ -28,7 +29,9 @@ SHEETS_TOOL = {
         "- edit: `ops` run in order on the file at `path`. Formulas recompute; formats, validation, filters, "
         "charts and named ranges move with inserted or deleted rows and columns; the rest of the file is "
         "kept exactly. The reply shows the changed cells' new values and any formula errors.\n"
-        "- create: a new workbook at `path` (`target` names the first sheet, `rtl` for Arabic), then `ops`.\n"
+        "- create: a new workbook at `path` (`target` names the first sheet, `rtl` for Arabic; an Arabic name or "
+        "Arabic values make it right to left unless rtl is false), then `ops`.\n"
+        "- note puts a note on a cell (`text`; empty removes it); define_name names a range (`name`, `target`).\n"
         "Targets are A1 ranges (B3, B3:D9, 'Sheet 2'!A1:C4), rows (5 or 5:7), columns (C or C:D) or a "
         "sheet name. Values are rows of cells: [[\"Item\", \"Qty\"], [\"Tea\", 5]]; a value starting with = "
         "is a formula. Read before editing a file you have not seen. `ops` is always sent: [] for read."
@@ -55,7 +58,8 @@ SHEETS_TOOL = {
                         "formulas": {"type": "array", "items": {"type": "array", "items": {"type": "string"}},
                                      "description": "set_formulas: rows of formulas, e.g. [[\"=SUM(B2:B9)\"]]"},
                         "count": {"type": "integer", "description": "insert_rows / insert_cols: how many"},
-                        "name": {"type": "string", "description": "add_sheet / rename_sheet: the sheet name"},
+                        "name": {"type": "string", "description": "add_sheet / rename_sheet: the sheet name; define_name: the name (letters, digits, _)"},
+                        "text": {"type": "string", "description": "note: the note's text ('' removes the note)"},
                         "rows": {"type": "integer", "description": "freeze: rows frozen at the top"},
                         "cols": {"type": "integer", "description": "freeze: columns frozen at the start"},
                         "width": {"type": "integer", "description": "column_width: pixels"},
@@ -88,6 +92,13 @@ SHEETS_PROMPT = (
     "everything in the file it does not touch (charts, pivots, formats) and the person sees the change "
     "live. pandas stays fine for analysing data."
 )
+
+
+_ARABIC = re.compile("[" + chr(0x0600) + "-" + chr(0x06FF) + chr(0x0750) + "-" + chr(0x077F) + "]")
+
+
+def _arabic(text):
+    return bool(text) and bool(_ARABIC.search(str(text)))
 
 
 def sheets_step(inp):
@@ -150,8 +161,12 @@ async def exec_sheets(inp, workspace, ctx=None):
         if action == "create":
             if path.exists():
                 return _err(f"{rel} already exists: edit it, or create under another name.")
-            create = {"sheet": str(inp.get("target") or "").strip() or ("ورقة1" if inp.get("rtl") else "Sheet1"),
-                      "rightToLeft": bool(inp.get("rtl"))}
+            rtl = inp.get("rtl")
+            if rtl is None:   # models drop optional flags: an Arabic workbook reads right to left
+                values = [o.get("values") for o in ops[:5] if isinstance(o, dict)]
+                rtl = _arabic(inp.get("target")) or _arabic(json.dumps(values, ensure_ascii=False))
+            create = {"sheet": str(inp.get("target") or "").strip() or ("ورقة1" if rtl else "Sheet1"),
+                      "rightToLeft": bool(rtl)}
             result = await client.sheets_apply(None, path.name, ops, create=create)
             await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
             try:
