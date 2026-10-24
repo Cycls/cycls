@@ -140,6 +140,30 @@ describe("saving from Cycls Sheets", () => {
     await waitFor(() => expect(a.sheetsSave).toHaveBeenLastCalledWith("b.xlsx", "abc123", { snapshot: { sheetOrder: ["s1"] }, ops: [] }, true));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
+
+  test("an editor left open takes in a change made elsewhere when the page comes back into view", async () => {
+    const a = { ...api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" }), sheetsVersion: vi.fn(async () => ({ version: "abc123" })) };
+    const { frame, doc } = await opened(a);
+    say("https://office.test", frame.contentWindow, { type: "loaded", doc });
+    act(() => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => expect(a.sheetsVersion).toHaveBeenCalledTimes(1));
+    expect(a.sheetsOpen).toHaveBeenCalledTimes(1);   // the same version: nothing to do
+
+    a.sheetsVersion.mockResolvedValue({ version: "v7" });   // someone else saved it
+    act(() => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalledTimes(2));   // opened again, quietly
+    expect(screen.queryByText("This workbook changed since you opened it.")).toBeNull();
+  });
+
+  test("with changes not yet saved, a change made elsewhere shows the bar instead", async () => {
+    const a = { ...api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" }), sheetsVersion: vi.fn(async () => ({ version: "v7" })) };
+    const { frame, doc } = await opened(a);
+    say("https://office.test", frame.contentWindow, { type: "loaded", doc });
+    say("https://office.test", frame.contentWindow, { type: "dirty", doc, dirty: true });
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(await screen.findByText("This workbook changed since you opened it.")).toBeTruthy();
+    expect(a.sheetsOpen).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("the agent's edits in Cycls Sheets", () => {

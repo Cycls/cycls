@@ -380,6 +380,25 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
     seenContent.current = contentKey;
     needsCheck.current = true;
   }
+  // Nor does an editor left open wait for a turn: it looks again when the page comes back into view and every
+  // 30 s while it is shown, so a change made in another tab or by someone else reaches it.
+  const [poll, setPoll] = useState(0);
+  useEffect(() => {
+    if (!api?.sheetsVersion) return;
+    const look = () => {
+      if (document.visibilityState !== "visible") return;
+      needsCheck.current = true;
+      setPoll((n) => n + 1);
+    };
+    const timer = window.setInterval(look, 30_000);
+    window.addEventListener("focus", look);
+    document.addEventListener("visibilitychange", look);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", look);
+      document.removeEventListener("visibilitychange", look);
+    };
+  }, [api]);
   useEffect(() => {
     if (!needsCheck.current || !api?.sheetsVersion || live || !loaded || commands.current.size) return;
     needsCheck.current = false;
@@ -388,11 +407,14 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
       await saving.current;
       const now = await api.sheetsVersion!(path).catch(() => null);
       if (cancelled || !now?.version || now.version === version.current || conflictRef.current !== null) return;
-      if (statusRef.current === "saved") reopen();
+      // Taken in quietly when nothing here is unsaved and the person is not in the editor (a cell being typed
+      // into is not saved yet); otherwise the bar asks.
+      const inEditor = !!frameRef.current && document.activeElement === frameRef.current;
+      if (statusRef.current === "saved" && !inEditor) reopen();
       else setConflict(now.version);
     })();
     return () => { cancelled = true; };
-  }, [contentKey, live, loaded, api, path, reopen]);
+  }, [contentKey, poll, live, loaded, api, path, reopen]);
 
   useEffect(() => { if (ready) post({ type: "theme", theme: dark ? "dark" : "light" }); }, [dark, ready, post]);
   useEffect(() => { if (ready) post({ type: "locale", lang }); }, [lang, ready, post]);
