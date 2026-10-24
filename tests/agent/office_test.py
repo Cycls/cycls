@@ -2,6 +2,7 @@
 per file, and the client over a mocked service. No service is contacted."""
 import asyncio
 import types
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -257,6 +258,8 @@ def test_save_patches_through_the_service_and_keeps_versions(monkeypatch, tmp_pa
 
     saved = c.put("/office/sheets/save", params={"path": "b.xlsx", "base": v0}, content=b'{"edit": 1}')   # plain JSON is gzipped here
     assert saved.status_code == 200 and saved.json()["unchanged"] is False
+    stamp = datetime.fromtimestamp((tmp_path / "b.xlsx").stat().st_mtime, timezone.utc).isoformat()
+    assert saved.json()["modified"] == stamp, "the editor's Last modified follows its own saves"
     v1 = saved.json()["version"]
     assert v1 != v0 and (tmp_path / "b.xlsx").read_bytes().startswith(b"PK\x03\x04 patched")
     assert sent[-1] == (original, {"edit": 1})

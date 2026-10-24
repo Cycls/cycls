@@ -162,6 +162,8 @@ def office_router(ws_dep, required_auth=None, changed=None):
                     "detail": "This workbook changed since it was opened.", "version": e.current})
         if changed is not None:
             changed(ws.root)
-        return {"version": new, "unchanged": False, "summary": result["summary"]}
+        # When it was written: the editor's "Last modified" follows its own saves.
+        modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
+        return {"version": new, "unchanged": False, "summary": result["summary"], "modified": modified}
 
     return r

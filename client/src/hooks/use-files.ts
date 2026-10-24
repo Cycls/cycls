@@ -81,7 +81,7 @@ export type OfficeEditorApi = {
   // `base` answers {conflict: <its version>} instead.
   sheetsSave: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean) => Promise<SheetsSaved>;
 };
-export type SheetsSaved = { version: string; unchanged: boolean } | { conflict: string };
+export type SheetsSaved = { version: string; unchanged: boolean; modified?: string } | { conflict: string };
 
 async function gzipJson(value: unknown): Promise<Blob> {
   const json = new Blob([JSON.stringify(value)], { type: "application/json" });
@@ -297,7 +297,7 @@ export function useFiles(baseUrl: string = "") {
       try {
         const res = await api(`/office/sheets/save?${q}`, { method: "PUT", body: await gzipJson(payload), silent: true });
         track("file_saved", { path: filePath });
-        return (await res.json()) as { version: string; unchanged: boolean };
+        return (await res.json()) as { version: string; unchanged: boolean; modified?: string };
       } catch (err) {
         if ((err as { status?: number }).status === 412) {
           const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);

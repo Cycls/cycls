@@ -115,6 +115,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   type Status = "saved" | "saving" | "dirty" | "error";
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState<string | null>(null);   // the file's newer version
+  const [savedAt, setSavedAt] = useState<string | null>(null);     // when this editor last wrote the file
   const editable = !!api;
   const doc = useRef("");
   const version = useRef("");       // what the next save names as its base
@@ -228,6 +229,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
     setLoaded(false);
     setStatus("saved");
     setConflict(null);
+    setSavedAt(null);
     post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable || liveRef.current });
   }, [ready, opened, path, name, post, editable]);
 
@@ -341,6 +343,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
         }
         forceNext.current = false;
         version.current = r.version;
+        if (!r.unchanged && r.modified) setSavedAt(r.modified);
         setConflict(null);
         setStatus("saved");
         post({ type: "written", doc: forDoc, id, ok: true });
@@ -454,7 +457,8 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
 
   // In the canvas the file's header row is the canvas's: these go into it. Elsewhere (a share) the
   // view brings its own row.
-  const modified = opened?.modified ? modifiedLabel(opened.modified) : "";
+  const modifiedAt = savedAt ?? opened?.modified;
+  const modified = modifiedAt ? modifiedLabel(modifiedAt) : "";
   const startItems = modified ? <span className="shrink-0 text-muted-foreground">· {modified}</span> : null;
   const endItems = (
     <>
