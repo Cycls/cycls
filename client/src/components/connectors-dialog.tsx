@@ -20,7 +20,13 @@ export type Connector = {
   use_cases: [string, string][]; skills: [string, string][];
   developer: string | null; website: string | null;
   privacy: string | null; terms: string | null; docs: string | null;
+  actions?: CardAction[];   // from the CMS: how the confirm card words this connector's calls
 };
+// One call the confirm card knows how to word, from the CMS. `match` is "METHOD path" for a REST connector
+// (`*` stands for one path segment) or the tool's name; `show` names the details worth a row, by their path
+// in the call, and an `id` lets `ask`, `who` and `done` quote one: "Sent to {to}".
+export type CardAction = { match: string; ask: L; who?: L; button?: L; done?: L;
+                           show?: { id?: string; label: L; from: string }[] };
 type Mode = "allow" | "ask" | "never";
 type ToolRow = { name: string; title: string; description: string | null; writes: boolean; mode: Mode };
 type PromptRow = { name: string; title: string; description: string | null };

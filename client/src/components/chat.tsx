@@ -13,7 +13,7 @@ import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
-import { ConfirmCard } from "./confirm-card";
+import { ApprovalContext, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
 import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
@@ -137,7 +137,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   config?: AppConfig | null;
   view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -198,8 +198,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
   // The agent's connect card: a tool needed an account the user hasn't linked.
   const [connect, setConnect] = useState<{ name: string } | null>(null);
-  // A tool the user set to "ask": approve sends the next turn with the approval attached.
-  const [confirm, setConfirm] = useState<{ tool: string; key: string; connector?: string; label: string; args: unknown } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
@@ -263,7 +261,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setFollowUp(null);
     setAsk(null);
     setConnect(null);
-    setConfirm(null);
     setPills([]);
     queuedRef.current = [];
     setQueued([]);
@@ -443,10 +440,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       } else if (ev.action === "connect" && typeof ev.connector === "string") {
         setConnect({ name: ev.connector });
         track("ui_action", { action: "connect", connector: ev.connector });
-      } else if (ev.action === "confirm" && typeof ev.tool === "string" && typeof ev.key === "string") {
-        setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
-                     label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
-        track("ui_action", { action: "confirm", tool: ev.tool });
+      } else if (ev.action === "confirm" && typeof ev.tool === "string") {
+        track("ui_action", { action: "confirm", tool: ev.tool });   // the card itself is a part of the agent's message
       } else if (ev.action === "compacted") {
         track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
@@ -576,6 +571,19 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     if (selection) void flushDesignEditor(selection.path, 1500).then(go);
     else go();
   }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, files?.path]);
+
+  // A confirm card's answer is a turn of its own, carrying the card's key: the model reads it, the chat shows
+  // no bubble for it, and the card turns into its receipt. "Don't ask again" is Always allow for that tool.
+  const answerCard = useCallback<Answer>((card, yes, remember, title) => {
+    track(yes ? "confirm_approved" : "confirm_dismissed", { tool: card.tool, chat_id: chatId, remember });
+    markCard(card.key, { state: yes ? "approved" : "declined", ...(remember ? { remembered: true } : {}) });
+    if (yes && remember) {
+      track("connector_permissions_changed", { connector: card.connector ?? "_builtin", scope: "card", to: "allow" });
+      api(card.connector ? `/connectors/${card.connector}/tools/${card.tool}` : `/tools/${card.tool}`,
+          { method: "PUT", json: { mode: "allow" } }).catch(() => {});
+    }
+    handleSubmit(`${t(yes ? "approved" : "cardNotNow")}: ${title}`, "confirm", yes ? { approvals: [card.key] } : { declined: [card.key] });
+  }, [chatId, markCard, api, handleSubmit]);
 
   // Drain on the falling edge of `isStreaming` — one message per edge, and the
   // send it triggers raises the flag again, so the rest follow in order.
@@ -1166,7 +1174,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
             <div ref={scrollRef} className="isolate relative flex-1 overflow-y-auto" dir="ltr">
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-                <ConnectorsContext.Provider value={connectors ?? []}>{messages.map((msg, i) => {
+                <ConnectorsContext.Provider value={connectors ?? []}>
+                <ApprovalContext.Provider value={{ agent: meta?.name || "", answer: answerCard, busy: isStreaming }}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
                   return (
@@ -1186,7 +1195,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                       onOpenFile={openFileInCanvas}
                     />
                   );
-                })}</ConnectorsContext.Provider>
+                })}</ApprovalContext.Provider>
+                </ConnectorsContext.Provider>
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
@@ -1220,28 +1230,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                       openAuth(url, loadConnectors);
                     }}
                     onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
-                  />
-                )}
-                {confirm && !ask && !connect && (
-                  <ConfirmCard
-                    key={confirm.tool}
-                    label={confirm.label}
-                    args={confirm.args}
-                    onApprove={() => {
-                      track("confirm_approved", { tool: confirm.tool, chat_id: chatId });
-                      const c = confirm;
-                      setConfirm(null);
-                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
-                    }}
-                    onAlways={() => {
-                      track("connector_permissions_changed", { connector: confirm.connector ?? "_builtin", scope: "card", to: "allow" });
-                      const c = confirm;
-                      setConfirm(null);
-                      const path = c.connector ? `/connectors/${c.connector}/tools/${c.tool}` : `/tools/${c.tool}`;
-                      api(path, { method: "PUT", json: { mode: "allow" } }).catch(() => {});
-                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
-                    }}
-                    onDismiss={() => { track("confirm_dismissed", { tool: confirm.tool }); setConfirm(null); }}
                   />
                 )}
                 {!ask && !connect && survey && !hushed && !isStreaming && (

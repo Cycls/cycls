@@ -19,6 +19,7 @@ from cycls._agent.web import office
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt, skills
+from cycls._agent.connectors import approval_key
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 
@@ -52,18 +53,36 @@ def to_ui_messages(raw):
     # calls from a file card back to a plain step.
     errored, results = set(), {}   # tool_use id → its stored result, for a connector step's Response
     search_ids = set()   # client-side `web_search` calls, by tool_use id
+    # A confirm card's state comes from what followed it: the turn that carried its approval or "Not now",
+    # then the same call made again and how it went. Keys are hashed, so only a carded tool's calls are keyed.
+    carded = {k.split(":")[0] for m in raw for card in (m.get("cards") or []) if (k := card.get("key"))}
+    decided, calls = {}, {}   # key → "approved" | "declined"; key → its calls' ids, in order
     for msg in raw:
         c = msg.get("content")
+        for k in msg.get("approvals") or ():
+            decided[k] = "approved"
+        for k in msg.get("declined") or ():
+            decided[k] = "declined"
         if msg.get("role") == "assistant" and isinstance(c, list):
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "web_search":
                     search_ids.add(b.get("id"))
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in carded:
+                    calls.setdefault(approval_key(b["name"], b.get("input")), []).append(b.get("id"))
         if msg.get("role") == "user" and isinstance(c, list):
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     body = results[b.get("tool_use_id")] = b.get("content")
                     if b.get("is_error") or (isinstance(body, str) and body.startswith("Error")):
                         errored.add(b.get("tool_use_id"))
+
+    def card_state(card):
+        answer = decided.get(card.get("key"))
+        if answer != "approved":
+            return answer or "waiting"
+        ids = calls.get(card.get("key")) or []
+        after = ids[ids.index(card["id"]) + 1:] if card.get("id") in ids else ids[1:]
+        return ("failed" if after[0] in errored else "done") if after else "approved"
 
     out = []
     for msg in raw:
@@ -88,7 +107,11 @@ def to_ui_messages(raw):
                     # transcript. Without this a reload shows a finished-looking
                     # chat with nothing to approve.
                     if msg.get("cards") and out and out[-1]["role"] == "assistant":
-                        out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
+                        held = {card["id"] for card in msg["cards"] if card.get("id")}   # the card stands where its step was
+                        out[-1]["parts"] = [p for p in out[-1]["parts"] if not (p.get("type") == "step" and p.get("id") in held)]
+                        out[-1]["parts"] += [{"type": "card", "card": card,
+                                              **({"state": card_state(card)} if card.get("action") == "confirm" else {})}
+                                             for card in msg["cards"]]
                     continue
             elif not isinstance(c, str):
                 continue
@@ -138,6 +161,14 @@ def to_ui_messages(raw):
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
                 out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    waiting = []   # a card still waiting when the person typed something else was skipped
+    for m in out:
+        if m["role"] == "assistant":
+            waiting += [p for p in m["parts"] if p.get("type") == "card" and p.get("state") == "waiting"]
+        else:
+            for p in waiting:
+                p["state"] = "skipped"
+            waiting = []
     return out
 
 
@@ -1862,6 +1893,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
                         "icon": o.icon or row.get("icon") or None,
                         "prompts": [p for p in (oauth.bilingual(x) for x in (o.prompts or row.get("prompts") or [])) if p],
                         "showcase": row.get("showcase") or "prompts", "gallery": row.get("gallery") or [],
+                        "actions": [a for a in (row.get("actions") or []) if isinstance(a, dict)],   # the confirm card's words
                         "gradient": row.get("gradient") or None, "links": oauth.links_of(row, o),
                         "use_cases": o.use_cases, "skills": o.skills,
                         "developer": o.developer or row.get("developer") or None, "website": o.website,

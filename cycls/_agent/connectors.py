@@ -235,19 +235,23 @@ def approval_key(tool, inp):
     return f"{tool}:{hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:12]}"
 
 
-def gated(fn, tool, label, connector, classify=None, hard=False):
-    """Runs with the person's approval for this exact call, or under Auto unless the call is hard — the person
-    set Ask, or it destroys something. With a classifier, a call it deems a read passes. Otherwise the confirm
-    card, and the model stops. Every decision but a read is an audit line."""
+def gated(fn, tool, label, connector, classify=None, hard=False, allowed=False, danger=False):
+    """Runs with the person's approval for this exact call, or under Auto or Always allow unless the call is
+    hard (the person set Ask) or destroys something: a delete asks even after Always allow. With a classifier,
+    a call it deems a read passes. Otherwise the confirm card, and the model stops. Every decision but a read
+    is an audit line."""
     async def call(inp, ctx):
         key, args = approval_key(tool, inp), inp or {}
+        risky = danger or bool(classify and _DESTRUCTIVE.search(json.dumps(args).lower()))
         how = ("approved" if key in ctx.approvals else "read" if classify and not classify(tool, args)
-               else "auto" if ctx.auto and not hard and not (classify and _DESTRUCTIVE.search(json.dumps(args).lower())) else "asked")
+               else "auto" if (ctx.auto or allowed) and not hard and not risky else "asked")
         if how != "read":
             log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=tool, connector=connector, how=how)
         if how != "asked":
             return await fn(inp, ctx)
-        return {"type": "ui", "action": "confirm", "tool": tool, "key": key, "connector": connector, "label": label, "args": inp,
+        from .tools import tool_step   # the tools module imports this one
+        return {**tool_step(tool, inp), "type": "ui", "action": "confirm", "tool": tool, "key": key,
+                "connector": connector, "label": label, "args": inp, "risk": "destructive" if risky else "write",
                 "ack": f"{label} needs the user's approval — a card is asking them. End your turn now. "
                        "If they approve, make this call again with exactly the same arguments: the approval covers "
                        "this call, so any change to the arguments asks them a second time."}
@@ -274,9 +278,15 @@ async def tools_for(server, ws):
     chosen = await permissions(ws, o.name)
     found = {f"{server.label}_{t.name}": t for t in await server.tools(token, url)}
     modes = {k: mode(server, t, chosen) for k, t in found.items()}
+
+    def policy(k, f):   # Ask gates; Always allow gates a tool that writes too, so a delete still asks
+        t, m = found.get(k), modes.get(k)
+        if m == "ask" or (m == "allow" and t and (server._writes or writes(t))):
+            return gated(f, k, names[k], o.name, server._writes, hard=chosen.get(k) == "ask",
+                         allowed=m == "allow", danger=bool(t and destructive(t)))
+        return f
     return ([s for s in schemas if modes.get(s["name"]) != "never"],
-            {k: gated(f, k, names[k], o.name, server._writes, chosen.get(k) == "ask" or destructive(found[k])) if modes.get(k) == "ask" else f
-             for k, f in fns.items() if modes.get(k) != "never"},
+            {k: policy(k, f) for k, f in fns.items() if modes.get(k) != "never"},
             names)
 
 

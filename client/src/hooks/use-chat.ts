@@ -47,11 +47,14 @@ export interface Part {
   first?: boolean;   // chat_id event: the account's first chat in this workspace
   action?: string;
   sources?: Source[];
+  card?: Record<string, unknown>;   // a confirm card, standing in the conversation where its step was
+  state?: string;   // its answer: waiting · approved · done · failed · declined · skipped
+  remembered?: boolean;   // answered with "Don't ask again"
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
 export type SendExtra = {
-  approvals?: string[]; connectors?: string[]; selection?: DesignSelection;
+  approvals?: string[]; declined?: string[]; connectors?: string[]; selection?: DesignSelection;
   folder?: string;   // the folder open in Files: where the agent saves a design named without one
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
 };
@@ -112,6 +115,18 @@ async function sha256Hex(text: string): Promise<string | null> {
     return null;   // no WebCrypto (an insecure origin)
   }
 }
+
+// A confirm card's parts, changed where they stand.
+const withCards = (msgs: Message[], change: (p: Part) => Part) =>
+  msgs.map((m) => (m.parts?.some((p) => p.type === "card") ? { ...m, parts: m.parts.map((p) => (p.type === "card" ? change(p) : p)) } : m));
+// A card still waiting when the person typed something else was skipped; the server reads it the same way.
+const skipWaiting = (msgs: Message[]) => withCards(msgs, (p) => (p.state === "waiting" ? { ...p, state: "skipped" } : p));
+// After an approval's run, its card reads how the call went: the step made again, by the same name and words.
+const settle = (msgs: Message[], keys: string[], ran: Part[]) => withCards(msgs, (p) => {
+  if (p.state !== "approved" || !keys.includes(String(p.card?.key))) return p;
+  const step = ran.find((s) => s.type === "step" && s.tool_name === p.card?.tool_name && s.step === p.card?.step);
+  return step ? { ...p, state: step.ok === false ? "failed" : "done" } : p;
+});
 
 export function useChat(baseUrl: string = "") {
   const [messages, _setMessages] = useState<Message[]>([]);
@@ -300,7 +315,7 @@ export function useChat(baseUrl: string = "") {
       const silent = origin === "confirm";
       const view = viewRef.current;
       const mine = () => viewRef.current === view;
-      setMessages((prev) => [...prev, ...(silent ? [] : [userMessage]), assistantMessage]);
+      setMessages((prev) => [...(silent ? prev : skipWaiting(prev)), ...(silent ? [] : [userMessage]), assistantMessage]);
       setAttached(true);
       setRunStartedAt((prev) => prev ?? new Date().toISOString());
       const sentAt = Date.now();
@@ -362,6 +377,7 @@ export function useChat(baseUrl: string = "") {
                                  detach: true,   // we poll, and we stop through the endpoint
                                  ...(autoApprove() ? {} : { auto: false }),
                                  ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
+                                 ...(extra?.declined?.length ? { declined: extra.declined } : {}),
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
                                  ...(extra?.selection ? { selection: extra.selection } : {}),
                                  ...(extra?.folder ? { folder: extra.folder } : {}),
@@ -417,17 +433,19 @@ export function useChat(baseUrl: string = "") {
                 continue;
               }
 
-              // Agent-driven UI action — dispatch to handler, don't add as part,
-              // don't persist in chat history
+              // Agent-driven UI action — dispatch to handler, don't add as part. A confirm card is the
+              // one that stays: it stands in the conversation, in the place of the step it holds back.
               if (type === "ui" && item.action) {
                 const ev = item as unknown as UIAction;
                 uiHandlerRef.current?.(ev);
-                continue;
-              }
-
+                if (ev.action !== "confirm") continue;
+                const held = parts.findIndex((p) => p.type === "step" && p.id === ev.id);
+                if (held >= 0) parts.splice(held, 1);
+                currentPart = { type: "card", card: ev, state: "waiting" };
+                parts.push(currentPart);
               // Tool-call argument stream — fold the partial JSON into the
               // step it belongs to (a live preview of what the model is writing).
-              if (type === "step_arg" && item.id) {
+              } else if (type === "step_arg" && item.id) {
                 const t = parts.find((p) => p.type === "step" && p.id === item.id);
                 if (t) t.args = (t.args || "") + (item.delta || "");
               } else if (type === "step" && item.id) {
@@ -512,6 +530,7 @@ export function useChat(baseUrl: string = "") {
             return updated;
           });
         }
+        if (mine() && extra?.approvals?.length) setMessages((prev) => settle(prev, extra.approvals!, finalParts));
 
         // Success — clear retry ref
         lastRequestRef.current = null;
@@ -849,8 +868,13 @@ export function useChat(baseUrl: string = "") {
     track("chat_favorited", { chat_id: id, on });
   }, [api]);
 
+  // A confirm card's answer, shown at once; the turn that carries it saves it.
+  const markCard = useCallback((key: string, patch: Partial<Part>) =>
+    setMessages((prev) => withCards(prev, (p) => (p.card?.key === key ? { ...p, ...patch } : p))), []);
+
   return {
     messages,
+    markCard,
     isStreaming,
     attached,    // a stream is feeding this tab right now
     runStatus,   // "running" while the server still has work, even with no stream

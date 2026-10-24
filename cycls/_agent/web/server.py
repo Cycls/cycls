@@ -357,6 +357,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         workspace_id: Optional[str] = None
         disabled_tools: list = []   # tools the person switched off in Settings (e.g. ["WebSearch"]); LLM.run() honours it
         approvals: list = []       # approval keys from the confirm card — this turn only
+        declined: list = []        # keys the confirm card's "Not now" turned down, saved with this turn
         auto: bool = True          # the composer's switch; absent means Auto
         connectors: list = []      # connectors the person @-mentioned — the turn gets a "[Using: …]" line
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
@@ -420,7 +421,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
                           workspace_id=ws_id,
                           disabled_tools=[t for t in (data.get("disabled_tools") or []) if isinstance(t, str)][:20],
-                          approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
+                          approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20],
+                          declined=[t for t in (data.get("declined") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
                           selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")))
 

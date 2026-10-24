@@ -7,6 +7,7 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { ImagePart } from "./parts/image-part";
 import { StepPart } from "./parts/step-part";
+import { ApprovalCard } from "./approval-card";
 import { GlowStar, Star } from "./cycls-star";
 import { StepGroup } from "./parts/step-group";
 import { FilePart } from "./parts/file-part";
@@ -58,6 +59,8 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       );
     case "sources":
       return <SourcesPart key={index} sources={part.sources || []} />;
+    case "card":   // a confirm card, where the agent asked; other cards drive the composer
+      return part.card?.action === "confirm" ? <ApprovalCard key={index} part={part} /> : null;
     case "step":
       return (
         <StepPart

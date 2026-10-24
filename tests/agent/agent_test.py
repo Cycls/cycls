@@ -1704,7 +1704,7 @@ def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
         events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
 
     cards = [e for e in events if isinstance(e, dict) and e.get("action") == "connect"]
-    assert cards == [{"type": "ui", "action": "connect", "connector": "google"}]
+    assert cards == [{"type": "ui", "action": "connect", "connector": "google", "id": "t1"}]   # a card names the call it holds
     result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
                   for b in msg["content"] if b.get("type") == "tool_result")
     assert "not connected" in result["content"] and "end your turn" in result["content"]

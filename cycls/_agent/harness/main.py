@@ -155,7 +155,7 @@ def _shape(block, out, ok, handlers, mcp_names):
         ack = out.pop("ack", None)
         waiting = out.get("action") in ("confirm", "connect")
         return (ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user.",
-                [out], waiting)
+                [{**out, "id": block["id"]}], waiting)
     if ok and handlers and name in handlers and name not in mcp_names and not detailed(name):
         # A custom handler's result is both the chat's and the model's; a
         # connector's is the model's alone — the chat sees the step.
@@ -265,7 +265,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
-               extra_body=None, approvals=(), mentions=(), auto=True, api_connectors=()):
+               extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=()):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
@@ -289,7 +289,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
-        await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
+        await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
     messages = session.messages
 
@@ -406,8 +406,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         if not o.api or o.servers or o.name in hidden or not await o.bearer(workspace):
             continue
         schema, fn, label, writes = connectors.api_tool(o)
+        chosen = (await connectors.permissions(workspace, o.name)).get(schema["name"])   # its one tool's Ask / Always allow / Never
+        if chosen == "never":
+            continue
         tools_list.append(schema)
-        handlers[schema["name"]] = connectors.gated(fn, schema["name"], label, o.name, writes)
+        handlers[schema["name"]] = connectors.gated(fn, schema["name"], label, o.name, writes,
+                                                    hard=chosen == "ask", allowed=chosen == "allow")
         mcp_names.add(schema["name"])
         owners[schema["name"]] = o
         register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))

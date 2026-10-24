@@ -8,7 +8,7 @@ import { stepText, t } from "../../lib/i18n";
 
 // A built-in tool wears its own glyph, the way a connector wears its logo: the shimmer stopping is what
 // says it finished, and a red tint is what says it didn't.
-const GLYPHS: Record<string, IconName> = {
+export const GLYPHS: Record<string, IconName> = {
   "Web Search": "globe",
   Fetching: "link",
   Reading: "doc",

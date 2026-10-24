@@ -1233,7 +1233,8 @@ def _reads(cmd):
 
 
 def risk(name, inp):
-    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
+    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes,
+    and even after Always allow)."""
     if name == "bash":
         cmd = str(inp.get("command") or "")
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
@@ -1248,13 +1249,14 @@ def _gate(name, inp, ctx, step):
     if r is None or ctx is None:
         return None
     key, chosen = approval_key(name, inp), (getattr(ctx, "modes", None) or {}).get(name)
-    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow"
+    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow" and r != "destructive"
            else "asked" if chosen == "ask" else "auto" if getattr(ctx, "auto", True) and r != "destructive" else "asked")
     log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=name, risk=r, how=how)
     if how != "asked":
         return None
     label = f"{step['tool_name']} · {step['step']}".strip(" ·")[:80]
     return {"type": "ui", "action": "confirm", "tool": name, "key": key, "label": label, "args": inp,
+            "tool_name": step["tool_name"], "step": step["step"], "risk": r,
             "ack": f"{label} needs the user's approval — a card is asking them. End your turn now. "
                        "If they approve, make this call again with exactly the same arguments: the approval covers "
                        "this call, so any change to the arguments asks them a second time."}

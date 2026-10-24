@@ -571,7 +571,39 @@ def test_a_waiting_card_survives_a_reload():
     ])
     parts = ui[-1]["parts"]
     assert ui[-1]["role"] == "assistant"
-    assert [p for p in parts if p["type"] == "card"] == [{"type": "card", "card": card}]
+    assert [p for p in parts if p["type"] == "card"] == [{"type": "card", "card": card, "state": "waiting"}]
+
+
+def test_a_card_reads_its_state_from_what_followed():
+    """The card stays in the chat as a record. Its state is what happened next: approved and the call made
+    again (done, or failed), "Not now", or a message typed instead (skipped). It stands where its step was."""
+    from cycls._agent.web.routers import to_ui_messages
+    from cycls._agent.connectors import approval_key
+    args = {"command": "mkdir out"}
+    key = approval_key("bash", args)
+    card = {"type": "ui", "action": "confirm", "tool": "bash", "key": key, "label": "Bash · mkdir out", "args": args, "id": "A"}
+    asked = [
+        {"role": "user", "content": "make the folder"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": args}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "needs approval"}], "cards": [card]},
+    ]
+    again = lambda result: [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "B", "name": "bash", "input": args}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "B", "content": result}]},
+        {"role": "assistant", "content": "done"}]
+    def state(raw):
+        cards = [p for m in to_ui_messages(raw) if m["role"] == "assistant" for p in m["parts"] if p["type"] == "card"]
+        return cards[0]["state"]
+    approve = {"role": "user", "content": "Approved", "internal": True, "approvals": [key]}
+    assert state(asked) == "waiting"
+    assert state(asked + [approve]) == "approved"
+    assert state(asked + [approve] + again("ok")) == "done"
+    assert state(asked + [approve] + again("Error: no space")) == "failed"
+    assert state(asked + [{"role": "user", "content": "Not now", "internal": True, "declined": [key]},
+                          {"role": "assistant", "content": "ok, I won't"}]) == "declined"
+    assert state(asked + [{"role": "user", "content": "actually, rename it"}]) == "skipped"
+    first = next(m for m in to_ui_messages(asked) if m["role"] == "assistant")
+    assert [p["type"] for p in first["parts"]] == ["card"]   # the step it held back is gone
 
 
 def test_a_batch_with_no_card_projects_unchanged():

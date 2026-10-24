@@ -89,7 +89,7 @@ def test_routes_connect_list_and_disconnect(tmp_path):
     assert client.get("/connectors").json() == [{"name": "google", "kind": "oauth", "hint": None, "scope": "user",
                                                  "title": None, "description": None, "category": None,
                                                  "about": None, "story": None, "icon": None, "prompts": [],
-                                                 "showcase": "prompts", "gallery": [], "gradient": None, "links": [],
+                                                 "showcase": "prompts", "gallery": [], "actions": [], "gradient": None, "links": [],
                                                  "use_cases": [], "skills": [],
                                                  "developer": None, "website": None,
                                                  "privacy": None, "terms": None, "docs": None, "team": None,
@@ -293,6 +293,23 @@ def test_a_one_tool_server_asks_only_for_the_calls_that_write():
     assert c.mode(plain, t, {}) == "allow" and c.mode(mixed, t, {}) == "ask"
 
 
+def test_always_allow_runs_a_write_but_a_delete_still_asks():
+    """The confirm card's "Don't ask again" is Always allow. For a REST connector one tool does everything,
+    so Always allow there would otherwise let a delete through without a word."""
+    from cycls._agent.tools import ToolContext
+    async def run(inp, ctx): return "ran"
+    writes = lambda tool, args: str(args.get("method") or "GET").upper() != "GET"
+    g = c.gated(run, "outlook_request", "outlook · request", "outlook", writes, allowed=True)
+    manual = ToolContext(None, None, auto=False)
+    assert asyncio.run(g({"method": "POST", "path": "/me/sendMail"}, manual)) == "ran"   # Always allow runs it, even in Manual
+    card = asyncio.run(g({"method": "DELETE", "path": "/me/messages/1"}, manual))
+    assert (card["action"], card["risk"], card["connector"]) == ("confirm", "destructive", "outlook")
+    ask = c.gated(run, "outlook_request", "outlook · request", "outlook", writes)
+    assert asyncio.run(ask({"method": "POST", "path": "/me/sendMail"}, manual))["risk"] == "write"
+    hard = c.gated(run, "notion_delete_page", "notion · delete", "notion", allowed=True, danger=True)
+    assert asyncio.run(hard({"id": "p1"}, ToolContext(None, None)))["risk"] == "destructive"   # a destructive tool, allowed
+
+
 class _Resp:
     def __init__(self, data): self._d = data
     def raise_for_status(self): pass
@@ -362,9 +379,10 @@ def test_a_builtin_allow_needs_no_secret_key(tmp_path, monkeypatch):
     modes = asyncio.run(state.settings_db(ws).get("tools"))
     assert modes == {"bash": "allow"}
     step = {"tool_name": "Bash", "step": "wipe"}
-    hard = {"command": "git clean -fdx"}
-    assert _gate("bash", hard, ToolContext(None, ws, auto=False), step) is not None              # without it: asks
-    assert _gate("bash", hard, ToolContext(None, ws, auto=False, modes=modes), step) is None     # with it: runs
+    hard, write = {"command": "git clean -fdx"}, {"command": "mkdir out"}
+    assert _gate("bash", write, ToolContext(None, ws, auto=False), step) is not None             # without it: asks
+    assert _gate("bash", write, ToolContext(None, ws, auto=False, modes=modes), step) is None    # with it: runs
+    assert _gate("bash", hard, ToolContext(None, ws, auto=False, modes=modes), step) is not None  # a delete still asks
     assert client.get("/tools").json() == {"bash": "allow"}                                      # the panel reads it back
     assert client.delete("/tools/bash").json() == {"ok": True}
     assert client.get("/tools").json() == {}                                                     # and clears it to Auto

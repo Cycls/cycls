@@ -485,9 +485,11 @@ class Session:
             await put_compaction(self.workspace, self.chat_id,
                                  {"summary": self.summary, "first_kept": self.first_kept, "cleared": self.cleared})
 
-    async def add_user(self, content, *, attachments=None, internal=False, selection=None, connectors=None):
-        """`internal` marks a turn the person did not type — an approval carried back from a confirm
-        card. The model reads it, the chat never shows it, and it never becomes the chat's title.
+    async def add_user(self, content, *, attachments=None, internal=False, selection=None, connectors=None,
+                       approvals=(), declined=()):
+        """`internal` marks a turn the person did not type — a confirm card's approval or "Not now",
+        which it also keeps, so the card reads its state after a reload. The model reads it, the chat
+        never shows it, and it never becomes the chat's title.
 
         The turn is durable when this returns. It used to reach disk only at the
         first checkpoint, after the first tool batch, so a run that died before
@@ -500,8 +502,13 @@ class Session:
             self.replay = False
             return
         msg = {"role": "user", "content": content}
+        internal = internal or bool(approvals or declined)
         if internal:
             msg["internal"] = True
+        if approvals:
+            msg["approvals"] = list(approvals)
+        if declined:
+            msg["declined"] = list(declined)
         if attachments:
             msg["attachments"] = attachments
         if selection:   # the chat shows it as a chip
