@@ -91,15 +91,45 @@ Cycls → editor `{target: "cycls-sheets", type, …}`, posted to the editor's e
 | `written {doc, id, ok}` (a save landed, or didn't) | `dirty {doc, dirty}` |
 | `flush {id}` · `save` | `saved {doc, id, snapshot, ops}` · `flushed {id, ok}` |
 | `command {doc, id, mutations}` (the agent's edit, already in the file) | `applied {doc, id, ok, error?}` |
+| | `selection {doc, sheet, ranges}` · `print {doc}` (Ctrl/Cmd+P) |
+| `comments {doc, threads, me, agent?}` · `commentDone {doc, rid, ok, thread?, error?}` | `comment {doc, rid, op, id?, reply?, text?, sheet?, sheet_name?, cell?}` |
 
 Autosave: about 1.2 s after the last change, at most 8 s after the first; one save in flight. A replayed mutation is
-never saved or undone and never marks the workbook dirty.
+never saved or undone and never marks the workbook dirty. Ctrl/Cmd+S saves at once. The agent's replayed changes
+are outlined in Cycls orange until a few seconds after its turn.
+
+## Comments
+
+What people write on a workbook's cells is kept like a design's comments: in the workspace's `.comments` record
+(`design/comments.py`), not in the file, so a comment is no save. A thread is pinned to `{sheet, sheet_name, cell}`
+(the sheet's id, its name for people, a cell like B5); `cell: null` once its row or column was removed (the thread
+stays in the list). The routes are the design ones, `/comments/<path>`; a rename, the trash and a restore carry a
+workbook's comments as they do a design's. Anyone's edit moves a thread with its cell (`move`); the words stay
+their author's.
+
+- In the editor, the engine's own comment UI (a violet corner mark — a note's is yellow — the thread card, replies,
+  resolve) runs on a data source that asks the app (`comment` → the store → `commentDone` with the thread); the app
+  polls the record (the design comment store) and gives the editor the list (`comments`), which it applies. Rows
+  inserted or removed, and cells moved, report the threads' new cells.
+- The agent: `sheets {action: "comments"}` lists every thread; with `number`, `reply` and `resolve` it answers and
+  closes or reopens one as itself. `read` ends with the open ones. An edit that inserts or removes rows or columns
+  moves the threads with their cells (`comments.shift`).
+
+## Arabic and right-to-left editing
+
+A right-to-left sheet is drawn mirrored (S4). While a cell is edited: arrows move the caret the way they point in
+Arabic text (a letter at a time — the engine laid an Arabic word out as one glyph, so the caret jumped words and
+Backspace deleted a whole word; each letter is a glyph of its own now, the word still painted joined); typing
+straight into a cell, an arrow moves to the cell it points at; pointing at cells in a formula follows the screen;
+a validation list, a link card, a note or a comment opens on the mirrored side. Typed text keeps no colour of the
+editor's own (cells stay "automatic" in Excel).
 
 ## Not built yet
 
-Comments and co-editing (S5); Docs (D1–D6). Built 2026-10-24 (not deployed yet): charts drawn and kept, pivot
-tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid out again
-once a font has loaded, the reload after a file changed some other way. Saved since 2026-10-24: notes, defined
+Live co-editing (left out on purpose, 2026-10-24); Docs (D1–D6). Built 2026-10-24 (not deployed yet): charts drawn
+and kept, pivot tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid
+out again once a font has loaded, the reload after a file changed some other way, print, comments, the agent's
+changes outlined, Arabic caret and deletion by letter and the other right-to-left editing fixes. Saved since 2026-10-24: notes, defined
 names, tables (with their Excel style shown), pictures (shown, moved, resized, deleted, added), cells inserted or
 deleted with a shift; right-to-left sheets drawn mirrored (S4). Deployed 2026-10-24: the cycls-office service and
 super-dev (SDK feat/office).
