@@ -61,7 +61,7 @@ def _run(inp, ws):
 def test_the_choices_that_matter_are_required():
     schema = sheets.SHEETS_TOOL["input_schema"]
     assert schema["required"] == ["action", "path", "ops"]     # ops too: models drop optional fields
-    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create"]
+    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments"]
     op = schema["properties"]["ops"]["items"]
     assert op["required"] == ["op", "target"]
     assert set(op["properties"]["op"]["enum"]) == set(sheets.OPS)

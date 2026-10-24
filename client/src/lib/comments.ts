@@ -8,6 +8,9 @@ export interface CommentAuthor { id: string; name: string; image?: string; agent
 export interface CommentReply { id: string; author: CommentAuthor; text: string; at: string; edited?: string }
 // A slide (index, and name, which survives a reorder) and a point in its own pixels.
 export interface CommentSpot { page?: string; frame: number; frame_name?: string; x: number; y: number }
+// A workbook's cell: the sheet's id (its name beside it, for people), and the cell — null once its row or
+// column was removed (the thread stays, on no cell).
+export interface CellSpot { sheet: string; sheet_name?: string; cell: string | null }
 export interface CommentThread extends CommentSpot {
   id: string;
   n: number;                    // its number in the design, never reused
@@ -21,17 +24,19 @@ export interface CommentThread extends CommentSpot {
   resolved_at?: string;
   replies: CommentReply[];
 }
+// A workbook's thread: the same record, pinned to a cell instead of a slide's spot.
+export type SheetCommentThread = Omit<CommentThread, keyof CommentSpot> & CellSpot;
 export type CommentChange =
   | { op: "reply"; text: string }
   | { op: "resolve" | "reopen" }
   | { op: "edit"; text: string; reply?: string }
   | { op: "delete"; reply?: string }
-  | ({ op: "move" } & CommentSpot);
+  | ({ op: "move" } & (CommentSpot | CellSpot));
 
 type Named = { name?: string; image?: string };
 export interface CommentsApi {
   list: (path: string, version?: string) => Promise<{ threads?: CommentThread[]; version: string; me?: string; unchanged?: boolean }>;
-  add: (path: string, body: CommentSpot & { text: string } & Named) => Promise<{ thread: CommentThread }>;
+  add: (path: string, body: (CommentSpot | CellSpot) & { text: string } & Named) => Promise<{ thread: CommentThread }>;
   change: (path: string, id: string, body: CommentChange & Named) => Promise<{ thread: CommentThread | null }>;
 }
 // `me.name` comes from the browser: the server knows only an id.
@@ -100,6 +105,7 @@ export class CommentStore {
       this.timer = setInterval(() => { if (document.visibilityState !== "hidden") void this.refresh(); }, EVERY_MS);
       document.addEventListener("visibilitychange", this.onSeen);
       window.addEventListener("cycls:design-command", this.onCommand);
+      window.addEventListener("cycls:sheets-command", this.onCommand);
     }
     return () => {
       if (--this.watchers > 0) return;
@@ -107,6 +113,7 @@ export class CommentStore {
       this.timer = null;
       document.removeEventListener("visibilitychange", this.onSeen);
       window.removeEventListener("cycls:design-command", this.onCommand);
+      window.removeEventListener("cycls:sheets-command", this.onCommand);
     };
   };
 
@@ -148,7 +155,7 @@ export class CommentStore {
     void this.refresh();
   }
 
-  async add(spot: CommentSpot, text: string): Promise<CommentThread> {
+  async add(spot: CommentSpot | CellSpot, text: string): Promise<CommentThread> {
     const { thread } = await this.host.api.add(this.path, { ...spot, text, ...this.who() });
     this.took(thread, thread.id);
     this.set({ draft: null, active: thread.id });

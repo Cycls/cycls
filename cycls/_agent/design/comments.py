@@ -1,7 +1,8 @@
-"""Comment threads pinned on a design's slides (docs/notes/design.md, "Comments"). Kept in the
-workspace's shared `.comments` shelf, not the .fig, so a comment is no save; one record per design,
-written only if unchanged since read (`gen`) — the server runs on several instances."""
-import hashlib, math, secrets
+"""Comment threads pinned on a design's slides or a workbook's cells (docs/notes/design.md, "Comments";
+docs/notes/office.md). Kept in the workspace's shared `.comments` shelf, not the file, so a comment is no
+save; one record per file, written only if unchanged since read (`gen`) — the server runs on several
+instances."""
+import hashlib, math, re, secrets
 from datetime import datetime, timezone
 
 from cycls._app.db import DB, Conflict, workspace
@@ -14,6 +15,20 @@ KEPT_MAX = 1500        # threads kept in all — past it the oldest resolved go
 NAME_MAX = 80
 _SPAN = 30000          # a point this far from a slide's corner is not on a slide
 _TRIES = 8
+SHEET_EXTS = (".xlsx", ".xlsm")
+_CELL = re.compile(r"\$?([A-Z]{1,3})\$?([1-9][0-9]{0,6})")
+_SHEET_ID = re.compile(r"[A-Za-z0-9_.-]{1,40}")
+_MAX_ROW, _MAX_COL = 1_048_576, 16_384
+
+
+def kind_of(rel):
+    """What a file's comments are pinned on: a workbook's cells, or a design's slides."""
+    return "sheet" if str(rel).lower().endswith(SHEET_EXTS) else "design"
+
+
+def commentable(name):
+    """A file that has comments: a design (.fig) or a workbook."""
+    return str(name).lower().endswith((".fig",) + SHEET_EXTS)
 
 
 class Refused(Exception):
@@ -135,6 +150,54 @@ def _spot(at):
     return spot
 
 
+def _col_index(letters):
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
+def _col_name(index):
+    s, n = "", index + 1
+    while n > 0:
+        n, m = divmod(n - 1, 26)
+        s = chr(65 + m) + s
+    return s
+
+
+def cell_at(cell):
+    """B5 → (row 4, column 1), from 0; None when it is not a cell."""
+    m = _CELL.fullmatch(cell.strip().upper()) if isinstance(cell, str) else None
+    if not m:
+        return None
+    row, col = int(m.group(2)) - 1, _col_index(m.group(1))
+    return (row, col) if row < _MAX_ROW and col < _MAX_COL else None
+
+
+def cell_name(row, col):
+    return f"{_col_name(col)}{row + 1}"
+
+
+def _sheet_spot(at, gone_ok=False):
+    """Where a workbook comment is: {sheet (the sheet's id, e.g. s1), sheet_name?, cell (B5)}, checked. A cell
+    that was removed (its row or column deleted) is `cell: None` — the thread stays, on no cell."""
+    at = at if isinstance(at, dict) else {}
+    sheet = at.get("sheet")
+    if not isinstance(sheet, str) or not _SHEET_ID.fullmatch(sheet):
+        raise Refused("`sheet` is the sheet the comment is on: its id, e.g. s1.")
+    raw = at.get("cell")
+    if raw is None and gone_ok:
+        spot = {"sheet": sheet, "cell": None}
+    else:
+        at_cell = cell_at(raw)
+        if at_cell is None:
+            raise Refused("`cell` is the cell the comment is on, e.g. B5.")
+        spot = {"sheet": sheet, "cell": cell_name(*at_cell)}
+    if name := _words(at.get("sheet_name"), 120):
+        spot["sheet_name"] = name
+    return spot
+
+
 def author(user_id, name=None, image=None, agent=False):
     """Who wrote it: the signed-in person's id (never the request's) and the browser's name for them."""
     who = {"id": str(user_id), "name": _words(name, NAME_MAX) or ("Super" if agent else "Someone")}
@@ -180,8 +243,9 @@ def _trim(doc):
 
 
 async def add(ws, rel, who, text, at):
-    """A new thread pinned at `at`. → (the thread, the version)."""
-    text, spot = _text(text), _spot(at)
+    """A new thread pinned at `at` (a slide's spot, or a workbook's cell). → (the thread, the version)."""
+    text = _text(text)
+    spot = _sheet_spot(at) if kind_of(rel) == "sheet" else _spot(at)
 
     def change(doc):
         if len(open_threads(doc)) >= THREADS_MAX:
@@ -203,7 +267,8 @@ async def change(ws, rel, tid, op, who, body=None):
     if op not in ("reply", "resolve", "reopen", "edit", "delete", "move"):
         raise Refused("`op` is reply, resolve, reopen, edit, delete or move.")
     text = _text(body.get("text")) if op in ("reply", "edit") else None
-    spot = _spot(body) if op == "move" else None
+    sheet = kind_of(rel) == "sheet"
+    spot = (_sheet_spot(body, gone_ok=True) if sheet else _spot(body)) if op == "move" else None
     rid = body.get("reply") if op in ("edit", "delete") else None
 
     def own(item, what):
@@ -235,8 +300,11 @@ async def change(ws, rel, tid, op, who, body=None):
             own(t, "change")
             t.update(text=text, edited=now)
         elif op == "move":
-            own(t, "move")
-            for k in ("page", "frame_name"):
+            # A workbook comment follows its cell when rows move or the cell is cut and pasted: anyone's edit
+            # moves it. A pin on a slide is where its author put it.
+            if not sheet:
+                own(t, "move")
+            for k in ("page", "frame_name", "sheet_name"):
                 t.pop(k, None)
             t.update(spot)
         else:
@@ -246,6 +314,56 @@ async def change(ws, rel, tid, op, who, body=None):
         t["updated"] = now
         return t
     return await _update(ws, rel, apply)
+
+
+def shift_threads(threads, ops):
+    """Workbook comments moved with rows and columns inserted or removed ({kind, sheetId, start, count, band?},
+    the agent's edits): a comment on a removed cell is on no cell. → whether any moved."""
+    moved = False
+    for op in ops or []:
+        kind, sheet = str(op.get("kind") or ""), op.get("sheetId")
+        start, count = int(op.get("start") or 0), int(op.get("count") or 0)
+        if count <= 0 or kind not in ("insert-rows", "remove-rows", "insert-cols", "remove-cols"):
+            continue
+        rows = kind.endswith("rows")
+        band = op.get("band") if isinstance(op.get("band"), list) and len(op["band"]) == 2 else None
+        for t in threads:
+            if t.get("sheet") != sheet or not t.get("cell"):
+                continue
+            row, col = cell_at(t["cell"]) or (None, None)
+            if row is None:
+                continue
+            here, other = (row, col) if rows else (col, row)
+            if band and not band[0] <= other <= band[1]:
+                continue
+            if kind.startswith("insert"):
+                if here < start:
+                    continue
+                here += count
+            elif here < start:
+                continue
+            elif here < start + count:
+                t["cell"] = None
+                moved = True
+                continue
+            else:
+                here -= count
+            t["cell"] = cell_name(here, other) if rows else cell_name(other, here)
+            moved = True
+    return moved
+
+
+async def shift(ws, rel, ops):
+    """A workbook's comments moved with the rows and columns the agent inserted or removed."""
+    doc, _ = await read(ws, rel)
+    if not doc or not any(t.get("cell") for t in doc["threads"]) or not ops:
+        return
+    if not shift_threads([dict(t) for t in doc["threads"]], ops):
+        return
+
+    def apply(d):
+        shift_threads(d["threads"], ops)
+    await _update(ws, rel, apply)
 
 
 def _reopen(thread):

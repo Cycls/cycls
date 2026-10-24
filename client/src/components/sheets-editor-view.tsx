@@ -2,6 +2,7 @@ import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } 
 import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import type { OfficeEditorApi, OfficeOpen, SheetsOpened } from "../hooks/use-files";
+import { useComments, type CellSpot, type CommentChange, type SheetCommentThread } from "../lib/comments";
 import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { publishSelection } from "./design-editor-view";
@@ -39,6 +40,11 @@ export const flushAllSheetsEditors = (ms = 1500) =>
 
 /** A `sheets_command` event from the chat: the agent's edit, already written to `path`. */
 export type SheetsCommand = { path: string; mutations: unknown[] | null; version?: string; intent?: string; reload: boolean };
+// What the editor asks of a comment (its own comment UI): checked here, then sent through the comment store.
+type CommentAsk = {
+  rid?: unknown; op?: unknown; id?: unknown; reply?: unknown; text?: unknown;
+  sheet?: unknown; sheet_name?: unknown; cell?: unknown;
+};
 export function sheetsCommandDetail(ev: Record<string, unknown>): SheetsCommand {
   return {
     path: String(ev.path),
@@ -122,6 +128,13 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   const commands = useRef(new Map<string, string | undefined>());   // command id → the file's version after it
   const flushes = useRef(new Map<string, (ok: boolean) => void>());
   const reopenRef = useRef<() => void>(() => {});
+  const features = useRef<string[]>([]);   // what the editor said it does (ready)
+  // Comments on cells: the workspace's record for this file (the same store as a design's), polled; none on a
+  // view that cannot comment (a share).
+  const comments = useComments(api ? path : undefined);
+  const commentsRef = useRef(comments);
+  commentsRef.current = comments;
+  const answerRef = useRef<(ask: CommentAsk) => Promise<void>>(async () => {});
   // Never "*": anything sent goes to the editor's origin or nowhere.
   const origin = (() => {
     try {
@@ -161,7 +174,12 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
       if (!origin || e.origin !== origin || e.source !== frameRef.current?.contentWindow) return;
       const msg = e.data as { source?: string; type?: string; doc?: string };
       if (msg?.source !== "cycls-sheets") return;
-      if (msg.type === "ready") setReady(true);
+      if (msg.type === "ready") {
+        const f = (msg as { features?: unknown }).features;
+        features.current = Array.isArray(f) ? f.filter((x): x is string => typeof x === "string") : [];
+        setReady(true);
+      }
+      else if (msg.type === "comment" && msg.doc === doc.current) void answerRef.current(msg as unknown as CommentAsk);
       else if (msg.type === "loaded" && msg.doc === doc.current) { loadedRef.current = true; setLoaded(true); }
       else if (msg.type === "applied" && msg.doc === doc.current) {
         const { id, ok } = msg as { id?: string; ok?: boolean };
@@ -219,6 +237,49 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
     post({ type: "readonly", readonly: !editable || live });
     if (!live) setIntent(null);
   }, [live, ready, editable, post]);
+
+  // The workbook's comments, given to the editor whenever they change (its own comment UI shows them; what is
+  // written there comes back as `comment` and goes through the store).
+  const threads = comments?.threads;
+  const commentsLoaded = comments?.loaded;
+  const meId = comments?.me;
+  useEffect(() => {
+    if (!ready || !loaded || !commentsLoaded || !features.current.includes("comments")) return;
+    const host = commentsRef.current?.host;
+    const me = host?.me ? { id: meId || host.me.id, name: host.me.name, ...(host.me.image ? { image: host.me.image } : {}) } : undefined;
+    post({ type: "comments", doc: doc.current, threads: threads ?? [], me, ...(host?.agent ? { agent: host.agent } : {}) });
+  }, [ready, loaded, threads, commentsLoaded, meId, post]);
+
+  answerRef.current = async (ask: CommentAsk) => {
+    const store = commentsRef.current?.store;
+    const forDoc = doc.current;
+    const reply = (ok: boolean, thread: SheetCommentThread | null = null, error?: string) =>
+      post({ type: "commentDone", doc: forDoc, rid: ask.rid, ok, thread, ...(error ? { error } : {}) });
+    if (!store || typeof ask.rid !== "string") return reply(false, null, "Comments are off here.");
+    try {
+      if (ask.op === "add") {
+        const spot: CellSpot = { sheet: String(ask.sheet ?? ""), cell: typeof ask.cell === "string" ? ask.cell : null, ...(ask.sheet_name ? { sheet_name: String(ask.sheet_name).slice(0, 120) } : {}) };
+        const thread = await store.add(spot, String(ask.text ?? ""));
+        return reply(true, thread as unknown as SheetCommentThread);
+      }
+      if (typeof ask.id !== "string") return reply(false, null, "Which comment?");
+      const reply_ = typeof ask.reply === "string" ? { reply: ask.reply } : {};
+      let body: CommentChange;
+      switch (ask.op) {
+        case "reply": body = { op: "reply", text: String(ask.text ?? "") }; break;
+        case "edit": body = { op: "edit", text: String(ask.text ?? ""), ...reply_ }; break;
+        case "resolve": case "reopen": body = { op: ask.op }; break;
+        case "delete": body = { op: "delete", ...reply_ }; break;
+        case "move": body = { op: "move", sheet: String(ask.sheet ?? ""), cell: typeof ask.cell === "string" ? ask.cell : null, ...(ask.sheet_name ? { sheet_name: String(ask.sheet_name).slice(0, 120) } : {}) }; break;
+        default: return reply(false, null, "Unknown comment change.");
+      }
+      await store.change(ask.id, body);
+      const now = store.get().threads.find((x) => x.id === ask.id) ?? null;
+      return reply(true, now as unknown as SheetCommentThread | null);
+    } catch (e) {
+      return reply(false, null, String((e as Error)?.message ?? e));
+    }
+  };
 
   // The file again, as saved (an edit that did not replay, or one too large to send).
   const reopen = useCallback(() => {

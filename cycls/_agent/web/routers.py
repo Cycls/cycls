@@ -915,7 +915,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                 await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
             except OSError as e:   # never fail a rename that already happened
                 log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
-            if dest.suffix.lower() == ".fig" and Path(rel).suffix.lower() == ".fig":
+            if _commentable(dest.name) and _commentable(rel) and Path(rel).suffix.lower() == dest.suffix.lower():
                 await _comments(ws, "move", Path(rel).as_posix(), Path(dst).as_posix())   # …and what was said about it
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
@@ -941,13 +941,17 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if trash.owned_by_app(rel) and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
-        if meta["kind"] == "file" and rel.lower().endswith(".fig"):
-            await _comments(ws, "shelve", Path(rel).as_posix(), meta["id"])   # a new design of that name starts with none
+        if meta["kind"] == "file" and _commentable(rel):
+            await _comments(ws, "shelve", Path(rel).as_posix(), meta["id"])   # a new file of that name starts with none
         _catalog_drop(ws.root)
         return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
 
+    def _commentable(name):
+        from cycls._agent.design import comments
+        return comments.commentable(name)
+
     async def _comments(ws, what, *args):
-        """A design's comments follow it (comments.py: move, shelve, unshelve, drop); a failure only logs."""
+        """A design's or workbook's comments follow it (comments.py: move, shelve, unshelve, drop); a failure only logs."""
         from cycls._agent.design import comments
         try:
             await getattr(comments, what)(ws, *args)
@@ -1013,7 +1017,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             path = await asyncio.to_thread(trash.restore, ws.root, tid)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Not found")
-        if path.lower().endswith(".fig"):
+        if _commentable(path):
             await _comments(ws, "unshelve", tid, Path(path).as_posix())
         _catalog_drop(ws.root)
         return {"ok": True, "path": path}

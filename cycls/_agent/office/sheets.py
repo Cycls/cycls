@@ -14,7 +14,7 @@ from ..design.store import Stale, read_fig, write_fig
 from ..paths import _resolve_path
 from . import client
 
-ACTIONS = ("read", "edit", "create")
+ACTIONS = ("read", "edit", "create", "comments")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
        "insert_cols", "delete_cols", "add_sheet", "rename_sheet", "delete_sheet", "freeze", "column_width",
        "sort", "set_direction", "note", "define_name")
@@ -32,6 +32,8 @@ SHEETS_TOOL = {
         "- create: a new workbook at `path` (`target` names the first sheet, `rtl` for Arabic; an Arabic name or "
         "Arabic values make it right to left unless rtl is false), then `ops`.\n"
         "- note puts a note on a cell (`text`; empty removes it); define_name names a range (`name`, `target`).\n"
+        "- comments: what people wrote on the workbook's cells, every thread; with `number` (the # in the list) "
+        "answer it (`reply`) and close or reopen it (`resolve`). read lists the open ones too.\n"
         "Targets are A1 ranges (B3, B3:D9, 'Sheet 2'!A1:C4), rows (5 or 5:7), columns (C or C:D) or a "
         "sheet name. Values are rows of cells: [[\"Item\", \"Qty\"], [\"Tea\", 5]]; a value starting with = "
         "is a formula. Read before editing a file you have not seen. `ops` is always sent: [] for read."
@@ -79,6 +81,9 @@ SHEETS_TOOL = {
                 },
             },
             "rtl": {"type": "boolean", "description": "create: the first sheet reads right to left (Arabic)"},
+            "number": {"type": "integer", "description": "comments: the comment to answer or resolve (its #)"},
+            "reply": {"type": "string", "description": "comments: your answer to comment `number`"},
+            "resolve": {"type": "boolean", "description": "comments: true closes comment `number`, false reopens it"},
             "raw": {"type": "boolean", "description": "read: stored values instead of formatted ones"},
             "intent": {"type": "string", "description": "edit: a few words on what the change does, shown to the person"},
         },
@@ -109,6 +114,101 @@ def sheets_step(inp):
 
 def _err(message):
     return f"Error: {message}"
+
+
+def _clip(text, most):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= most else text[: most - 1] + "…"
+
+
+_PLAIN_SHEET = re.compile(r"[A-Za-z_\u0600-\u06FF][\w.\u0600-\u06FF]*")
+
+
+def _where(t):
+    sheet = t.get("sheet_name") or t.get("sheet") or "?"
+    if not _PLAIN_SHEET.fullmatch(sheet):
+        sheet = "'" + sheet.replace("'", "''") + "'"
+    return f"{sheet}!{t['cell']}" if t.get("cell") else f"{sheet} (its cell was removed)"
+
+
+def _thread_line(t, full=False):
+    who = (t.get("author") or {}).get("name") or "Someone"
+    replies = t.get("replies") or []
+    line = f"#{t.get('n')} {_where(t)} — {who}: \"{_clip(t.get('text'), 400 if full else 160)}\""
+    if replies and not full:
+        line += f" · {len(replies)} repl{'y' if len(replies) == 1 else 'ies'}"
+    if t.get("resolved"):
+        line += " · resolved"
+    if full:
+        for r in replies[-5:]:
+            line += f"\n    ↳ {(r.get('author') or {}).get('name') or 'Someone'}: \"{_clip(r.get('text'), 300)}\""
+        if len(replies) > 5:
+            line += f"\n    (and {len(replies) - 5} earlier)"
+    return line
+
+
+async def _open_comments(workspace, rel):
+    """The open comments on a workbook, a line each — "" when none (or comments are not kept here)."""
+    from ..design import comments
+    if not comments.usable(workspace):
+        return ""
+    try:
+        doc, _ = await comments.read(workspace, rel)
+    except Exception:
+        return ""
+    threads = comments.open_threads(doc)
+    if not threads:
+        return ""
+    lines = [_thread_line(t) for t in threads[:12]]
+    more = f"\n  … and {len(threads) - 12} more (action comments lists them all)" if len(threads) > 12 else ""
+    return "\n\nOpen comments:\n  " + "\n  ".join(lines) + more
+
+
+async def _exec_comments(inp, workspace, rel):
+    """List a workbook's comments, or reply to / resolve / reopen one by `number`, as the agent."""
+    from ..design import comments
+    if not comments.usable(workspace):
+        return _err("comments aren't kept in this workspace.")
+    try:
+        doc, _ = await comments.read(workspace, rel)
+    except Exception as e:
+        return _err(f"couldn't read the comments on {rel} — {e}")
+    threads = comments.shown(doc)
+    number, reply, resolve = inp.get("number"), inp.get("reply"), inp.get("resolve")
+    if number is None:
+        if (isinstance(reply, str) and reply.strip()) or isinstance(resolve, bool):
+            return _err("`reply` and `resolve` are for one comment — pass its `number` (the # in the list).")
+        if not threads:
+            return f"No one has commented on {rel}."
+        opened = [t for t in threads if not t.get("resolved")]
+        closed = [t for t in threads if t.get("resolved")]
+        out = [f"Comments on {rel}: {len(opened)} open, {len(closed)} resolved."]
+        out += [_thread_line(t, full=True) for t in opened[:40]]
+        if closed:
+            out.append("Resolved:")
+            out += [_thread_line(t) for t in closed[-10:]]
+        return "\n".join(out)
+    thread = next((t for t in threads if t.get("n") == number), None)
+    if thread is None:
+        have = ", ".join(f"#{t['n']}" for t in threads) or "none"
+        return _err(f"{rel} has no comment #{number} — it has {have}. Nothing was changed.")
+    if not (isinstance(reply, str) and reply.strip()) and not isinstance(resolve, bool):
+        return _err(f"nothing to do to comment #{number} — pass `reply` (your answer) and/or `resolve` "
+                    "(true closes it, false opens it again). Without `number`, comments lists them.")
+    me, did = comments.author("agent", agent=True), []
+    try:
+        if isinstance(reply, str) and reply.strip():
+            await comments.change(workspace, rel, thread["id"], "reply", me, {"text": reply})
+            did.append("replied to")
+        if isinstance(resolve, bool):
+            await comments.change(workspace, rel, thread["id"], "resolve" if resolve else "reopen", me)
+            did.append("resolved" if resolve else "reopened")
+    except comments.Refused as e:
+        return _err(str(e) + (f" (Already done: {did[0]} it.)" if did else ""))
+    left = len([t for t in threads if not t.get("resolved") and t.get("n") != number]) + (0 if resolve else 1)
+    said = " and ".join(did)
+    return (f"{said[0].upper()}{said[1:]} comment #{number} on {rel}. The people working on it see that in the "
+            f"workbook. {left} comment{'s' if left != 1 else ''} still open.")
 
 
 def _check_ops(ops):
@@ -154,7 +254,13 @@ async def exec_sheets(inp, workspace, ctx=None):
             if not path.is_file():
                 return _err(f"{rel} does not exist.")
             data = await asyncio.to_thread(path.read_bytes)
-            return await client.sheets_read(data, path.name, target=inp.get("target"), raw=bool(inp.get("raw")))
+            text = await client.sheets_read(data, path.name, target=inp.get("target"), raw=bool(inp.get("raw")))
+            return text + await _open_comments(workspace, rel)
+
+        if action == "comments":
+            if not path.is_file():
+                return _err(f"{rel} does not exist.")
+            return await _exec_comments(inp, workspace, rel)
 
         if bad := _check_ops(ops):
             return _err(bad)
@@ -200,6 +306,13 @@ async def exec_sheets(inp, workspace, ctx=None):
     except client.Unavailable as e:
         return _err(f"Sheets is unavailable — {e}")
 
+    if result.get("ops"):   # comments on the cells follow the rows and columns the edit moved
+        from ..design import comments
+        if comments.usable(workspace):
+            try:
+                await comments.shift(workspace, rel, result["ops"])
+            except Exception as e:
+                log("warn", message=f"comments on {rel} did not follow the edit: {type(e).__name__}: {e}")
     ui = {"type": "ui", "action": "sheets_command", "path": rel, "mutations": result["mutations"],
           "version": version}
     if intent := inp.get("intent"):

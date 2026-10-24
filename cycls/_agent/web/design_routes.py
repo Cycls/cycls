@@ -422,11 +422,11 @@ def design_router(ws_dep, user_dep, changed):
     # ---- Comments on a design (cycls/_agent/design/comments.py) ----
 
     def _commented(ws, path):
-        """The `.fig` a comments request is about."""
+        """The `.fig` or workbook a comments request is about."""
         root = Path(ws.root).resolve()
         src = _safe_path(root, path)
-        if not _design_doc(src.name) or not src.is_file():
-            raise HTTPException(404, "No such design")
+        if not comments.commentable(src.name) or not src.is_file():
+            raise HTTPException(404, "No such design or workbook")
         return src.relative_to(root).as_posix()
 
     def _commenter(ws, user, body):
@@ -449,8 +449,9 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.post("/comments/{path:path}")
     async def comment(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
-        """A new thread {text, frame (from 0), x, y (slide pixels), page?, frame_name?, name?}, or with `?id=`
-        a change {op: reply|resolve|reopen|edit|delete|move, …} → {thread (null once deleted), version}."""
+        """A new thread {text, frame (from 0), x, y (slide pixels), page?, frame_name?, name?} — on a workbook
+        {text, sheet, cell, sheet_name?, name?} — or with `?id=` a change {op: reply|resolve|reopen|edit|delete|
+        move, …} → {thread (null once deleted), version}."""
         rel = await asyncio.to_thread(_commented, ws, path)
         try:
             body = await request.json()
