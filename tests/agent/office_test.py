@@ -161,6 +161,27 @@ def test_open_reads_once_then_serves_the_cache(monkeypatch, tmp_path):
     assert len(calls) == 2
 
 
+def test_version_is_the_one_open_and_save_name(monkeypatch, tmp_path):
+    """An open editor asks for the file's version after it may have changed some other way; it must be the same
+    version open answers with (and a save names as its base)."""
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04 workbook")
+    c = _app(_ws(tmp_path))
+    assert c.get("/office/sheets/version", params={"path": "b.xlsx"}).status_code == 403   # not switched on
+    monkeypatch.setenv("SHEETS_ORGS", "org1")
+
+    async def read_xlsx(data, name=None):
+        return {"workbook": {"id": "book"}, "notices": []}
+
+    monkeypatch.setattr(office, "read_xlsx", read_xlsx)
+    opened = c.get("/office/sheets/open", params={"path": "b.xlsx"}).json()["version"]
+    got = c.get("/office/sheets/version", params={"path": "b.xlsx"}).json()
+    assert got["version"] == opened and got["modified"]
+    (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04 written by a script")
+    assert c.get("/office/sheets/version", params={"path": "b.xlsx"}).json()["version"] != opened
+    assert c.get("/office/sheets/version", params={"path": "missing.xlsx"}).status_code == 404
+
+
 def test_open_says_why_it_cannot(monkeypatch, tmp_path):
     (tmp_path / "b.xlsx").write_bytes(b"PK\x03\x04")
     c = _app(_ws(tmp_path))

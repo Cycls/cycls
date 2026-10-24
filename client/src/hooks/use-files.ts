@@ -74,6 +74,8 @@ export type SheetsOpened = {
 export type OfficeEditorApi = {
   sheets: (path: string) => Promise<OfficeOpen>;
   sheetsOpen: (path: string) => Promise<SheetsOpened>;
+  // The file's version now (an open editor checks it once the file may have changed some other way).
+  sheetsVersion?: (path: string) => Promise<{ version: string; modified?: string }>;
   pdf: (path: string) => Promise<string>;   // a blob URL of the file as PDF (the office-render service)
   // The editor's workbook written back into the file (only what differs changes). A file changed since
   // `base` answers {conflict: <its version>} instead.
@@ -284,6 +286,8 @@ export function useFiles(baseUrl: string = "") {
       const body = (await res.json()) as SheetsOpened;
       return { ...body, modified: res.headers.get("X-Modified") ?? body.modified };
     },
+    sheetsVersion: async (filePath) =>
+      (await api(`/office/sheets/version?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
     pdf: async (filePath) =>
       URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
     sheetsSave: async (filePath, base, payload, force) => {

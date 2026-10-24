@@ -4,6 +4,7 @@
                                     → {editor: true, url, name} or {editor: false, reason}
     GET /office/sheets/open?path=   the workbook the editor opens (gzip JSON):
                                     {version, modified, snapshot, notices, activeSheet, stats}
+    GET /office/sheets/version?path=  the file's version now → {version, modified}
     PUT /office/sheets/save?path=&base=&force=
                                     the editor's workbook (JSON, gzip) written back into the file:
                                     only what differs changes (patch-back on the service), the
@@ -112,6 +113,17 @@ def office_router(ws_dep, required_auth=None, changed=None):
         return Response(body, media_type="application/json", headers={
             "Content-Encoding": "gzip", "Cache-Control": "no-store", "X-Version": version, "X-Modified": modified,
         })
+
+    @r.get("/office/sheets/version")
+    async def sheets_version(path: str, ws: Workspace = ws_dep):
+        """The file's version now (what a save names as its base): an open editor checks it after the file may
+        have changed some other way, and takes the new file in (or asks, with unsaved changes)."""
+        file_path = _sheet_file(ws, path)
+        if not office.offered(ws, "sheets"):
+            raise HTTPException(403, "Cycls Sheets is not switched on for this workspace.")
+        data = await asyncio.to_thread(file_path.read_bytes)
+        modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
+        return {"version": version_of(data), "modified": modified}
 
     @r.put("/office/sheets/save")
     async def sheets_save(path: str, request: Request, base: str = "", force: bool = False,

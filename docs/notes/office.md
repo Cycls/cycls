@@ -15,8 +15,12 @@ One Node process:
 - `/sheets/` — the Cycls Sheets editor (public, framed by Cycls, strict content policy).
 - `/health` — release, engine stamp, workers.
 - `/v1/…` behind `OFFICE_SECRET`:
-  - `xlsx/read` — the file's bytes → the workbook the editor opens, plus notices of what is kept but not editable
-    (charts, pivots, …).
+  - `xlsx/read` — the file's bytes → the workbook the editor opens, plus notices of what is kept but not editable.
+    Charts come with it as descriptions (kind, series and the cells they draw from, colours, axes, legend, place):
+    the editor draws them with ECharts, redraws one when its cells change, and a moved, resized or deleted chart
+    is saved (the chart part itself is never rewritten). Pivot tables come with their place, fields and source:
+    the editor outlines each with a tag and keeps its cells from edits (formatting allowed, as in Excel); a save
+    after its source changed sets `refreshOnLoad`, so Excel recomputes it on open.
   - `xlsx/patch` — the original file + the editor's workbook (gzip JSON, `{snapshot, ops}`) → the patched file.
     Only changed rows and parts are rewritten; `ops` (rows/columns inserted or removed) move the references the
     file keeps as written (conditional formats, validation, filters, pictures, charts, tables, pivots, names).
@@ -30,13 +34,17 @@ One Node process:
   - `GET /office/sheets?path=` → `{editor: true, url, name}` or `{editor: false, reason}`, per workspace.
   - `GET /office/sheets/open?path=` → the workbook (gzip JSON, cached by file version in `.cache/sheets/`),
     `X-Version`, `X-Modified`.
+  - `GET /office/sheets/version?path=` → `{version, modified}`, the version open and save use.
   - `PUT /office/sheets/save?path=&base=&force=` → patch-back through the service, `write_fig(by="user")` keeps the
     replaced version; a stale `base` answers 412 with the file's version.
 - `Config.public()` sends `sheets_editor: true` when the service is configured (the URL and org list stay
   server-side).
 - `client/src/components/sheets-editor-view.tsx`: `SheetsOrPreview` asks the route once per file (without Sheets
   the SheetJS preview stays). The editor puts its items into the canvas's file header (last modified, status,
-  Open ⌄ with Excel/PDF) and shows the conflict bar (Load the latest / Keep mine).
+  Open ⌄ with Excel/PDF) and shows the conflict bar (Load the latest / Keep mine). Each time the canvas fetches
+  the file again (a turn ended, a refresh), once the agent is done the view checks the file's version: a file
+  changed some other way (the agent's other tools, another tab or person) is taken in, or, with changes not yet
+  saved, the conflict bar asks.
 
 ## The agent's `sheets` tool (`cycls/_agent/office/sheets.py`)
 
@@ -89,7 +97,9 @@ never saved or undone and never marks the workbook dirty.
 
 ## Not built yet
 
-Comments and co-editing (S5); charts and pivots shown (S6); Docs (D1–D6). Saved since 2026-10-24: notes, defined
+Comments and co-editing (S5); Docs (D1–D6). Built 2026-10-24 (not deployed yet): charts drawn and kept, pivot
+tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid out again
+once a font has loaded, the reload after a file changed some other way. Saved since 2026-10-24: notes, defined
 names, tables (with their Excel style shown), pictures (shown, moved, resized, deleted, added), cells inserted or
 deleted with a shift; right-to-left sheets drawn mirrored (S4). Deployed 2026-10-24: the cycls-office service and
 super-dev (SDK feat/office).

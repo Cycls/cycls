@@ -50,13 +50,14 @@ export function sheetsCommandDetail(ev: Record<string, unknown>): SheetsCommand 
 }
 
 /** Asks once per file whether this workspace opens it in Cycls Sheets; otherwise shows `preview`. */
-export function SheetsOrPreview({ path, name, api, preview, onDownload, live }: {
+export function SheetsOrPreview({ path, name, api, preview, onDownload, live, contentKey }: {
   path: string;
   name: string;
   api: OfficeEditorApi;
   preview: ReactNode;
   onDownload?: () => void;
   live?: boolean;
+  contentKey?: string | null;   // changes each time the canvas fetches the file again
 }) {
   const [open, setOpen] = useState<OfficeOpen | null>(null);
   useEffect(() => {
@@ -69,7 +70,7 @@ export function SheetsOrPreview({ path, name, api, preview, onDownload, live }: 
   }, [api, path]);
   if (!open) return <LoadingBar />;
   return open.editor
-    ? <SheetsEditorView url={open.url} path={path} name={name} api={api} onDownload={onDownload} fallback={preview} live={live} />
+    ? <SheetsEditorView url={open.url} path={path} name={name} api={api} onDownload={onDownload} fallback={preview} live={live} contentKey={contentKey} />
     : <>{preview}</>;
 }
 
@@ -85,7 +86,7 @@ function modifiedLabel(iso: string | undefined): string {
   return t("sheetsLastModified").replace("{time}", time);
 }
 
-export function SheetsEditorView({ url, path, name, api, onDownload, fallback, live = false }: {
+export function SheetsEditorView({ url, path, name, api, onDownload, fallback, live = false, contentKey }: {
   url: string;
   path: string;
   name: string;
@@ -93,6 +94,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   onDownload?: () => void;
   fallback?: ReactNode;
   live?: boolean;     // the agent is working: read-only, its edits replayed
+  contentKey?: string | null;   // changes each time the canvas fetches the file again
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const slots = useContext(CanvasHeaderSlot);
@@ -299,6 +301,33 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
     setConflict(null);
     post({ type: "save" });
   };
+
+  // A file changed some other way (the agent's other tools, another tab or person): each time the canvas
+  // fetches the file again (a turn ended, a refresh), its version is checked once the agent is done — the editor
+  // takes the new file in, or, with changes not yet saved, shows the bar that asks.
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const conflictRef = useRef(conflict);
+  conflictRef.current = conflict;
+  const seenContent = useRef(contentKey);
+  const needsCheck = useRef(false);
+  if (contentKey !== seenContent.current) {
+    seenContent.current = contentKey;
+    needsCheck.current = true;
+  }
+  useEffect(() => {
+    if (!needsCheck.current || !api?.sheetsVersion || live || !loaded || commands.current.size) return;
+    needsCheck.current = false;
+    let cancelled = false;
+    void (async () => {
+      await saving.current;
+      const now = await api.sheetsVersion!(path).catch(() => null);
+      if (cancelled || !now?.version || now.version === version.current || conflictRef.current !== null) return;
+      if (statusRef.current === "saved") reopen();
+      else setConflict(now.version);
+    })();
+    return () => { cancelled = true; };
+  }, [contentKey, live, loaded, api, path, reopen]);
 
   useEffect(() => { if (ready) post({ type: "theme", theme: dark ? "dark" : "light" }); }, [dark, ready, post]);
   useEffect(() => { if (ready) post({ type: "locale", lang }); }, [lang, ready, post]);
