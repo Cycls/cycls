@@ -183,6 +183,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
         const { id, ok } = msg as { id?: string; ok?: boolean };
         if (typeof id === "string") { flushes.current.get(id)?.(ok === true); flushes.current.delete(id); }
       }
+      else if (msg.type === "print" && msg.doc === doc.current) void printRef.current();
       else if (msg.type === "error" && msg.doc === doc.current) setFailed(true);
       else if (msg.type === "dirty" && msg.doc === doc.current) {
         const d = (msg as { dirty?: boolean }).dirty;
@@ -332,9 +333,19 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   useEffect(() => { if (ready) post({ type: "theme", theme: dark ? "dark" : "light" }); }, [dark, ready, post]);
   useEffect(() => { if (ready) post({ type: "locale", lang }); }, [lang, ready, post]);
 
+  // What is unsaved goes into the file first: a PDF or a print is made from the file.
+  const flushNow = (ms = 8000) => new Promise<boolean>((resolve) => {
+    if (!loadedRef.current || !editable) return resolve(true);
+    const id = `f${++seq.current}`;
+    const timer = window.setTimeout(() => { flushes.current.delete(id); resolve(false); }, ms);
+    flushes.current.set(id, (ok) => { window.clearTimeout(timer); resolve(ok); });
+    post({ type: "flush", id });
+  });
+
   const savePdf = async () => {
     setMenu(false);
     if (!api) return;
+    await flushNow();
     try {
       const href = await api.pdf(path);
       const a = document.createElement("a");
@@ -344,6 +355,36 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
       setTimeout(() => URL.revokeObjectURL(href), 10_000);
     } catch { /* the toast comes from the request */ }
   };
+
+  // Printed as the PDF the file makes (the canvas would print only what is on screen): the browser's print
+  // dialog over a hidden frame holding it; where a browser cannot print a framed PDF, it is saved instead.
+  const printPdf = async () => {
+    setMenu(false);
+    if (!api) return;
+    await flushNow();
+    let href: string;
+    try {
+      href = await api.pdf(path);
+    } catch { return; /* the toast comes from the request */ }
+    const frame = document.createElement("iframe");
+    frame.style.cssText = "position:fixed;inset-inline-end:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+    frame.src = href;
+    frame.onload = () => {
+      try {
+        frame.contentWindow?.focus();
+        frame.contentWindow?.print();
+      } catch {
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = `${name.replace(/\.[^.]+$/, "")}.pdf`;
+        a.click();
+      }
+    };
+    document.body.appendChild(frame);
+    setTimeout(() => { frame.remove(); URL.revokeObjectURL(href); }, 120_000);
+  };
+  const printRef = useRef(printPdf);
+  printRef.current = printPdf;
 
   if (!origin) return null;
   if (failed && fallback) return <>{fallback}</>;
@@ -395,6 +436,16 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
               <button role="menuitem" onClick={() => void savePdf()}
                       className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-secondary">
                 <span className="flex size-4 items-center justify-center rounded bg-red-600 text-[8px] font-bold text-white">PDF</span>{t("sheetsSavePdf")}
+              </button>
+            )}
+            {api && (
+              <button role="menuitem" onClick={() => void printPdf()} data-testid="sheets-print"
+                      className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-secondary">
+                <svg viewBox="0 0 16 16" className="size-4 text-muted-foreground" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+                  <path d="M4.5 6V2.5h7V6M4.5 11.5h-2v-5h11v5h-2M4.5 9.5h7v4h-7z" strokeLinejoin="round" />
+                </svg>
+                <span className="flex-1">{t("sheetsPrint")}</span>
+                <span className="text-muted-foreground" dir="ltr">Ctrl+P</span>
               </button>
             )}
           </div>
