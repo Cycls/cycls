@@ -199,14 +199,17 @@ async def docs_read(data, name, start=None, max_chars=None):
     return r.json()["text"]
 
 
-async def docs_apply(data, name, ops, create=None):
+async def docs_apply(data, name, ops, create=None, author=None):
     """The agent's edits made and written into the file (all or none) → {unchanged, bytes, report}.
-    `create` ({content, rtl?}) makes a new document from markdown and needs no `data`."""
+    `create` ({content, rtl?}) makes a new document from markdown and needs no `data`; `author` is who comments
+    and replies are written as."""
     import base64
     import json
     request = {"name": name, "ops": list(ops or [])}
     if create is not None:
         request["create"] = create
+    if author:
+        request["author"] = str(author)[:60]
     files = {"request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json")}
     if data is not None:
         files["file"] = (name or "document.docx", bytes(data), _DOCX)

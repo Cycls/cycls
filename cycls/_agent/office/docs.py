@@ -15,7 +15,10 @@ from . import client
 
 ACTIONS = ("read", "edit", "create")
 OPS = ("replace", "find_replace", "insert_after", "insert_before", "delete", "style", "list", "link", "cell",
-       "insert_row", "delete_row", "insert_column", "delete_column")
+       "insert_row", "delete_row", "insert_column", "delete_column", "insert_table", "picture", "comment", "reply",
+       "resolve", "accept_changes", "reject_changes")
+_IMAGES = {".png", ".jpg", ".jpeg", ".gif"}
+_MAX_IMAGE = 10 * 1024 * 1024
 _MAX_OPS = 100
 
 DOCS_TOOL = {
@@ -37,9 +40,14 @@ DOCS_TOOL = {
         "style (para or find, to?; style like \"Heading 2\", align, rtl, bold, italic, underline, strike, color, "
         "highlight, size, font — with find, only those words); list (para, to?, list: bullet | numbered | none, "
         "level?); link (find, url; \"\" removes it); cell (table \"T1\", row, col, text); insert_row (table, after, "
-        "cells); delete_row (table, row); insert_column (table, after, cells); delete_column (table, col). Rows "
-        "and columns count from 1. Read before editing a document you have not seen. `ops` and `content` are "
-        "always sent: ops [] for read and create, content \"\" for read and edit."
+        "cells); delete_row (table, row); insert_column (table, after, cells); delete_column (table, col); "
+        "insert_table (para, rows: [[\"Name\", \"Owner\"], [\"…\", \"…\"]], header?) adds a table after the paragraph; "
+        "picture (para, path: a PNG/JPEG/GIF in the workspace, width? in pixels, align?) adds a picture after it; "
+        "comment (para or find, text) comments on the paragraph or those words; reply (comment: the # in the read's "
+        "Comments, text); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
+        "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
+        "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
+        "ops [] for read and create, content \"\" for read and edit."
     ),
     "input_schema": {
         "type": "object",
@@ -75,6 +83,12 @@ DOCS_TOOL = {
                         "row": {"type": "integer"}, "col": {"type": "integer"},
                         "after": {"type": "integer", "description": "insert_row / insert_column: after this row or column (0 = first)"},
                         "cells": {"type": "array", "items": {"type": "string"}, "description": "insert_row: the new row's cells; insert_column: one per row"},
+                        "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "description": "insert_table: rows of cells, the first a header"},
+                        "header": {"type": "boolean", "description": "insert_table: false when the first row is not a header"},
+                        "path": {"type": "string", "description": "picture: the image file in the workspace"},
+                        "width": {"type": "integer", "description": "picture: width in pixels (it keeps its proportions)"},
+                        "comment": {"type": "integer", "description": "reply / resolve: the comment's # in the read"},
+                        "done": {"type": "boolean", "description": "resolve: false opens the comment again"},
                     },
                     "required": ["op"],
                 },
@@ -120,6 +134,30 @@ def _check_ops(ops):
         if op["op"] not in OPS:
             return f"op {i}: unknown op {str(op['op'])[:30]!r} (one of {', '.join(OPS)})"
     return None
+
+
+def _with_pictures(ops, root):
+    """Ops with each picture's image read from the workspace (sent as base64 with its name)."""
+    import base64
+    out = []
+    for i, op in enumerate(ops, 1):
+        if op.get("op") != "picture":
+            out.append(op)
+            continue
+        raw = str(op.get("path") or "").strip()
+        if not raw:
+            raise ValueError(f"op {i} (picture) needs `path`: a PNG, JPEG or GIF in the workspace")
+        image = _resolve_path(raw, root)
+        if image.suffix.lower() not in _IMAGES:
+            raise ValueError(f"op {i} (picture): {raw} is not a PNG, JPEG or GIF")
+        if not image.is_file():
+            raise ValueError(f"op {i} (picture): {raw} does not exist")
+        if image.stat().st_size > _MAX_IMAGE:
+            raise ValueError(f"op {i} (picture): {raw} is larger than 10 MB")
+        sent = {k: v for k, v in op.items() if k != "path"}
+        sent.update(data=base64.b64encode(image.read_bytes()).decode(), name=image.name)
+        out.append(sent)
+    return out
 
 
 async def exec_docs(inp, workspace, ctx=None):
@@ -177,12 +215,18 @@ async def exec_docs(inp, workspace, ctx=None):
         # edit
         if not ops:
             return _err("edit needs `ops`: [{\"op\": \"replace\", \"para\": \"¶3·k3f\", \"text\": \"…\"}].")
+        try:
+            ops = await asyncio.to_thread(_with_pictures, ops, root)
+        except ValueError as e:
+            return _err(f"{e}. Nothing was changed.")
+        from ..design import comments as _comments
+        author = _comments.author("agent", agent=True)["name"]
         async with lock(path):   # one change at a time per file: the model calls tools in parallel
             for attempt in (1, 2):
                 data, base = await asyncio.to_thread(read_fig, root, rel)
                 if data is None:
                     return _err(f"{rel} does not exist (use create for a new document).")
-                result = await client.docs_apply(data, path.name, ops)
+                result = await client.docs_apply(data, path.name, ops, author=author)
                 if result["unchanged"]:
                     return f"Nothing in {rel} changed.\n{result['report']}".strip()
                 try:   # a save meanwhile: apply to that, once (its references may no longer match — then it says so)

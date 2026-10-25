@@ -201,3 +201,39 @@ def test_only_docx_files_and_known_ops(monkeypatch, tmp_path):
     out = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "rewrite_everything"}]}, _ws(tmp_path))
     assert "unknown op" in out and (tmp_path / "q3.docx").read_bytes() == DOCX
     assert "needs `ops`" in _run({"action": "edit", "path": "q3.docx", "ops": []}, _ws(tmp_path))
+
+
+def test_a_picture_is_sent_from_the_workspace_and_comments_are_signed(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    (tmp_path / "img").mkdir()
+    (tmp_path / "img" / "logo.png").write_bytes(b"\x89PNG fake image")
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"]))
+        return _applied("A picture added after the paragraph.")
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "edit", "path": "q3.docx", "content": "",
+                "ops": [{"op": "picture", "para": "¶2·abc", "path": "img/logo.png", "width": 200},
+                        {"op": "comment", "para": "¶3·def", "text": "Check this"}]}, _ws(tmp_path))
+    assert out["_model"].startswith("Edited q3.docx.")
+    sent = seen[0]
+    picture = sent["ops"][0]
+    assert "path" not in picture and picture["name"] == "logo.png" and picture["width"] == 200
+    assert base64.b64decode(picture["data"]) == b"\x89PNG fake image"
+    assert sent["author"] == "Super"
+
+
+def test_a_picture_that_is_not_there_or_not_an_image_changes_nothing(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    (tmp_path / "notes.txt").write_text("x")
+    _mock(monkeypatch, lambda r: pytest.fail("the service was called"))
+    missing = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "picture", "para": "¶2", "path": "nope.png"}]}, _ws(tmp_path))
+    assert "does not exist" in missing and "Nothing was changed" in missing
+    text = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "picture", "para": "¶2", "path": "notes.txt"}]}, _ws(tmp_path))
+    assert "not a PNG, JPEG or GIF" in text
+    outside = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "picture", "para": "¶2", "path": "../../etc/x.png"}]}, _ws(tmp_path))
+    assert outside.startswith("Error:") and (tmp_path / "q3.docx").read_bytes() == DOCX
