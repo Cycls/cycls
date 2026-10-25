@@ -1,4 +1,4 @@
-"""Cycls Sheets (the office editors): who gets it, the config the browser sees, the route that answers
+"""Cycls Sheets and Cycls Docs (the office editors): who gets it, the config the browser sees, the route that answers
 per file, and the client over a mocked service. No service is contacted."""
 import asyncio
 import types
@@ -314,3 +314,90 @@ def test_patch_xlsx_sends_both_parts_and_reads_the_answer(monkeypatch):
     out = asyncio.run(office.patch_xlsx(b"PK old", b"edit"))
     assert out == {"unchanged": False, "bytes": b"PK new", "summary": {"cellsWritten": 2}}
     assert seen[-1].url.path == "/v1/xlsx/patch" and b'name="file"' in seen[-1].content and b'name="snapshot"' in seen[-1].content
+
+
+# ---- Cycls Docs: the same routes for Word documents -------------------------------------------
+
+def _docx(path, body_xml):
+    import zipfile
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("word/document.xml", f'<w:document xmlns:w="w"><w:body>{body_xml}</w:body></w:document>')
+
+
+def test_docs_opens_word_files_and_keeps_right_to_left_ones_on_the_preview(monkeypatch, tmp_path):
+    _docx(tmp_path / "report.docx", "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
+    _docx(tmp_path / "arabic.docx", "<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:t>مرحبا</w:t></w:r></w:p>")
+    _docx(tmp_path / "off.docx", '<w:p><w:pPr><w:bidi w:val="0"/></w:pPr></w:p>')
+    (tmp_path / "budget.xlsx").write_bytes(b"PK\x03\x04")
+    c = _app(_ws(tmp_path))
+    assert c.get("/office/docs", params={"path": "budget.xlsx"}).status_code == 400
+    assert c.get("/office/docs", params={"path": "report.docx"}).json() == {"editor": False, "reason": "off"}
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test/")
+    monkeypatch.setenv("SHEETS_ORGS", "org1")
+    assert c.get("/office/docs", params={"path": "report.docx"}).json()["editor"] is False, "Sheets on is not Docs on"
+    monkeypatch.setenv("DOCS_ORGS", "org1")
+    assert c.get("/office/docs", params={"path": "report.docx"}).json() == {
+        "editor": True, "url": "https://office.test/docs/", "name": "report.docx"}
+    assert c.get("/office/docs", params={"path": "arabic.docx"}).json() == {"editor": False, "reason": "rtl"}
+    assert c.get("/office/docs", params={"path": "off.docx"}).json()["editor"] is True, "bidi switched off is left to right"
+
+
+def test_docs_open_and_save_go_through_the_docx_calls(monkeypatch, tmp_path):
+    import gzip
+    import json
+
+    from cycls._agent.design.store import version_of
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("DOCS_ORGS", "*")
+    original = b"PK\x03\x04 original document"
+    (tmp_path / "r.docx").write_bytes(original)
+    reads, patches = [], []
+
+    async def read_docx(data, name=None):
+        reads.append(name)
+        return {"document": {"id": "doc", "title": name, "body": {"dataStream": "Hi\r\n"}}, "notices": [],
+                "readonly": True, "stats": {"paragraphs": 1}}
+
+    async def patch_docx(data, snapshot_gz):
+        patches.append((data, json.loads(gzip.decompress(snapshot_gz))))
+        return {"unchanged": False, "bytes": b"PK\x03\x04 patched document", "summary": {"paragraphs": 1}}
+
+    monkeypatch.setattr(office, "read_docx", read_docx)
+    monkeypatch.setattr(office, "patch_docx", patch_docx)
+    c = _app(_ws(tmp_path))
+    opened = c.get("/office/docs/open", params={"path": "r.docx"}).json()
+    assert opened["snapshot"]["title"] == "r" and opened["readonly"] is True and opened["version"] == version_of(original)
+    assert list((tmp_path / ".cache" / "docs").glob("*.json.gz")), "kept apart from the workbooks' cache"
+    c.get("/office/docs/open", params={"path": "r.docx"})
+    assert reads == ["r"]
+
+    saved = c.put("/office/docs/save", params={"path": "r.docx", "base": opened["version"]}, content=b'{"body": 1}')
+    assert saved.status_code == 200 and saved.json()["unchanged"] is False
+    assert (tmp_path / "r.docx").read_bytes() == b"PK\x03\x04 patched document" and patches[0] == (original, {"body": 1})
+    stale = c.put("/office/docs/save", params={"path": "r.docx", "base": opened["version"]}, content=b"{}")
+    assert stale.status_code == 412 and stale.json()["detail"] == "This document changed since it was opened."
+
+
+def test_read_and_patch_docx_call_the_service(monkeypatch):
+    import gzip
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("OFFICE_SECRET", "s")
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("content-type", "")))
+        if request.url.path == "/v1/docx/read":
+            return httpx.Response(200, json={"document": {"id": "d"}, "notices": [], "readonly": False})
+        return httpx.Response(200, content=b"PK patched", headers={"content-type": "application/octet-stream"})
+
+    _mock(monkeypatch, handler)
+    got = asyncio.run(office.read_docx(b"PK", name="r"))
+    assert got["document"]["id"] == "d"
+    patched = asyncio.run(office.patch_docx(b"PK", gzip.compress(b"{}")))
+    assert patched["bytes"] == b"PK patched" and not patched["unchanged"]
+    assert seen[0] == ("/v1/docx/read", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    assert seen[1][0] == "/v1/docx/patch" and seen[1][1].startswith("multipart/form-data")

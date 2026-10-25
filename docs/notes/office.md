@@ -6,13 +6,14 @@ versions, live agent edits. The engine is the open-source part of [Univer](https
 (Apache-2.0), patched and rebranded in the **cycls-office** repo, which also holds the Excel/Word exchange (we write
 back only what changed), the headless engine the agent edits through, and the service.
 
-The full plan (phases P0 → S1–S6 → D1–D6) is kept outside the repo; this note says what is built. Sheets only so
-far; Docs has its config switch and nothing else.
+The full plan (phases P0 → S1–S6 → D1–D6) is kept outside the repo; this note says what is built: Sheets (editor
+and agent tool), and Docs (agent tool, and the editor for left-to-right documents).
 
 ## The service (cycls-office)
 
 One Node process:
 - `/sheets/` — the Cycls Sheets editor (public, framed by Cycls, strict content policy).
+- `/docs/` — the Cycls Docs editor (the same).
 - `/health` — release, engine stamp, workers.
 - `/v1/…` behind `OFFICE_SECRET`:
   - `xlsx/read` — the file's bytes → the workbook the editor opens, plus notices of what is kept but not editable.
@@ -25,17 +26,24 @@ One Node process:
     Only changed rows and parts are rewritten; `ops` (rows/columns inserted or removed) move the references the
     file keeps as written (conditional formats, validation, filters, pictures, charts, tables, pivots, names).
   - `sheets/read` and `sheets/apply` — the agent's tool (below).
+  - `docx/read` — the file's bytes → the document the editor opens (`{document, notices, readonly, stats}`;
+    `readonly` when it has tracked changes). `docx/patch` — the original + the editor's document (gzip JSON) →
+    the patched file, only changed paragraphs rewritten, or `{unchanged: true}`.
+  - `docs/read` and `docs/apply` — the agent's Word tool (below).
 
 ## In the SDK
 
 - `cycls/_agent/office/client.py`: `configured()`, `editor_url()`, `offered(workspace, "sheets"|"docs")`, and the
-  service calls (`read_xlsx`, `patch_xlsx`, `sheets_read`, `sheets_apply`). Never follows a redirect.
-- `web/office_routes.py`:
-  - `GET /office/sheets?path=` → `{editor: true, url, name}` or `{editor: false, reason}`, per workspace.
-  - `GET /office/sheets/open?path=` → the workbook (gzip JSON, cached by file version in `.cache/sheets/`),
+  service calls (`read_xlsx`, `patch_xlsx`, `read_docx`, `patch_docx`, `sheets_read`, `sheets_apply`, `docs_read`,
+  `docs_apply`). Never follows a redirect.
+- `web/office_routes.py`, the same four routes for each editor (`<p>` is `sheets` for .xlsx/.xlsm, `docs` for .docx):
+  - `GET /office/<p>?path=` → `{editor: true, url, name}` or `{editor: false, reason}`, per workspace
+    (`SHEETS_ORGS` / `DOCS_ORGS`). A .docx with any right-to-left paragraph or style answers `reason: "rtl"` and
+    keeps the preview until the editor lays Arabic out as Word does (D3).
+  - `GET /office/<p>/open?path=` → what the editor opens (gzip JSON, cached by file version in `.cache/<p>/`),
     `X-Version`, `X-Modified`.
-  - `GET /office/sheets/version?path=` → `{version, modified}`, the version open and save use.
-  - `PUT /office/sheets/save?path=&base=&force=` → patch-back through the service, `write_fig(by="user")` keeps the
+  - `GET /office/<p>/version?path=` → `{version, modified}`, the version open and save use.
+  - `PUT /office/<p>/save?path=&base=&force=` → patch-back through the service, `write_fig(by="user")` keeps the
     replaced version; a stale `base` answers 412 with the file's version.
 - `Config.public()` sends `sheets_editor: true` when the service is configured (the URL and org list stay
   server-side).
@@ -45,6 +53,10 @@ One Node process:
   the file again (a turn ended, a refresh), once the agent is done the view checks the file's version: a file
   changed some other way (the agent's other tools, another tab or person) is taken in, or, with changes not yet
   saved, the conflict bar asks.
+- The same view is Cycls Docs with `product="docs"` (`DocsOrPreview`, used by the canvas for a .docx; without Docs
+  the docx-preview stays): its own channel (`cycls-docs`), wording, glyph and Word download. A document with
+  tracked changes opens view only. Not yet: comments in the editor, the selection offered to the composer, and
+  the agent's edits replayed live — an open document takes them in when the canvas fetches the file again.
 
 ## The agent's `sheets` tool (`cycls/_agent/office/sheets.py`)
 

@@ -13,7 +13,7 @@ import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
 import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
-import { SheetsOrPreview } from "./sheets-editor-view";
+import { DocsOrPreview, SheetsOrPreview } from "./sheets-editor-view";
 import { officeGlyphFor } from "./file-glyph";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { DocxView } from "./docx-view";
@@ -394,7 +394,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
   designHost?: DesignHost;
   videoEditor?: VideoEditorApi;   // when set, a video has Edit (the video editor)
-  officeEditor?: OfficeEditorApi;   // when set, an .xlsx may open in Cycls Sheets (asked per file)
+  officeEditor?: OfficeEditorApi;   // when set, an .xlsx may open in Cycls Sheets and a .docx in Cycls Docs (asked per file)
   onReload?: () => void;          // fetch the file again (a video's preview after its editor closes)
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onDownload?: () => void;
@@ -423,9 +423,12 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} />;
   }
   // Word .docx renders natively as formatted HTML (docx-preview) from its raw
-  // bytes — a document view, not a flat PDF.
+  // bytes — a document view, not a flat PDF — unless it opens in Cycls Docs (asked per file).
   if (isDocx(fileKind(file))) {
-    return content ? <DocxView url={content} /> : null;
+    if (!content) return null;
+    return officeEditor?.docs && !shared
+      ? <DocsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<DocxView url={content} />} />
+      : <DocxView url={content} />;
   }
   // Presentations render as a slide viewer from the ?as=slides manifest (per-
   // slide images), not a flat PDF. `content` here is that JSON, fetched as text.

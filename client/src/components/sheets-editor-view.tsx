@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import type { OfficeEditorApi, OfficeOpen, SheetsOpened } from "../hooks/use-files";
@@ -6,12 +6,17 @@ import { useComments, type CellSpot, type CommentChange, type SheetCommentThread
 import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { publishSelection } from "./design-editor-view";
-import { SheetGlyph } from "./file-glyph";
+import { DocGlyph, SheetGlyph } from "./file-glyph";
 import { LoadingBar } from "./loading-bar";
 import { cn } from "../lib/utils";
 
-// Cycls Sheets in the canvas: a header (where the file is, when it changed, Open ⌄) over the editor,
-// which the cycls-office service serves into an iframe.
+// Cycls Sheets (and Cycls Docs, the same view for a .docx) in the canvas: a header (where the file is, when it
+// changed, Open ⌄) over the editor, which the cycls-office service serves into an iframe.
+//
+// Cycls Docs speaks the same protocol as "cycls-docs" (load, theme, locale, readonly, written, flush, save; it
+// sends ready, loaded, error, dirty, saved {snapshot}, flushed, print). It has no comments, selection or agent
+// replay yet: the agent's edits reach an open document when the canvas fetches the file again, as a change made
+// elsewhere does. A document with tracked changes opens view only.
 //
 // Protocol 1 (postMessage, JSON). Cycls → editor {target: "cycls-sheets", type, …}, posted to the
 // editor's exact origin only; editor → Cycls {source: "cycls-sheets", type, …}, heard only from that
@@ -55,8 +60,24 @@ export function sheetsCommandDetail(ev: Record<string, unknown>): SheetsCommand 
   };
 }
 
-/** Asks once per file whether this workspace opens it in Cycls Sheets; otherwise shows `preview`. */
-export function SheetsOrPreview({ path, name, api, preview, onDownload, live, contentKey }: {
+export type OfficeProduct = "sheets" | "docs";
+
+/** The calls one editor makes, whichever product it is; null when this host has none for it. */
+function callsFor(api: OfficeEditorApi | undefined, product: OfficeProduct) {
+  if (!api) return null;
+  if (product === "sheets") return { check: api.sheets, open: api.sheetsOpen, version: api.sheetsVersion, save: api.sheetsSave };
+  if (!api.docs || !api.docsOpen || !api.docsSave) return null;
+  return { check: api.docs, open: api.docsOpen, version: api.docsVersion, save: api.docsSave };
+}
+
+// What differs between the two editors, in words and looks.
+const WORDS = {
+  sheets: { download: "sheetsDownloadXlsx", couldNotOpen: "sheetsCouldNotOpen", changedElsewhere: "sheetsChangedElsewhere" },
+  docs: { download: "docsDownloadDocx", couldNotOpen: "docsCouldNotOpen", changedElsewhere: "docsChangedElsewhere" },
+} as const;
+
+/** Asks once per file whether this workspace opens it in Cycls Sheets (or Docs); otherwise shows `preview`. */
+export function SheetsOrPreview({ path, name, api, preview, onDownload, live, contentKey, product = "sheets" }: {
   path: string;
   name: string;
   api: OfficeEditorApi;
@@ -64,21 +85,28 @@ export function SheetsOrPreview({ path, name, api, preview, onDownload, live, co
   onDownload?: () => void;
   live?: boolean;
   contentKey?: string | null;   // changes each time the canvas fetches the file again
+  product?: OfficeProduct;
 }) {
   const [open, setOpen] = useState<OfficeOpen | null>(null);
   useEffect(() => {
     let cancelled = false;
     setOpen(null);
-    api.sheets(path)
+    const check = callsFor(api, product)?.check;
+    if (!check) { setOpen({ editor: false, reason: "off" }); return; }
+    check(path)
       .then((o) => { if (!cancelled) setOpen(o); })
       .catch(() => { if (!cancelled) setOpen({ editor: false, reason: "unavailable" }); });
     return () => { cancelled = true; };
-  }, [api, path]);
+  }, [api, path, product]);
   if (!open) return <LoadingBar />;
   return open.editor
-    ? <SheetsEditorView url={open.url} path={path} name={name} api={api} onDownload={onDownload} fallback={preview} live={live} contentKey={contentKey} />
+    ? <SheetsEditorView url={open.url} path={path} name={name} api={api} onDownload={onDownload} fallback={preview} live={live} contentKey={contentKey} product={product} />
     : <>{preview}</>;
 }
+
+/** A Word document: Cycls Docs when this workspace has it (and the document is laid out left to right), else `preview`. */
+export const DocsOrPreview = (props: Omit<Parameters<typeof SheetsOrPreview>[0], "product">) =>
+  <SheetsOrPreview {...props} product="docs" />;
 
 function modifiedLabel(iso: string | undefined): string {
   if (!iso) return "";
@@ -92,7 +120,7 @@ function modifiedLabel(iso: string | undefined): string {
   return t("sheetsLastModified").replace("{time}", time);
 }
 
-export function SheetsEditorView({ url, path, name, api, onDownload, fallback, live = false, contentKey }: {
+export function SheetsEditorView({ url, path, name, api: given, onDownload, fallback, live = false, contentKey, product = "sheets" }: {
   url: string;
   path: string;
   name: string;
@@ -101,7 +129,13 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   fallback?: ReactNode;
   live?: boolean;     // the agent is working: read-only, its edits replayed
   contentKey?: string | null;   // changes each time the canvas fetches the file again
+  product?: OfficeProduct;
 }) {
+  const calls = useMemo(() => callsFor(given, product), [given, product]);
+  const api = calls ? given : undefined;
+  const channel = `cycls-${product}`;
+  const words = WORDS[product];
+  const Glyph = product === "docs" ? DocGlyph : SheetGlyph;
   const frameRef = useRef<HTMLIFrameElement>(null);
   const slots = useContext(CanvasHeaderSlot);
   const dark = useDarkMode();
@@ -116,7 +150,9 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState<string | null>(null);   // the file's newer version
   const [savedAt, setSavedAt] = useState<string | null>(null);     // when this editor last wrote the file
-  const editable = !!api;
+  // A document with tracked changes opens view only (the reader shows them accepted; a save would lose them).
+  const heldReadonly = !!opened && (opened as { readonly?: boolean }).readonly === true;
+  const editable = !!api && !heldReadonly;
   const doc = useRef("");
   const version = useRef("");       // what the next save names as its base
   const forceNext = useRef(false);  // "Keep mine": the next save writes over the newer file
@@ -132,7 +168,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   const features = useRef<string[]>([]);   // what the editor said it does (ready)
   // Comments on cells: the workspace's record for this file (the same store as a design's), polled; none on a
   // view that cannot comment (a share).
-  const comments = useComments(api ? path : undefined);
+  const comments = useComments(api && product === "sheets" ? path : undefined);
   const commentsRef = useRef(comments);
   commentsRef.current = comments;
   const answerRef = useRef<(ask: CommentAsk) => Promise<void>>(async () => {});
@@ -155,26 +191,26 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   });
 
   const post = useCallback((msg: Record<string, unknown>) => {
-    if (origin) frameRef.current?.contentWindow?.postMessage({ target: "cycls-sheets", ...msg }, origin);
-  }, [origin]);
+    if (origin) frameRef.current?.contentWindow?.postMessage({ target: channel, ...msg }, origin);
+  }, [origin, channel]);
 
   // The workbook, read by the service (cached by version).
   useEffect(() => {
-    if (!api) return;
+    if (!calls) return;
     let cancelled = false;
     setOpened(null);
     setFailed(false);
-    api.sheetsOpen(path)
+    calls.open(path)
       .then((o) => { if (!cancelled) setOpened(o); })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [api, path]);
+  }, [calls, path]);
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (!origin || e.origin !== origin || e.source !== frameRef.current?.contentWindow) return;
       const msg = e.data as { source?: string; type?: string; doc?: string };
-      if (msg?.source !== "cycls-sheets") return;
+      if (msg?.source !== channel) return;
       if (msg.type === "ready") {
         const f = (msg as { features?: unknown }).features;
         features.current = Array.isArray(f) ? f.filter((x): x is string => typeof x === "string") : [];
@@ -217,7 +253,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
       window.removeEventListener("message", onMessage);
       publishSelection({ path, frame: null, nodes: [] });   // closed: nothing selected here any more
     };
-  }, [origin, path]);
+  }, [origin, path, channel]);
 
   // Send the workbook once both sides are ready (and again if the file's version changes).
   useEffect(() => {
@@ -288,11 +324,11 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   // person out of the message they are typing.
   const keepFocus = useRef<HTMLElement | null>(null);
   const reopen = useCallback(() => {
-    if (!api) return;
+    if (!calls) return;
     const el = document.activeElement;
     keepFocus.current = el instanceof HTMLElement && el !== document.body && el !== frameRef.current ? el : null;
-    api.sheetsOpen(path).then(setOpened).catch(() => setFailed(true));
-  }, [api, path]);
+    calls.open(path).then(setOpened).catch(() => setFailed(true));
+  }, [calls, path]);
   reopenRef.current = reopen;
   useEffect(() => {
     if (!loaded || !keepFocus.current) return;
@@ -341,13 +377,13 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
 
   // One save at a time; the editor sends the next once this one is answered.
   const save = async (id: string, snapshot: unknown, ops: unknown[]) => {
-    if (!api) return;
+    if (!calls) return;
     const forDoc = doc.current;
     const run = (async () => {
       setStatus("saving");
       try {
         const force = forceNext.current;
-        const r = await api.sheetsSave(path, version.current, { snapshot, ops }, force);
+        const r = await calls.save(path, version.current, { snapshot, ops }, force);
         if (forDoc !== doc.current) return;
         if ("conflict" in r) {
           setConflict(r.conflict);
@@ -398,7 +434,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   // 30 s while it is shown, so a change made in another tab or by someone else reaches it.
   const [poll, setPoll] = useState(0);
   useEffect(() => {
-    if (!api?.sheetsVersion) return;
+    if (!calls?.version) return;
     const look = () => {
       if (document.visibilityState !== "visible") return;
       needsCheck.current = true;
@@ -412,14 +448,15 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
       window.removeEventListener("focus", look);
       document.removeEventListener("visibilitychange", look);
     };
-  }, [api]);
+  }, [calls]);
   useEffect(() => {
-    if (!needsCheck.current || !api?.sheetsVersion || live || !loaded || commands.current.size) return;
+    const versionOf = calls?.version;
+    if (!needsCheck.current || !versionOf || live || !loaded || commands.current.size) return;
     needsCheck.current = false;
     let cancelled = false;
     void (async () => {
       await saving.current;
-      const now = await api.sheetsVersion!(path).catch(() => null);
+      const now = await versionOf(path).catch(() => null);
       if (cancelled || !now?.version || now.version === version.current || conflictRef.current !== null) return;
       // Taken in quietly when nothing here is unsaved and the person is not in the editor (a cell being typed
       // into is not saved yet); otherwise the bar asks.
@@ -428,7 +465,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
       else setConflict(now.version);
     })();
     return () => { cancelled = true; };
-  }, [contentKey, poll, live, loaded, api, path, reopen]);
+  }, [contentKey, poll, live, loaded, calls, path, reopen]);
 
   useEffect(() => { if (ready) post({ type: "theme", theme: dark ? "dark" : "light" }); }, [dark, ready, post]);
   useEffect(() => { if (ready) post({ type: "locale", lang }); }, [lang, ready, post]);
@@ -515,13 +552,13 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
         </div>
       )}
       <span className={cn("shrink-0 rounded-md px-2 py-0.5 text-xs", status === "error" ? "bg-red-500/10 text-red-600" : "bg-secondary text-muted-foreground")}
-            data-testid="sheets-status">
+            data-testid={`${product}-status`} title={heldReadonly ? t("docsTrackedReadonly") : undefined}>
         {!editable ? t("sheetsViewOnly") : status === "saving" ? t("sheetsSaving") : status === "dirty" ? t("sheetsUnsaved") : status === "error" ? t("sheetsSaveFailed") : t("sheetsSaved")}
       </span>
       <div className="relative">
         <button onClick={() => setMenu((v) => !v)} aria-haspopup="menu" aria-expanded={menu}
                 className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 py-1 text-xs font-medium hover:bg-secondary">
-          <SheetGlyph className="size-3.5" />
+          <Glyph className="size-3.5" />
           {t("sheetsOpen")}
           <span aria-hidden="true" className="text-muted-foreground">▾</span>
         </button>
@@ -530,7 +567,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
             {onDownload && (
               <button role="menuitem" onClick={() => { setMenu(false); onDownload(); }}
                       className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-secondary">
-                <SheetGlyph className="size-4" />{t("sheetsDownloadXlsx")}
+                <Glyph className="size-4" />{t(words.download)}
               </button>
             )}
             {api && (
@@ -540,7 +577,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
               </button>
             )}
             {api && (
-              <button role="menuitem" onClick={() => void printPdf()} data-testid="sheets-print"
+              <button role="menuitem" onClick={() => void printPdf()} data-testid={`${product}-print`}
                       className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-secondary">
                 <svg viewBox="0 0 16 16" className="size-4 text-muted-foreground" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
                   <path d="M4.5 6V2.5h7V6M4.5 11.5h-2v-5h11v5h-2M4.5 9.5h7v4h-7z" strokeLinejoin="round" />
@@ -557,7 +594,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
   const inCanvas = !!slots.end;
 
   return (
-    <div className="flex h-full w-full flex-col" data-testid="sheets-editor" data-path={path}>
+    <div className="flex h-full w-full flex-col" data-testid={`${product}-editor`} data-path={path}>
       {inCanvas ? (
         <>
           {slots.start && startItems && createPortal(startItems, slots.start)}
@@ -565,7 +602,7 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
         </>
       ) : (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
-          <SheetGlyph className="size-4 shrink-0" />
+          <Glyph className="size-4 shrink-0" />
           <div className="flex min-w-0 items-center gap-1 text-muted-foreground" dir="auto">
             <span className="shrink-0">{t("sheetsWorkspace")}</span>
             {crumbs.map((c, i) => <span key={i} className="shrink-0">/ {c}</span>)}
@@ -578,21 +615,21 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
         </div>
       )}
       {live && editable && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-[#EF8733]/10 px-3 py-1.5 text-xs" role="status" data-testid="sheets-live">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-[#EF8733]/10 px-3 py-1.5 text-xs" role="status" data-testid={`${product}-live`}>
           <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-[#EF8733]" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate" dir="auto">{t("sheetsAgentEditing")}{intent ? <span className="text-muted-foreground"> · {intent}</span> : null}</span>
         </div>
       )}
       {conflict !== null && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-amber-500/10 px-3 py-2 text-xs" role="alert">
-          <span className="flex-1">{t("sheetsChangedElsewhere")}</span>
+          <span className="flex-1">{t(words.changedElsewhere)}</span>
           <button onClick={loadLatest} className="cursor-pointer rounded-md bg-foreground px-2.5 py-1 font-medium text-background hover:opacity-90">{t("sheetsLoadLatest")}</button>
           <button onClick={keepMine} className="cursor-pointer rounded-md border border-border px-2.5 py-1 font-medium hover:bg-secondary">{t("sheetsKeepMine")}</button>
         </div>
       )}
       <div className="relative min-h-0 flex-1">
         {!loaded && <div className="absolute inset-x-0 top-0 z-10"><LoadingBar /></div>}
-        {failed && <div className="absolute inset-0 z-10 flex items-center justify-center p-6 text-sm text-muted-foreground">{t("sheetsCouldNotOpen")}</div>}
+        {failed && <div className="absolute inset-0 z-10 flex items-center justify-center p-6 text-sm text-muted-foreground">{t(words.couldNotOpen)}</div>}
         <iframe ref={frameRef} src={src} title={name} className="h-full w-full border-0"
                 allow="clipboard-read; clipboard-write" />
       </div>

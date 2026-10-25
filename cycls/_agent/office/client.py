@@ -109,8 +109,23 @@ def _refused(r):
 async def patch_xlsx(original, snapshot_gz):
     """The original .xlsx and the editor's workbook (gzip JSON) → {unchanged, bytes, summary}.
     Only what differs is written into the file; `bytes` is None when nothing does."""
-    r = await _call("POST", "/v1/xlsx/patch", files={
-        "file": ("workbook.xlsx", bytes(original), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    return await _patch("/v1/xlsx/patch", original, snapshot_gz, "workbook.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+async def read_xlsx(data, name=None):
+    """An .xlsx file's bytes → {workbook, notices, activeSheet, stats}: what Cycls Sheets opens."""
+    params = {"name": name} if name else None
+    r = await _call("POST", "/v1/xlsx/read", content=bytes(data), params=params,
+                    headers_extra={"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+    if r.status_code >= 400:
+        raise _refused(r)
+    return r.json()
+
+
+async def _patch(path, original, snapshot_gz, filename, mime):
+    r = await _call("POST", path, files={
+        "file": (filename, bytes(original), mime),
         "snapshot": ("snapshot.json.gz", bytes(snapshot_gz), "application/gzip"),
     })
     if r.status_code >= 400:
@@ -129,14 +144,20 @@ async def patch_xlsx(original, snapshot_gz):
     return {"unchanged": False, "bytes": r.content, "summary": summary}
 
 
-async def read_xlsx(data, name=None):
-    """An .xlsx file's bytes → {workbook, notices, activeSheet, stats}: what Cycls Sheets opens."""
+async def read_docx(data, name=None):
+    """A .docx file's bytes → {document, notices, readonly, stats}: what Cycls Docs opens."""
     params = {"name": name} if name else None
-    r = await _call("POST", "/v1/xlsx/read", content=bytes(data), params=params,
-                    headers_extra={"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+    r = await _call("POST", "/v1/docx/read", content=bytes(data), params=params,
+                    headers_extra={"Content-Type": _DOCX})
     if r.status_code >= 400:
         raise _refused(r)
     return r.json()
+
+
+async def patch_docx(original, snapshot_gz):
+    """The original .docx and the editor's document (gzip JSON) → {unchanged, bytes, summary}.
+    Only what differs is written into the file; `bytes` is None when nothing does."""
+    return await _patch("/v1/docx/patch", original, snapshot_gz, "document.docx", _DOCX)
 
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

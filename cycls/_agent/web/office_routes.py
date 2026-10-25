@@ -1,35 +1,42 @@
-"""The routes behind the office editors in the canvas (Cycls Sheets; Cycls Docs later).
+"""The routes behind the office editors in the canvas (Cycls Sheets and Cycls Docs), the same for both:
 
-    GET /office/sheets?path=        may this workspace open the file in Cycls Sheets?
-                                    → {editor: true, url, name} or {editor: false, reason}
-    GET /office/sheets/open?path=   the workbook the editor opens (gzip JSON):
-                                    {version, modified, snapshot, notices, activeSheet, stats}
-    GET /office/sheets/version?path=  the file's version now → {version, modified}
-    PUT /office/sheets/save?path=&base=&force=
-                                    the editor's workbook (JSON, gzip) written back into the file:
-                                    only what differs changes (patch-back on the service), the
-                                    replaced version is kept → {version, unchanged, summary};
-                                    412 {version} when the file changed since `base`
+    GET /office/<product>?path=        may this workspace open the file in that editor?
+                                       → {editor: true, url, name} or {editor: false, reason}
+    GET /office/<product>/open?path=   what the editor opens (gzip JSON):
+                                       sheets {version, snapshot, notices, activeSheet, stats};
+                                       docs {version, snapshot, notices, readonly, stats}
+    GET /office/<product>/version?path=  the file's version now → {version, modified}
+    PUT /office/<product>/save?path=&base=&force=
+                                       the editor's snapshot (JSON, gzip) written back into the file: only
+                                       what differs changes (patch-back on the service), the replaced
+                                       version is kept → {version, unchanged, summary, modified}; 412
+                                       {version} when the file changed since `base`
 
-The browser frames the editor from `url`; whether an organisation has Sheets is answered here, per
-workspace (SHEETS_ORGS), so the setting never leaks to the page. The service reads the file; what it
-read is kept beside the workspace's other caches (.cache/sheets/<version>.json.gz), so opening the
-same file again costs nothing. A save goes through the same versioned write as a design
-(design/store.py write_fig): the base check, the version history, one write at a time per file.
+<product> is sheets (.xlsx, .xlsm) or docs (.docx). The browser frames the editor from `url`; whether an
+organisation has it is answered here, per workspace (SHEETS_ORGS / DOCS_ORGS), so the setting never leaks to
+the page. A right-to-left Word document keeps the preview until the editor lays one out as Word does
+(reason "rtl"). The service reads the file; what it read is kept beside the workspace's other caches
+(.cache/<product>/<version>.json.gz), so opening the same file again costs nothing. A save goes through the
+same versioned write as a design (design/store.py write_fig): the base check, the version history, one write
+at a time per file.
 """
 import asyncio
 import gzip
 import json
+import re
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 SHEETS_EXTS = (".xlsx", ".xlsm")
-SHEETS_CACHE = ".cache/sheets"
-MAX_BYTES = 20 * 1024 * 1024     # larger workbooks keep the read-only preview
-MAX_SNAPSHOT = 64 * 1024 * 1024  # an editor's workbook as sent (gzip)
+DOCS_EXTS = (".docx",)
+MAX_BYTES = 20 * 1024 * 1024     # larger files keep the read-only preview
+MAX_SNAPSHOT = 64 * 1024 * 1024  # an editor's snapshot as sent (gzip)
 GZIP_MAGIC = bytes([0x1F, 0x8B])
 _KEEP = 24                       # cached reads kept per workspace
+# A paragraph (or a style) set right to left: <w:bidi/>, or with a value other than off.
+_BIDI = re.compile(rb'<w:bidi(?:\s*/>|\s+w:val="(?:1|true|on)")')
 
 
 def _write_cache(cache_dir, version, body):
@@ -46,6 +53,21 @@ def _write_cache(cache_dir, version, body):
         pass
 
 
+def right_to_left(file_path):
+    """Whether a .docx sets any paragraph (or paragraph style) right to left. An unreadable file: no."""
+    try:
+        with zipfile.ZipFile(file_path) as z:
+            for name in ("word/document.xml", "word/styles.xml"):
+                try:
+                    if _BIDI.search(z.read(name)):
+                        return True
+                except KeyError:
+                    continue
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return False
+
+
 def office_router(ws_dep, required_auth=None, changed=None):
     from fastapi import APIRouter, Depends, HTTPException, Request, Response
     from fastapi.responses import JSONResponse
@@ -59,111 +81,130 @@ def office_router(ws_dep, required_auth=None, changed=None):
 
     r = APIRouter()
 
-    def _sheet_file(ws, path):
-        if not path or not path.lower().endswith(SHEETS_EXTS):
-            raise HTTPException(400, "path: an .xlsx or .xlsm file")
-        file_path = _safe_path(ws.root, path)
-        if not file_path.is_file():
-            raise HTTPException(404, "There is no such file.")
-        return file_path
+    async def _read_sheets(data, name):
+        read = await office.read_xlsx(data, name=name)
+        return {"snapshot": read.get("workbook"), "notices": read.get("notices") or [],
+                "activeSheet": read.get("activeSheet"), "stats": read.get("stats") or {}}
 
-    @r.get("/office/sheets")
-    async def sheets(path: str, ws: Workspace = ws_dep):
-        file_path = _sheet_file(ws, path)
-        if not office.offered(ws, "sheets"):
-            return {"editor": False, "reason": "off"}
-        if file_path.stat().st_size > MAX_BYTES:
-            return {"editor": False, "reason": "too-large"}
-        return {"editor": True, "url": f"{office.editor_url()}/sheets/", "name": Path(path).name}
+    async def _read_docs(data, name):
+        read = await office.read_docx(data, name=name)
+        return {"snapshot": read.get("document"), "notices": read.get("notices") or [],
+                "readonly": bool(read.get("readonly")), "stats": read.get("stats") or {}}
 
-    @r.get("/office/sheets/open")
-    async def sheets_open(path: str, ws: Workspace = ws_dep):
-        file_path = _sheet_file(ws, path)
-        if not office.offered(ws, "sheets"):
-            raise HTTPException(403, "Cycls Sheets is not switched on for this workspace.")
-        st = file_path.stat()
-        if st.st_size > MAX_BYTES:
-            raise HTTPException(413, f"The workbook is larger than {MAX_BYTES // (1024 * 1024)} MB.")
-        data = await asyncio.to_thread(file_path.read_bytes)
-        version = version_of(data)
-        cache = Path(ws.root) / SHEETS_CACHE / f"{version}.json.gz"
-        body = None
-        if cache.is_file():
-            try:
-                body = await asyncio.to_thread(cache.read_bytes)
-            except OSError:
-                body = None
-        if body is None:
-            try:
-                read = await office.read_xlsx(data, name=Path(path).stem)
-            except office.Unavailable as e:
-                raise HTTPException(503, str(e))
-            except office.Refused as e:
-                raise HTTPException(422, f"This workbook could not be opened: {e}")
-            payload = {
-                "version": version,
-                "snapshot": read.get("workbook"),
-                "notices": read.get("notices") or [],
-                "activeSheet": read.get("activeSheet"),
-                "stats": read.get("stats") or {},
-            }
-            body = gzip.compress(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 6)
-            await asyncio.to_thread(_write_cache, Path(ws.root) / SHEETS_CACHE, version, body)
-        modified = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
-        return Response(body, media_type="application/json", headers={
-            "Content-Encoding": "gzip", "Cache-Control": "no-store", "X-Version": version, "X-Modified": modified,
-        })
+    products = {
+        "sheets": {"exts": SHEETS_EXTS, "title": "Cycls Sheets", "noun": "workbook", "what": "an .xlsx or .xlsm file",
+                   "read": _read_sheets, "patch": "patch_xlsx"},
+        "docs": {"exts": DOCS_EXTS, "title": "Cycls Docs", "noun": "document", "what": "a .docx file",
+                 "read": _read_docs, "patch": "patch_docx"},
+    }
 
-    @r.get("/office/sheets/version")
-    async def sheets_version(path: str, ws: Workspace = ws_dep):
-        """The file's version now (what a save names as its base): an open editor checks it after the file may
-        have changed some other way, and takes the new file in (or asks, with unsaved changes)."""
-        file_path = _sheet_file(ws, path)
-        if not office.offered(ws, "sheets"):
-            raise HTTPException(403, "Cycls Sheets is not switched on for this workspace.")
-        data = await asyncio.to_thread(file_path.read_bytes)
-        modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
-        return {"version": version_of(data), "modified": modified}
+    def _add(product, p):
+        noun, cache_dir = p["noun"], f".cache/{product}"
 
-    @r.put("/office/sheets/save")
-    async def sheets_save(path: str, request: Request, base: str = "", force: bool = False,
-                          ws: Workspace = ws_dep, user=user_dep):
-        file_path = _sheet_file(ws, path)
-        if not office.offered(ws, "sheets"):
-            raise HTTPException(403, "Cycls Sheets is not switched on for this workspace.")
-        body = await request.body()
-        if not body:
-            raise HTTPException(400, "Send the workbook (JSON, gzip).")
-        if len(body) > MAX_SNAPSHOT:
-            raise HTTPException(413, "The workbook sent is too large.")
-        snapshot_gz = body if body[:2] == GZIP_MAGIC else gzip.compress(body, 6)
-        rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
-        from cycls._agent.design.deck import lock
-        async with lock(file_path):     # one read → patch → write at a time per file
-            data, version = await asyncio.to_thread(read_fig, ws.root, rel)
-            if data is None:
+        def _file(ws, path):
+            if not path or not path.lower().endswith(p["exts"]):
+                raise HTTPException(400, f"path: {p['what']}")
+            file_path = _safe_path(ws.root, path)
+            if not file_path.is_file():
                 raise HTTPException(404, "There is no such file.")
-            if base and base != version and not force:
-                return JSONResponse(status_code=412, content={
-                    "detail": "This workbook changed since it was opened.", "version": version})
-            try:
-                result = await office.patch_xlsx(data, snapshot_gz)
-            except office.Unavailable as e:
-                raise HTTPException(503, str(e))
-            except office.Refused as e:
-                raise HTTPException(422, f"The workbook could not be saved: {e}")
-            if result["unchanged"]:
-                return {"version": version, "unchanged": True, "summary": result["summary"]}
-            try:
-                new = await write_fig(ws.root, rel, result["bytes"], base=version, by="user",
-                                      reason="keep" if force else "save", force=force, who=person(user, ws))
-            except Stale as e:
-                return JSONResponse(status_code=412, content={
-                    "detail": "This workbook changed since it was opened.", "version": e.current})
-        if changed is not None:
-            changed(ws.root)
-        # When it was written: the editor's "Last modified" follows its own saves.
-        modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
-        return {"version": new, "unchanged": False, "summary": result["summary"], "modified": modified}
+            return file_path
 
+        def _on(ws):
+            if not office.offered(ws, product):
+                raise HTTPException(403, f"{p['title']} is not switched on for this workspace.")
+
+        async def editor(path: str, ws: Workspace = ws_dep):
+            file_path = _file(ws, path)
+            if not office.offered(ws, product):
+                return {"editor": False, "reason": "off"}
+            if file_path.stat().st_size > MAX_BYTES:
+                return {"editor": False, "reason": "too-large"}
+            if product == "docs" and await asyncio.to_thread(right_to_left, file_path):
+                return {"editor": False, "reason": "rtl"}
+            return {"editor": True, "url": f"{office.editor_url()}/{product}/", "name": Path(path).name}
+
+        async def open_(path: str, ws: Workspace = ws_dep):
+            file_path = _file(ws, path)
+            _on(ws)
+            st = file_path.stat()
+            if st.st_size > MAX_BYTES:
+                raise HTTPException(413, f"The {noun} is larger than {MAX_BYTES // (1024 * 1024)} MB.")
+            data = await asyncio.to_thread(file_path.read_bytes)
+            version = version_of(data)
+            cache = Path(ws.root) / cache_dir / f"{version}.json.gz"
+            body = None
+            if cache.is_file():
+                try:
+                    body = await asyncio.to_thread(cache.read_bytes)
+                except OSError:
+                    body = None
+            if body is None:
+                try:
+                    payload = {"version": version, **(await p["read"](data, Path(path).stem))}
+                except office.Unavailable as e:
+                    raise HTTPException(503, str(e))
+                except office.Refused as e:
+                    raise HTTPException(422, f"This {noun} could not be opened: {e}")
+                body = gzip.compress(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 6)
+                await asyncio.to_thread(_write_cache, Path(ws.root) / cache_dir, version, body)
+            modified = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
+            return Response(body, media_type="application/json", headers={
+                "Content-Encoding": "gzip", "Cache-Control": "no-store", "X-Version": version, "X-Modified": modified,
+            })
+
+        async def version_(path: str, ws: Workspace = ws_dep):
+            """The file's version now (what a save names as its base): an open editor checks it after the file may
+            have changed some other way, and takes the new file in (or asks, with unsaved changes)."""
+            file_path = _file(ws, path)
+            _on(ws)
+            data = await asyncio.to_thread(file_path.read_bytes)
+            modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
+            return {"version": version_of(data), "modified": modified}
+
+        async def save(path: str, request: Request, base: str = "", force: bool = False,
+                       ws: Workspace = ws_dep, user=user_dep):
+            file_path = _file(ws, path)
+            _on(ws)
+            body = await request.body()
+            if not body:
+                raise HTTPException(400, f"Send the {noun} (JSON, gzip).")
+            if len(body) > MAX_SNAPSHOT:
+                raise HTTPException(413, f"The {noun} sent is too large.")
+            snapshot_gz = body if body[:2] == GZIP_MAGIC else gzip.compress(body, 6)
+            rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+            from cycls._agent.design.deck import lock
+            async with lock(file_path):     # one read → patch → write at a time per file
+                data, version = await asyncio.to_thread(read_fig, ws.root, rel)
+                if data is None:
+                    raise HTTPException(404, "There is no such file.")
+                if base and base != version and not force:
+                    return JSONResponse(status_code=412, content={
+                        "detail": f"This {noun} changed since it was opened.", "version": version})
+                try:
+                    result = await getattr(office, p["patch"])(data, snapshot_gz)   # looked up per call (tests replace it)
+                except office.Unavailable as e:
+                    raise HTTPException(503, str(e))
+                except office.Refused as e:
+                    raise HTTPException(422, f"The {noun} could not be saved: {e}")
+                if result["unchanged"]:
+                    return {"version": version, "unchanged": True, "summary": result["summary"]}
+                try:
+                    new = await write_fig(ws.root, rel, result["bytes"], base=version, by="user",
+                                          reason="keep" if force else "save", force=force, who=person(user, ws))
+                except Stale as e:
+                    return JSONResponse(status_code=412, content={
+                        "detail": f"This {noun} changed since it was opened.", "version": e.current})
+            if changed is not None:
+                changed(ws.root)
+            # When it was written: the editor's "Last modified" follows its own saves.
+            modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
+            return {"version": new, "unchanged": False, "summary": result["summary"], "modified": modified}
+
+        r.add_api_route(f"/office/{product}", editor, methods=["GET"], name=f"office_{product}")
+        r.add_api_route(f"/office/{product}/open", open_, methods=["GET"], name=f"office_{product}_open")
+        r.add_api_route(f"/office/{product}/version", version_, methods=["GET"], name=f"office_{product}_version")
+        r.add_api_route(f"/office/{product}/save", save, methods=["PUT"], name=f"office_{product}_save")
+
+    for product, p in products.items():
+        _add(product, p)
     return r

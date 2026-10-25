@@ -60,7 +60,7 @@ export type VideoEditorApi = {
   readText: (path: string) => Promise<{ text: string; version: string }>;
 };
 
-// Cycls Sheets (and Cycls Docs later): may this workspace open the file in the editor, and where from.
+// Cycls Sheets and Cycls Docs: may this workspace open the file in the editor, and where from.
 export type OfficeOpen = { editor: true; url: string; name: string } | { editor: false; reason: string };
 export type SheetsNotice = { kind: string; sheet?: string; message: string };
 // What the editor opens: the workbook as the service read it (cached by version).
@@ -70,6 +70,7 @@ export type SheetsOpened = {
   snapshot: Record<string, unknown>;
   notices: SheetsNotice[];
   activeSheet?: string;
+  readonly?: boolean;   // a Word document with tracked changes: view only
 };
 export type OfficeEditorApi = {
   sheets: (path: string) => Promise<OfficeOpen>;
@@ -80,6 +81,11 @@ export type OfficeEditorApi = {
   // The editor's workbook written back into the file (only what differs changes). A file changed since
   // `base` answers {conflict: <its version>} instead.
   sheetsSave: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean) => Promise<SheetsSaved>;
+  // Cycls Docs, the same four for a .docx (GET /office/docs…).
+  docs?: (path: string) => Promise<OfficeOpen>;
+  docsOpen?: (path: string) => Promise<SheetsOpened>;
+  docsVersion?: (path: string) => Promise<{ version: string; modified?: string }>;
+  docsSave?: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean) => Promise<SheetsSaved>;
 };
 export type SheetsSaved = { version: string; unchanged: boolean; modified?: string } | { conflict: string };
 
@@ -278,24 +284,23 @@ export function useFiles(baseUrl: string = "") {
     },
   }), [api]);
 
-  const officeEditor = useMemo<OfficeEditorApi>(() => ({
-    sheets: async (filePath) =>
-      (await api(`/office/sheets?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
-    sheetsOpen: async (filePath) => {
-      const res = await api(`/office/sheets/open?path=${encodeURIComponent(filePath)}`, { silent: true });
+  const officeEditor = useMemo<OfficeEditorApi>(() => {
+    // The same four calls for each editor, under /office/<product>.
+    const check = (product: string) => async (filePath: string): Promise<OfficeOpen> =>
+      (await api(`/office/${product}?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
+    const open = (product: string) => async (filePath: string): Promise<SheetsOpened> => {
+      const res = await api(`/office/${product}/open?path=${encodeURIComponent(filePath)}`, { silent: true });
       const body = (await res.json()) as SheetsOpened;
       return { ...body, modified: res.headers.get("X-Modified") ?? body.modified };
-    },
-    sheetsVersion: async (filePath) =>
-      (await api(`/office/sheets/version?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
-    pdf: async (filePath) =>
-      URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
-    sheetsSave: async (filePath, base, payload, force) => {
+    };
+    const version = (product: string) => async (filePath: string): Promise<{ version: string; modified?: string }> =>
+      (await api(`/office/${product}/version?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
+    const save = (product: string) => async (filePath: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean): Promise<SheetsSaved> => {
       const q = new URLSearchParams({ path: filePath });
       if (base) q.set("base", base);
       if (force) q.set("force", "true");
       try {
-        const res = await api(`/office/sheets/save?${q}`, { method: "PUT", body: await gzipJson(payload), silent: true });
+        const res = await api(`/office/${product}/save?${q}`, { method: "PUT", body: await gzipJson(payload), silent: true });
         track("file_saved", { path: filePath });
         return (await res.json()) as { version: string; unchanged: boolean; modified?: string };
       } catch (err) {
@@ -305,8 +310,14 @@ export function useFiles(baseUrl: string = "") {
         }
         throw err;
       }
-    },
-  }), [api]);
+    };
+    return {
+      sheets: check("sheets"), sheetsOpen: open("sheets"), sheetsVersion: version("sheets"), sheetsSave: save("sheets"),
+      docs: check("docs"), docsOpen: open("docs"), docsVersion: version("docs"), docsSave: save("docs"),
+      pdf: async (filePath) =>
+        URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
+    };
+  }, [api]);
 
   // null where a design opens alone, or on a server without the route.
   const designLive = useCallback(async (filePath: string) => {
