@@ -91,9 +91,11 @@ DOCS_TOOL = {
 }
 
 DOCS_PROMPT = (
-    "Word files: read and change .docx files with `docs`, not python-docx or a script — it keeps everything in "
-    "the file it does not touch (layout, headers, comments, pictures). A new Word document: `docs` create, from "
-    "markdown."
+    "Word files: read and change any existing .docx with `docs`, never python-docx or a script (even where a skill "
+    "describes one): it keeps everything in the file it does not touch (layout, headers, comments, pictures) and the "
+    "person sees the change. A new plain Word document (headings, paragraphs, lists, tables, links): `docs` create, "
+    "from markdown. Only a Word file that needs pictures, headers and footers, brand colours, a cover or a custom page "
+    "layout is built with the docx skill."
 )
 
 
