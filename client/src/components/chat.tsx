@@ -27,7 +27,7 @@ import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
-import { flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
+import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
 import { track } from "../lib/analytics";
@@ -443,6 +443,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         window.dispatchEvent(new CustomEvent("cycls:sheets-command", { detail: sheetsCommandDetail(ev) }));
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
         track("ui_action", { action: "sheets_command" });
+      } else if (ev.action === "docs_command" && typeof ev.path === "string") {
+        // A `docs` edit, already in the file: an open Docs editor takes it in at once (read-only until the turn
+        // ends), the paragraphs it changed marked; a preview of the file fetches it again.
+        const live = ev.path;
+        setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
+        window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: docsCommandDetail(ev) }));
+        window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        track("ui_action", { action: "docs_command" });
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));

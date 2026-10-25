@@ -221,7 +221,7 @@ async def docs_read(data, name, start=None, max_chars=None):
 
 
 async def docs_apply(data, name, ops, create=None, author=None):
-    """The agent's edits made and written into the file (all or none) → {unchanged, bytes, report}.
+    """The agent's edits made and written into the file (all or none) → {unchanged, bytes, report, touched}.
     `create` ({content, rtl?}) makes a new document from markdown and needs no `data`; `author` is who comments
     and replies are written as."""
     import base64
@@ -240,4 +240,6 @@ async def docs_apply(data, name, ops, create=None, author=None):
     body = r.json()
     return {"unchanged": bool(body.get("unchanged")),
             "bytes": base64.b64decode(body["file"]) if body.get("file") else None,
-            "report": body.get("report") or ""}
+            "report": body.get("report") or "",
+            # the paragraphs the edit changed (ids in the written file): an open editor marks them
+            "touched": [str(t) for t in (body.get("touched") or [])][:50]}

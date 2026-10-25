@@ -43,6 +43,18 @@ export const sheetsEditorsOpen = () => editors.size > 0;
 export const flushAllSheetsEditors = (ms = 1500) =>
   Promise.all([...editors.values()].flatMap((set) => [...set]).map((h) => h.flush(ms))).then((oks) => oks.every(Boolean));
 
+/** A `docs_command` event from the chat: the agent's Word edit, already written to `path` — the editor opens the new
+ *  file (`version`), marking the paragraphs it changed (`touched`). */
+export type DocsCommand = { path: string; version?: string; intent?: string; touched: string[] };
+export function docsCommandDetail(ev: Record<string, unknown>): DocsCommand {
+  return {
+    path: String(ev.path),
+    version: typeof ev.version === "string" ? ev.version : undefined,
+    intent: typeof ev.intent === "string" ? ev.intent.slice(0, 80) : undefined,
+    touched: Array.isArray(ev.touched) ? ev.touched.filter((t): t is string => typeof t === "string").slice(0, 50) : [],
+  };
+}
+
 /** A `sheets_command` event from the chat: the agent's edit, already written to `path`. */
 export type SheetsCommand = { path: string; mutations: unknown[] | null; version?: string; intent?: string; reload: boolean };
 // What the editor asks of a comment (its own comment UI): checked here, then sent through the comment store.
@@ -268,7 +280,14 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
     setStatus("saved");
     setConflict(null);
     setSavedAt(null);
-    post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable || liveRef.current });
+    // Opened again (an edit the agent or someone else made): the view stays where it was, and the agent's changed
+    // paragraphs are marked (Docs).
+    const again = reopening.current;
+    const marks = pendingMarks.current;
+    reopening.current = false;
+    pendingMarks.current = null;
+    post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable || liveRef.current,
+           ...(again ? { keepView: true } : {}), ...(marks?.length ? { marks } : {}) });
   }, [ready, opened, path, name, post, editable]);
 
   // While the agent works the person watches; editing comes back when the turn ends.
@@ -325,11 +344,20 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   // What had focus on the page keeps it: the editor takes focus when a workbook loads, which would pull the
   // person out of the message they are typing.
   const keepFocus = useRef<HTMLElement | null>(null);
+  const reopening = useRef(false);
+  const pendingMarks = useRef<string[] | null>(null);
+  const opens = useRef(0);
   const reopen = useCallback(() => {
     if (!calls) return;
     const el = document.activeElement;
     keepFocus.current = el instanceof HTMLElement && el !== document.body && el !== frameRef.current ? el : null;
-    calls.open(path).then(setOpened).catch(() => setFailed(true));
+    // The agent may edit twice in quick succession: only the latest open is taken in.
+    const mine = ++opens.current;
+    calls.open(path).then((o) => {
+      if (mine !== opens.current) return;
+      reopening.current = true;
+      setOpened(o);
+    }).catch(() => { if (mine === opens.current) setFailed(true); });
   }, [calls, path]);
   reopenRef.current = reopen;
   useEffect(() => {
@@ -354,8 +382,21 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
       post({ type: "command", doc: doc.current, id, mutations: d.mutations });
     };
     window.addEventListener("cycls:sheets-command", onCommand);
-    return () => window.removeEventListener("cycls:sheets-command", onCommand);
-  }, [path, post, reopen]);
+    // The agent's Word edits: the new file opened at once, its changed paragraphs marked.
+    const onDocsCommand = (e: Event) => {
+      const d = (e as CustomEvent<DocsCommand>).detail;
+      if (product !== "docs" || !d || d.path !== path) return;
+      if (d.intent) setIntent(d.intent);
+      if (d.version && d.version === version.current) return;   // already the file open
+      pendingMarks.current = d.touched;
+      reopen();
+    };
+    window.addEventListener("cycls:docs-command", onDocsCommand);
+    return () => {
+      window.removeEventListener("cycls:sheets-command", onCommand);
+      window.removeEventListener("cycls:docs-command", onDocsCommand);
+    };
+  }, [path, post, reopen, product]);
 
   // Save what is unsaved now (before a message goes): true once it is in the file.
   useEffect(() => {

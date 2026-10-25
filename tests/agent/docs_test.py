@@ -56,9 +56,9 @@ def _run(inp, ws):
     return asyncio.run(docs.exec_docs(inp, ws, types.SimpleNamespace(chat_id="c1")))
 
 
-def _applied(report="¶3 replaced.", unchanged=False):
+def _applied(report="¶3 replaced.", unchanged=False, touched=()):
     return httpx.Response(200, json={"unchanged": unchanged, "file": None if unchanged else base64.b64encode(PATCHED).decode(),
-                                     "report": report})
+                                     "report": report, "touched": list(touched)})
 
 
 # ---- the schema and who gets it ----------------------------------------------------------------
@@ -109,7 +109,7 @@ def test_read_and_apply_send_the_file_and_the_request(monkeypatch):
     assert json.loads(form["request"]) == {"name": "q3.docx", "from": 12}
 
     r = asyncio.run(office.docs_apply(DOCX, "q3.docx", [{"op": "delete", "para": "¶3·abc"}]))
-    assert r == {"unchanged": False, "bytes": PATCHED, "report": "¶3 replaced."}
+    assert r == {"unchanged": False, "bytes": PATCHED, "report": "¶3 replaced.", "touched": []}
     assert seen[1][0] == "/v1/docs/apply" and json.loads(seen[1][1]["request"])["ops"] == [{"op": "delete", "para": "¶3·abc"}]
 
     asyncio.run(office.docs_apply(None, "new.docx", [], create={"content": "# مرحبا"}))
@@ -130,20 +130,23 @@ def test_the_service_s_own_words_reach_the_model_once(monkeypatch, tmp_path):
 
 # ---- the executor ------------------------------------------------------------------------------
 
-def test_edit_writes_the_file_keeps_the_old_version_and_refreshes_a_preview(monkeypatch, tmp_path):
+def test_edit_writes_the_file_keeps_the_old_version_and_tells_an_open_editor(monkeypatch, tmp_path):
     _on(monkeypatch)
     (tmp_path / "reports").mkdir()
     (tmp_path / "reports" / "q3.docx").write_bytes(DOCX)
 
     def handler(request):
         assert _form(request)["file"] == DOCX
-        return _applied("¶3 replaced.\n\nNow:\n¶3·h10 Revenue grew **15%**.")
+        return _applied("¶3 replaced.\n\nNow:\n¶3·h10 Revenue grew **15%**.", touched=["3E1A0B2C"])
 
     _mock(monkeypatch, handler)
     out = _run({"action": "edit", "path": "reports/q3.docx", "intent": "Update revenue",
                 "ops": [{"op": "replace", "para": "¶3·u22", "text": "Revenue grew **15%**."}]}, _ws(tmp_path))
     assert out["_model"].startswith("Edited reports/q3.docx.\n¶3 replaced.") and "¶3·h10" in out["_model"]
-    assert out["_ui"] == {"type": "ui", "action": "refresh_canvas", "path": "reports/q3.docx"}
+    from cycls._agent.design.store import version_of
+    # an open Docs editor takes the new file in, the changed paragraph marked
+    assert out["_ui"] == {"type": "ui", "action": "docs_command", "path": "reports/q3.docx", "version": version_of(PATCHED),
+                          "touched": ["3E1A0B2C"], "intent": "Update revenue"}
     assert (tmp_path / "reports" / "q3.docx").read_bytes() == PATCHED
     kept = versions.listing(tmp_path, "reports/q3.docx")
     assert kept and versions.read(tmp_path, "reports/q3.docx", kept[0]["id"]) == DOCX   # the old file, kept
@@ -165,7 +168,8 @@ def test_a_save_meanwhile_is_edited_again_once(monkeypatch, tmp_path):
     _mock(monkeypatch, handler)
     out = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "delete", "para": "¶2"}]}, _ws(tmp_path))
     assert calls == [DOCX, b"PK\x03\x04 saved by hand"]          # applied again, to the newer file
-    assert f.read_bytes() == PATCHED + b"hand" and out["_ui"]["action"] == "refresh_canvas"
+    assert f.read_bytes() == PATCHED + b"hand" and out["_ui"]["action"] == "docs_command"
+    assert out["_ui"]["touched"] == []
 
 
 def test_nothing_to_change_writes_nothing(monkeypatch, tmp_path):

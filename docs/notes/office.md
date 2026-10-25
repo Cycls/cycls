@@ -112,8 +112,14 @@ not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-o
 - `create` → a new document from `content` in markdown (headings, one paragraph per line, lists nested by two
   spaces, `| tables |`, `> quotes`, links, `[page break]`; Arabic makes it right to left, `rtl` forces it); opens
   in the canvas. The reply is its read.
-- The `_ui` event after an edit is `refresh_canvas {path}`: an open preview fetches the file again (there is no
-  Docs editor yet).
+- The `_ui` event after an edit is `docs_command {path, version, touched, intent?}`: an open Docs editor opens the
+  new file at once, read-only under the orange banner until the turn ends, the view kept where it was; the
+  paragraphs the edit changed (`touched`, paragraph ids in the written file, at most 50, from the service's
+  `/v1/docs/apply`) are marked in orange and the first is scrolled into view. The marks are drawn over the page,
+  never written into the file; they go ~6 s after the turn ends, or as soon as the person changes something. An
+  open preview fetches the file again (`cycls:canvas-refresh`). A command naming the version already open does
+  nothing; two quick edits open only the latest. A right-to-left paragraph is marked across the page's text area
+  (in a table cell too: the row), since a right-to-left line's own box is not reliable.
 - Every call logs `docs_call` with its argument names and op names.
 
 ## Configuration

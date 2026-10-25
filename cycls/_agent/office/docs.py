@@ -235,7 +235,7 @@ async def exec_docs(inp, workspace, ctx=None):
                 if result["unchanged"]:
                     return f"Nothing in {rel} changed.\n{result['report']}".strip()
                 try:   # a save meanwhile: apply to that, once (its references may no longer match — then it says so)
-                    await write_fig(root, rel, result["bytes"], base=base, by="agent", reason="agent", intent=inp.get("intent"))
+                    version = await write_fig(root, rel, result["bytes"], base=base, by="agent", reason="agent", intent=inp.get("intent"))
                     break
                 except Stale:
                     if attempt == 2:
@@ -247,6 +247,10 @@ async def exec_docs(inp, workspace, ctx=None):
     except client.Unavailable as e:
         return _err(f"Docs is unavailable — {e}")
 
-    # An open preview of the file fetches it again.
-    return {"_model": f"Edited {rel}.\n{result['report']}".strip(),
-            "_ui": {"type": "ui", "action": "refresh_canvas", "path": rel}}
+    # An open Docs editor takes the new file in at once (read-only while the turn runs), the paragraphs the edit
+    # changed marked and in view; an open preview fetches the file again.
+    ui = {"type": "ui", "action": "docs_command", "path": rel, "version": version,
+          "touched": list(result.get("touched") or [])[:50]}
+    if intent := inp.get("intent"):
+        ui["intent"] = str(intent)[:80]
+    return {"_model": f"Edited {rel}.\n{result['report']}".strip(), "_ui": ui}

@@ -90,6 +90,33 @@ describe("Cycls Docs in the canvas", () => {
       ["0.0 load r.docx@d1", "4.2 operation.set-selections 12-12", "4.3 mutation.rich-text-editing r12 i1"]));
   });
 
+  test("the agent's Word edit opens the new file at once, its changed paragraphs marked and the view kept", async () => {
+    const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" });
+    render(<SheetsEditorView url="https://office.test/docs/" path="r.docx" name="r.docx" api={a} product="docs" live />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.docsOpen).toHaveBeenCalledTimes(1));
+    say(frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(types(posted)).toContain("load"));
+    const loads = () => posted.filter(([m]) => (m as { type: string }).type === "load").map(([m]) => m as Record<string, unknown>);
+    expect(loads()[0].keepView).toBeUndefined();
+
+    // the file open already: nothing to do
+    act(() => { window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: { path: "r.docx", version: "d1", touched: ["p1"] } })); });
+    expect(a.docsOpen).toHaveBeenCalledTimes(1);
+
+    (a.docsOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...OPENED, version: "d2" });
+    act(() => { window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: { path: "r.docx", version: "d2", touched: ["p1", "p7"], intent: "Tighten the summary" } })); });
+    await waitFor(() => expect(loads()).toHaveLength(2));
+    expect(loads()[1]).toMatchObject({ readonly: true, keepView: true, marks: ["p1", "p7"] });
+    expect(String(loads()[1].doc)).toContain("@d2");
+    expect(await screen.findByText(/Tighten the summary/)).toBeTruthy();
+
+    // another file's edit is not this editor's
+    act(() => { window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: { path: "other.docx", version: "x", touched: [] } })); });
+    expect(a.docsOpen).toHaveBeenCalledTimes(2);
+  });
+
   test("a document with tracked changes opens view only", async () => {
     const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" }, { ...OPENED, readonly: true });
     render(<SheetsEditorView url="https://office.test/docs/" path="r.docx" name="r.docx" api={a} product="docs" />);
