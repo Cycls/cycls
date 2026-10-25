@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import type { OfficeEditorApi, OfficeOpen, SheetsOpened } from "../hooks/use-files";
-import { useComments, type CellSpot, type CommentChange, type SheetCommentThread } from "../lib/comments";
+import { CommentsContext, useComments, type CellSpot, type CommentChange, type SheetCommentThread } from "../lib/comments";
 import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { publishSelection } from "./design-editor-view";
@@ -187,6 +187,11 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   // Comments on cells: the workspace's record for this file (the same store as a design's), polled; none on a
   // view that cannot comment (a share).
   const comments = useComments(api && product === "sheets" ? path : undefined);
+  // Cycls Docs keeps comments in the Word file: the editor only needs who is writing.
+  const commentsHost = useContext(CommentsContext);
+  const docsMe = product === "docs" && commentsHost?.me
+    ? { name: commentsHost.me.name, ...(commentsHost.me.image ? { image: commentsHost.me.image } : {}) }
+    : undefined;
   const commentsRef = useRef(comments);
   commentsRef.current = comments;
   const answerRef = useRef<(ask: CommentAsk) => Promise<void>>(async () => {});
@@ -304,7 +309,7 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
     reopening.current = false;
     pendingMarks.current = null;
     post({ type: "load", doc: doc.current, name, snapshot: opened.snapshot, activeSheet: opened.activeSheet, readonly: !editable || liveRef.current,
-           ...(again ? { keepView: true } : {}), ...(marks?.length ? { marks } : {}) });
+           ...(again ? { keepView: true } : {}), ...(marks?.length ? { marks } : {}), ...(docsMe ? { me: docsMe } : {}) });
   }, [ready, opened, path, name, post, editable]);
 
   // While the agent works the person watches; editing comes back when the turn ends.

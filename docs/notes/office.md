@@ -144,6 +144,7 @@ Cycls → editor `{target: "cycls-sheets", type, …}`, posted to the editor's e
 | `flush {id}` · `save` | `saved {doc, id, snapshot, ops}` · `flushed {id, ok}` |
 | `command {doc, id, mutations}` (the agent's edit, already in the file) | `applied {doc, id, ok, error?}` |
 | | `selection {doc, sheet, ranges}` · `print {doc}` (Ctrl/Cmd+P) |
+| Docs: `load {…, marks?, keepView?, me?}` · `reveal {doc, start, end}` | Docs: `selection {doc, nodes: [{name, type, text?}]}` |
 | `comments {doc, threads, me, agent?}` · `commentDone {doc, rid, ok, thread?, error?}` | `comment {doc, rid, op, id?, reply?, text?, sheet?, sheet_name?, cell?}` |
 
 Autosave: about 1.2 s after the last change, at most 8 s after the first; one save in flight. A replayed mutation is
@@ -166,6 +167,36 @@ their author's.
 - The agent: `sheets {action: "comments"}` lists every thread; with `number`, `reply` and `resolve` it answers and
   closes or reopens one as itself. `read` ends with the open ones. An edit that inserts or removes rows or columns
   moves the threads with their cells (`comments.shift`).
+
+## Cycls Docs: selection, comments, tracked changes
+
+- **Add selection.** The editor names what is selected the way the agent's read names it (`@cycls-office/docx`
+  agent/selection.ts): words in a paragraph `¶12·h10 (words) "15%"`, whole paragraphs `(paragraph)`, a table
+  cell `T1 r2c3 (cell)`, a long stretch `¶3·abc to ¶40·xyz (paragraphs)`; it sends `selection {doc, nodes}` and
+  the canvas offers it to the composer (the chip shows the words). The turn gets
+  `[Selected in reports/q3.docx: ¶12·h10 (words) "15%"]`; the references work for an edit straight away (the chat
+  saves an open document before a message goes). A paragraph typed in the editor keeps an id of the editor's own
+  until the file is read again: its reference fails once, and the agent is told to read again.
+- **Comments are kept in the Word file** (not in `.comments`, unlike a workbook's). The editor's read
+  (`/v1/docx/read`) gives the file's comments as the engine's threads (the `DOC_UNIVER_THREAD_COMMENT_PLUGIN`
+  resource, the commented words as COMMENT decorations); the editor runs the engine's comment UI on them (marked
+  words, the panel, replies, resolve, edit and delete for one's own). Authors are people by name: the person at the
+  editor (`me` in `load`, from the comments host) is `person:<name>`, and the file's comments under that name are
+  theirs. A new comment or reply gets the next free Word comment id in the editor; a save (the service's
+  `saveDocx`: patch-back, then `write/comments.ts`) compares the editor's threads with the file's and writes only
+  what differs under those ids, so the file read back names them the same and the next save does nothing. Guards:
+  the editor sends its threads only once a comment changed; a save removes only threads the editor was given
+  (those whose words are in the body). The agent's `docs` comment ops write to the same place, so each sees the
+  other's.
+- **Tracked changes open in review.** The editor's read marks them as Word's review does (insertions underlined,
+  deletions struck through, a colour per person) and lists them (`changes`: ids, author, date, inserted/deleted,
+  place; formatting, paragraph-mark and row changes as one `other` item, so taking every listed change leaves
+  none). The document stays read-only; the canvas shows a review bar (the count, a list with each change's words
+  and author — picking one sends `reveal {doc, start, end}` and the editor selects it — ✓/✕ each, Accept all /
+  Reject all). `POST /office/docs/changes {base, action: accept | reject, ids?}` takes some or all for the person
+  (the service's `accept_changes` / `reject_changes` with `ids`), written like a save with the old version kept;
+  the file opens again, editable once none are left. Reads of `.docx` are cached in `.cache/docs-review` since
+  this (older reads have no review in them).
 
 ## Arabic and right-to-left editing
 
