@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { ApprovalCard, ApprovalContext, matchAction, type Confirm } from "../src/components/approval-card";
+import { ApprovalCard, ApprovalContext, ApprovalReceipt, matchAction, waitingCard, type Confirm } from "../src/components/approval-card";
 import { ConnectorsContext } from "../src/components/parts/tool-call";
 import type { Connector } from "../src/components/connectors-dialog";
 import type { Part } from "../src/hooks/use-chat";
 
-// The question a gated call asks, in the conversation: the action in plain words (the CMS's for a connector),
-// the face of its step, "Don't ask again" (Always allow) except for a delete, and a receipt once answered.
+// The question a gated call asks, over the message box: the action in plain words (the CMS's for a connector),
+// the face of its step, "Don't ask again" (Always allow) except for a delete. In the conversation it is one line.
 
 const outlook = {
   name: "outlook", title: { en: "Outlook" }, icon: "https://cdn/outlook.svg",
@@ -18,15 +18,17 @@ const send: Confirm = { tool: "outlook_request", key: "k1", label: "outlook · r
   args: { method: "POST", path: "me/sendMail", context: "Sending Sara the Q3 numbers",
           body: JSON.stringify({ message: { subject: "Q3 numbers", toRecipients: [{ emailAddress: { address: "sara@acme.com" } }] } }) } };
 
-function show(card: Confirm, state = "waiting", busy = false) {
+const part = (card: Confirm, state = "waiting"): Part => ({ type: "card", card: card as unknown as Part["card"], state });
+function show(card: Confirm) {
   const answer = vi.fn();
+  render(<ConnectorsContext.Provider value={[outlook]}><ApprovalCard part={part(card)} agent="Super" answer={answer} /></ConnectorsContext.Provider>);
+  return answer;
+}
+function line(card: Confirm, state: string) {
   render(
     <ConnectorsContext.Provider value={[outlook]}>
-      <ApprovalContext.Provider value={{ agent: "Super", answer, busy }}>
-        <ApprovalCard part={{ type: "card", card: card as unknown as Part["card"], state }} />
-      </ApprovalContext.Provider>
+      <ApprovalContext.Provider value={{ agent: "Super" }}><ApprovalReceipt part={part(card, state)} /></ApprovalContext.Provider>
     </ConnectorsContext.Provider>);
-  return answer;
 }
 
 describe("the approval card", () => {
@@ -71,25 +73,29 @@ describe("the approval card", () => {
     expect(screen.getByText("py")).toBeTruthy();   // the file's own tile
   });
 
-  it("turns into its receipt once answered", () => {
-    const cases: [string, boolean, RegExp][] = [
-      ["done", false, /Sent to sara@acme.com/], ["approved", true, /Working on it/], ["approved", false, /Approved/],
-      ["failed", false, /Didn't go through/], ["declined", false, /Not now/], ["skipped", false, /Skipped/]];
-    for (const [state, busy, text] of cases) {
-      show(send, state, busy);
+  it("is one line in the conversation, waiting, then how it went, with no spinner of its own", () => {
+    const cases: [string, RegExp][] = [
+      ["waiting", /Waiting for an answer/], ["approved", /Approved/], ["done", /Sent to sara@acme.com/],
+      ["failed", /Didn't go through/], ["declined", /Not now/], ["skipped", /Skipped/]];
+    for (const [state, text] of cases) {
+      line(send, state);
       expect(screen.getByText(text)).toBeTruthy();
       expect(screen.queryByText("Send")).toBeNull();
+      expect(document.querySelector(".animate-spin")).toBeNull();
       cleanup();
     }
   });
 });
 
-describe("the approval card on a shared chat", () => {
-  afterEach(cleanup);
-  it("shows the question as a receipt: nobody there can answer it", () => {
-    render(<ApprovalCard part={{ type: "card", card: send as unknown as Part["card"], state: "waiting" }} />);
-    expect(screen.getByText("Waiting for an answer")).toBeTruthy();
-    expect(screen.queryByText("Not now")).toBeNull();
+describe("the card the message box asks", () => {
+  const said = (...parts: Part[]) => ({ role: "assistant", parts });
+  const confirm = (state = "waiting"): Part => ({ type: "card", card: { action: "confirm", ...send } as unknown as Part["card"], state });
+  it("is the one the last reply left waiting", () => {
+    const ask = confirm();
+    expect(waitingCard([{ role: "user" }, said({ type: "text", text: "Drafted it." }, ask)])).toBe(ask);
+    expect(waitingCard([said(ask), { role: "user" }])).toBeUndefined();   // sent past it: skipped
+    expect(waitingCard([said(confirm("approved"))])).toBeUndefined();
+    expect(waitingCard([said({ type: "card", card: { action: "ask" } as unknown as Part["card"], state: "waiting" })])).toBeUndefined();
   });
 });
 

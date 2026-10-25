@@ -1,8 +1,10 @@
-// The question a gated call asks, in the conversation where the agent asked it. It asks about the action as
-// a colleague would, wears the face of the step it stands for (a connector's logo, a file's tile, a tool's
-// glyph, the trash for a delete) and, once answered, stays as a one-line receipt.
+// The question a gated call asks, over the message box while the reply that asked it waits. It asks about the
+// action as a colleague would and wears the face of the step it stands for (a connector's logo, a file's tile, a
+// tool's glyph, the trash for a delete). Where the agent asked, the conversation keeps one line: waiting, then
+// how it went.
 import { createContext, useContext, useState } from "react";
-import { Icon, Spinner } from "./icon";
+import { motion } from "framer-motion";
+import { Icon } from "./icon";
 import { Star } from "./cycls-star";
 import { GLYPHS } from "./parts/step-part";
 import { ConnectorsContext } from "./parts/tool-call";
@@ -18,8 +20,16 @@ export type Confirm = {
 };
 // `yes` approves, else "Not now"; `remember` is "Don't ask again", which is Always allow for that tool.
 export type Answer = (card: Confirm, yes: boolean, remember: boolean, title: string) => void;
-// `busy` while a run is going: an approved card shows it working until the call is made again.
-export const ApprovalContext = createContext<{ agent: string; answer?: Answer; busy?: boolean }>({ agent: "" });
+// The agent's name, for the words of a card's line in the conversation.
+export const ApprovalContext = createContext<{ agent: string }>({ agent: "" });
+
+// The card the last reply left waiting, if it did: the one the message box asks.
+export function waitingCard(messages: { role: string; parts?: Part[] }[]) {
+  const last = messages[messages.length - 1];
+  return last?.role === "assistant"
+    ? last.parts?.find((p) => p.type === "card" && p.card?.action === "confirm" && (p.state || "waiting") === "waiting")
+    : undefined;
+}
 
 type Words = { title: string; sub?: string; button: string; done: string; rows: [string, string][];
                cmd?: string; details?: string; remember?: string };
@@ -122,35 +132,39 @@ function Face({ card, c }: { card: Confirm; c?: Connector }) {
   );
 }
 
-export function ApprovalCard({ part }: { part: Part }) {
+// A card's line in the conversation, where the agent asked. No spinner once approved: the reply's own loader is
+// the one that says it is working.
+export function ApprovalReceipt({ part }: { part: Part }) {
   const card = part.card as unknown as Confirm;
-  const { agent, answer, busy } = useContext(ApprovalContext);
+  const { agent } = useContext(ApprovalContext);
+  const c = useContext(ConnectorsContext).find((x) => x.name === card.connector);
+  const w = words(card, c, agent);
+  const state = part.state || "waiting";
+  const [icon, text, tone] =
+    state === "waiting" ? [<Icon name="hand" className="size-4" />, t("cardWaiting"), "text-muted-foreground"]
+    : state === "approved" ? [<Icon name="check" className="size-4" />, t("cardApproved"), "text-foreground"]
+    : state === "done" ? [<Icon name="check" className="size-4" />, w.done, "text-foreground"]
+    : state === "failed" ? [<Icon name="x" className="size-4" />, t("cardFailed"), "text-destructive"]
+    : [<Icon name="x" className="size-4" />, t(state === "declined" ? "cardDeclined" : "cardSkipped"), "text-muted-foreground"];
+  return (
+    <div className={cn("my-1 flex items-center gap-2 text-sm", tone)}>
+      {icon}<span dir="auto" className="min-w-0 truncate">{text}</span>
+      {!["done", "approved"].includes(state) && <span dir="auto" className="min-w-0 truncate text-muted-foreground">· {w.title}</span>}
+      {part.remembered && <span className="shrink-0 text-xs text-muted-foreground">· {t("cardWontAsk")}</span>}
+    </div>
+  );
+}
+
+export function ApprovalCard({ part, agent, answer }: { part: Part; agent: string; answer: Answer }) {
+  const card = part.card as unknown as Confirm;
   const c = useContext(ConnectorsContext).find((x) => x.name === card.connector);
   const [remember, setRemember] = useState(false);
   const w = words(card, c, agent);
-  const state = part.state || "waiting";
-
-  if (state !== "waiting" || !answer) {   // a shared chat has nobody to answer: it shows the question as a receipt
-    const [icon, text, tone] =
-      state === "waiting" ? [<Icon name="hand" className="size-4" />, t("cardWaiting"), "text-muted-foreground"]
-      : state === "approved" ? (busy ? [<Spinner className="size-4" />, t("cardWorking"), "text-muted-foreground"]
-                                   : [<Icon name="check" className="size-4" />, t("cardApproved"), "text-foreground"])
-      : state === "done" ? [<Icon name="check" className="size-4" />, w.done, "text-foreground"]
-      : state === "failed" ? [<Icon name="x" className="size-4" />, t("cardFailed"), "text-destructive"]
-      : [<Icon name="x" className="size-4" />, t(state === "declined" ? "cardDeclined" : "cardSkipped"), "text-muted-foreground"];
-    return (
-      <div className={cn("my-1 flex items-center gap-2 text-sm", tone)}>
-        {icon}<span dir="auto" className="min-w-0 truncate">{text}</span>
-        {!["done", "approved"].includes(state) && <span dir="auto" className="min-w-0 truncate text-muted-foreground">· {w.title}</span>}
-        {part.remembered && <span className="shrink-0 text-xs text-muted-foreground">· {t("cardWontAsk")}</span>}
-      </div>
-    );
-  }
-
   const danger = card.risk === "destructive";
   return (
-    <div className={cn("my-1 flex flex-col gap-3 rounded-2xl border bg-background p-4 shadow-sm",
-                       danger ? "border-destructive/30" : "border-border")}>
+    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}
+                className={cn("mb-2 flex max-h-[60dvh] flex-col gap-3 overflow-y-auto rounded-2xl border bg-background p-4 shadow-sm",
+                              danger ? "border-destructive/30" : "border-border")}>
       <div className="flex items-start gap-3">
         <Face card={card} c={c} />
         <div className="min-w-0">
@@ -180,16 +194,16 @@ export function ApprovalCard({ part }: { part: Part }) {
         </label>
       )}
       <div className="flex justify-end gap-2">
-        <button onClick={() => answer?.(card, false, false, w.title)}
+        <button onClick={() => answer(card, false, false, w.title)}
                 className="cursor-pointer rounded-full px-4 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
           {t("cardNotNow")}
         </button>
-        <button onClick={() => answer?.(card, true, remember, w.title)}
+        <button onClick={() => answer(card, true, remember, w.title)}
                 className={cn("cursor-pointer rounded-full px-4 py-2 text-[13px] font-medium transition hover:opacity-85",
                               danger ? "bg-destructive text-white" : "bg-foreground text-background")}>
           {w.button}
         </button>
       </div>
-    </div>
+    </motion.div>
   );
 }

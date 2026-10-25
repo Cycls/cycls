@@ -7,29 +7,33 @@ import type { Part } from "../../hooks/use-chat";
 export const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 
 // A picture in a message: an image part's own address, a workspace file a tool opened (a canvas card), or
-// one a tool is still making, held as a frame of its shape.
-type Shot = { src?: string; path?: string; caption?: string; making?: string; label?: string };
+// one a tool is still making, held as a frame of its shape. A file keeps the shape it was made in, when known.
+type Shot = { src?: string; path?: string; caption?: string; making?: string; label?: string; shape?: string };
 const shot = (p: Part): Shot =>
   p.type === "image" ? { src: p.src, caption: p.caption || p.alt }
   : p.picture && p.tool_name !== "Canvas" ? { making: p.picture, label: p.step }
-  : { path: p.step, caption: p.step?.split("/").pop() };
+  : { path: p.step, caption: p.step?.split("/").pop(), shape: p.picture };
 
-const ratio = (shape?: string) => {
+const dims = (shape?: string) => {
   const [w, h] = (shape || "").split(":").map(Number);
-  return w > 0 && h > 0 ? `${w} / ${h}` : "1 / 1";
+  return w > 0 && h > 0 ? [w, h] : [1, 1];
+};
+// A picture a tool made, alone in its message, is at most 20rem on its long side: the frame it is made in, and
+// the picture that takes its place.
+const fit = (shape?: string) => {
+  const [w, h] = dims(shape);
+  return { aspectRatio: `${w} / ${h}`, width: `${20 * Math.min(1, w / h)}rem` };
 };
 
-// The frame a picture is made in: a field of dots breathing over a blur, until the picture takes its place.
-export function Making({ shape, label, className }: { shape?: string; label?: string; className?: string }) {
+// The frame a picture is made in: dots over a blur, crossed by a sweep of light in step with the shimmer on its
+// words, until the picture takes its place.
+export function Making({ shape, label, one }: { shape?: string; label?: string; one?: boolean }) {
   return (
-    <div className={cn("relative overflow-hidden rounded-xl border border-border bg-secondary", className)} style={{ aspectRatio: ratio(shape) }}>
+    <div className="relative max-w-full overflow-hidden rounded-xl border border-border bg-secondary"
+         style={one ? fit(shape) : { aspectRatio: "1 / 1" }}>
       <div className="absolute -inset-6 opacity-60 blur-2xl"
            style={{ background: "radial-gradient(circle at 25% 30%, rgb(47 107 255 / .35), transparent 55%), radial-gradient(circle at 75% 70%, rgb(255 84 0 / .3), transparent 55%)" }} />
-      <div className="absolute inset-0 grid grid-cols-8 grid-rows-8 place-items-center p-4">
-        {Array.from({ length: 64 }, (_, i) => (
-          <span key={i} className="size-1 animate-pulse rounded-full bg-foreground/25" style={{ animationDelay: `${((i % 8) + Math.floor(i / 8)) * 80}ms` }} />
-        ))}
-      </div>
+      <div className="dot-shimmer absolute inset-3" />
       <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-gradient-to-t from-background/90 to-transparent px-3 pb-2.5 pt-8 text-xs">
         <span className="text-shimmer shrink-0 font-medium">{t("makingPicture")}</span>
         {label && <span dir="auto" className="min-w-0 truncate text-muted-foreground">{label}</span>}
@@ -73,11 +77,13 @@ export function Gallery({ items, resolve, onOpenFile }: {
   return (
     <div className={cn("my-2", one ? "max-w-md" : cn("grid max-w-xl gap-1.5", cols))}>
       {shots.map((s, i) => {
-        if (s.making) return <Making key={i} shape={one ? s.making : "1:1"} label={s.label} />;
+        if (s.making) return <Making key={i} shape={s.making} label={s.label} one={one} />;
         const src = s.src || (s.path ? urls[s.path] : undefined);
-        const look = cn("relative block overflow-hidden rounded-xl border border-border bg-secondary", !one && "aspect-square");
-        const picture = src ? <img src={src} alt={s.caption || ""} className={one ? "block max-h-[28rem] max-w-full" : "size-full object-cover"} />
-                            : <span className={cn("block animate-pulse", one ? "h-60 w-80 max-w-full" : "size-full")} />;
+        const look = cn("relative block overflow-hidden rounded-xl border border-border bg-secondary", one ? "w-fit max-w-full" : "aspect-square");
+        const size = !one ? "size-full object-cover" : s.path ? "block max-h-80 max-w-[min(20rem,100vw_-_3rem)]" : "block max-h-[28rem] max-w-full";
+        const picture = src ? <img src={src} alt={s.caption || ""} className={size} />
+                            : <span className={cn("block max-w-full animate-pulse", one ? !s.shape && "h-60 w-80" : "size-full")}
+                                    style={one && s.shape ? fit(s.shape) : undefined} />;
         if (s.path && onOpenFile)
           return <button key={i} type="button" onClick={() => onOpenFile(s.path!)} aria-label={s.caption} className={cn(look, "cursor-pointer")}>{picture}</button>;
         // An image an app sent keeps its caption under it.

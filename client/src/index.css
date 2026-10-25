@@ -207,6 +207,17 @@ body {
   animation: text-shimmer 1.6s linear infinite;
 }
 
+/* Dot shimmer — the frame a picture is made in: a field of dots lit by the text shimmer's sweep, in step with
+   the words under it */
+.dot-shimmer {
+  background: linear-gradient(90deg, var(--color-muted-foreground) 35%, var(--color-foreground) 50%, var(--color-muted-foreground) 65%);
+  background-size: 200% auto;
+  -webkit-mask: radial-gradient(circle, #000 1.5px, transparent 2px) center / 16px 16px;
+  mask: radial-gradient(circle, #000 1.5px, transparent 2px) center / 16px 16px;
+  opacity: 0.55;
+  animation: text-shimmer 1.6s linear infinite;
+}
+
 /* Clerk drawers (checkout, subscription details) must clear the app chrome
    and the settings dialog (z-80). Clerk gives them no usable z of their own. */
 .cl-drawerRoot,

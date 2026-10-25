@@ -139,7 +139,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `message_retried` / `message_regenerated` / `message_failed` | recovery paths | friction |
 | `run_failed` | a run ended `failed` or `interrupted` — seen live (`via: stream`) or found by the poll after the stream dropped (`via: poll`); once per run | `status`, `reason` (`error`; `budget` — the 45-minute cap; `shutdown`; `lost` — its heartbeat stopped, the container died), `error_id` — the reference the person was shown, and the `error_id` of the server's `error` log row with the stack. The real error rate; a dropped connection is not one (below) |
 | `run_busy` | send refused with 409 — the chat already has a run, or a regenerate named a turn that is no longer the chat's last | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
-| `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works; `sent` carries `now` when *Send now* stopped the reply for it | does queueing get used? |
+| `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
 
 ### Deliverables
@@ -206,7 +206,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 
 | event | fires when | key props / question |
 |---|---|---|
-| `paywall_shown` | the **agent** forces the plan modal; a limit opens it once a period on each device, after that the reply's note carries it | `reason` (`limit` / `plan_required`) — friction, not curiosity |
+| `paywall_shown` | the **agent** forces the plan modal; a limit opens it once a period on each device, as the reply that used the last of it ends or at the refusal after it, and after that the line and the note carry it | `reason` (`limit` / `plan_required`) — friction, not curiosity |
 | `limit_reached` | free-tier cap specifically | |
 | `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall); `source` `usage` is the limit's line or note, `why` `limit` when the limit opened it; closed by `not_now`, `dismiss`, `backdrop` or `select` | `source`, `why`, `method` |
 | `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans, `why` (`limit` or `menu`: what opened the window) |

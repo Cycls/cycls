@@ -341,7 +341,34 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onDownload, onShare }: {
+// A markdown document, read. A link to another workspace file opens it in the canvas, read as markdown means it:
+// beside the document. Agents sometimes write paths from the workspace root, so a plain one missing beside it
+// opens from there, as its pictures do.
+function MdDoc({ path, content, shared, readFile, resolveMedia, onOpenFile }: {
+  path: string;
+  content: string;
+  shared?: boolean;
+  readFile?: (path: string, silent?: boolean) => Promise<string>;
+  resolveMedia?: (path: string) => Promise<string>;
+  onOpenFile?: (path: string) => void;
+}) {
+  const folder = path.slice(0, path.lastIndexOf("/") + 1);
+  const open = useCallback((p: string) => {
+    const root = folder && p.startsWith(folder) ? p.slice(folder.length) : "";
+    if (!root || !readFile) return onOpenFile?.(p);
+    readFile(p, true).then(() => onOpenFile?.(p), () => onOpenFile?.(root));
+  }, [folder, readFile, onOpenFile]);
+  return (
+    <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
+      {/* a shared page gives it the whole screen: keep the lines a reading width */}
+      <div className={shared ? "mx-auto max-w-3xl py-6" : undefined}>
+        <TextPart text={content} resolveMedia={resolveMedia} folder={folder} onOpenFile={onOpenFile && open} />
+      </div>
+    </div>
+  );
+}
+
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onDownload, onShare, onOpenFile }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -358,6 +385,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onDownload?: () => void;
   onShare?: () => void;
+  onOpenFile?: (path: string) => void;   // another workspace file, opened beside this one
 }) {
   const lang = codeLang(fileKind(file));
   if (content == null && !error) return <LoadingBar />;
@@ -456,12 +484,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
     ) : null;
   }
   if (isMd(fileKind(file))) {
-    return (
-      <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
-        {/* a shared page gives it the whole screen: keep the lines a reading width */}
-        <div className={shared ? "mx-auto max-w-3xl py-6" : undefined}><TextPart text={content ?? ""} resolveMedia={resolveMedia} /></div>
-      </div>
-    );
+    return <MdDoc path={file.path} content={content ?? ""} shared={shared} readFile={readFile} resolveMedia={resolveMedia} onOpenFile={onOpenFile} />;
   }
   if (lang == null) {
     return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
@@ -626,6 +649,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   reloadKey={reload}
                   designEditorUrl={designEditorUrl}
                   designHost={designHost}
+                  onOpenFile={onAddFile}
                 />
               )}
             </div>
@@ -870,8 +894,9 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 }
 
 // Keyed by path from the parent: each open file keeps its own state.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, onOpenFile }: {
   file: CanvasFile;
+  onOpenFile?: (path: string) => void;   // a link in a document to another workspace file
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string, silent?: boolean) => Promise<string>;
   openFile: (path: string, silent?: boolean) => Promise<string>;
@@ -1151,7 +1176,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                          fetchConnector={fetchConnector}
                          appData={appData}
                          designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile}
-                         onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
+                         onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} onOpenFile={onOpenFile} />
             </div>}
             {previewing && (() => {
               const pictures = preview ? parseDeck(preview) : null;

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { MessageBubble } from "../src/components/message";
 import { Gallery } from "../src/components/parts/gallery";
 import { SourceChip } from "../src/components/parts/sources-part";
-import { UpgradeContext, nearLimit, usedUp } from "../src/components/usage";
+import { UpgradeContext, nearLimit, usedUp, useLimitOpensPlans } from "../src/components/usage";
 import type { Message, Part } from "../src/hooks/use-chat";
 
 // What a message shows besides its words: the pictures a tool made, in a grid that opens the canvas, the frame
@@ -45,6 +45,17 @@ describe("pictures", () => {
     expect(resolve).toHaveBeenCalledWith("images/cat.png");
   });
 
+  it("alone, a frame is 20rem on its long side, in its shape; in a grid it is a square", () => {
+    const frame = (picture: string) => ({ type: "step", id: picture, tool_name: "image", step: "a cat", picture }) as Part;
+    const { container, rerender } = render(<Gallery items={[frame("16:9")]} />);
+    const box = () => container.querySelector<HTMLElement>(".dot-shimmer")!.parentElement!.style;
+    expect([box().width, box().aspectRatio]).toEqual(["20rem", "16 / 9"]);
+    rerender(<Gallery items={[frame("9:16")]} />);
+    expect([box().width, box().aspectRatio]).toEqual(["11.25rem", "9 / 16"]);
+    rerender(<Gallery items={[frame("16:9"), frame("1:1")]} />);
+    expect([box().width, box().aspectRatio]).toEqual(["", "1 / 1"]);
+  });
+
   it("a shared chat, with no way into the workspace, keeps the file's card", () => {
     render(<MessageBubble message={said([{ type: "step", id: "t1:file", tool_name: "Canvas", step: "images/cat.png", ok: true }])} />);
     expect(screen.queryByRole("img")).toBeNull();
@@ -62,15 +73,35 @@ describe("the limit an agent reports", () => {
     expect(usedUp(usage(14))).toBe(true);
   });
 
-  it("is nothing in the reply until it is used up; then the reply is the note, and its button opens the plans", () => {
+  it("is the note only in the reply it refused, and the note's button opens the plans", () => {
     const { rerender } = render(<MessageBubble message={said([usage(12), { type: "text", text: "Sure." }])} />);
     expect(screen.queryByText("Subscribe and keep going")).toBeNull();
+    rerender(<MessageBubble message={said([usage(14), { type: "text", text: "Here it is." }])} />);   // the last one used
+    expect(screen.queryByText(/Thanks for trying/)).toBeNull();
+    rerender(<MessageBubble message={said([usage(14)])} isStreaming />);   // a reply not yet begun waits as any does
+    expect(screen.queryByText(/Thanks for trying/)).toBeNull();
     const upgrade = vi.fn();
     rerender(<UpgradeContext.Provider value={{ upgrade, agent: "Super" }}><MessageBubble message={said([{ ...usage(14), per: "month" }])} /></UpgradeContext.Provider>);
     expect(screen.getByText("Thanks for trying Super")).toBeTruthy();
     expect(screen.getByText(/You've used this month's 14 free messages, and we'd love to keep going with you\. They come back on 1 January\./)).toBeTruthy();
     fireEvent.click(screen.getByText("Subscribe and keep going"));
     expect(upgrade).toHaveBeenCalled();
+  });
+
+  it("opens the plans as the reply that used the last of it ends, once a period on this device", () => {
+    localStorage.clear();
+    const open = vi.fn();
+    const { rerender } = renderHook(({ u, streaming }) => useLimitOpensPlans("Super", u, streaming, open),
+                                    { initialProps: { u: usage(13), streaming: false } });
+    rerender({ u: usage(14), streaming: true });   // the 14th reply, still going
+    expect(open).not.toHaveBeenCalled();
+    rerender({ u: usage(14), streaming: false });   // it ends
+    expect(open).toHaveBeenCalledTimes(1);
+    rerender({ u: usage(14), streaming: true });   // the 15th, refused
+    rerender({ u: usage(14), streaming: false });
+    expect(open).toHaveBeenCalledTimes(1);
+    rerender({ u: { ...usage(14), resets: "2027-02-01" }, streaming: false });   // the next period's limit
+    expect(open).toHaveBeenCalledTimes(2);
   });
 });
 

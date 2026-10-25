@@ -53,17 +53,22 @@ const rehypePlugins = [[rehypeKatex, { strict: false }]] as const;
 
 // A workspace file however the model wrote it — relative, /workspace/…,
 // file://, sandbox:, or our own /files/ URL — as the path the canvas opens.
-// Anything else is the web and gets null.
-export function workspacePath(href: string): string | null {
+// In a document, a relative one is from the document's `folder`, as markdown
+// means it. Anything else is the web and gets null.
+export function workspacePath(href: string, folder = ""): string | null {
   let h = href.replace(/^(file:\/\/|sandbox:)/i, "");
   if (/^https?:\/\//i.test(h)) {
     let u: URL;
     try { u = new URL(h); } catch { return null; }
     if (u.origin !== location.origin || !u.pathname.startsWith("/files/")) return null;
-    h = u.pathname.slice(7);
+    h = u.pathname.slice(6);
   } else if (/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(h)) return null;
-  h = decodeURI(h).replace(/^(\.\/|\/?workspace\/|\/)+/, "");
-  return h || null;
+  h = decodeURI(h);
+  const out: string[] = [];
+  for (const s of `${/^\/|^workspace\//.test(h) ? "" : folder}${h.replace(/^\/?workspace\//, "")}`.split("/"))
+    if (s === "..") out.pop();
+    else if (s && s !== ".") out.push(s);
+  return out.join("/") || null;
 }
 
 // Bare paths in prose become links: "saved to reports/report.md".
@@ -90,9 +95,10 @@ const remarkPaths = () => (tree: Node) => { linkifyPaths(tree); };
 const remarkPlugins = [[remarkGfm, { singleTilde: false }], remarkMath, remarkPaths] as const;
 
 const MemoizedMarkdownBlock = memo(
-  function MarkdownBlock({ content, onOpenFile, sources, resolveMedia }: {
+  function MarkdownBlock({ content, onOpenFile, folder, sources, resolveMedia }: {
     content: string;
     onOpenFile?: (path: string) => void;
+    folder?: string;
     sources?: Map<string, Source>;
     resolveMedia?: (path: string) => Promise<string>;
   }) {
@@ -100,7 +106,7 @@ const MemoizedMarkdownBlock = memo(
       ...markdownComponents,
       img: ({ src, alt }: { src?: string; alt?: string }) => <Media src={src ?? ""} alt={alt} resolve={resolveMedia} />,
       a({ href, children }: { href?: string; children?: React.ReactNode }) {
-        const path = href && onOpenFile ? workspacePath(href) : null;
+        const path = href && onOpenFile ? workspacePath(href, folder) : null;
         if (path) {
           return (
             <a href={href} onClick={(e) => { e.preventDefault(); onOpenFile!(path); }} className="cursor-pointer">
@@ -134,13 +140,14 @@ const MemoizedMarkdownBlock = memo(
       </ReactMarkdown>
     );
   },
-  (prev, next) => prev.content === next.content && prev.onOpenFile === next.onOpenFile
+  (prev, next) => prev.content === next.content && prev.onOpenFile === next.onOpenFile && prev.folder === next.folder
     && prev.sources === next.sources && prev.resolveMedia === next.resolveMedia,
 );
 
-export const TextPart = memo(function TextPart({ text, onOpenFile, sources, resolveMedia }: {
+export const TextPart = memo(function TextPart({ text, onOpenFile, folder, sources, resolveMedia }: {
   text: string;
   onOpenFile?: (path: string) => void;
+  folder?: string;   // a document's own folder: its relative links are from there
   resolveMedia?: (path: string) => Promise<string>;   // workspace images and videos, fetched with credentials
   // Results the turn's searches returned, keyed by `urlKey`. Built once per
   // message so the identity stays stable across streamed tokens.
@@ -152,7 +159,7 @@ export const TextPart = memo(function TextPart({ text, onOpenFile, sources, reso
   return (
     <div dir="auto" className="prose dark:prose-invert min-w-full">
       {blocks.map((block, index) => (
-        <MemoizedMarkdownBlock key={index} content={block} onOpenFile={onOpenFile} sources={sources} resolveMedia={resolveMedia} />
+        <MemoizedMarkdownBlock key={index} content={block} onOpenFile={onOpenFile} folder={folder} sources={sources} resolveMedia={resolveMedia} />
       ))}
     </div>
   );

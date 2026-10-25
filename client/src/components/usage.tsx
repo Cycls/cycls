@@ -1,15 +1,32 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect } from "react";
 import { Star } from "./cycls-star";
 import { getLang, t } from "../lib/i18n";
 import type { Part } from "../hooks/use-chat";
 
 // An agent's limit, as it reports it with a reply (`{"type": "usage", "used", "limit", "per", "resets"}`): a line over
-// the message box in its last fifth, and a note in place of the reply once nothing is left. Plans open from both.
+// the message box in its last fifth, and a note in place of the reply it refuses. Plans open from both.
 export const UpgradeContext = createContext<{ upgrade?: () => void; agent?: string }>({});
 
 const left = (u: Part) => Math.max(0, (u.limit ?? 0) - (u.used ?? 0));
 export const nearLimit = (u?: Part | null): u is Part => !!u?.limit && left(u) <= Math.ceil(u.limit / 5);
 export const usedUp = (u?: Part | null): u is Part => !!u?.limit && left(u) === 0;
+
+// A limit opens the plans by itself once a period on each device; after that the line and the note carry it.
+export function firstTime(agent: string | undefined, u: Part) {
+  const key = `cycls_plans_shown:${agent}:${u.resets ?? ""}`;
+  try {
+    if (localStorage.getItem(key)) return false;
+    localStorage.setItem(key, "1");
+  } catch { /* private mode: every time */ }
+  return true;
+}
+
+// The reply that used the last of a limit opens the plans as it ends, as the refusal after it would.
+export function useLimitOpensPlans(agent: string | undefined, usage: Part | null, streaming: boolean, open: () => void) {
+  useEffect(() => {
+    if (!streaming && usedUp(usage) && firstTime(agent, usage)) open();
+  }, [agent, usage, streaming, open]);
+}
 
 // The day it comes back, in the reader's language; the Gregorian calendar, as the limit counts.
 function day(iso?: string) {

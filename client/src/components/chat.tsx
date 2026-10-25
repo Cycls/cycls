@@ -13,7 +13,7 @@ import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
-import { ApprovalContext, type Answer } from "./approval-card";
+import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
 import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
@@ -25,7 +25,7 @@ import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra, Part } from "../hooks/use-chat";
-import { UpgradeContext, UsageLine, nearLimit, usedUp } from "./usage";
+import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
@@ -398,6 +398,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else if (plans === "b2b") activeOrg ? openPricing("organization", "url_param") : onCreateOrg?.();
   });
 
+  const limitPlans = useCallback(() => {
+    track("paywall_shown", { reason: "limit" });
+    openPricing(activeOrg ? "organization" : "user", "agent_event", "limit");
+  }, [openPricing, activeOrg]);
+  useLimitOpensPlans(name, usage, isStreaming, limitPlans);
+
   useEffect(() => {
     if (!setUIHandler) return;
     setUIHandler((ev) => {
@@ -407,9 +413,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       } else if (ev.action === "open_plan_modal") {
         // The agent blocked the user — a paywall, not a curious plans click.
         if (ev.reason === "limit") track("limit_reached", {});
-        // A limit opens the plans by itself once a period on this device; after that the note in the reply carries it.
         const u = usageRef.current;
-        if (ev.reason === "limit" && usedUp(u) && once(`cycls_plans_shown:${name}:${u.resets ?? ""}`)) return;
+        if (ev.reason === "limit" && usedUp(u) && !firstTime(name, u)) return;
         track("paywall_shown", { reason: ev.reason || "unspecified" });
         openPricing(activeOrg ? "organization" : "user", "agent_event", typeof ev.reason === "string" ? ev.reason : undefined);
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
@@ -587,8 +592,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else go();
   }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, files?.path]);
 
+  // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
+  const approval = useMemo(() => waitingCard(messages), [messages]);
   // A confirm card's answer is a turn of its own, carrying the card's key: the model reads it, the chat shows
-  // no bubble for it, and the card turns into its receipt. "Don't ask again" is Always allow for that tool.
+  // no bubble for it, and the card's line in the chat says how it went. "Don't ask again" is Always allow for that tool.
   const answerCard = useCallback<Answer>((card, yes, remember, title) => {
     track(yes ? "confirm_approved" : "confirm_dismissed", { tool: card.tool, chat_id: chatId, remember });
     markCard(card.key, { state: yes ? "approved" : "declined", ...(remember ? { remembered: true } : {}) });
@@ -672,21 +679,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     });
     return () => setRestoreHandler(null);
   }, [setRestoreHandler, connectors]);
-
-  // "Send now": the message goes to the front, and a reply still running stops so it can go — the end of the run
-  // drains it, as it drains any queue. A held queue sends it at once.
-  const sendNow = useCallback((id: string) => {
-    const hit = queuedRef.current.find((m) => m.id === id);
-    if (!hit) return;
-    const rest = queuedRef.current.filter((m) => m.id !== id);
-    heldRef.current = false;
-    track("queued_message_sent", { chat_id: chatId, remaining: rest.length, now: true });
-    if (isStreaming) { queuedRef.current = [hit, ...rest]; setQueued(queuedRef.current); onStop(); return; }
-    queuedRef.current = rest;
-    setQueued(rest);
-    onSend(hit.text, hit.attachments, "queued", hit.extra);
-    setTimeout(() => scrollToBottom(), 0);
-  }, [chatId, isStreaming, onStop, onSend, scrollToBottom]);
 
   const dropQueued = useCallback((id: string) => {
     queuedRef.current = queuedRef.current.filter((m) => m.id !== id);
@@ -1211,7 +1203,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
                 <ConnectorsContext.Provider value={connectors ?? []}>
-                <ApprovalContext.Provider value={{ agent: meta?.name || "", answer: answerCard, busy: isStreaming }}>{messages.map((msg, i) => {
+                <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
                   return (
@@ -1242,6 +1234,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
+                {approval && !isStreaming && (
+                  <ConnectorsContext.Provider value={connectors ?? []}>
+                    <ApprovalCard key={String(approval.card?.key)} part={approval} agent={meta?.name || ""} answer={answerCard} />
+                  </ConnectorsContext.Provider>
+                )}
                 {ask && (
                   <AskCard
                     key={ask.questions.map((q) => q.question).join("|")}
@@ -1272,12 +1269,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
                   />
                 )}
-                {!ask && !connect && survey && !hushed && !isStreaming && (
+                {!ask && !connect && !approval && survey && !hushed && !isStreaming && (
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>
                   {queued.length > 0 && (
-                    <MessageQueue items={queued} held={heldRef.current} onEdit={editQueued} onDrop={dropQueued} onSendNow={sendNow} />
+                    <MessageQueue items={queued} held={heldRef.current} onEdit={editQueued} onDrop={dropQueued} />
                   )}
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
@@ -1285,7 +1282,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
                   )}
                 </AnimatePresence>
-                {followUpsOn && followUp && !isStreaming && !ask && (
+                {followUpsOn && followUp && !isStreaming && !ask && !approval && (
                   <FollowUpChip
                     text={followUp}
                     onAccept={() => {
@@ -1792,23 +1789,13 @@ function RunIndicator({ step, startedAt, onStop }: {
   );
 }
 
-// Whether this device already did something under `key`, marking it done. With storage refused it never has.
-function once(key: string) {
-  try {
-    if (localStorage.getItem(key)) return true;
-    localStorage.setItem(key, "1");
-  } catch { /* private mode: every time */ }
-  return false;
-}
-
-// Messages written while the agent works, in the order they'll go: each can be edited (tap it), sent now, or
-// dropped. After Stop the queue holds until something is sent.
-function MessageQueue({ items, held, onEdit, onDrop, onSendNow }: {
+// Messages written while the agent works, in the order they'll go: each can be edited (tap it) or dropped. After
+// Stop the queue holds until something is sent.
+function MessageQueue({ items, held, onEdit, onDrop }: {
   items: { id: string; text: string }[];
   held: boolean;
   onEdit: (id: string) => void;
   onDrop: (id: string) => void;
-  onSendNow: (id: string) => void;
 }) {
   return (
     <motion.div
@@ -1831,10 +1818,6 @@ function MessageQueue({ items, held, onEdit, onDrop, onSendNow }: {
               <button onClick={() => onEdit(m.id)} title={held ? t("queuedHeld") : t("queuedHint")} dir="auto"
                       className="min-w-0 flex-1 cursor-pointer truncate text-start text-sm text-foreground/80 transition-colors hover:text-foreground">
                 {m.text}
-              </button>
-              <button onClick={() => onSendNow(m.id)}
-                      className="shrink-0 cursor-pointer rounded-full px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
-                {t("queueSendNow")}
               </button>
               <button onClick={() => onDrop(m.id)} aria-label={t("queueRemove")}
                       className="shrink-0 cursor-pointer rounded-full p-1.5 text-muted-foreground/60 transition-colors hover:bg-secondary hover:text-foreground">

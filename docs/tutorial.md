@@ -155,7 +155,7 @@ yield {"type": "table", "row": ["web-2", "Online", "62%"]}
 yield {"type": "callout", "callout": "Operation completed!", "style": "success"}
 yield {"type": "status", "status": "Connecting to database..."}
 yield {"type": "image", "src": "/public/chart.png", "alt": "Chart"}
-yield {"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}   # a limit: a line near its end, a note once used up
+yield {"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}   # a limit: a line near its end; the reply that uses it up opens the plans, one it refuses is a note
 ```
 
 ### UI actions

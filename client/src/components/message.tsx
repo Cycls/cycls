@@ -6,7 +6,7 @@ import { CodePart } from "./parts/code-part";
 import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { StepPart } from "./parts/step-part";
-import { ApprovalCard } from "./approval-card";
+import { ApprovalReceipt } from "./approval-card";
 import { GlowStar, Star } from "./cycls-star";
 import { StepGroup } from "./parts/step-group";
 import { FilePart } from "./parts/file-part";
@@ -51,10 +51,8 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       );
     case "sources":
       return <SourcesPart key={index} sources={part.sources || []} />;
-    case "card":   // a confirm card, where the agent asked; other cards drive the composer
-      return part.card?.action === "confirm" ? <ApprovalCard key={index} part={part} /> : null;
-    case "usage":   // only once nothing is left: before that it is the line over the message box
-      return <UsageNote key={index} usage={part} />;
+    case "card":   // a confirm card's line, where the agent asked; the card itself waits over the message box
+      return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} /> : null;
     case "step":
       return (
         <StepPart
@@ -176,13 +174,19 @@ export function MessageBubble({
   // depend on the reader opening a step.
   const byCall = new Map<string, Source[]>();
   for (const p of parts) if (p.type === "sources" && p.id && p.sources?.length) byCall.set(p.id, p.sources);
-  // A picture a tool made shows as itself, so its step goes; one that failed keeps its row.
+  // A picture a tool made shows as itself, so its step goes (one that failed keeps its row), and its file keeps
+  // the shape it was made in.
   const made = new Set(parts.flatMap((p) => (p.type === "step" && p.id?.endsWith(":file") ? [p.id.slice(0, -5)] : [])));
+  const shapes = new Map(parts.flatMap((p): [string, string][] => (p.type === "step" && p.picture && p.id ? [[`${p.id}:file`, p.picture]] : [])));
   const rendered = parts
-    .filter((p) => p.type !== "sources" && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")))
-    .filter((p) => !(p.type === "step" && p.picture && p.id && made.has(p.id)) && !(p.type === "usage" && !usedUp(p)))
+    .filter((p) => p.type !== "sources" && p.type !== "usage" && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")))
+    .filter((p) => !(p.type === "step" && p.picture && p.id && made.has(p.id)))
+    .map((p) => (p.type === "step" && p.id && shapes.has(p.id) ? { ...p, picture: shapes.get(p.id) } : p))
     .map((p) => (p.type === "step" && p.id && byCall.has(p.id) ? { ...p, sources: byCall.get(p.id) } : p));
   const isEmpty = rendered.length === 0;
+  // A limit is the line over the message box; in a reply it is the note, and only where it is the whole of one:
+  // the reply it refused.
+  const refused = isEmpty && !isStreaming ? parts.find((p) => p.type === "usage" && usedUp(p)) : undefined;
 
   // Every result this turn's searches returned, keyed for link lookup. `parts`
   // is rebuilt on every streamed token, so the memo keys on the URLs instead —
@@ -221,6 +225,7 @@ export function MessageBubble({
     <div className="group flex w-full max-w-3xl items-start gap-4 px-6 pb-2">
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {isEmpty && isStreaming && <Loader />}
+        {refused && <UsageNote usage={refused} />}
 
         {groupParts(rendered, isStreaming).map((group, gi, all) => {
           if (group.kind === "step")
