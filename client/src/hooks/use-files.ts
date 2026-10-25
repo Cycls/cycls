@@ -80,12 +80,12 @@ export type OfficeEditorApi = {
   pdf: (path: string) => Promise<string>;   // a blob URL of the file as PDF (the office-render service)
   // The editor's workbook written back into the file (only what differs changes). A file changed since
   // `base` answers {conflict: <its version>} instead.
-  sheetsSave: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean) => Promise<SheetsSaved>;
+  sheetsSave: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]) => Promise<SheetsSaved>;
   // Cycls Docs, the same four for a .docx (GET /office/docs…).
   docs?: (path: string) => Promise<OfficeOpen>;
   docsOpen?: (path: string) => Promise<SheetsOpened>;
   docsVersion?: (path: string) => Promise<{ version: string; modified?: string }>;
-  docsSave?: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean) => Promise<SheetsSaved>;
+  docsSave?: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]) => Promise<SheetsSaved>;
 };
 export type SheetsSaved = { version: string; unchanged: boolean; modified?: string } | { conflict: string };
 
@@ -295,12 +295,20 @@ export function useFiles(baseUrl: string = "") {
     };
     const version = (product: string) => async (filePath: string): Promise<{ version: string; modified?: string }> =>
       (await api(`/office/${product}/version?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
-    const save = (product: string) => async (filePath: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean): Promise<SheetsSaved> => {
+    const save = (product: string) => async (filePath: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]): Promise<SheetsSaved> => {
       const q = new URLSearchParams({ path: filePath });
       if (base) q.set("base", base);
       if (force) q.set("force", "true");
+      // The editor's trail since its last save, logged with it on the server (a header: no text in it, only names and offsets).
+      const headers: Record<string, string> = {};
+      if (trail?.length) {
+        let lines = trail;
+        let value = encodeURIComponent(JSON.stringify(lines));
+        while (value.length > 7000 && lines.length > 1) value = encodeURIComponent(JSON.stringify(lines = lines.slice(0, -1)));
+        if (value.length <= 7000) headers["X-Edit-Trail"] = value;
+      }
       try {
-        const res = await api(`/office/${product}/save?${q}`, { method: "PUT", body: await gzipJson(payload), silent: true });
+        const res = await api(`/office/${product}/save?${q}`, { method: "PUT", body: await gzipJson(payload), headers, silent: true });
         track("file_saved", { path: filePath });
         return (await res.json()) as { version: string; unchanged: boolean; modified?: string };
       } catch (err) {

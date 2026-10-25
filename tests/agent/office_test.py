@@ -401,3 +401,49 @@ def test_read_and_patch_docx_call_the_service(monkeypatch):
     assert patched["bytes"] == b"PK patched" and not patched["unchanged"]
     assert seen[0] == ("/v1/docx/read", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     assert seen[1][0] == "/v1/docx/patch" and seen[1][1].startswith("multipart/form-data")
+
+
+def test_every_save_is_logged_with_what_it_changed_and_the_editors_trail(monkeypatch, tmp_path, capsys):
+    import gzip
+    import json
+    from urllib.parse import quote
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("DOCS_ORGS", "*")
+    (tmp_path / "r.docx").write_bytes(b"PK\x03\x04 original")
+
+    async def patch_docx(data, snapshot_gz):
+        same = json.loads(gzip.decompress(snapshot_gz)).get("same")
+        if same:
+            return {"unchanged": True, "bytes": None, "summary": {"paragraphsChanged": 0, "notices": []}}
+        return {"unchanged": False, "bytes": b"PK\x03\x04 patched",
+                "summary": {"paragraphsChanged": 1, "paragraphsRemoved": 4, "notices": [{"kind": "x"}]}}
+
+    monkeypatch.setattr(office, "patch_docx", patch_docx)
+    c = _app(_ws(tmp_path))
+    trail = ["0.0 load r.docx@v1", "12.4 operation.set-selections 113-140", "12.5 mutation.rich-text-editing r113 d27 i1"]
+    capsys.readouterr()
+    r = c.put("/office/docs/save", params={"path": "r.docx"}, content=b'{"edit": 1}',
+              headers={"X-Edit-Trail": quote(json.dumps(trail))})
+    assert r.status_code == 200
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if '"office_save"' in ln]
+    assert len(lines) == 1
+    got = lines[0]
+    assert got["outcome"] == "written" and got["product"] == "docs" and got["path"] == "r.docx"
+    assert got["summary"] == {"paragraphsChanged": 1, "paragraphsRemoved": 4, "notices": 1}
+    assert got["trail"] == trail and got["version"] and got["replaced"]
+
+    c.put("/office/docs/save", params={"path": "r.docx"}, content=b'{"same": true}', headers={"X-Edit-Trail": "not json"})
+    unchanged = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if '"office_save"' in ln][0]
+    assert unchanged["outcome"] == "unchanged" and unchanged["trail"] is None
+
+
+def test_the_trail_header_is_bounded():
+    import json
+    from urllib.parse import quote
+
+    from cycls._agent.web.office_routes import edit_trail
+    assert edit_trail(None) is None and edit_trail("%7B") is None and edit_trail(quote('{"a": 1}')) is None
+    long = [f"{i} " + "x" * 300 for i in range(100)]
+    got = edit_trail(quote(json.dumps(long)))
+    assert len(got) == 64 and all(len(x) <= 120 for x in got) and got[0].startswith("0 ")

@@ -26,6 +26,7 @@ import json
 import re
 import uuid
 import zipfile
+from urllib.parse import unquote
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,6 +54,20 @@ def _write_cache(cache_dir, version, body):
         pass
 
 
+def edit_trail(header):
+    """The editor's trail sent with a save (X-Edit-Trail: URI-encoded JSON list of short lines) -> at most 64 lines.
+    The editor sends the first lines of a burst and the last ones; the start (what was selected) matters most."""
+    if not header:
+        return None
+    try:
+        lines = json.loads(unquote(header))
+    except ValueError:
+        return None
+    if not isinstance(lines, list):
+        return None
+    return [str(line)[:120] for line in lines[:64]]
+
+
 def right_to_left(file_path):
     """Whether a .docx sets any paragraph (or paragraph style) right to left. An unreadable file: no."""
     try:
@@ -73,6 +88,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
     from fastapi.responses import JSONResponse
 
     from cycls._agent.design.store import Stale, read_fig, version_of, write_fig
+    from cycls._agent.logs import log
     from cycls._agent.office import client as office
     from cycls._agent.web.shared import _safe_path, person
     from cycls._app.db import Workspace
@@ -172,28 +188,44 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 raise HTTPException(413, f"The {noun} sent is too large.")
             snapshot_gz = body if body[:2] == GZIP_MAGIC else gzip.compress(body, 6)
             rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+            trail = edit_trail(request.headers.get("x-edit-trail"))
+
+            def logged(outcome, **fields):
+                # Every save, with what it changed and what the editor did before it: a save that changed more
+                # than the person meant can be traced (names and offsets only, never the document's text).
+                summary = fields.pop("summary", None)
+                if isinstance(summary, dict):
+                    summary = {k: v for k, v in summary.items() if k != "notices"} | {"notices": len(summary.get("notices") or [])}
+                log("office_save", user=user, product=product, path=rel[-160:], outcome=outcome, base=base or None,
+                    force=force, bytes=len(body), summary=summary, trail=trail, **fields)
             from cycls._agent.design.deck import lock
             async with lock(file_path):     # one read → patch → write at a time per file
                 data, version = await asyncio.to_thread(read_fig, ws.root, rel)
                 if data is None:
                     raise HTTPException(404, "There is no such file.")
                 if base and base != version and not force:
+                    logged("stale", version=version)
                     return JSONResponse(status_code=412, content={
                         "detail": f"This {noun} changed since it was opened.", "version": version})
                 try:
                     result = await getattr(office, p["patch"])(data, snapshot_gz)   # looked up per call (tests replace it)
                 except office.Unavailable as e:
+                    logged("unavailable", error=str(e)[:200])
                     raise HTTPException(503, str(e))
                 except office.Refused as e:
+                    logged("refused", error=str(e)[:200])
                     raise HTTPException(422, f"The {noun} could not be saved: {e}")
                 if result["unchanged"]:
+                    logged("unchanged", version=version, summary=result["summary"])
                     return {"version": version, "unchanged": True, "summary": result["summary"]}
                 try:
                     new = await write_fig(ws.root, rel, result["bytes"], base=version, by="user",
                                           reason="keep" if force else "save", force=force, who=person(user, ws))
                 except Stale as e:
+                    logged("stale", version=e.current)
                     return JSONResponse(status_code=412, content={
                         "detail": f"This {noun} changed since it was opened.", "version": e.current})
+                logged("written", version=new, replaced=version, summary=result["summary"])
             if changed is not None:
                 changed(ws.root)
             # When it was written: the editor's "Last modified" follows its own saves.

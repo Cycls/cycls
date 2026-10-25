@@ -75,6 +75,21 @@ describe("Cycls Docs in the canvas", () => {
     expect(screen.getByRole("menuitem", { name: /Word/ })).toBeTruthy();
   });
 
+  test("a save carries the editor's trail to the server (lines only, at most 60)", async () => {
+    const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" });
+    render(<SheetsEditorView url="https://office.test/docs/" path="r.docx" name="r.docx" api={a} product="docs" />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.docsOpen).toHaveBeenCalled());
+    say(frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(types(posted)).toContain("load"));
+    const doc = (posted.find(([m]) => (m as { type: string }).type === "load")![0] as { doc: string }).doc;
+    const trail = ["0.0 load r.docx@d1", "4.2 operation.set-selections 12-12", 7, "4.3 mutation.rich-text-editing r12 i1"];
+    say(frame.contentWindow, { type: "saved", doc, id: "1", snapshot: { body: { dataStream: "x\r\n" } }, trail });
+    await waitFor(() => expect(a.docsSave).toHaveBeenCalledWith("r.docx", "d1", { snapshot: { body: { dataStream: "x\r\n" } }, ops: [] }, false,
+      ["0.0 load r.docx@d1", "4.2 operation.set-selections 12-12", "4.3 mutation.rich-text-editing r12 i1"]));
+  });
+
   test("a document with tracked changes opens view only", async () => {
     const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" }, { ...OPENED, readonly: true });
     render(<SheetsEditorView url="https://office.test/docs/" path="r.docx" name="r.docx" api={a} product="docs" />);

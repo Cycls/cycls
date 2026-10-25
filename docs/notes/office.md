@@ -44,7 +44,11 @@ One Node process:
     `X-Version`, `X-Modified`.
   - `GET /office/<p>/version?path=` → `{version, modified}`, the version open and save use.
   - `PUT /office/<p>/save?path=&base=&force=` → patch-back through the service, `write_fig(by="user")` keeps the
-    replaced version; a stale `base` answers 412 with the file's version.
+    replaced version; a stale `base` answers 412 with the file's version. Every save logs `office_save` (product,
+    path, outcome written/unchanged/stale/refused/unavailable, the patch summary, versions) with the editor's
+    `X-Edit-Trail`: what the editor did since its last save, a line per command, edit or selection (names, offsets,
+    lengths, never the text; the first 20 lines of a burst and the last 39) — a save that changed more than the
+    person meant can be traced from `cycls logs`.
 - `Config.public()` sends `sheets_editor: true` when the service is configured (the URL and org list stay
   server-side).
 - `client/src/components/sheets-editor-view.tsx`: `SheetsOrPreview` asks the route once per file (without Sheets

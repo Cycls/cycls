@@ -244,8 +244,10 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
         const d = (msg as { dirty?: boolean }).dirty;
         setStatus((now) => (now === "saving" ? now : d ? "dirty" : "saved"));
       } else if (msg.type === "saved" && msg.doc === doc.current) {
-        const { id, snapshot, ops } = msg as { id?: string; snapshot?: unknown; ops?: unknown[] };
-        if (typeof id === "string" && snapshot) void save(id, snapshot, Array.isArray(ops) ? ops : []);
+        const { id, snapshot, ops, trail } = msg as { id?: string; snapshot?: unknown; ops?: unknown[]; trail?: unknown };
+        // What the editor did since its last save (names and offsets, no text): logged with the save.
+        const lines = Array.isArray(trail) ? trail.filter((l): l is string => typeof l === "string").slice(0, 64).map((l) => l.slice(0, 120)) : undefined;
+        if (typeof id === "string" && snapshot) void save(id, snapshot, Array.isArray(ops) ? ops : [], lines);
       }
     };
     window.addEventListener("message", onMessage);
@@ -376,14 +378,16 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   }, [path, post, editable]);
 
   // One save at a time; the editor sends the next once this one is answered.
-  const save = async (id: string, snapshot: unknown, ops: unknown[]) => {
+  const save = async (id: string, snapshot: unknown, ops: unknown[], trail?: string[]) => {
     if (!calls) return;
     const forDoc = doc.current;
     const run = (async () => {
       setStatus("saving");
       try {
         const force = forceNext.current;
-        const r = await calls.save(path, version.current, { snapshot, ops }, force);
+        const r = trail?.length
+          ? await calls.save(path, version.current, { snapshot, ops }, force, trail)
+          : await calls.save(path, version.current, { snapshot, ops }, force);
         if (forDoc !== doc.current) return;
         if ("conflict" in r) {
           setConflict(r.conflict);
