@@ -155,6 +155,25 @@ describe("saving from Cycls Sheets", () => {
     expect(screen.queryByText("This workbook changed since you opened it.")).toBeNull();
   });
 
+  test("taking in a change quietly leaves the person typing where they were", async () => {
+    const a = { ...api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" }), sheetsVersion: vi.fn(async () => ({ version: "abc123" })) };
+    const { posted, frame, doc } = await opened(a);
+    say("https://office.test", frame.contentWindow, { type: "loaded", doc });
+    const box = document.createElement("textarea");
+    document.body.appendChild(box);
+    box.focus();
+    a.sheetsVersion.mockResolvedValue({ version: "v7" });
+    (a.sheetsOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...OPENED, version: "v7" });
+    act(() => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => expect(posted.some(([m]) => (m as { doc?: string }).doc === "b.xlsx@v7")).toBe(true));
+    expect(document.activeElement).toBe(box);
+    frame.focus();   // the editor takes focus as the workbook loads
+    expect(document.activeElement).toBe(frame);
+    say("https://office.test", frame.contentWindow, { type: "loaded", doc: doc.replace("abc123", "v7") });
+    await waitFor(() => expect(document.activeElement).toBe(box));
+    box.remove();
+  });
+
   test("with changes not yet saved, a change made elsewhere shows the bar instead", async () => {
     const a = { ...api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" }), sheetsVersion: vi.fn(async () => ({ version: "v7" })) };
     const { frame, doc } = await opened(a);

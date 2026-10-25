@@ -283,12 +283,26 @@ export function SheetsEditorView({ url, path, name, api, onDownload, fallback, l
     }
   };
 
-  // The file again, as saved (an edit that did not replay, or one too large to send).
+  // The file again, as saved (an edit that did not replay, or one too large to send, or a change made elsewhere).
+  // What had focus on the page keeps it: the editor takes focus when a workbook loads, which would pull the
+  // person out of the message they are typing.
+  const keepFocus = useRef<HTMLElement | null>(null);
   const reopen = useCallback(() => {
     if (!api) return;
+    const el = document.activeElement;
+    keepFocus.current = el instanceof HTMLElement && el !== document.body && el !== frameRef.current ? el : null;
     api.sheetsOpen(path).then(setOpened).catch(() => setFailed(true));
   }, [api, path]);
   reopenRef.current = reopen;
+  useEffect(() => {
+    if (!loaded || !keepFocus.current) return;
+    const el = keepFocus.current;
+    keepFocus.current = null;
+    // The editor may take focus a moment after it says the workbook is in.
+    const give = () => { if (document.activeElement === frameRef.current && el.isConnected) el.focus({ preventScroll: true }); };
+    const timers = [0, 250, 750, 1500].map((ms) => window.setTimeout(give, ms));
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [loaded]);
 
   // The agent's edits (from chat.tsx).
   useEffect(() => {
