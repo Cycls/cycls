@@ -1,0 +1,203 @@
+"""The `docs` tool: its schema, who is offered it, the wire to the office service, and the executor
+(read, edit with the stale-file retry, create) over a mocked service. No service is contacted."""
+import asyncio
+import base64
+import json
+import types
+
+import httpx
+import pytest
+
+from cycls._agent import versions
+from cycls._agent.office import client as office
+from cycls._agent.office import docs
+
+_REAL_CLIENT = httpx.AsyncClient
+DOCX = b"PK\x03\x04 original document"
+PATCHED = b"PK\x03\x04 patched document"
+
+
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    for k in ("OFFICE_URL", "OFFICE_SECRET", "OFFICE_EDITOR_URL", "SHEETS_ORGS", "DOCS_ORGS"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def _on(monkeypatch):
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("OFFICE_SECRET", "k" * 40)
+    monkeypatch.setenv("DOCS_ORGS", "org1")
+
+
+def _ws(tmp_path, subject="org1:user1"):
+    return types.SimpleNamespace(root=tmp_path, subject=subject, ws=None)
+
+
+def _mock(monkeypatch, handler):
+    monkeypatch.setattr(office.httpx, "AsyncClient",
+                        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler), **kw))
+
+
+def _form(request):
+    """The multipart parts a request carried: {name: bytes}."""
+    body = request.read()
+    boundary = request.headers["content-type"].split("boundary=")[1].encode()
+    parts = {}
+    for chunk in body.split(b"--" + boundary):
+        if b'name="' not in chunk:
+            continue
+        head, _, data = chunk.partition(b"\r\n\r\n")
+        name = head.split(b'name="')[1].split(b'"')[0].decode()
+        parts[name] = data.rstrip(b"\r\n")
+    return parts
+
+
+def _run(inp, ws):
+    return asyncio.run(docs.exec_docs(inp, ws, types.SimpleNamespace(chat_id="c1")))
+
+
+def _applied(report="¶3 replaced.", unchanged=False):
+    return httpx.Response(200, json={"unchanged": unchanged, "file": None if unchanged else base64.b64encode(PATCHED).decode(),
+                                     "report": report})
+
+
+# ---- the schema and who gets it ----------------------------------------------------------------
+
+def test_the_choices_that_matter_are_required():
+    schema = docs.DOCS_TOOL["input_schema"]
+    assert schema["required"] == ["action", "path", "ops", "content"]     # models drop optional fields
+    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create"]
+    op = schema["properties"]["ops"]["items"]
+    assert op["required"] == ["op"]
+    assert set(op["properties"]["op"]["enum"]) == set(docs.OPS)
+
+
+def test_offered_only_with_the_service_and_the_organisation(monkeypatch, tmp_path):
+    from cycls._agent.tools import _TOOLS, build_tools
+    assert not [t for t in build_tools(["Docs"], None) if t["name"] == "docs"]
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    assert [t["name"] for t in build_tools(["Docs"], None)] == ["docs"]
+    assert "docs" in _TOOLS and "python-docx" in _TOOLS["docs"].prompt
+    # In the list, but the organisation is not on DOCS_ORGS (Sheets being on does not switch Docs on).
+    monkeypatch.setenv("SHEETS_ORGS", "org1")
+    out = _run({"action": "read", "path": "a.docx", "ops": []}, _ws(tmp_path))
+    assert out.startswith("Error:") and "not switched on" in out
+
+
+def test_the_step_names_the_action_and_what_it_does():
+    assert docs.docs_step({"action": "edit", "path": "q3.docx", "intent": "Tighten the summary"}) == \
+        {"tool_name": "Docs", "step": "edit Tighten the summary"}
+    assert docs.docs_step({"action": "read", "path": "q3.docx"})["step"] == "read q3.docx"
+
+
+# ---- the wire --------------------------------------------------------------------------------
+
+def test_read_and_apply_send_the_file_and_the_request(monkeypatch):
+    _on(monkeypatch)
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, _form(request)))
+        if request.url.path == "/v1/docs/read":
+            return httpx.Response(200, json={"text": "q3.docx — 20 paragraphs"})
+        return _applied()
+
+    _mock(monkeypatch, handler)
+    assert asyncio.run(office.docs_read(DOCX, "q3.docx", start=12)) == "q3.docx — 20 paragraphs"
+    path, form = seen[0]
+    assert path == "/v1/docs/read" and form["file"] == DOCX
+    assert json.loads(form["request"]) == {"name": "q3.docx", "from": 12}
+
+    r = asyncio.run(office.docs_apply(DOCX, "q3.docx", [{"op": "delete", "para": "¶3·abc"}]))
+    assert r == {"unchanged": False, "bytes": PATCHED, "report": "¶3 replaced."}
+    assert seen[1][0] == "/v1/docs/apply" and json.loads(seen[1][1]["request"])["ops"] == [{"op": "delete", "para": "¶3·abc"}]
+
+    asyncio.run(office.docs_apply(None, "new.docx", [], create={"content": "# مرحبا"}))
+    assert "file" not in seen[2][1] and json.loads(seen[2][1]["request"])["create"] == {"content": "# مرحبا"}
+
+
+def test_the_service_s_own_words_reach_the_model_once(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    said = "op 1 (replace): ¶3 is not the paragraph you read (it is ¶3·u22 now): read the document again. Nothing was changed."
+    _mock(monkeypatch, lambda r: httpx.Response(422, json={"error": said}))
+    out = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "replace", "para": "¶3·zzz", "text": "x"}]}, _ws(tmp_path))
+    assert out == f"Error: {said}"
+    assert (tmp_path / "q3.docx").read_bytes() == DOCX
+    _mock(monkeypatch, lambda r: httpx.Response(503))
+    assert "unavailable" in _run({"action": "read", "path": "q3.docx", "ops": []}, _ws(tmp_path))
+
+
+# ---- the executor ------------------------------------------------------------------------------
+
+def test_edit_writes_the_file_keeps_the_old_version_and_refreshes_a_preview(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "q3.docx").write_bytes(DOCX)
+
+    def handler(request):
+        assert _form(request)["file"] == DOCX
+        return _applied("¶3 replaced.\n\nNow:\n¶3·h10 Revenue grew **15%**.")
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "edit", "path": "reports/q3.docx", "intent": "Update revenue",
+                "ops": [{"op": "replace", "para": "¶3·u22", "text": "Revenue grew **15%**."}]}, _ws(tmp_path))
+    assert out["_model"].startswith("Edited reports/q3.docx.\n¶3 replaced.") and "¶3·h10" in out["_model"]
+    assert out["_ui"] == {"type": "ui", "action": "refresh_canvas", "path": "reports/q3.docx"}
+    assert (tmp_path / "reports" / "q3.docx").read_bytes() == PATCHED
+    kept = versions.listing(tmp_path, "reports/q3.docx")
+    assert kept and versions.read(tmp_path, "reports/q3.docx", kept[0]["id"]) == DOCX   # the old file, kept
+
+
+def test_a_save_meanwhile_is_edited_again_once(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    f = tmp_path / "q3.docx"
+    f.write_bytes(DOCX)
+    calls = []
+
+    def handler(request):
+        sent = _form(request)["file"]
+        calls.append(sent)
+        if len(calls) == 1:
+            f.write_bytes(b"PK\x03\x04 saved by hand")    # a save lands while the edit runs
+        return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED + sent[-4:]).decode(), "report": "done"})
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "delete", "para": "¶2"}]}, _ws(tmp_path))
+    assert calls == [DOCX, b"PK\x03\x04 saved by hand"]          # applied again, to the newer file
+    assert f.read_bytes() == PATCHED + b"hand" and out["_ui"]["action"] == "refresh_canvas"
+
+
+def test_nothing_to_change_writes_nothing(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    _mock(monkeypatch, lambda r: _applied("Nothing in the file changed.", unchanged=True))
+    out = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "find_replace", "find": "a", "replace": "a"}]}, _ws(tmp_path))
+    assert out.startswith("Nothing in q3.docx changed.") and not versions.listing(tmp_path, "q3.docx")
+
+
+def test_create_makes_a_new_document_from_markdown_and_opens_it(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"]))
+        return _applied("notes.docx — 3 paragraphs\n\n¶1·gxk [Heading 1] Notes")
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "create", "path": "new/notes.docx", "ops": [], "content": "# Notes\n- one", "rtl": False}, _ws(tmp_path))
+    assert seen[0]["create"] == {"content": "# Notes\n- one", "rtl": False}
+    assert (tmp_path / "new" / "notes.docx").read_bytes() == PATCHED
+    assert out["_model"].startswith("Created new/notes.docx.\nnotes.docx — 3 paragraphs")
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "new/notes.docx"}
+    assert "already exists" in _run({"action": "create", "path": "new/notes.docx", "ops": [], "content": "x"}, _ws(tmp_path))
+    assert "needs `content`" in _run({"action": "create", "path": "new/other.docx", "ops": []}, _ws(tmp_path))
+
+
+def test_only_docx_files_and_known_ops(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    assert "not a .docx file" in _run({"action": "read", "path": "a.doc", "ops": []}, _ws(tmp_path))
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    out = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "rewrite_everything"}]}, _ws(tmp_path))
+    assert "unknown op" in out and (tmp_path / "q3.docx").read_bytes() == DOCX
+    assert "needs `ops`" in _run({"action": "edit", "path": "q3.docx", "ops": []}, _ws(tmp_path))

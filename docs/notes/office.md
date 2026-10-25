@@ -70,6 +70,37 @@ replays them; it is read-only under a banner while the turn runs (the tab is mar
 does not replay, or one too large to send (`reload`), reopens the saved file. Before a message is sent, every open
 Sheets editor saves what is unsaved, so the agent reads what the person sees.
 
+## The agent's `docs` tool (`cycls/_agent/office/docs.py`)
+
+Offered like `sheets`: the agent lists `"Docs"`, `build_tools` adds it when `OFFICE_URL` is set, `harness/main.py`
+drops it for an organisation not on `DOCS_ORGS`. While it is on, the prompt says .docx changes go through `docs`,
+not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-office, `/v1/docs/read|apply`).
+
+- Required: `action` (`read` / `edit` / `create`), `path`, `ops` and `content` — the last two even when an action
+  takes none (`[]`, `""`): DeepSeek sent 14 creates in a row without `content` while it was optional.
+- `read` → each paragraph on a line: `¶7·k3f [Heading 2] {center} {rtl} 1) text with **bold**, *italic*,
+  [links](url)`. The number is its place among the body's paragraphs (tables apart); the three letters are a check
+  of its id and text, so an edit made from an old read is refused ("read the document again"). Tables are grids
+  (`T1`, rows `r1:` with ` | ` between cells); pictures, footnote marks, page and line breaks show where they are;
+  headers, footers and footnotes are listed; about 12k characters, then `from` goes on.
+- `edit` → `ops`, all or none (the first that cannot be made stops the call and nothing is written): `replace`
+  (a paragraph's text; refused when it holds a picture or a note — `find_replace` keeps them), `find_replace`
+  (asks which when the words are in several places, unless `all`), `insert_after` / `insert_before` (markdown
+  lines: `## Heading`, `- item`, `1. item`, plain; plain text after a heading is body text), `delete` (never the
+  paragraph that ends a section or the document), `style` (a named style written as that style — not its look on
+  every word —, `align`, `rtl`; with `find` or for whole paragraphs bold / italic / underline / strike / color /
+  highlight / size / font), `list` (bullet / numbered / none; a new list takes the document's own look),
+  `link` (`""` removes), `cell`, `insert_row` / `delete_row`, `insert_column` / `delete_column`. Arabic text is
+  written right to left. Under the file's lock: read → apply → `write_fig(by="agent")`, once more on a save
+  meanwhile. The reply lists what was done and shows the changed paragraphs and tables as the next read will
+  (new paragraphs carry a Word paragraph id, so their references hold).
+- `create` → a new document from `content` in markdown (headings, one paragraph per line, lists nested by two
+  spaces, `| tables |`, `> quotes`, links, `[page break]`; Arabic makes it right to left, `rtl` forces it); opens
+  in the canvas. The reply is its read.
+- The `_ui` event after an edit is `refresh_canvas {path}`: an open preview fetches the file again (there is no
+  Docs editor yet).
+- Every call logs `docs_call` with its argument names and op names.
+
 ## Configuration
 
 | env | meaning |
@@ -126,7 +157,8 @@ editor's own (cells stay "automatic" in Excel).
 
 ## Not built yet
 
-Live co-editing (left out on purpose, 2026-10-24); Docs (D1–D6). Built 2026-10-24 (not deployed yet): charts drawn
+Live co-editing (left out on purpose, 2026-10-24); the Docs editor and its right-to-left work (D3–D6). The
+`docs` agent tool (D2) is built (2026-10-25, not deployed). Built 2026-10-24 (not deployed yet): charts drawn
 and kept, pivot tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid
 out again once a font has loaded, the reload after a file changed some other way, print, comments, the agent's
 changes outlined, Arabic caret and deletion by letter and the other right-to-left editing fixes. Saved since 2026-10-24: notes, defined

@@ -371,6 +371,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # Likewise Sheets: on for the organisations on SHEETS_ORGS (cycls/_agent/office/client.py).
     if "Sheets" in allowed_tools and not office_offered(workspace, "sheets"):
         allowed_tools = [t for t in allowed_tools if t != "Sheets"]
+    # And Docs, for the organisations on DOCS_ORGS.
+    if "Docs" in allowed_tools and not office_offered(workspace, "docs"):
+        allowed_tools = [t for t in allowed_tools if t != "Docs"]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     if not session.replay:   # a replay runs the saved turn again, as it was
         incoming = context.messages.raw[-1]

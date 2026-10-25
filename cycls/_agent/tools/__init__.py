@@ -43,6 +43,7 @@ from ..video.tool import VIDEO_PROMPT, video_tool
 from ..transcribe.tool import TRANSCRIBE_TOOL, transcribe_step
 from ..transcribe.run import exec_transcribe
 from ..video.run import _exec_video, _video_step
+from ..office.docs import DOCS_PROMPT, DOCS_TOOL, docs_step, exec_docs
 from ..office.sheets import SHEETS_PROMPT, SHEETS_TOOL, exec_sheets, sheets_step
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
@@ -451,6 +452,11 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent.office import client as _office
             if _office.configured():
                 tools.append(SHEETS_TOOL)
+        elif name == "Docs":
+            # the same for Cycls Docs: offered with the office service; who may use it is DOCS_ORGS
+            from cycls._agent.office import client as _office
+            if _office.configured():
+                tools.append(DOCS_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -1137,6 +1143,9 @@ _TOOLS = {
                                    "transcribe again with the same path to collect it."),
     "sheets":     Tool(lambda inp, ws, ctx=None, **_: exec_sheets(inp, ws, ctx), sheets_step, prompt=SHEETS_PROMPT,
                        interrupted="The file is as it was before this call, or has the whole edit: read it "
+                                   "before changing it again."),
+    "docs":       Tool(lambda inp, ws, ctx=None, **_: exec_docs(inp, ws, ctx), docs_step, prompt=DOCS_PROMPT,
+                       interrupted="The document is as it was before this call, or has the whole edit: read it "
                                    "before changing it again."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),

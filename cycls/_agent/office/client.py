@@ -177,3 +177,43 @@ async def sheets_apply(data, name, edits, create=None):
             "bytes": base64.b64decode(body["file"]) if body.get("file") else None,
             "mutations": body.get("mutations") or [], "ops": body.get("ops") or [],
             "report": body.get("report") or ""}
+
+
+_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+async def docs_read(data, name, start=None, max_chars=None):
+    """The agent's read of a Word document: numbered paragraphs (¶7·k3f) and tables as grids."""
+    import json
+    request = {"name": name}
+    if start:
+        request["from"] = int(start)
+    if max_chars:
+        request["maxChars"] = int(max_chars)
+    r = await _call("POST", "/v1/docs/read", files={
+        "file": (name or "document.docx", bytes(data), _DOCX),
+        "request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json"),
+    })
+    if r.status_code >= 400:
+        raise _refused(r)
+    return r.json()["text"]
+
+
+async def docs_apply(data, name, ops, create=None):
+    """The agent's edits made and written into the file (all or none) → {unchanged, bytes, report}.
+    `create` ({content, rtl?}) makes a new document from markdown and needs no `data`."""
+    import base64
+    import json
+    request = {"name": name, "ops": list(ops or [])}
+    if create is not None:
+        request["create"] = create
+    files = {"request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json")}
+    if data is not None:
+        files["file"] = (name or "document.docx", bytes(data), _DOCX)
+    r = await _call("POST", "/v1/docs/apply", files=files)
+    if r.status_code >= 400:
+        raise _refused(r)
+    body = r.json()
+    return {"unchanged": bool(body.get("unchanged")),
+            "bytes": base64.b64decode(body["file"]) if body.get("file") else None,
+            "report": body.get("report") or ""}
