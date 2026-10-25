@@ -44,7 +44,7 @@ DOCS_TOOL = {
         "insert_table (para, rows: [[\"Name\", \"Owner\"], [\"…\", \"…\"]], header?) adds a table after the paragraph; "
         "picture (para, path: a PNG/JPEG/GIF in the workspace, width? in pixels, align?) adds a picture after it; "
         "comment (para or find, text) comments on the paragraph or those words; reply (comment: the # in the read's "
-        "Comments, text); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
+        "Comments, text: your answer, done: true to resolve it too); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
         "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
         "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
         "ops [] for read and create, content \"\" for read and edit."
@@ -64,7 +64,7 @@ DOCS_TOOL = {
                         "para": {"type": "string", "description": "A paragraph's reference from the read, e.g. ¶7·k3f"},
                         "to": {"type": "string", "description": "The last paragraph of a range (delete, style, list)"},
                         "find": {"type": "string", "description": "Words in the document: they name the paragraph, or are what find_replace, link and style change"},
-                        "text": {"type": "string", "description": "replace / cell: the new text; insert_*: the new lines"},
+                        "text": {"type": "string", "description": "replace / cell: the new text; insert_*: the new lines; comment / reply: what it says"},
                         "replace": {"type": "string", "description": "find_replace: the new words (\"\" removes them)"},
                         "all": {"type": "boolean", "description": "find_replace / link: every place the words are"},
                         "style": {"type": "string", "description": "A paragraph style the document has, e.g. Heading 2, Title, Normal"},
@@ -88,7 +88,7 @@ DOCS_TOOL = {
                         "path": {"type": "string", "description": "picture: the image file in the workspace"},
                         "width": {"type": "integer", "description": "picture: width in pixels (it keeps its proportions)"},
                         "comment": {"type": "integer", "description": "reply / resolve: the comment's # in the read"},
-                        "done": {"type": "boolean", "description": "resolve: false opens the comment again"},
+                        "done": {"type": "boolean", "description": "resolve: false opens the comment again; reply: true also resolves it"},
                     },
                     "required": ["op"],
                 },
