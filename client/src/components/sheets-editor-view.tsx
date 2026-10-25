@@ -104,7 +104,7 @@ export function SheetsOrPreview({ path, name, api, preview, onDownload, live, co
     : <>{preview}</>;
 }
 
-/** A Word document: Cycls Docs when this workspace has it (and the document is laid out left to right), else `preview`. */
+/** A Word document: Cycls Docs when this workspace has it, else `preview`. */
 export const DocsOrPreview = (props: Omit<Parameters<typeof SheetsOrPreview>[0], "product">) =>
   <SheetsOrPreview {...props} product="docs" />;
 

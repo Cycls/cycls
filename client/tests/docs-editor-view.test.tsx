@@ -40,8 +40,8 @@ const say = (source: unknown, data: Record<string, unknown>, channel = "cycls-do
 const types = (posted: Array<[unknown, string]>) => posted.map(([m]) => (m as { type: string }).type);
 
 describe("Cycls Docs in the canvas", () => {
-  test("a workspace without Docs (or a right-to-left document) keeps the preview", async () => {
-    render(<DocsOrPreview path="r.docx" name="r.docx" api={api({ editor: false, reason: "rtl" })} preview={<p>preview</p>} />);
+  test("a workspace without Docs keeps the preview", async () => {
+    render(<DocsOrPreview path="r.docx" name="r.docx" api={api({ editor: false, reason: "off" })} preview={<p>preview</p>} />);
     expect(await screen.findByText("preview")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
   });

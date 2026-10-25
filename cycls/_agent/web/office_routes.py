@@ -14,8 +14,7 @@
 
 <product> is sheets (.xlsx, .xlsm) or docs (.docx). The browser frames the editor from `url`; whether an
 organisation has it is answered here, per workspace (SHEETS_ORGS / DOCS_ORGS), so the setting never leaks to
-the page. A right-to-left Word document keeps the preview until the editor lays one out as Word does
-(reason "rtl"). The service reads the file; what it read is kept beside the workspace's other caches
+the page. The service reads the file; what it read is kept beside the workspace's other caches
 (.cache/<product>/<version>.json.gz), so opening the same file again costs nothing. A save goes through the
 same versioned write as a design (design/store.py write_fig): the base check, the version history, one write
 at a time per file.
@@ -23,9 +22,7 @@ at a time per file.
 import asyncio
 import gzip
 import json
-import re
 import uuid
-import zipfile
 from urllib.parse import unquote
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,8 +33,6 @@ MAX_BYTES = 20 * 1024 * 1024     # larger files keep the read-only preview
 MAX_SNAPSHOT = 64 * 1024 * 1024  # an editor's snapshot as sent (gzip)
 GZIP_MAGIC = bytes([0x1F, 0x8B])
 _KEEP = 24                       # cached reads kept per workspace
-# A paragraph (or a style) set right to left: <w:bidi/>, or with a value other than off.
-_BIDI = re.compile(rb'<w:bidi(?:\s*/>|\s+w:val="(?:1|true|on)")')
 
 
 def _write_cache(cache_dir, version, body):
@@ -66,21 +61,6 @@ def edit_trail(header):
     if not isinstance(lines, list):
         return None
     return [str(line)[:120] for line in lines[:64]]
-
-
-def right_to_left(file_path):
-    """Whether a .docx sets any paragraph (or paragraph style) right to left. An unreadable file: no."""
-    try:
-        with zipfile.ZipFile(file_path) as z:
-            for name in ("word/document.xml", "word/styles.xml"):
-                try:
-                    if _BIDI.search(z.read(name)):
-                        return True
-                except KeyError:
-                    continue
-    except (OSError, zipfile.BadZipFile):
-        return False
-    return False
 
 
 def office_router(ws_dep, required_auth=None, changed=None):
@@ -135,8 +115,6 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 return {"editor": False, "reason": "off"}
             if file_path.stat().st_size > MAX_BYTES:
                 return {"editor": False, "reason": "too-large"}
-            if product == "docs" and await asyncio.to_thread(right_to_left, file_path):
-                return {"editor": False, "reason": "rtl"}
             return {"editor": True, "url": f"{office.editor_url()}/{product}/", "name": Path(path).name}
 
         async def open_(path: str, ws: Workspace = ws_dep):

@@ -38,8 +38,7 @@ One Node process:
   `docs_apply`). Never follows a redirect.
 - `web/office_routes.py`, the same four routes for each editor (`<p>` is `sheets` for .xlsx/.xlsm, `docs` for .docx):
   - `GET /office/<p>?path=` → `{editor: true, url, name}` or `{editor: false, reason}`, per workspace
-    (`SHEETS_ORGS` / `DOCS_ORGS`). A .docx with any right-to-left paragraph or style answers `reason: "rtl"` and
-    keeps the preview until the editor lays Arabic out as Word does (D3).
+    (`SHEETS_ORGS` / `DOCS_ORGS`). Arabic (right-to-left) Word documents open in the editor too (D3, below).
   - `GET /office/<p>/open?path=` → what the editor opens (gzip JSON, cached by file version in `.cache/<p>/`),
     `X-Version`, `X-Modified`.
   - `GET /office/<p>/version?path=` → `{version, modified}`, the version open and save use.
@@ -170,6 +169,14 @@ Backspace deleted a whole word; each letter is a glyph of its own now, the word 
 straight into a cell, an arrow moves to the cell it points at; pointing at cells in a formula follows the screen;
 a validation list, a link card, a note or a comment opens on the mirrored side. Typed text keeps no colour of the
 editor's own (cells stay "automatic" in Excel).
+
+A right-to-left Word document (D3, engine patch 0012 + the docx reader) is laid out as Word lays it out: a w:bidi
+paragraph starts on the right, its indents (and a list level's hanging) are measured from the right, the list
+marker stands beside its text on the right, a justified paragraph's last line ends on the right, a w:bidiVisual
+table is mirrored (first column on the right), and Arabic punctuation takes its own place in the line. Word's jc
+"left"/"right" in a w:bidi paragraph name its sides by reading order; the model holds the side on screen (the
+editor's align buttons), swapped on the way in and back on the way out. In the editor the arrow keys go the way
+they point in a right-to-left paragraph (Left goes on through the text, Right goes back; Shift extends).
 
 ## Not built yet
 

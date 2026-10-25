@@ -325,7 +325,7 @@ def _docx(path, body_xml):
         z.writestr("word/document.xml", f'<w:document xmlns:w="w"><w:body>{body_xml}</w:body></w:document>')
 
 
-def test_docs_opens_word_files_and_keeps_right_to_left_ones_on_the_preview(monkeypatch, tmp_path):
+def test_docs_opens_word_files_left_to_right_and_right_to_left(monkeypatch, tmp_path):
     _docx(tmp_path / "report.docx", "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>")
     _docx(tmp_path / "arabic.docx", "<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:t>مرحبا</w:t></w:r></w:p>")
     _docx(tmp_path / "off.docx", '<w:p><w:pPr><w:bidi w:val="0"/></w:pPr></w:p>')
@@ -340,8 +340,8 @@ def test_docs_opens_word_files_and_keeps_right_to_left_ones_on_the_preview(monke
     monkeypatch.setenv("DOCS_ORGS", "org1")
     assert c.get("/office/docs", params={"path": "report.docx"}).json() == {
         "editor": True, "url": "https://office.test/docs/", "name": "report.docx"}
-    assert c.get("/office/docs", params={"path": "arabic.docx"}).json() == {"editor": False, "reason": "rtl"}
-    assert c.get("/office/docs", params={"path": "off.docx"}).json()["editor"] is True, "bidi switched off is left to right"
+    assert c.get("/office/docs", params={"path": "arabic.docx"}).json()["editor"] is True, "Arabic documents open in Docs too"
+    assert c.get("/office/docs", params={"path": "off.docx"}).json()["editor"] is True
 
 
 def test_docs_open_and_save_go_through_the_docx_calls(monkeypatch, tmp_path):
