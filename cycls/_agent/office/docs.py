@@ -133,6 +133,9 @@ def _check_ops(ops):
             return f"op {i} needs an `op` ({', '.join(OPS)})"
         if op["op"] not in OPS:
             return f"op {i}: unknown op {str(op['op'])[:30]!r} (one of {', '.join(OPS)})"
+        if op["op"] in ("reply", "comment", "replace", "insert_after", "insert_before", "cell") and not isinstance(op.get("text"), str):
+            got = ", ".join(sorted(str(k) for k in op)) or "nothing"
+            return f"op {i} ({op['op']}) needs `text`, a string (it came with: {got})"
     return None
 
 
@@ -167,7 +170,9 @@ async def exec_docs(inp, workspace, ctx=None):
     from ..logs import log
     log("docs_call", chat_id=getattr(ctx, "chat_id", None), action=action[:12],
         keys=sorted(str(k)[:20] for k in inp)[:20],
-        ops=[str(o.get("op"))[:16] for o in ops[:30] if isinstance(o, dict)] if isinstance(ops, list) else None)
+        ops=[str(o.get("op"))[:16] for o in ops[:30] if isinstance(o, dict)] if isinstance(ops, list) else None,
+        # each op's field names: what a model (or a host between us) sent, to see a dropped field
+        op_keys=[sorted(str(k)[:16] for k in o)[:12] for o in ops[:12] if isinstance(o, dict)] if isinstance(ops, list) else None)
     if action not in ACTIONS:
         return _err(f"action must be one of {', '.join(ACTIONS)}.")
     if not client.offered(workspace, "docs"):
