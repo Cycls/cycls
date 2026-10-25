@@ -84,18 +84,42 @@ def office_router(ws_dep, required_auth=None, changed=None):
 
     async def _read_docs(data, name):
         read = await office.read_docx(data, name=name)
-        return {"snapshot": read.get("document"), "notices": read.get("notices") or [],
-                "readonly": bool(read.get("readonly")), "stats": read.get("stats") or {}}
+        out = {"snapshot": read.get("document"), "notices": read.get("notices") or [],
+               "readonly": bool(read.get("readonly")), "stats": read.get("stats") or {}}
+        # A document with tracked changes opens in review: the changes shown marked, and listed here for the
+        # person to accept or reject (each by its Word ids; `other` = those with nothing to show in the text).
+        changes = []
+        for c in (read.get("changes") or [])[:300]:
+            if not isinstance(c, dict) or not isinstance(c.get("ids"), list):
+                continue
+            item = {"ids": [str(i)[:20] for i in c["ids"][:400]], "author": str(c.get("author") or "")[:60],
+                    "color": str(c.get("color") or "")[:9]}
+            for k in ("inserted", "deleted"):
+                if isinstance(c.get(k), str) and c[k]:
+                    item[k] = c[k][:200]
+            if isinstance(c.get("date"), str):
+                item["date"] = c["date"][:30]
+            for k in ("start", "end"):
+                if isinstance(c.get(k), int) and not isinstance(c.get(k), bool):
+                    item[k] = c[k]
+            if c.get("other"):
+                item["other"] = True
+            changes.append(item)
+        if changes:
+            out["changes"] = changes
+        return out
 
     products = {
         "sheets": {"exts": SHEETS_EXTS, "title": "Cycls Sheets", "noun": "workbook", "what": "an .xlsx or .xlsm file",
                    "read": _read_sheets, "patch": "patch_xlsx"},
+        # docs reads are kept in their own folder since tracked changes open in review (2026-10-25): an older
+        # read of such a file has no review in it.
         "docs": {"exts": DOCS_EXTS, "title": "Cycls Docs", "noun": "document", "what": "a .docx file",
-                 "read": _read_docs, "patch": "patch_docx"},
+                 "read": _read_docs, "patch": "patch_docx", "cache": ".cache/docs-review"},
     }
 
     def _add(product, p):
-        noun, cache_dir = p["noun"], f".cache/{product}"
+        noun, cache_dir = p["noun"], p.get("cache") or f".cache/{product}"
 
         def _file(ws, path):
             if not path or not path.lower().endswith(p["exts"]):
@@ -210,10 +234,58 @@ def office_router(ws_dep, required_auth=None, changed=None):
             modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
             return {"version": new, "unchanged": False, "summary": result["summary"], "modified": modified}
 
+        async def changes_(path: str, request: Request, ws: Workspace = ws_dep, user=user_dep):
+            """A document's tracked changes accepted or rejected by the person: {base, action: accept | reject,
+            ids?} (ids: some changes, as the review lists them; none: all). Written like a save, the replaced
+            version kept; a file changed since it was opened is refused (412)."""
+            file_path = _file(ws, path)
+            _on(ws)
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001
+                raise HTTPException(400, "Send {base, action: accept | reject, ids?}.")
+            action = body.get("action") if isinstance(body, dict) else None
+            if action not in ("accept", "reject"):
+                raise HTTPException(400, "action is accept or reject.")
+            base = str(body.get("base") or "")
+            ids = body.get("ids")
+            ids = [str(i)[:20] for i in ids[:2000]] if isinstance(ids, list) and ids else None
+            rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+            op = {"op": f"{action}_changes", **({"ids": ids} if ids else {})}
+            from cycls._agent.design.deck import lock
+            async with lock(file_path):
+                data, version = await asyncio.to_thread(read_fig, ws.root, rel)
+                if data is None:
+                    raise HTTPException(404, "There is no such file.")
+                if base and base != version:
+                    return JSONResponse(status_code=412, content={
+                        "detail": f"This {noun} changed since it was opened.", "version": version})
+                try:
+                    result = await office.docs_apply(data, file_path.name, [op])
+                except office.Unavailable as e:
+                    raise HTTPException(503, str(e))
+                except office.Refused as e:
+                    raise HTTPException(422, str(e))
+                if result["unchanged"] or not result["bytes"]:
+                    return {"version": version, "unchanged": True}
+                try:
+                    new = await write_fig(ws.root, rel, result["bytes"], base=version, by="user",
+                                          reason=f"{action} changes", who=person(user, ws))
+                except Stale as e:
+                    return JSONResponse(status_code=412, content={
+                        "detail": f"This {noun} changed since it was opened.", "version": e.current})
+            log("office_changes", user=user, path=rel[-160:], action=action, some=len(ids) if ids else None,
+                version=new, replaced=version)
+            if changed is not None:
+                changed(ws.root)
+            return {"version": new, "unchanged": False}
+
         r.add_api_route(f"/office/{product}", editor, methods=["GET"], name=f"office_{product}")
         r.add_api_route(f"/office/{product}/open", open_, methods=["GET"], name=f"office_{product}_open")
         r.add_api_route(f"/office/{product}/version", version_, methods=["GET"], name=f"office_{product}_version")
         r.add_api_route(f"/office/{product}/save", save, methods=["PUT"], name=f"office_{product}_save")
+        if product == "docs":
+            r.add_api_route("/office/docs/changes", changes_, methods=["POST"], name="office_docs_changes")
 
     for product, p in products.items():
         _add(product, p)

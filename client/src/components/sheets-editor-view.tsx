@@ -7,16 +7,18 @@ import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { publishSelection } from "./design-editor-view";
 import { DocGlyph, SheetGlyph } from "./file-glyph";
+import { DocsReviewBar } from "./docs-review-bar";
 import { LoadingBar } from "./loading-bar";
 import { cn } from "../lib/utils";
 
 // Cycls Sheets (and Cycls Docs, the same view for a .docx) in the canvas: a header (where the file is, when it
 // changed, Open ⌄) over the editor, which the cycls-office service serves into an iframe.
 //
-// Cycls Docs speaks the same protocol as "cycls-docs" (load, theme, locale, readonly, written, flush, save; it
-// sends ready, loaded, error, dirty, saved {snapshot}, flushed, print). It has no comments, selection or agent
-// replay yet: the agent's edits reach an open document when the canvas fetches the file again, as a change made
-// elsewhere does. A document with tracked changes opens view only.
+// Cycls Docs speaks the same protocol as "cycls-docs" (load {…, marks?, keepView?}, theme, locale, readonly,
+// written, flush, save; it sends ready, loaded, error, dirty, saved {snapshot}, flushed, print, selection {nodes}).
+// The agent's `docs` edits are already in the file when they arrive (a `docs_command`): the editor opens the new
+// file at once, read-only while the agent works, the changed paragraphs marked. A selection comes already named as
+// the agent's read names it (¶12·h10, T1 r2c3). A document with tracked changes opens view only.
 //
 // Protocol 1 (postMessage, JSON). Cycls → editor {target: "cycls-sheets", type, …}, posted to the
 // editor's exact origin only; editor → Cycls {source: "cycls-sheets", type, …}, heard only from that
@@ -79,7 +81,7 @@ function callsFor(api: OfficeEditorApi | undefined, product: OfficeProduct) {
   if (!api) return null;
   if (product === "sheets") return { check: api.sheets, open: api.sheetsOpen, version: api.sheetsVersion, save: api.sheetsSave };
   if (!api.docs || !api.docsOpen || !api.docsSave) return null;
-  return { check: api.docs, open: api.docsOpen, version: api.docsVersion, save: api.docsSave };
+  return { check: api.docs, open: api.docsOpen, version: api.docsVersion, save: api.docsSave, changes: api.docsChanges };
 }
 
 // What differs between the two editors, in words and looks.
@@ -162,8 +164,12 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   const [status, setStatus] = useState<Status>("saved");
   const [conflict, setConflict] = useState<string | null>(null);   // the file's newer version
   const [savedAt, setSavedAt] = useState<string | null>(null);     // when this editor last wrote the file
-  // A document with tracked changes opens view only (the reader shows them accepted; a save would lose them).
+  // A document with tracked changes opens view only, in review (the changes marked; a save would lose them),
+  // until they are accepted or rejected.
   const heldReadonly = !!opened && (opened as { readonly?: boolean }).readonly === true;
+  const changes = product === "docs" ? opened?.changes ?? [] : [];
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewFailed, setReviewFailed] = useState(false);
   const editable = !!api && !heldReadonly;
   const doc = useRef("");
   const version = useRef("");       // what the next save names as its base
@@ -237,6 +243,17 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
         commands.current.delete(id);
         if (ok && after) version.current = after;   // the open workbook is the file again
         else if (!ok) reopenRef.current();
+      } else if (msg.type === "selection" && msg.doc === doc.current && product === "docs") {
+        // Cycls Docs names what is selected itself, as the agent's read does (¶12·h10, T1 r2c3).
+        const { nodes } = msg as { nodes?: unknown };
+        if (!Array.isArray(nodes)) return;
+        const named = nodes
+          .filter((n): n is { name: string; type: string; text?: unknown } =>
+            !!n && typeof (n as { name?: unknown }).name === "string" && typeof (n as { type?: unknown }).type === "string")
+          .slice(0, 10)
+          .map((n) => ({ name: n.name.slice(0, 60), type: n.type.slice(0, 24),
+                         ...(typeof n.text === "string" && n.text ? { text: n.text.slice(0, 80) } : {}) }));
+        publishSelection({ path, frame: null, nodes: named });
       } else if (msg.type === "selection" && msg.doc === doc.current) {
         const { sheet, ranges } = msg as { sheet?: unknown; ranges?: unknown };
         if (typeof sheet !== "string" || !Array.isArray(ranges)) return;
@@ -638,6 +655,23 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   );
   const inCanvas = !!slots.end;
 
+  // Tracked changes accepted or rejected (some, or all), then the file opened again: the rest still marked, or the
+  // document editable once none are left.
+  async function takeChanges(action: "accept" | "reject", ids?: string[]) {
+    const take = calls && "changes" in calls ? calls.changes : undefined;
+    if (!take || reviewBusy) return;
+    setReviewBusy(true);
+    setReviewFailed(false);
+    try {
+      await take(path, version.current, action, ids);
+      reopen();
+    } catch {
+      setReviewFailed(true);
+    } finally {
+      setReviewBusy(false);
+    }
+  }
+
   return (
     <div className="flex h-full w-full flex-col" data-testid={`${product}-editor`} data-path={path}>
       {inCanvas ? (
@@ -664,6 +698,10 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
           <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-[#EF8733]" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate" dir="auto">{t("sheetsAgentEditing")}{intent ? <span className="text-muted-foreground"> · {intent}</span> : null}</span>
         </div>
+      )}
+      {changes.length > 0 && (
+        <DocsReviewBar changes={changes} busy={reviewBusy || !!live} failed={reviewFailed} onTake={takeChanges}
+                       onReveal={(c) => { if (c.start !== undefined && c.end !== undefined) post({ type: "reveal", doc: doc.current, start: c.start, end: c.end }); }} />
       )}
       {conflict !== null && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-amber-500/10 px-3 py-2 text-xs" role="alert">

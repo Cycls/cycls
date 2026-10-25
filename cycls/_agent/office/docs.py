@@ -47,7 +47,11 @@ DOCS_TOOL = {
         "Comments, text: your answer, done: true to resolve it too); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
         "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
         "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
-        "ops [] for read and create, content \"\" for read and edit."
+        "ops [] for read and create, content \"\" for read and edit.\n"
+        "When the person selects something in a document open in Cycls Docs and asks you, their message carries a "
+        "line such as [Selected in reports/q3.docx: ¶12·h10 (words) \"15%\", T1 r2c3 (cell) \"1,500\"]: the "
+        "references are a read's, so edit those paragraphs (words: with find in that paragraph) or cells straight "
+        "away; if one no longer matches, read the document again."
     ),
     "input_schema": {
         "type": "object",
@@ -133,6 +137,13 @@ def _check_ops(ops):
             return f"op {i} needs an `op` ({', '.join(OPS)})"
         if op["op"] not in OPS:
             return f"op {i}: unknown op {str(op['op'])[:30]!r} (one of {', '.join(OPS)})"
+        # A cell's words sent in `cells` (what insert_row takes) mean the same: one value.
+        if op["op"] == "cell" and not isinstance(op.get("text"), str):
+            given = op.get("cells")
+            if isinstance(given, list) and len(given) == 1 and isinstance(given[0], (str, int, float)) and not isinstance(given[0], bool):
+                op["text"] = str(given[0])
+            elif isinstance(given, str):
+                op["text"] = given
         if op["op"] in ("reply", "comment", "replace", "insert_after", "insert_before", "cell") and not isinstance(op.get("text"), str):
             got = ", ".join(sorted(str(k) for k in op)) or "nothing"
             return f"op {i} ({op['op']}) needs `text`, a string (it came with: {got})"

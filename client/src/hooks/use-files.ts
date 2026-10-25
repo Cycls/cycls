@@ -71,6 +71,12 @@ export type SheetsOpened = {
   notices: SheetsNotice[];
   activeSheet?: string;
   readonly?: boolean;   // a Word document with tracked changes: view only
+  changes?: DocsTrackedChange[];   // its tracked changes, shown marked in the document (review)
+};
+// One tracked change in a Word document, as the review lists it; `other`: those with nothing to show in the text.
+export type DocsTrackedChange = {
+  ids: string[]; author: string; color: string; date?: string;
+  inserted?: string; deleted?: string; start?: number; end?: number; other?: boolean;
 };
 export type OfficeEditorApi = {
   sheets: (path: string) => Promise<OfficeOpen>;
@@ -86,6 +92,9 @@ export type OfficeEditorApi = {
   docsOpen?: (path: string) => Promise<SheetsOpened>;
   docsVersion?: (path: string) => Promise<{ version: string; modified?: string }>;
   docsSave?: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]) => Promise<SheetsSaved>;
+  // A document's tracked changes accepted or rejected (some by their ids, or all); a file changed since `base`
+  // answers {conflict}.
+  docsChanges?: (path: string, base: string, action: "accept" | "reject", ids?: string[]) => Promise<SheetsSaved>;
 };
 export type SheetsSaved = { version: string; unchanged: boolean; modified?: string } | { conflict: string };
 
@@ -322,6 +331,22 @@ export function useFiles(baseUrl: string = "") {
     return {
       sheets: check("sheets"), sheetsOpen: open("sheets"), sheetsVersion: version("sheets"), sheetsSave: save("sheets"),
       docs: check("docs"), docsOpen: open("docs"), docsVersion: version("docs"), docsSave: save("docs"),
+      docsChanges: async (filePath, base, action, ids) => {
+        try {
+          const res = await api(`/office/docs/changes?path=${encodeURIComponent(filePath)}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ base, action, ...(ids?.length ? { ids } : {}) }), silent: true,
+          });
+          track("ui_action", { action: `docs_${action}_changes`, some: !!ids?.length });
+          return (await res.json()) as { version: string; unchanged: boolean };
+        } catch (err) {
+          if ((err as { status?: number }).status === 412) {
+            const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
+            return { conflict: typeof now === "string" ? now : "" };
+          }
+          throw err;
+        }
+      },
       pdf: async (filePath) =>
         URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
     };

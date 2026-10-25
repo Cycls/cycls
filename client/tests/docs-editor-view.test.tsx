@@ -5,6 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OfficeEditorApi, SheetsOpened } from "../src/hooks/use-files";
 import { DocsOrPreview, SheetsEditorView } from "../src/components/sheets-editor-view";
+import { designSelection, type DesignSelection } from "../src/components/design-editor-view";
+import { selectionLabel } from "../src/components/selection-chip";
 
 afterEach(cleanup);
 
@@ -115,6 +117,66 @@ describe("Cycls Docs in the canvas", () => {
     // another file's edit is not this editor's
     act(() => { window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: { path: "other.docx", version: "x", touched: [] } })); });
     expect(a.docsOpen).toHaveBeenCalledTimes(2);
+  });
+
+  test("what is selected in the document is offered to the chat by the agent's references, the chip showing the words", async () => {
+    const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" });
+    render(<SheetsEditorView url="https://office.test/docs/" path="notes/r.docx" name="r.docx" api={a} product="docs" />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.docsOpen).toHaveBeenCalled());
+    say(frame.contentWindow, { type: "ready", protocol: 1, features: ["selection"] });
+    await waitFor(() => expect(types(posted)).toContain("load"));
+    const doc = (posted.find(([m]) => (m as { type: string }).type === "load")![0] as { doc: string }).doc;
+    const seen: unknown[] = [];
+    const listen = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener("cycls:design-selection", listen);
+    say(frame.contentWindow, { type: "selection", doc, nodes: [{ name: "¶12·h10", type: "words", text: "Revenue grew 15% this quarter, ahead of plan, with costs under control" }, { name: "T1 r2c3", type: "cell", text: "1,500" }, { bad: 1 }] });
+    const sel = seen[seen.length - 1] as DesignSelection;
+    expect(sel).toEqual({ path: "notes/r.docx", frame: null, nodes: [
+      { name: "¶12·h10", type: "words", text: "Revenue grew 15% this quarter, ahead of plan, with costs under control" },
+      { name: "T1 r2c3", type: "cell", text: "1,500" }] });
+    expect(designSelection("notes/r.docx")).toEqual(sel);
+    expect(selectionLabel(sel)).toBe("r.docx: “Revenue grew 15% this quarter, ahead of…” +1");
+    say(frame.contentWindow, { type: "selection", doc, nodes: [] });
+    expect(designSelection("notes/r.docx")).toBeNull();
+    window.removeEventListener("cycls:design-selection", listen);
+  });
+
+  test("tracked changes are reviewed: listed, brought into view, taken one by one or all, the file opened again", async () => {
+    const changes = [
+      { ids: ["3", "4"], author: "Sara", color: "#C2410C", inserted: "July", deleted: "June", start: 10, end: 18 },
+      { ids: ["7"], author: "Omar", color: "#2563EB", deleted: "strong " , start: 30, end: 37 },
+      { ids: ["9"], author: "Sara", color: "#C2410C", other: true },
+    ];
+    const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" }, { ...OPENED, readonly: true, changes });
+    const docsChanges = vi.fn(async () => ({ version: "d2", unchanged: false }));
+    a.docsChanges = docsChanges;
+    render(<SheetsEditorView url="https://office.test/docs/" path="r.docx" name="r.docx" api={a} product="docs" />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.docsOpen).toHaveBeenCalledTimes(1));
+    say(frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(types(posted)).toContain("load"));
+    const doc = (posted.find(([m]) => (m as { type: string }).type === "load")![0] as { doc: string }).doc;
+    expect(screen.getByTestId("docs-review-count").textContent).toBe("2");
+    fireEvent.click(screen.getByRole("button", { name: /Review/ }));
+    expect(screen.getByText(/Replaced “June” → “July”/)).toBeTruthy();
+    expect(screen.getByText(/Formatting and layout changes/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText(/Deleted “strong”/));
+    expect(posted.map(([m]) => m)).toContainEqual(expect.objectContaining({ type: "reveal", doc, start: 30, end: 37 }));
+
+    (a.docsOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...OPENED, version: "d2", readonly: true, changes: changes.slice(1) });
+    fireEvent.click(screen.getAllByRole("button", { name: "Accept" })[0]);
+    await waitFor(() => expect(docsChanges).toHaveBeenCalledWith("r.docx", "d1", "accept", ["3", "4"]));
+    await waitFor(() => expect(a.docsOpen).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("docs-review-count").textContent).toBe("1"));
+
+    (a.docsOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...OPENED, version: "d3" });
+    fireEvent.click(screen.getByTestId("docs-reject-all"));
+    await waitFor(() => expect(docsChanges).toHaveBeenLastCalledWith("r.docx", "d2", "reject", undefined));
+    await waitFor(() => expect(screen.queryByTestId("docs-review")).toBeNull());
   });
 
   test("a document with tracked changes opens view only", async () => {

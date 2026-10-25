@@ -370,7 +370,7 @@ def test_docs_open_and_save_go_through_the_docx_calls(monkeypatch, tmp_path):
     c = _app(_ws(tmp_path))
     opened = c.get("/office/docs/open", params={"path": "r.docx"}).json()
     assert opened["snapshot"]["title"] == "r" and opened["readonly"] is True and opened["version"] == version_of(original)
-    assert list((tmp_path / ".cache" / "docs").glob("*.json.gz")), "kept apart from the workbooks' cache"
+    assert list((tmp_path / ".cache" / "docs-review").glob("*.json.gz")), "kept apart from the workbooks' cache"
     c.get("/office/docs/open", params={"path": "r.docx"})
     assert reads == ["r"]
 
@@ -447,3 +447,45 @@ def test_the_trail_header_is_bounded():
     long = [f"{i} " + "x" * 300 for i in range(100)]
     got = edit_trail(quote(json.dumps(long)))
     assert len(got) == 64 and all(len(x) <= 120 for x in got) and got[0].startswith("0 ")
+
+
+def test_tracked_changes_open_in_review_and_are_taken_by_the_person(monkeypatch, tmp_path):
+    from cycls._agent import versions
+    from cycls._agent.design.store import version_of
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    monkeypatch.setenv("DOCS_ORGS", "*")
+    original = b"PK\x03\x04 tracked document"
+    (tmp_path / "r.docx").write_bytes(original)
+    change = {"ids": ["3", "4"], "author": "Sara", "color": "#C2410C", "inserted": "July", "deleted": "June",
+              "start": 10, "end": 18, "date": "2026-10-25T11:30:00Z"}
+
+    async def read_docx(data, name=None):
+        return {"document": {"id": "doc", "body": {"dataStream": "Hi\r\n"}}, "notices": [], "readonly": True,
+                "changes": [change, {"ids": ["9"], "author": "Sara", "color": "#C2410C", "other": True}, "junk"]}
+
+    applied = []
+
+    async def docs_apply(data, name, ops, create=None, author=None):
+        applied.append((data, name, ops))
+        return {"unchanged": False, "bytes": b"PK\x03\x04 taken", "report": "1 tracked change accepted.", "touched": []}
+
+    monkeypatch.setattr(office, "read_docx", read_docx)
+    monkeypatch.setattr(office, "docs_apply", docs_apply)
+    c = _app(_ws(tmp_path))
+    opened = c.get("/office/docs/open", params={"path": "r.docx"}).json()
+    assert opened["changes"] == [change, {"ids": ["9"], "author": "Sara", "color": "#C2410C", "other": True}]
+
+    r = c.post("/office/docs/changes", params={"path": "r.docx"}, json={"base": opened["version"], "action": "accept", "ids": ["3", "4"]})
+    assert r.status_code == 200 and r.json()["version"] == version_of(b"PK\x03\x04 taken")
+    assert applied == [(original, "r.docx", [{"op": "accept_changes", "ids": ["3", "4"]}])]
+    assert (tmp_path / "r.docx").read_bytes() == b"PK\x03\x04 taken"
+    kept = versions.listing(tmp_path, "r.docx")
+    assert kept and versions.read(tmp_path, "r.docx", kept[0]["id"]) == original and kept[0]["reason"] == "accept changes"
+
+    # all of them, the other way; a file changed since is refused; a wrong action is refused
+    c.post("/office/docs/changes", params={"path": "r.docx"}, json={"action": "reject"})
+    assert applied[-1][2] == [{"op": "reject_changes"}]
+    stale = c.post("/office/docs/changes", params={"path": "r.docx"}, json={"base": opened["version"], "action": "accept"})
+    assert stale.status_code == 412
+    assert c.post("/office/docs/changes", params={"path": "r.docx"}, json={"action": "merge"}).status_code == 400

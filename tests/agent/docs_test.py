@@ -241,3 +241,25 @@ def test_a_picture_that_is_not_there_or_not_an_image_changes_nothing(monkeypatch
     assert "not a PNG, JPEG or GIF" in text
     outside = _run({"action": "edit", "path": "q3.docx", "ops": [{"op": "picture", "para": "¶2", "path": "../../etc/x.png"}]}, _ws(tmp_path))
     assert outside.startswith("Error:") and (tmp_path / "q3.docx").read_bytes() == DOCX
+
+
+# ---- what the person selected in an open document ---------------------------------------------------------------
+
+def test_a_selection_in_a_word_document_reaches_the_model_by_its_references():
+    from cycls._agent.harness.main import _with_selection
+    from cycls._agent.web.server import _clean_selection
+    raw = {"path": "reports/q3.docx", "frame": None,
+           "nodes": [{"name": "¶12·h10", "type": "words", "text": "15%"}, {"name": "T1 r2c3", "type": "cell", "text": "1,500"}]}
+    sel = _clean_selection(raw)
+    assert sel == {"path": "reports/q3.docx", "frame": None, "nodes": raw["nodes"]}
+    assert _with_selection("make it 17%", sel)[-1]["text"] == \
+        '[Selected in reports/q3.docx: ¶12·h10 (words) "15%", T1 r2c3 (cell) "1,500"]'
+    assert "Selected in" in docs.DOCS_TOOL["description"]
+
+
+def test_a_cell_value_sent_in_cells_counts_as_its_text():
+    from cycls._agent.office.docs import _check_ops
+    op = {"op": "cell", "table": "T1", "row": 2, "col": 2, "cells": ["1,550"], "rows": []}
+    assert _check_ops([op]) is None and op["text"] == "1,550"
+    # an empty `cells` (hosts that fill every field) still says what is missing
+    assert "needs `text`" in _check_ops([{"op": "cell", "table": "T1", "row": 2, "col": 2, "cells": [], "width": 0}])

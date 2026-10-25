@@ -5,6 +5,12 @@ import { t } from "../lib/i18n";
 // A design selection attached to a message: the file and the nodes by name.
 export function selectionLabel(sel: DesignSelection): string {
   const file = sel.path.split("/").pop() ?? sel.path;
+  // A Word document: the words selected (its references, ¶12·h10, are for the agent).
+  if (sel.path.toLowerCase().endsWith(".docx")) {
+    const first = sel.nodes[0];
+    const words = first?.text ? `“${first.text.length > 40 ? `${first.text.slice(0, 39)}…` : first.text}”` : first?.name ?? "";
+    return `${file}: ${words}${sel.nodes.length > 1 ? ` +${sel.nodes.length - 1}` : ""}`;
+  }
   const names = sel.nodes.map((n) => n.name);
   // which page, on a design of several; where the playhead was, in a video
   const where = sel.page ? `${file} › ${sel.page}` : typeof sel.time === "number" ? `${file} · ${sel.time.toFixed(1)} s` : file;
