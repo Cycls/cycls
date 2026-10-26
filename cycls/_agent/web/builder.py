@@ -95,6 +95,7 @@ class Web:
         self._favicon: Optional[str] = None
         self._colors: Optional[dict] = None
         self._connectors: list = []
+        self._apps: Optional[dict] = None
 
     def _copy(self, **updates):
         new = Web.__new__(Web)
@@ -238,6 +239,24 @@ class Web:
     def connectors(self, *oauths):
         """Connectors the directory offers and the connect routes serve (cycls.OAuth2)."""
         return self._copy(_connectors=[*self._connectors, *oauths])
+
+    def apps(self, catalog: str, *, theme: Optional[dict] = None):
+        """An app catalog: a folder of built bundles shipped in the image, one per slug
+        (`<slug>/index.html`, `app.json` with name/name_ar/icon/description/description_ar/category,
+        `README.md`, `src/`). The Apps section of the connectors window lists it; a workspace admin
+        installs, updates and removes them (docs/notes/apps.md, "The catalog"). The folder is copied
+        into the image for you. `theme` is the app theme a workspace wears until an admin picks one:
+        {"base": "zinc", "color": "blue", "radius": 0.5, "primary": "#0b6b5d"} — every key optional."""
+        from cycls._agent import catalog as _catalog
+        if not isinstance(catalog, str) or not catalog.strip():
+            raise ValueError("apps(catalog) is the path of a folder of app bundles, e.g. \"default_apps\"")
+        p = Path(catalog)
+        if p.is_absolute() or catalog.startswith(("/", "\\")) or ".." in p.parts:
+            raise ValueError(f"apps(catalog) is a folder beside the agent, relative: got {catalog!r}")
+        if theme is not None:
+            theme = _catalog.clean_theme(theme)
+        # a str, never a Path: the agent is pickled on the deploying machine (a WindowsPath does not unpickle on Linux)
+        return self._copy(_apps={"catalog": p.as_posix(), "theme": theme})
 
     def analytics(self, *providers):
         """Analytics as plugins: one canonical event pipe in the client,

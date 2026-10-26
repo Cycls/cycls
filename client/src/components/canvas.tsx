@@ -22,6 +22,7 @@ import { CommentButtons, CommentLayer, CommentsList } from "./comments";
 import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from "./deck-view";
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
+import { appThemeContext, subscribeAppTheme } from "../lib/app-theme";
 import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
@@ -118,6 +119,8 @@ interface PendingSave {
   resolve: (path: string | null) => void;
 }
 
+const hostMode = () => (document.body.classList.contains("dark") ? "dark" : "light");
+
 // Without readFile (shared pages have no workspace) this is a plain sandboxed doc.
 function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetchConnector, appData }: {
   file: CanvasFile;
@@ -163,8 +166,18 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
       appData: shared ? undefined : appData,
       context: {
         // Dark mode lives on document.body (lib/utils applyTheme), not <html>.
-        theme: document.body.classList.contains("dark") ? "dark" : "light",
+        theme: hostMode(),
         locale: document.documentElement.lang || "en",
+        ...appThemeContext(),   // the workspace's app theme, when one is set (lib/app-theme)
+      },
+      // A theme an admin saves, or the host flipping light/dark, re-skins the open app in place.
+      commands: (send) => {
+        const push = () => send({ type: "theme", theme: hostMode(), tokens: appThemeContext().tokens ?? null });
+        const off = subscribeAppTheme(push);
+        let mode = hostMode();
+        const watch = new MutationObserver(() => { if (hostMode() !== mode) { mode = hostMode(); push(); } });
+        watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => { off(); watch.disconnect(); };
       },
     });
   }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData]);

@@ -16,6 +16,7 @@ export const MSG = {
   loadError: "cycls:loaderror",
   data: "cycls:data",
   dataResult: "cycls:data:result",
+  command: "cycls:command",
 } as const;
 
 export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -97,10 +98,14 @@ export interface BridgeOptions {
   // The app's rows in the object store. `who` picks the audience; the server
   // resolves the viewer and the role, so the frame cannot name someone else.
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  // Host → app pushes, over the port once the app is linked. The canvas subscribes the workspace's
+  // app theme here: `subscribe(send)` returns its own unsubscribe. A command before the handshake is
+  // dropped — the init that follows carries the same state.
+  commands?: (send: (command: Record<string, unknown>) => void) => () => void;
 }
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData, commands,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
@@ -217,8 +222,10 @@ export function attachBridge({
   }
 
   window.addEventListener("message", onWindow);
+  const unsubscribe = commands?.((command) => port?.postMessage({ type: MSG.command, command }));
   return () => {
     window.removeEventListener("message", onWindow);
+    unsubscribe?.();
     port?.close();
     port = null;
   };

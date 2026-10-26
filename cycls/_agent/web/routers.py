@@ -14,7 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, JSONResponse
 
 from cycls._app.db import DB, Conflict, Workspace, workspace
-from cycls._agent import connectors as oauth, credentials, spill, state, trash
+from cycls._agent import catalog as app_catalog, connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
@@ -990,11 +990,16 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         await db.delete(src)
 
     async def _drop_app_data(ws, metas):
-        """An app's rows outlive its folder until the trash entry goes for good."""
+        """An app's rows outlive its folder until the trash entry goes for good — unless an app of that
+        slug lives there again (rebuilt, or reinstalled from the catalog): those rows are its, not the
+        dead one's, and purging the old entry must not take them."""
         db = state.apps_db(ws)
         for m in metas:
             if m and m.get("kind") == "app":
-                await db.delete(state.app_shelf(m["path"].split("/")[1]))
+                slug = m["path"].split("/")[1]
+                if (Path(ws.root) / "apps" / slug).exists():
+                    continue
+                await db.delete(state.app_shelf(slug))
 
     async def _trashed_chats(ws):
         rows = []
@@ -1177,6 +1182,114 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         await _may_write(slug, k, who, user, ws)
         await state.apps_db(ws).delete(key(k))
         return {"ok": True}
+
+    return r
+
+
+def _drop_app_caches(root):
+    """What lists apps, made to look again: the model's one-line catalog and the files walk."""
+    from cycls._agent import tools as T
+    for k in (root, str(root), Path(root)):
+        T._apps_cache.pop(k, None)
+    _catalog_drop(root)
+
+
+def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
+    """The agent's app catalog and the workspace's app theme (docs/notes/apps.md, "The catalog").
+
+    The catalog routes exist only when the agent declares one (`cycls.Web().apps(folder)`); the theme
+    routes always — any app reading shadcn tokens can wear a workspace's theme, catalog or not.
+    Installing, updating, removing and re-theming change what every member sees, so they take a
+    workspace admin, exactly as deleting an app does (`_admin`)."""
+    r = APIRouter()
+    spec = getattr(cycls_app, "apps", None) or {}
+    folder = spec.get("catalog")
+    catalog = app_catalog.Catalog(Path(folder)) if folder else None
+    default_theme = spec.get("theme")
+
+    async def _gate(user, ws, what):
+        if not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail=f"Only workspace admins can {what}")
+
+    def _slug(data):
+        slug = (data or {}).get("slug")
+        if not app_catalog.valid_slug(slug) or not catalog or slug not in catalog.entries():
+            raise HTTPException(status_code=404, detail="No such app in this agent's catalog")
+        return slug
+
+    async def _put(ws, user, slug, allow_update):
+        root = Path(ws.root)
+        fresh = not (root / "apps" / slug).exists()
+        try:
+            outcome = await asyncio.to_thread(
+                app_catalog.install, root, catalog, slug, allow_update=allow_update,
+                trash=lambda rt, rel: trash.trash_path(rt, rel, by="user", reason="update"))
+        except app_catalog.NotOurs:
+            raise HTTPException(status_code=409, detail="An app of yours already has that name; rename or remove it first")
+        if fresh and outcome == "installed":   # a reused slug must not inherit a dead app's rows (build_app does the same)
+            await state.apps_db(ws).delete(state.app_shelf(slug))
+        _drop_app_caches(ws.root)
+        log("app", user=user, action=outcome, app=slug, version=catalog.entries()[slug]["version"])
+        return {"ok": True, "slug": slug, "outcome": outcome, "entry": f"apps/{slug}/index.html"}
+
+    if catalog is not None:
+        @r.get("/apps/catalog")
+        async def list_catalog(ws: Workspace = ws_dep, user: Any = user_dep):
+            rows = await asyncio.to_thread(app_catalog.listing, ws.root, catalog)
+            return {"apps": rows, "admin": await _admin(cycls_app, user, ws, volume, base)}
+
+        @r.post("/apps/install")
+        async def install(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+            slug = _slug(await request.json())
+            await _gate(user, ws, "install apps")
+            return await _put(ws, user, slug, allow_update=False)
+
+        @r.post("/apps/update")
+        async def update(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+            slug = _slug(await request.json())
+            await _gate(user, ws, "update apps")
+            if not (Path(ws.root) / "apps" / slug).exists():
+                raise HTTPException(status_code=404, detail="That app is not installed")
+            return await _put(ws, user, slug, allow_update=True)
+
+        @r.post("/apps/uninstall")
+        async def uninstall(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+            """A delete, so a move to the trash: restorable for the trash's TTL, its rows kept until the
+            entry is purged. Only an app the catalog installed — a person's own goes through Files."""
+            slug = _slug(await request.json())
+            await _gate(user, ws, "remove apps")
+            if not (Path(ws.root) / "apps" / slug).exists():
+                raise HTTPException(status_code=404, detail="That app is not installed")
+            if not app_catalog.is_ours(ws.root, slug):
+                raise HTTPException(status_code=409, detail="This app was not installed from the catalog")
+            meta = await asyncio.to_thread(trash.trash_path, ws.root, f"apps/{slug}", "user", "uninstall")
+            _drop_app_caches(ws.root)
+            log("app", user=user, action="uninstalled", app=slug)
+            return {"ok": True, "trash_id": meta["id"]}
+
+    @r.get("/apps/theme")
+    async def get_theme(ws: Workspace = ws_dep, user: Any = user_dep):
+        """The choice, not the CSS: `theme` is the workspace's own (null when none was made), `default`
+        the agent's; the client derives the tokens and hands them to every app in `cycls:init`."""
+        mine = await state.apps_db(ws).get(app_catalog.THEME_KEY)
+        return {"theme": mine if isinstance(mine, dict) else None, "default": default_theme,
+                "admin": await _admin(cycls_app, user, ws, volume, base)}
+
+    @r.put("/apps/theme")
+    async def put_theme(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        await _gate(user, ws, "change the apps' theme")
+        data = await request.json()
+        if not isinstance(data, dict) or data.get("theme") is None:   # back to the agent's default, or the apps' own look
+            await state.apps_db(ws).delete(app_catalog.THEME_KEY)
+            log("app", user=user, action="theme", theme=None)
+            return {"ok": True, "theme": None}
+        try:
+            theme = app_catalog.clean_theme(data["theme"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        await state.apps_db(ws).put(app_catalog.THEME_KEY, theme)
+        log("app", user=user, action="theme", theme=theme)
+        return {"ok": True, "theme": theme}
 
     return r
 
@@ -2282,6 +2395,8 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(skills_router(ws_dep, required_auth))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
+    # before apps_router: `/apps/catalog` and `/apps/theme` are literal paths beside its `/apps/{slug}/data`
+    app.include_router(app_catalog_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:

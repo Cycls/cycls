@@ -13,6 +13,7 @@ import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
 import type { DesignSelection } from "./design-editor-view";
 import { SelectionChip } from "./selection-chip";
+import { AppIcon, type AppIconSource } from "./app-icon";
 
 const MENTION_DEBOUNCE_MS = 150;
 
@@ -72,6 +73,9 @@ export function InputBox({
   connectors,
   onOpenConnectors,
   onOpenSkills,
+  apps,
+  onOpenApp,
+  onBrowseApps,
   onToggleConnector,
   onAddConnector,
   placeholder,
@@ -106,6 +110,9 @@ export function InputBox({
   connectors?: Connector[];
   onOpenConnectors?: () => void;
   onOpenSkills?: () => void;
+  apps?: MenuApp[];                    // installed apps, for the + menu's Apps submenu
+  onOpenApp?: (app: MenuApp) => void;  // in the canvas
+  onBrowseApps?: () => void;           // the Apps section of the connectors window
   onToggleConnector?: (c: Connector, on: boolean) => void;   // the person's own on/off, kept across chats
   onAddConnector?: (c: Connector) => void;
   placeholder?: string;
@@ -369,7 +376,7 @@ export function InputBox({
       <div className="flex items-center justify-between px-1 pt-1" dir="ltr">
         <div className="relative flex items-center gap-0.5">
           {(onOpenFilePicker || onOpenFiles) && (
-            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} onToggleConnector={onToggleConnector} />
+            <AttachMenu onOpenFilePicker={onOpenFilePicker} onOpenFiles={onOpenFiles} connectors={connectors} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} apps={apps} onOpenApp={onOpenApp} onBrowseApps={onBrowseApps} onToggleConnector={onToggleConnector} />
           )}
           <button
             type="button"
@@ -452,16 +459,23 @@ function MicButton({ listening, transcribing, onStart, onStop, onCancel }: { lis
   );
 }
 
-function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onOpenSkills, onToggleConnector }: {
+export type MenuApp = AppIconSource & { slug: string; entry: string };
+
+function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnectors, onOpenSkills, apps, onOpenApp, onBrowseApps, onToggleConnector }: {
   onOpenFilePicker?: () => void; onOpenFiles?: () => void; connectors?: Connector[]; onOpenConnectors?: () => void; onOpenSkills?: () => void;
+  apps?: MenuApp[]; onOpenApp?: (app: MenuApp) => void; onBrowseApps?: () => void;
   onToggleConnector?: (c: Connector, on: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // The Apps submenu replaces the menu in place (a drill-down, with a back row), so it fits a phone
+  // as well as a desktop — a flyout beside a menu at the screen's edge has nowhere to go.
+  const [sub, setSub] = useState<"apps" | null>(null);
+  useEffect(() => { if (!open) setSub(null); }, [open]);
   const btnClass = "flex size-8 cursor-pointer items-center justify-center rounded-2xl text-muted-foreground transition hover:bg-secondary/80 hover:text-foreground";
   const item = "flex w-full items-center gap-2.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer";
   const pick = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); setOpen(false); fn?.(); };
 
-  if (!onOpenFiles && !onOpenConnectors && !onOpenSkills) {
+  if (!onOpenFiles && !onOpenConnectors && !onOpenSkills && !onBrowseApps) {
     return onOpenFilePicker ? (
       <button type="button" onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }} className={btnClass} aria-label="Attach file">
         <Icon name="paperclip" className="size-5" />
@@ -478,6 +492,28 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute start-0 bottom-full z-50 mb-2 w-52 rounded-lg border border-border bg-background shadow-lg py-1">
+            {sub === "apps" ? (
+              <div role="menu" aria-label={t("apps")}>
+                <button onClick={(e) => { e.stopPropagation(); setSub(null); }} className={cn(item, "font-medium text-foreground")}>
+                  <Icon name="chevron-left" className="size-3.5 rtl:rotate-180" />{t("apps")}
+                </button>
+                <div className="my-1 border-t border-border" />
+                <div className="max-h-64 overflow-y-auto">
+                  {apps?.length ? apps.map((a) => (
+                    <button key={a.slug} role="menuitem" onClick={pick(() => onOpenApp?.(a))} className={item}>
+                      <span className="flex size-5 items-center justify-center overflow-hidden rounded-md bg-secondary text-xs"><AppIcon app={a} className="size-full" /></span>
+                      <span className="min-w-0 flex-1 truncate text-start"><bdi>{a.name}</bdi></span>
+                    </button>
+                  )) : <p className="px-3 py-2 text-xs text-muted-foreground">{t("noAppsInstalled")}</p>}
+                </div>
+                {onBrowseApps && (
+                  <>
+                    <div className="my-1 border-t border-border" />
+                    <button role="menuitem" onClick={pick(onBrowseApps)} className={item}><Icon name="search" className="size-4" />{t("browseApps")}</button>
+                  </>
+                )}
+              </div>
+            ) : (<>
             {onOpenFilePicker && <button onClick={pick(onOpenFilePicker)} className={item}><Icon name="upload" className="size-4" />{t("uploadFile")}</button>}
             {onOpenFiles && <button onClick={pick(onOpenFiles)} className={item}><Icon name="folder" className="size-4" />{t("browseFiles")}</button>}
             {onOpenConnectors && (
@@ -501,6 +537,12 @@ function AttachMenu({ onOpenFilePicker, onOpenFiles, connectors, onOpenConnector
                 <Icon name="star" className="size-4" />{t("skills")}<Icon name="chevron-right" className="ms-auto size-3.5" />
               </button>
             )}
+            {onBrowseApps && (
+              <button onClick={(e) => { e.stopPropagation(); setSub("apps"); }} className={item} aria-haspopup="menu">
+                <Icon name="grid" className="size-4" />{t("apps")}<Icon name="chevron-right" className="ms-auto size-3.5 rtl:rotate-180" />
+              </button>
+            )}
+            </>)}
           </div>
         </>
       )}
