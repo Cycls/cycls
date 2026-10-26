@@ -202,6 +202,21 @@ their author's.
   (the service's `accept_changes` / `reject_changes` with `ids`), written like a save with the old version kept;
   the file opens again, editable once none are left. Reads of `.docx` are cached in `.cache/docs-review` since
   this (older reads have no review in them).
+- **Pictures, headers and footers made in the editor are saved** (cycls-office `packages/docx/src/write/`
+  blocks.ts, fields.ts, sections.ts). A picture inserted (Insert › picture: PNG, JPEG, GIF or BMP up to 5 MB,
+  inline) becomes a media part and an inline drawing; a picture the file had keeps the file's own drawing when it
+  is moved, copied (the copy gets its own drawing id) or resized (only its size changes). Pictures are told apart by
+  their bytes and size, not their ids (the editor keeps its ids, the file read again gives new ones), so the next
+  save does nothing. A header or footer made by double-clicking the top or bottom of a page becomes its own part
+  (`word/headerN.xml`) named by its section; an empty one (a click and nothing typed) is not written. The engine's
+  id for a header it made is paired with the file's header in the same place, so later saves edit that part.
+  "Different first page" is the section's `w:titlePg`, "Different odd and even pages" the settings'
+  `w:evenAndOddHeaders`, the header and footer distances the section's `w:pgMar`. Page number, page count and date
+  fields are written as Word fields; the reader gives PAGE and NUMPAGES in headers and footers to the editor as live
+  fields, so each page shows its own number. The Header & Footer toolbar's groups sit on one row (they were drawn
+  for a two-row ribbon and came out cut off). Still not saved, with a notice: text wrapping set on a picture
+  (it stays inline), shapes, tables inside a new header. Not saved and not told yet: a horizontal line (a paragraph
+  border); a section break added or removed refuses the save, as before.
 
 ## Arabic and right-to-left editing
 
@@ -222,8 +237,11 @@ they point in a right-to-left paragraph (Left goes on through the text, Right go
 
 ## Not built yet
 
-Live co-editing (left out on purpose, 2026-10-24); the Docs editor and its right-to-left work (D3–D6). The
-`docs` agent tool (D2) is built (2026-10-25, not deployed). Built 2026-10-24 (not deployed yet): charts drawn
+Live co-editing (left out on purpose, 2026-10-24); in Docs, right-to-left mouse work (clicking into and selecting
+mixed Arabic and English lines), right-to-left headers and footers, Arabic-Indic page numbers (D5), horizontal lines
+and section breaks saved. The Docs editor, its Arabic layout, the `docs` agent tool, comments and tracked changes
+are deployed (2026-10-25/26); pictures, headers and footers saved from the editor: built 2026-10-26. Built
+2026-10-24: charts drawn
 and kept, pivot tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid
 out again once a font has loaded, the reload after a file changed some other way, print, comments, the agent's
 changes outlined, Arabic caret and deletion by letter and the other right-to-left editing fixes. Saved since 2026-10-24: notes, defined
