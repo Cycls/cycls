@@ -274,3 +274,24 @@ def test_words_go_to_the_service_as_text():
     old = {"op": "replace", "para": "¶3·u22", "text": "Still taken."}   # a model that sends `text` anyway
     assert _check_ops([old]) is None and old["text"] == "Still taken."
     assert "needs `words`" in _check_ops([{"op": "reply", "comment": 4, "done": True}])
+
+
+def test_page_layout_ops_are_offered_and_cleaned_of_what_a_host_filled_with_nothing():
+    from cycls._agent.office.docs import DOCS_TOOL, OPS, _check_ops
+    for name in ("header", "footer", "section_break", "remove_section_break", "page_setup"):
+        assert name in OPS and name in DOCS_TOOL["description"]
+    props = DOCS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
+    for field in ("section", "page", "start", "paper", "orientation", "margin", "margins", "columns", "gap", "line", "page_start"):
+        assert field in props
+    footer = {"op": "footer", "words": "Page {page} of {pages}", "align": "center", "section": 0, "page": ""}
+    assert _check_ops([footer]) is None
+    assert footer == {"op": "footer", "text": "Page {page} of {pages}", "align": "center"}
+    cover = {"op": "header", "remove": True, "page": "first", "section": 1}   # none is said with remove
+    assert _check_ops([cover]) is None and cover == {"op": "header", "text": "", "page": "first", "section": 1}
+    # no words (models leave the field out when retrying) is not taken for none: it says what to send
+    assert "or remove: true for none" in _check_ops([{"op": "footer", "page": "first", "align": "center"}])
+    assert "needs `words`" in _check_ops([{"op": "header", "words": "", "section": 2}])
+    setup = {"op": "page_setup", "paper": "A4", "section": 0, "columns": 0, "page_start": 0, "margin": "2cm",
+             "margins": {"top": ""}, "orientation": "", "line": False, "gap": ""}
+    assert _check_ops([setup]) is None
+    assert setup == {"op": "page_setup", "paper": "A4", "margins": "2cm", "line": False}

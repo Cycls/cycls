@@ -16,18 +16,29 @@ from . import client
 ACTIONS = ("read", "edit", "create")
 OPS = ("replace", "find_replace", "insert_after", "insert_before", "delete", "style", "list", "link", "cell",
        "insert_row", "delete_row", "insert_column", "delete_column", "insert_table", "picture", "comment", "reply",
-       "resolve", "accept_changes", "reject_changes")
+       "resolve", "accept_changes", "reject_changes", "header", "footer", "section_break", "remove_section_break",
+       "page_setup")
 _IMAGES = {".png", ".jpg", ".jpeg", ".gif"}
 _MAX_IMAGE = 10 * 1024 * 1024
 _MAX_OPS = 100
+# The page-layout ops: a field a host filled with nothing ("", 0, {}) means it was not given.
+_LAYOUT = ("header", "footer", "section_break", "remove_section_break", "page_setup")
+
+
+def _given(v):
+    if isinstance(v, bool):
+        return True
+    return v not in ("", 0, None) and v != {} and v != []
 
 DOCS_TOOL = {
     "name": "docs",
     "description": (
         "Read, edit and create Word documents (.docx) in the workspace with Cycls Docs.\n"
         "- read: each paragraph on a line with its reference (¶7·k3f), its style ([Heading 2]), list marker and "
-        "text with **bold**, *italic* and [links](url); tables as grids (T1, rows r1…). For a long document, "
-        "`from` starts at a paragraph number.\n"
+        "text with **bold**, *italic* and [links](url); tables as grids (T1, rows r1…); above them the page (paper, "
+        "margins), the sections when there are several (S1 ¶1–¶12, each with its own page), and the headers and "
+        "footers ({page} is the page number, {pages} the count). For a long document, `from` starts at a paragraph "
+        "number.\n"
         "- edit: `ops` run in order on the file at `path`, all of them or none. Only what they change is written; "
         "the rest of the file (layout, headers, comments, pictures) is kept exactly. Name a paragraph by the "
         "reference a read gave (`para`, and `to` for a range) or by words in it (`find`). The reply shows the "
@@ -44,7 +55,15 @@ DOCS_TOOL = {
         "insert_table (para, rows: [[\"Name\", \"Owner\"], [\"…\", \"…\"]], header?) adds a table after the paragraph; "
         "picture (para, path: a PNG/JPEG/GIF in the workspace, width? in pixels, align?) adds a picture after it; "
         "comment (para or find, words) comments on the paragraph or those words; reply (comment: the # in the read's "
-        "Comments, words: your answer, done: true to resolve it too); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
+        "Comments, words: your answer, done: true to resolve it too); resolve (comment, done: false opens it again); "
+        "header / footer (words: its lines, {page} the page number, {pages} the page count; remove: true for none; section? "
+        "for one section's only; page?: first — the document's first page (a section's with section): with remove, "
+        "a cover page without one — or even; "
+        "align?); section_break (para, start?: new_page | continuous | odd_page | even_page) starts a new section after "
+        "the paragraph, for a landscape page, columns or other headers; remove_section_break (section: the one the break "
+        "ends); page_setup (section?, else every section; paper: A4 | Letter | Legal | A3 | A5; orientation: portrait "
+        "| landscape; margin: one length for all four, or margins {top, bottom, left, right} — lengths like 2.5cm or "
+        "1in; columns: 1–4, with gap? and line?; page_start: the first page's number); accept_changes / reject_changes take a "
         "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
         "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
         "ops [] for read and create, content \"\" for read and edit.\n"
@@ -95,6 +114,21 @@ DOCS_TOOL = {
                         "width": {"type": "integer", "description": "picture: width in pixels (it keeps its proportions)"},
                         "comment": {"type": "integer", "description": "reply / resolve: the comment's # in the read"},
                         "done": {"type": "boolean", "description": "resolve: false opens the comment again; reply: true also resolves it"},
+                        "section": {"type": "integer", "description": "header / footer / page_setup: one section, its number in the read (S2 is 2); remove_section_break: the section the break ends"},
+                        "page": {"type": "string", "enum": ["all", "first", "even"], "description": "header / footer: which pages (all when left out)"},
+                        "start": {"type": "string", "enum": ["new_page", "continuous", "odd_page", "even_page"], "description": "section_break: how the section after it starts"},
+                        "paper": {"type": "string", "description": "page_setup: A4, Letter, Legal, A3, A5, or e.g. 21cm x 29.7cm"},
+                        "orientation": {"type": "string", "enum": ["portrait", "landscape"]},
+                        "margin": {"type": "string", "description": "page_setup: one length for all four margins, e.g. 2.5cm or 1in"},
+                        "margins": {
+                            "type": "object", "description": "page_setup: some margins, each a length like 2cm",
+                            "properties": {k: {"type": "string"} for k in ("top", "bottom", "left", "right")},
+                        },
+                        "columns": {"type": "integer", "description": "page_setup: 1 to 4 columns of text"},
+                        "gap": {"type": "string", "description": "page_setup: the space between columns, e.g. 1cm"},
+                        "line": {"type": "boolean", "description": "page_setup: a line between the columns"},
+                        "page_start": {"type": "integer", "description": "page_setup: the number the first page gets"},
+                        "remove": {"type": "boolean", "description": "header / footer: true for none (no words)"},
                     },
                     "required": ["op"],
                 },
@@ -113,9 +147,9 @@ DOCS_TOOL = {
 DOCS_PROMPT = (
     "Word files: read and change any existing .docx with `docs`, never python-docx or a script (even where a skill "
     "describes one): it keeps everything in the file it does not touch (layout, headers, comments, pictures) and the "
-    "person sees the change. A new plain Word document (headings, paragraphs, lists, tables, links): `docs` create, "
-    "from markdown. Only a Word file that needs pictures, headers and footers, brand colours, a cover or a custom page "
-    "layout is built with the docx skill."
+    "person sees the change. A new Word document (headings, paragraphs, lists, tables, links): `docs` create, from "
+    "markdown, then `docs` edit for pictures, headers and footers, page numbers, sections and page setup. Only a Word "
+    "file that needs a designed cover, brand colours or a layout beyond that is built with the docx skill."
 )
 
 
@@ -149,6 +183,24 @@ def _check_ops(ops):
                 op["text"] = str(given[0])
             elif isinstance(given, str):
                 op["text"] = given
+        if op["op"] in _LAYOUT:
+            if isinstance(op.get("margins"), dict):
+                op["margins"] = {k: v for k, v in op["margins"].items() if _given(v)}
+            for k in [k for k, v in op.items() if k not in ("op", "text") and not _given(v)]:
+                del op[k]
+        # One length for every margin is sent as `margin` (a string): hosts handle one type per field better.
+        if op["op"] == "page_setup" and isinstance(op.get("margin"), str):
+            margin = op.pop("margin")
+            if "margins" not in op:
+                op["margins"] = margin
+        # None is said with remove: true (an empty string does not always arrive: models leave the field out).
+        if op["op"] in ("header", "footer"):
+            if op.pop("remove", False) is True:
+                op["text"] = ""
+            elif not isinstance(op.get("text"), str) or not op["text"].strip():
+                got = ", ".join(sorted(str(k) for k in op)) or "nothing"
+                return (f"op {i} ({op['op']}) needs `words`: its lines ({{page}} for the page number, {{pages}} the count), "
+                        f"or remove: true for none (it came with: {got})")
         if op["op"] in ("reply", "comment", "replace", "insert_after", "insert_before", "cell") and not isinstance(op.get("text"), str):
             got = ", ".join(sorted(str(k) for k in op)) or "nothing"
             return f"op {i} ({op['op']}) needs `words`, a string (it came with: {got})"
