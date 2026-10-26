@@ -141,6 +141,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `run_busy` | send refused with 409 — the chat already has a run, or a regenerate named a turn that is no longer the chat's last | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
+| `chat_title_generated` | a new chat named by the agent's model as its first reply ends (`source`, `length`, `language`) | whether named chats are renamed less: `chat_renamed` against `chat_loaded` |
 
 ### Deliverables
 

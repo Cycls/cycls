@@ -28,7 +28,7 @@ import type { Attachment, ChatApi, AppConfig, SendExtra, Part } from "../hooks/u
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
-import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
+import { t, getLang, setLang, useLang, stepText, langOf } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
@@ -462,6 +462,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         track("ui_action", { action: "connect", connector: ev.connector });
       } else if (ev.action === "confirm" && typeof ev.tool === "string") {
         track("ui_action", { action: "confirm", tool: ev.tool });   // the card itself is a part of the agent's message
+      } else if (ev.action === "title" && typeof ev.title === "string" && typeof ev.chat_id === "string") {
+        // A new chat named while its first reply was made: the list says so without a reload.
+        const id = ev.chat_id, title = ev.title;
+        setChats((prev) => (prev.some((x) => x.id === id) ? prev.map((x) => (x.id === id ? { ...x, title } : x))
+                                                          : [{ id, title, updatedAt: new Date().toISOString() }, ...prev]));
+        track("chat_title_generated", { source: "auto", length: title.length, language: langOf(title) });
       } else if (ev.action === "compacted") {
         track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
@@ -1526,7 +1532,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                               </svg>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                              <span dir="auto" className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
                               <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1542,7 +1548,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                                       setShares((prev) => prev.filter((x) => x.token !== s.token));
                                     }).finally(() => setSharesLoading(false));
                                   }}
-                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
+                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
                                   aria-label="Delete share"
                                 >
                                   <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1674,7 +1680,8 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
           return (
             <div
               key={s.id}
-              className={`group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary/30" : ""}`}
+              className={`group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary" : "hover:bg-secondary/50"}`}
+              aria-current={activeId === s.id ? "true" : undefined}
               onClick={() => onLoad(s.id)}
             >
               <button
@@ -1695,11 +1702,12 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span className="text-sm text-foreground truncate block">
+                  <span dir="auto" className={`text-sm text-foreground truncate block ${activeId === s.id ? "font-medium" : ""}`}
+                        onDoubleClick={(e) => { e.stopPropagation(); setRenaming(s.id); }}>
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}
                     {s.run === "running" && (
-                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500 animate-pulse align-middle"
+                      <span className="me-1.5 inline-block size-1.5 rounded-full bg-emerald-500 animate-pulse align-middle"
                             aria-label={t("working")} />
                     )}
                     {s.title || t("untitled")}
@@ -1712,7 +1720,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
               <div className="relative shrink-0">
                 <button
                   onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === s.id ? null : s.id); }}
-                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
                   aria-label="Actions"
                 >
                   <svg className="size-4" fill="currentColor" viewBox="0 0 24 24">

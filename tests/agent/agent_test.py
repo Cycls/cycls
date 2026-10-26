@@ -24,6 +24,7 @@ def _clear_client_cache():
     yield
     _providers._clients.clear()
 from cycls._agent.harness.compact import COMPACT_AT, COMPACT_BUFFER, compact
+from cycls._agent.harness.main import _chat_title as _named   # the real one: tests stub it (conftest)
 from cycls._agent.harness.events import Turn, to_ui
 from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, skills
 from cycls._agent.state import load_messages, load_tail
@@ -1312,6 +1313,86 @@ def test_a_tools_picture_rides_the_next_call_only(agent_env):
              if b.get("type") == "tool_result"]
     assert [x["type"] for r in saved for x in r["content"]] == ["image", "image"]
     assert base64.b64decode(saved[0]["content"][0]["source"]["data"]).startswith(b"\x89PNG")
+
+
+def test_a_new_chat_is_named_beside_the_reply_once_and_a_rename_wins(agent_env, monkeypatch):
+    """A new chat is named from the person's words by a call made beside the reply, written as the run ends with
+    a `title` event. A greeting alone waits for more; a chat is named once; a rename made meanwhile wins; an older
+    chat (no `titleSource`) keeps the title it has."""
+    from cycls._agent.harness import main
+    from cycls._agent.state import get_meta, put_meta
+    seen = []
+
+    async def named(provider, said, **kw):
+        seen.append(said)
+        return "Riyadh trip plan"
+    monkeypatch.setattr(main, "_chat_title", named)
+    ws, ctx = agent_env
+
+    def run(text):
+        ctx.messages.raw = [{"role": "user", "content": text}]
+        client = MagicMock()
+        client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("Sure")]))
+        with _mock_anthropic(client):
+            return asyncio.run(_drain(_run(context=ctx)))
+    meta = lambda: asyncio.run(get_meta(ctx.workspace, ctx.chat_id))
+    titled = lambda out: [e for e in out if isinstance(e, dict) and e.get("action") == "title"]
+
+    assert titled(run("hi")) == [] and seen == []
+    assert (meta()["title"], meta()["titleSource"]) == ("hi", "first")
+    out = run("Plan a trip to Riyadh next week")
+    assert seen == ["hi\n\nPlan a trip to Riyadh next week"]
+    assert titled(out) == [{"type": "ui", "action": "title", "chat_id": ctx.chat_id, "title": "Riyadh trip plan"}]
+    assert (meta()["title"], meta()["titleSource"]) == ("Riyadh trip plan", "auto")
+    run("and book the hotel too")
+    assert len(seen) == 1
+
+    ctx.chat_id = "renamed-meanwhile"
+
+    async def renamed(provider, said, **kw):
+        now = await get_meta(ctx.workspace, ctx.chat_id)
+        await put_meta(ctx.workspace, ctx.chat_id, {**now, "title": "Mine", "titleSource": "user"})
+        return "Riyadh trip plan"
+    monkeypatch.setattr(main, "_chat_title", renamed)
+    assert titled(run("Plan a trip to Riyadh next week")) == [] and meta()["title"] == "Mine"
+
+    ctx.chat_id = "older"
+    asyncio.run(put_meta(ctx.workspace, "older", {"id": "older", "createdAt": "2026-01-01T00:00:00+00:00",
+                                                  "title": "the first line"}))
+    seen.clear()
+    monkeypatch.setattr(main, "_chat_title", named)
+    run("Plan a trip to Riyadh next week")
+    assert seen == [] and meta()["title"] == "the first line" and "titleSource" not in meta()
+
+
+def test_a_new_chats_first_line_is_cut_at_a_word_until_it_is_named(agent_env):
+    """Until the run names it, a new chat is called by its first line, cut at a word with "…", never mid-word."""
+    from cycls._agent.state import get_meta, touch_meta
+    ws, ctx = agent_env
+    said = "Please prepare a detailed quarterly report on the specialty coffee market in Riyadh with all the numbers"
+    asyncio.run(touch_meta(ctx.workspace, "fresh", said))
+    meta = asyncio.run(get_meta(ctx.workspace, "fresh"))
+    assert meta["titleSource"] == "first" and meta["title"].endswith("…") and len(meta["title"]) <= 81
+    assert said.startswith(meta["title"][:-1]) and said[len(meta["title"]) - 1] == " "
+
+
+def test_a_chats_title_is_the_first_line_the_model_writes_without_quotes_or_a_full_stop():
+    """The title call goes to the agent's own model with its settings, and keeps what it wrote first, bare."""
+    class Model:
+        async def stream(self, **kw):
+            self.kw = kw
+            yield "x"
+            yield Turn(content=[{"type": "thinking", "thinking": "..."},
+                                {"type": "text", "text": '"خطة رحلة إلى الرياض."\nIt names the trip.'}], stop_reason="end_turn")
+    model = Model()
+    assert asyncio.run(_named(model, "أبي أخطط رحلة للرياض", max_tokens=100, thinking="adaptive")) == "خطة رحلة إلى الرياض"
+    assert model.kw["tools"] == [] and model.kw["thinking"] == "adaptive" and "أبي أخطط رحلة للرياض" in str(model.kw["messages"])
+
+    class Down:
+        async def stream(self, **kw):
+            raise RuntimeError("503")
+            yield
+    assert asyncio.run(_named(Down(), "plan a trip please")) == ""
 
 
 # ---------------------------------------------------------------------------

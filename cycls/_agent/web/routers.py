@@ -307,6 +307,8 @@ def chats_router(ws_dep):
         for k, v in patch.items():
             if v is None: merged.pop(k, None)
             else: merged[k] = v
+        if patch.get("title"):
+            merged["titleSource"] = "user"   # a name the person gave is never written over
         now = datetime.now(timezone.utc).isoformat()
         merged["id"] = chat_id
         merged.setdefault("createdAt", now)

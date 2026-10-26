@@ -1245,6 +1245,13 @@ def test_ws_mode_chats_land_in_personal_workspace(tmp_path):
     assert [c["id"] for c in r.json()] == ["c1"]
 
 
+def test_a_rename_makes_a_chats_title_the_persons(tmp_path):
+    """The run never names a chat the person named; marking a favourite names nothing."""
+    client = _ws_routers_client(tmp_path)
+    assert "titleSource" not in client.put("/chats/c1", json={"favoritedAt": "2026-10-27"}).json()
+    assert client.put("/chats/c1", json={"title": "Budget"}).json()["titleSource"] == "user"
+
+
 def test_ws_mode_foreign_workspace_is_404(tmp_path):
     client = _ws_routers_client(tmp_path)
     for header in ("u-user_2", "t-team1"):

@@ -130,19 +130,29 @@ async def add_cost(workspace, chat_id, delta):
     await put_meta(workspace, chat_id, existing)
 
 
+def _first_line(text, most=80):
+    """A title from what the person wrote, until a better one: cut at a word, with "…", not mid-word."""
+    text = " ".join(text.split())
+    if len(text) <= most:
+        return text
+    return (text[:most].rsplit(" ", 1)[0] or text[:most]) + "…"
+
+
 async def touch_meta(workspace, chat_id, content):
     """Stamp `updatedAt` for chat-list ordering; on the first turn also derive
     title from the user message and set createdAt. Sole writer of chat meta —
-    the FE shouldn't PUT this back."""
+    the FE shouldn't PUT this back. A new chat's title is its first line until the
+    run names it (`titleSource`: "first", then "auto"; a rename makes it "user")."""
     existing = (await get_meta(workspace, chat_id)) or {}
     now = datetime.now(timezone.utc).isoformat()
     meta = {**existing, "id": chat_id, "updatedAt": now}
     if "createdAt" not in meta:
         meta["createdAt"] = now
+        meta["titleSource"] = "first"
     if not meta.get("title"):
         text = content if isinstance(content, str) else next(
             (b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"), "")
-        if (title := text.strip()[:80]):
+        if (title := _first_line(text)):
             meta["title"] = title
     await put_meta(workspace, chat_id, meta)
 

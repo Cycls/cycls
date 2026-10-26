@@ -279,6 +279,53 @@ async def _stream_with_retry(provider, **kw):
 
 # ---- Loop ----
 
+TITLE_WAIT = 2   # seconds a finished run waits for its new chat's title, at most
+_NAMING = set()  # titles being made: a task needs a reference until it ends
+
+
+def _said(messages, most=3):
+    """The person's first few messages, as they wrote them (tool results and approvals aren't theirs)."""
+    out = []
+    for m in messages:
+        if m.get("role") != "user" or m.get("internal"):
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else " ".join(
+            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+        if text := " ".join(text.split()):
+            out.append(text[:500])
+        if len(out) == most:
+            break
+    return out
+
+
+async def _chat_title(provider, said, **kw):
+    """A new chat's title, from one small call to the agent's own model: a few words on what the person wants,
+    in their language. "" when it can't."""
+    prompt = ("Write a title for this conversation: 3 to 6 words on what the person wants, in the language they "
+              "wrote in. Reply with the title alone, no quotes and no full stop.\n\nThey wrote:\n" + said)
+    turn = None
+    try:
+        async for ev in provider.stream(messages=[{"role": "user", "content": prompt}],
+                                        system="You name conversations.", tools=[], **kw):
+            if isinstance(ev, Turn): turn = ev
+    except Exception:
+        return ""
+    text = "".join(b.get("text", "") for b in (turn.content if turn else [])
+                   if isinstance(b, dict) and b.get("type") == "text").strip()
+    line = text.split("\n", 1)[0] if text else ""
+    return " ".join(line.split()).strip("\"'«»“”`").rstrip(".").strip()[:80]
+
+
+async def _settled(task, wait):
+    """The task's result if it ends within `wait` seconds, else "" and it is called off."""
+    done, _ = await asyncio.wait({task}, timeout=wait)
+    if not done:
+        task.cancel()
+        return ""
+    return task.result()
+
+
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
@@ -312,6 +359,18 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
     messages = session.messages
+    # A new chat is named from the person's words while the reply is made, so naming never holds the reply up;
+    # a greeting alone waits for more to name it by.
+    naming = None
+    if session.chat_id and len(said := _said(messages, 4)) <= 3:
+        enough = " ".join(said)
+        if (len(enough.split()) >= 3 or "[Attached:" in enough) and \
+                ((await state.get_meta(workspace, session.chat_id)) or {}).get("titleSource") == "first":
+            naming = asyncio.create_task(_chat_title(provider, "\n\n".join(said), max_tokens=max_tokens,
+                                                     thinking=thinking, extra_body=extra_body,
+                                                     session=session.chat_id))
+            _NAMING.add(naming)
+            naming.add_done_callback(_NAMING.discard)
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
     if instructions:
@@ -684,3 +743,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             raise
 
     async for ev in fold(): yield ev   # now, while the answer is read — not when the next message waits on it
+
+    # Written last, when nothing else writes the chat's meta; a rename made meanwhile wins.
+    if naming and (title := await _settled(naming, TITLE_WAIT)):
+        meta = (await state.get_meta(workspace, session.chat_id)) or {}
+        if meta.get("titleSource") == "first":
+            await state.put_meta(workspace, session.chat_id, {**meta, "title": title, "titleSource": "auto"})
+            log("chat_title", user=user, chat_id=session.chat_id, length=len(title))
+            yield {"type": "ui", "action": "title", "chat_id": session.chat_id, "title": title}
