@@ -76,6 +76,7 @@ web = (
     # sees the model. Unset, it is this one whenever OPENAI_API_KEY is there. Any service that speaks
     # OpenAI's audio transcriptions API works, set as cycls.LLM is:
     .voice("openai/gpt-4o-transcribe")
+    # .voice("openrouter/elevenlabs/scribe-v2", base_url="https://openrouter.ai/api/v1")   # any of OpenRouter's 28
     # .voice("groq/whisper-large-v3-turbo", base_url="https://api.groq.com/openai/v1")   # key: GROQ_API_KEY
     # .voice("modal/whisper", base_url="https://<app>.modal.run/v1",
     #        headers={"Modal-Key": "...", "Modal-Secret": "..."})                         # your own Whisper

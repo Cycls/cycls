@@ -15,6 +15,7 @@ mic → MediaRecorder (mp4 in Safari and Chrome, webm or ogg in Firefox; m4a fro
 `Web().voice(...)` sets it, the way `cycls.LLM` sets a chat model:
 
 ```python
+cycls.Web().voice("openrouter/elevenlabs/scribe-v2", base_url="https://openrouter.ai/api/v1")   # key: OPENROUTER_API_KEY
 cycls.Web().voice("groq/whisper-large-v3-turbo", base_url="https://api.groq.com/openai/v1")   # key: GROQ_API_KEY
 cycls.Web().voice("mistral/voxtral-mini-latest", base_url="https://api.mistral.ai/v1", api_key=os.environ["MISTRAL_API_KEY"])
 cycls.Web().voice("modal/whisper", base_url="https://….modal.run/v1", headers={"Modal-Key": ..., "Modal-Secret": ...})
@@ -41,8 +42,24 @@ self-hosted Whisper (vLLM, faster-whisper servers, a Modal deployment) speak it.
 
 ElevenLabs (`/v1/speech-to-text`, `xi-api-key`, `model_id`), Deepgram (`/v1/listen`, raw bytes, `Token` auth, and
 Arabic only with `language=ar`) and Gemini (`generateContent` with the audio inline) each have their own. They reach
-this path through a gateway that speaks OpenAI's shape, such as LiteLLM. No per-service adapters: less to keep
+this path through a gateway that speaks OpenAI's shape: OpenRouter (below), or LiteLLM. No per-service adapters: less to keep
 working. If one is ever needed, it is a branch in `voice.transcribe` keyed on the vendor, and nothing else moves.
+
+## Every model through OpenRouter
+
+OpenRouter's `/audio/transcriptions` takes this shape for every transcription model it carries (28 in October 2026),
+each named `openrouter/<its id>` with `base_url="https://openrouter.ai/api/v1"` and one key, `OPENROUTER_API_KEY`:
+ElevenLabs, Deepgram and AssemblyAI among them, whose own APIs aren't this shape. Super and Haseef hear the mic this
+way, with ElevenLabs Scribe v2. The list and its prices: `GET https://openrouter.ai/api/v1/models?output_modalities=transcription`.
+
+One spoken Arabic sentence through each (2026-10-27):
+
+| | |
+|---|---|
+| Right, in 1-2 s | `elevenlabs/scribe-v2` (with its vowel marks), `assemblyai/universal-3-6-pro`, `openai/gpt-transcribe`, `x-ai/grok-stt-1.0`, `mistralai/voxtral-mini-transcribe-3-0`, and the open `openai/whisper-large-v3-turbo` and `nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b` |
+| Right, slower | `google/chirp-3` (2.5 s, no hamzas), `google/gemini-3.5-transcribe` (3.1 s), the open `qwen/qwen3-asr-1.7b` (21 s) |
+| Wrong | `deepgram/nova-3` wrote it in Latin letters: it hears Arabic only when told the language, which this path doesn't send. The open `nvidia/parakeet-tdt-0.6b-v3` has no Arabic |
+| Refused | `microsoft/mai-transcribe-2` (the m4a), `meta/muse-voice-transcribe-1.0` (WAV only) |
 
 ## Keeping the service private
 
