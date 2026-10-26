@@ -465,7 +465,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     tools_list[i] = design_tool(True)
             design_loaded = True
             DESIGN_LOADED.set(True)
-        return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body)
+        return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body,
+                    session=session.chat_id)
 
     def compacted(tier, reason, tokens, ok=True):
         """The analytics record of one compaction: a log row, and a `ui` event the client tracks."""
@@ -550,7 +551,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 model=bare_model,
                 input=turn.input, output=turn.output,
                 cached=turn.cached, cache_create=turn.cache_create,
-                cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason)
+                cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason,
+                **({"host": turn.host} if turn.host else {}))
             if session.chat_id:
                 try: await state.add_cost(workspace, session.chat_id, turn_cost)
                 except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")

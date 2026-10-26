@@ -86,6 +86,26 @@ def _stub(b):
     return b
 
 
+SEEN = "[picture: looked at when it came back; ask for it again to see it]"
+
+
+def _seen(b):
+    """A tool result whose pictures were looked at: the same result, a line in place of each."""
+    c = b.get("content") if isinstance(b, dict) and b.get("type") == "tool_result" else None
+    if not (isinstance(c, list) and any(isinstance(x, dict) and x.get("type") == "image" for x in c)):
+        return b
+    return {**b, "content": [{"type": "text", "text": SEEN} if isinstance(x, dict) and x.get("type") == "image" else x
+                             for x in c]}
+
+
+def once(messages):
+    """A tool's pictures reach the model on the call right after it ran, then a line stands in for each.
+    A picture costs time on every call it rides, cached or not; the swap is in the last call's newest
+    message, so only that is read again. Pictures the person attached stay."""
+    return [{**m, "content": [_seen(b) for b in m["content"]]} if isinstance(m.get("content"), list) else m
+            for m in messages[:-1]] + messages[-1:]
+
+
 def clear(messages):
     """Copies with tool results and long tool arguments stubbed — the transcript keeps the originals.
     A loaded skill is instructions, not history, so its result stays."""

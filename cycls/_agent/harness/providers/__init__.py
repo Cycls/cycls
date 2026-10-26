@@ -52,8 +52,10 @@ class Provider(Protocol):
     model: str
 
     def stream(self, *, messages: list[Message], system: str, tools: list[dict],
-               max_tokens: int, mcp_servers=None, thinking=None) -> AsyncIterator:
-        """Yield loop events (dicts / bare strings); then exactly one Turn."""
+               max_tokens: int, mcp_servers=None, thinking=None, extra_body=None,
+               session=None) -> AsyncIterator:
+        """Yield loop events (dicts / bare strings); then exactly one Turn.
+        `session`: the chat it is for, so a router can keep a chat on one host."""
         ...
 
     async def complete(self, *, messages: list[Message], system: str, max_tokens: int) -> str:

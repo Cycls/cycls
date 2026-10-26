@@ -44,7 +44,7 @@ class AnthropicProvider:
         return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
-                     thinking="adaptive", extra_body=None):
+                     thinking="adaptive", extra_body=None, session=None):
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,

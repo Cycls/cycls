@@ -5,11 +5,12 @@
 The context window is a budget. A fixed part (system prompt, tool schemas, skills and
 app catalogs, `AGENT.md`) is paid on every call; connectors cost ~15 tokens each until
 the model loads one (decisions 21–22 in [plugins-connectors.md](plugins-connectors.md)).
-The rest is the conversation, and it only grows. Three layers keep it bounded:
+The rest is the conversation, and it only grows. Four layers keep it bounded:
 
 | layer | when | model call | code |
 | --- | --- | --- | --- |
 | cap at ingest | as a tool result or attachment arrives | no | `_exec_read`, `spill.spill` |
+| a tool's pictures, once | every call after the one right after the tool ran | no | `compact.once` |
 | clear (tier 1) | past the trigger, or when a run starts after a pause | no | `Session.clear`, `compact.clear` |
 | summarize (tier 2) | past the trigger when clearing frees too little, or on overflow | yes | `Session.compact`, `compact.compact` |
 
@@ -37,6 +38,25 @@ Why the `read` cap exists: one user's 2.19M-character HTML deck was inlined whol
 1.48M tokens against a 1,048,576 window — and overflowed before the model ran, seven
 times across four chats. Compaction cannot rescue a single turn bigger than the window,
 so the only defence is not letting it in.
+
+## A tool's pictures, once
+
+A picture a tool returns (a design's render or sheet, a page, a browser screenshot, a `read`
+of an image) reaches the model on the call right after the tool ran. On every later call a
+line stands in for it, `[picture: looked at when it came back; ask for it again to see it]`,
+in the model's view only (`compact.once`, applied by `Session.context()`); the transcript
+keeps the picture. Pictures the person attached stay.
+
+Why: a picture is cheap in tokens (~580 on DeepSeek V4.1 Flash, ~1.5k on Claude) and dear in
+time, on every call it rides, cached or not. Measured on Super's hosts (2026-10-26): a
+264k-token chat started in ~4.4 s with a warm cache, and the same chat with 40 pictures (9 MB)
+in ~40 s, every call. One chat (fb6b062f) built a document page by page and carried up to 44
+pictures a call; clearing, which counts tokens, never saw them: they were ~25k of its 185k.
+
+The cache: the line takes the picture's place in the last call's newest message, so the host
+reuses everything before that message, and reads it again with the new turn. A picture
+dropped from deeper in the history would have the host read everything after it again,
+which is why the swap is never later than the next call.
 
 ## When the loop looks
 
@@ -245,4 +265,4 @@ with edited tool inputs in old turns), OpenRouter, Moonshot, Fireworks.
 ## Related
 
 - [plugins-connectors.md](plugins-connectors.md) — the tool-block budget and the spill design.
-- [runs.md](runs.md) — stream cuts and the 1200s request cap.
+- [runs.md](runs.md) — stream cuts, the request cap (an hour) and the run budget (45 minutes).

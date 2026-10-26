@@ -174,7 +174,7 @@ class OpenAIProvider:
         ]
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
-                     thinking=None, extra_body=None):
+                     thinking=None, extra_body=None, session=None):
         api_messages, dropped = self._to_messages(messages, system)
         # Capability limits are logged, never shown in chat — the model gets an
         # actionable stub in-context and works around it with tools.
@@ -197,10 +197,15 @@ class OpenAIProvider:
         if extra_body:
             # merged last — deployer keys win, even over top-level params
             kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
+        if session:
+            # A router that balances a model over several hosts keeps one chat on one of them
+            # (OpenRouter's sticky routing), so its cache stays warm; anyone else ignores the header.
+            kwargs["extra_headers"] = {"x-session-id": str(session)[:256]}
 
-        text_buf, calls, stop, usage = [], {}, "end_turn", None
+        text_buf, calls, stop, usage, host = [], {}, "end_turn", None, None
         async for chunk in await self._client.chat.completions.create(**kwargs):
             if chunk.usage: usage = chunk.usage
+            if isinstance(p := getattr(chunk, "provider", None), str): host = p   # the host a router chose
             if not chunk.choices: continue
             d = chunk.choices[0].delta
             if d.content:
@@ -244,7 +249,7 @@ class OpenAIProvider:
         yield Turn(content=content, stop_reason=stop,
                    input=(usage.prompt_tokens - cached if usage else 0),
                    output=(usage.completion_tokens if usage else 0),
-                   cached=cached)
+                   cached=cached, host=host)
 
     async def complete(self, *, messages, system, max_tokens):
         api_messages, _ = self._to_messages(messages, system)

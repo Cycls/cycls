@@ -1280,6 +1280,40 @@ def test_a_chat_back_after_a_pause_is_cleared_before_its_first_call(agent_env):
                 == ([{"type": "ui", "action": "compacted", "tier": 1, "reason": "cold", "tokens": 601_000, "ok": True}] if cold else []))
 
 
+def test_a_tools_picture_rides_the_next_call_only(agent_env):
+    """A picture a tool returns reaches the model on the call right after it ran; on later calls a
+    line stands in for it. A picture the person attached stays, and the transcript keeps both."""
+    import base64
+    from cycls._agent.harness.compact import SEEN
+    from cycls._agent.state import append_messages
+    ws, ctx = agent_env
+    (Path(ws) / "p.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    attached = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}}
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, [
+        {"role": "user", "content": [{"type": "text", "text": "this logo"}, attached]},
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}], 0))
+    read = lambda i: _tool_use_block(i, name="read", inp={"path": "p.png"})
+    responses = iter([_make_response([read("t1")], stop_reason="tool_use"),
+                      _make_response([read("t2")], stop_reason="tool_use"),
+                      _make_response([_text_block("Done")])])
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(responses, calls=calls)
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    def pictures(call):
+        results = [b for m in call["messages"] if isinstance(m["content"], list) for b in m["content"]
+                   if b.get("type") == "tool_result"]
+        return [[x.get("type") if x.get("type") == "image" else x.get("text") for x in r["content"]] for r in results]
+    assert pictures(calls[1]) == [["image"]]
+    assert pictures(calls[2]) == [[SEEN], ["image"]]
+    assert attached in calls[2]["messages"][0]["content"]
+    saved = [b for m in _read_history(ctx) if isinstance(m["content"], list) for b in m["content"]
+             if b.get("type") == "tool_result"]
+    assert [x["type"] for r in saved for x in r["content"]] == ["image", "image"]
+    assert base64.b64decode(saved[0]["content"][0]["source"]["data"]).startswith(b"\x89PNG")
+
+
 # ---------------------------------------------------------------------------
 # Auto-retry tests
 # ---------------------------------------------------------------------------

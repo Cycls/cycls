@@ -901,6 +901,33 @@ def _stream_kwargs(vendor, thinking=None, extra_body=None):
     return client.kwargs
 
 
+def test_openai_stream_keeps_a_chat_on_one_host_and_says_which():
+    """The chat id goes as `x-session-id`, so a router that balances hosts keeps the chat on one
+    (and its cache warm); the host a router names on its chunks is the Turn's `host`."""
+    import types
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
+
+    seen = {}
+    async def _create(**kw):
+        seen.update(kw)
+        async def gen():
+            delta = types.SimpleNamespace(content="hi", tool_calls=None)
+            yield types.SimpleNamespace(usage=None, provider="Novita",
+                                        choices=[types.SimpleNamespace(delta=delta, finish_reason="stop")])
+        return gen()
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_create)))
+
+    async def run(**kw):
+        return [e async for e in OpenAIProvider(client, "m", "openrouter").stream(
+            messages=[{"role": "user", "content": "q"}], system="", tools=[], max_tokens=100, **kw)]
+    turn = next(e for e in asyncio.run(run(session="chat-1")) if isinstance(e, Turn))
+    assert seen["extra_headers"] == {"x-session-id": "chat-1"} and turn.host == "Novita"
+    seen.clear()
+    asyncio.run(run())
+    assert "extra_headers" not in seen
+
+
 def test_openai_vendor_uses_max_completion_tokens():
     kw = _stream_kwargs("openai")
     assert kw["max_completion_tokens"] == 100 and "max_tokens" not in kw

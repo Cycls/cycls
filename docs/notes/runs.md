@@ -176,8 +176,11 @@ Why the damage is total today, in code:
   Session affinity is best effort and we will not build on it. After a drop,
   progress is per completed turn; token streaming returns on the next message.
 - No WebSocket. Same connection underneath, same causes.
-- No change to the 1200s request timeout. Once the request only carries the
-  stream, its limit no longer bounds the run.
+- The request timeout no longer bounds the run, but it still cut the stream: at
+  1200s the run went on detached, on CPU Cloud Run throttles once no request is
+  open, and the client fell to polling. Since 2026-10-26 an app asks for an hour
+  (`App`'s `timeout=3600`, Cloud Run's most), so a run ends by its own budget, with
+  its stream, before the request is cut.
 
 ## Design
 
@@ -430,7 +433,7 @@ last checkpoint rather than completing.
 | a reader lands mid-run | rewrites and renumbers the chat under the run | pure read |
 | container OOM or replaced mid-run | run dies, every run on the instance | heartbeat goes stale, chat shows `interrupted`, Continue resumes from the last checkpointed step |
 | deploy | in-flight requests drained | same; the shutdown hook checkpoints detached runs as `interrupted` |
-| run longer than 1200s | killed | request ends, run continues, client polls |
+| run longer than the request timeout (1200s, an hour since 2026-10-26) | killed | request ends, run continues, client polls; the 45-minute budget now ends a run first |
 | Cloud Run scales the instance in while a detached run is active | n/a | ends as `interrupted`, resumable |
 
 Bounded loss in every case: the in-flight model turn or tool batch, plus any

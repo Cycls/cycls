@@ -56,13 +56,15 @@ def tool_call(name: str, inp: dict) -> dict:
 class Turn:
     """A completed assistant turn — last event a provider stream emits.
     Loop-internal: never forwarded. `content` is assistant content blocks in
-    storage shape; the rest is this turn's token usage."""
+    storage shape; the rest is this turn's token usage, and the host that served
+    it when a router says (`host`)."""
     content: list
     stop_reason: str
     input: int = 0
     output: int = 0
     cached: int = 0
     cache_create: int = 0
+    host: str | None = None
 
 
 # ---- Back-compat ----
