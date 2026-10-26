@@ -587,12 +587,18 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           reply(false);
           if ((err as { status?: number }).status === 412) {
             const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
-            if (presences.has(latest.current.path) && typeof now === "string" && now && known.current.has(now) && retried.current < 3) {
-              // The room's document already holds that version: save again on it. An
-              // unknown version is a change from outside the room: ask.
+            if (typeof now === "string" && now && known.current.has(now) && retried.current < 3) {
+              // A version this editor already holds is no change from elsewhere: the room's, an agent
+              // edit it replayed, its own save, or the one it loaded, named by a server whose view of the
+              // file lags the write another made. Save again: in a room on the room's version at once,
+              // alone on the newest it holds a moment later. An unknown version is a change from outside: ask.
               retried.current++;
-              version.current = now;
-              post({ type: "save" });
+              if (presences.has(latest.current.path)) {
+                version.current = now;
+                post({ type: "save" });
+              } else {
+                window.setTimeout(() => { if (!disposed) post({ type: "save" }); }, 1000 * retried.current);
+              }
             } else {
               stale(typeof now === "string" ? now : "", m.fig);
             }
