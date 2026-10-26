@@ -97,7 +97,10 @@ not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-o
   [links](url)`. The number is its place among the body's paragraphs (tables apart); the three letters are a check
   of its id and text, so an edit made from an old read is refused ("read the document again"). Tables are grids
   (`T1`, rows `r1:` with ` | ` between cells); pictures, footnote marks, page and line breaks show where they are;
-  headers, footers and footnotes are listed; about 12k characters, then `from` goes on.
+  footnotes are listed; about 12k characters, then `from` goes on. Above the paragraphs: the page (paper,
+  orientation, margins, columns, page number start and format), or the sections when there are several (`S1
+  ¶1–¶12: A4 portrait · … · starts on a new page`), and the headers and footers each section shows, page numbers as
+  `{page}` / `{pages}` (first-page and even-page ones when the document has them).
 - `edit` → `ops`, all or none (the first that cannot be made stops the call and nothing is written): `replace`
   (a paragraph's text; refused when it holds a picture or a note — `find_replace` keeps them), `find_replace`
   (asks which when the words are in several places, unless `all`), `insert_after` / `insert_before` (markdown
@@ -105,8 +108,17 @@ not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-o
   paragraph that ends a section or the document), `style` (a named style written as that style — not its look on
   every word —, `align`, `rtl`; with `find` or for whole paragraphs bold / italic / underline / strike / color /
   highlight / size / font), `list` (bullet / numbered / none; a new list takes the document's own look),
-  `link` (`""` removes), `cell`, `insert_row` / `delete_row`, `insert_column` / `delete_column`. Arabic text is
-  written right to left. Under the file's lock: read → apply → `write_fig(by="agent")`, once more on a save
+  `link` (`""` removes), `cell`, `insert_row` / `delete_row`, `insert_column` / `delete_column`, and the page
+  layout (`packages/docx/src/agent/layout.ts`): `header` / `footer` (words a line each, `{page}` `{pages}` live;
+  every section, or `section`; `page: first` — the document's first page unless a section is named — or `even`;
+  `remove: true` for none; setting the first page apart keeps the other kind there, so a cover without a header
+  keeps its page number), `section_break` (after `para`; `start` new_page / continuous / odd_page / even_page; the
+  new section keeps the page and headers it was cut from), `remove_section_break` (`section`: the one it ends; its
+  paragraphs take the next section's page, as in Word), `page_setup` (every section or `section`; `paper` A4 /
+  Letter / Legal / A3 / A5 or `21cm x 29.7cm`, `orientation`, `margin` or `margins {top…}` in cm/in/mm/pt,
+  `columns` 1–4 with `gap` and `line`, `page_start`, `page_numbers` digits / roman / ROMAN / letters / LETTERS /
+  arabic_letters / abjad). For these ops the SDK drops fields a host filled with nothing ("", 0, {}). Arabic text
+  is written right to left. Under the file's lock: read → apply → `write_fig(by="agent")`, once more on a save
   meanwhile. The reply lists what was done and shows the changed paragraphs and tables as the next read will
   (new paragraphs carry a Word paragraph id, so their references hold).
 - `create` → a new document from `content` in markdown (headings, one paragraph per line, lists nested by two
@@ -125,7 +137,10 @@ not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-o
   renames it (a model's `text` is taken too) and says `words` in the service's errors. Some OpenRouter hosts'
   tool-call parsers drop a key named `text` (probed 2026-10-26: Alibaba, Morph, OpenInference, Relace, Makora,
   Ionstream, PrimeIntellect, Wafer — a reply failed 6 times on prod); with `words` they keep it. super-dev also
-  skips those hosts (they drop `done` and ramble even so).
+  skips those hosts (they drop `done` and ramble even so). A live layout turn (2026-10-26, DeepSeek V4.1 Flash,
+  local service) did A4 + 2 cm margins + a centred "Page X of Y" footer + no header on the cover + the Appendix in
+  its own section in ONE edit call, then read to check. Testing locally, give the turn super-dev's host ignore
+  list: InferenceNet sends a footer with no words and `remove: true` over and over.
 
 ## Configuration
 
@@ -214,8 +229,7 @@ their author's.
   `w:evenAndOddHeaders`, the header and footer distances the section's `w:pgMar`. Page number, page count and date
   fields are written as Word fields; the reader gives PAGE and NUMPAGES in headers and footers to the editor as live
   fields, so each page shows its own number. The Header & Footer toolbar's groups sit on one row (they were drawn
-  for a two-row ribbon and came out cut off). Still not saved, with a notice: text wrapping set on a picture
-  (it stays inline), shapes, tables inside a new header.
+  for a two-row ribbon and came out cut off). Still not saved, with a notice: tables inside a new header.
 - **Paragraph borders** (Word's `w:pBdr`) are read and written. The editor's horizontal line (Insert › line) is a
   bottom border on the paragraph it is put under; a file's own borders (a line under a heading, a box) now show in
   the editor. Thickness and distance go into Word's units (eighths of a point, whole points) and the editor's values
@@ -232,7 +246,27 @@ their author's.
   moved, every `w:sectPr` is placed again from the editor's paragraphs; if the file's paragraphs do not line up with
   the editor's, the save is refused rather than guessed. A break inside a paragraph cannot be said in Word: the
   editor splits the paragraph first when a section break is asked for mid-paragraph, and a save that still holds one
-  is refused with why. Columns changed are said to be not saved yet.
+  is refused with why. Columns (`w:cols`, equal or not, the line between), the page-number start and format
+  (`w:pgNumType` start / fmt) are written too. Delete at the end of a section's last paragraph removes its break,
+  as in Word (Backspace at the start of the next section already did).
+- **A save audit** (2026-10-26) ran every editor command in the real editor and compared what it showed with the
+  file read back. Fixed from it: headings (the heading menu dropped the paragraph's Word style; now the file's own
+  Title / Heading N, or one written into styles.xml looking as the editor drew it — and the editor draws new headings
+  with the file's own looks), tables made in the editor (written whole: grid, cells, the editor's padding, the
+  file's Table Grid style or lines of their own), the page-number start (lost silently), columns. Harmless
+  differences left: "no colour" said two ways, border padding in Word units, new table cells' padding (the file's
+  default draws the same). The audit scripts live outside the suite (packages/docx/.audit, git-excluded locally).
+- **Floating pictures**: a Word file's floating pictures (square, tight, through, top and bottom, in front of or
+  behind the text, from the page, a margin, the column or the paragraph) open floating instead of inline; wrapping
+  set in the editor or a floating picture moved is saved in the file's own drawing (crop, alt text kept), a new
+  floating picture written floating (`packages/docx/src/floating.ts`). The engine puts a word in a gap too narrow
+  for Word to use (it splits "Second" around a picture 24 px from the margin); the file is right.
+- **Shapes** made in the editor (a rounded rectangle or an ellipse, an SVG the engine draws) are written as Word
+  shapes (`wps:wsp` with its geometry, fill and outline: Word and LibreOffice can edit them), and such a Word shape
+  opens as the editor's own (`packages/docx/src/shapes.ts`).
+- A paragraph changed into or out of a field (a footer's page number given words around it) has its runs made
+  again: the old field's begin and end used to stay around the new words, so Word showed only the number. This hit
+  the editor and the agent alike.
 
 ## Arabic and right-to-left editing
 
@@ -251,13 +285,24 @@ table is mirrored (first column on the right), and Arabic punctuation takes its 
 editor's align buttons), swapped on the way in and back on the way out. In the editor the arrow keys go the way
 they point in a right-to-left paragraph (Left goes on through the text, Right goes back; Shift extends).
 
+Clicks, carets and selections in Arabic text go by the screen (engine patch 0014, 2026-10-26): the engine took
+every letter as left to right, so a click on a letter's right half put the caret after it, the caret before a letter
+was drawn on its left edge (a letter off), and a selection was one band from its first letter to its last (selecting
+into "Online" inside an Arabic line lit the whole word). An Arabic header or paragraph typed into an English document
+is written right to left (`w:bidi`), as the editor draws it. Page numbers in Roman numerals, letters or Arabic
+letters (أ، ب، ت / أ، ب، ج) are read, written and drawn (engine patch 0015). Arabic-Indic digits (١، ٢، ٣) are not
+something a Word file can say: Word's "Hindi numbers" page format is Devanagari, and Word shows Arabic-Indic digits by
+each person's Numeral setting (checked in Word, 2026-10-26).
+
 ## Not built yet
 
-Live co-editing (left out on purpose, 2026-10-24); in Docs, right-to-left mouse work (clicking into and selecting
-mixed Arabic and English lines), right-to-left headers and footers, Arabic-Indic page numbers (D5), columns set in
-the editor. The Docs editor, its Arabic layout, the `docs` agent tool, comments and tracked changes
-are deployed (2026-10-25/26), so are pictures, headers, footers and borders saved from the editor (2026-10-26);
-section breaks and page setup saved: built 2026-10-26. Built
+Live co-editing (left out on purpose, 2026-10-24); in Docs, tables inside a new header, a page-number format in the
+editor's own menus (only files and the agent set one), a two-person check of Docs (needs a second account). The Docs
+editor, its Arabic layout, the `docs` agent tool, comments and tracked changes are deployed (2026-10-25/26), so are
+pictures, headers, footers, borders, section breaks and page setup saved from the editor (2026-10-26). Built
+2026-10-26, not deployed: the save audit's fixes (headings, new tables, columns, page-number start and format),
+floating pictures, shapes, Delete removing a section break, the agent's page layout ops, Arabic carets / clicks /
+selections and right-to-left headers. Built
 2026-10-24: charts drawn
 and kept, pivot tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid
 out again once a font has loaded, the reload after a file changed some other way, print, comments, the agent's

@@ -281,7 +281,7 @@ def test_page_layout_ops_are_offered_and_cleaned_of_what_a_host_filled_with_noth
     for name in ("header", "footer", "section_break", "remove_section_break", "page_setup"):
         assert name in OPS and name in DOCS_TOOL["description"]
     props = DOCS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
-    for field in ("section", "page", "start", "paper", "orientation", "margin", "margins", "columns", "gap", "line", "page_start"):
+    for field in ("section", "page", "start", "paper", "orientation", "margin", "margins", "columns", "gap", "line", "page_start", "page_numbers"):
         assert field in props
     footer = {"op": "footer", "words": "Page {page} of {pages}", "align": "center", "section": 0, "page": ""}
     assert _check_ops([footer]) is None

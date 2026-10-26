@@ -63,7 +63,8 @@ DOCS_TOOL = {
         "the paragraph, for a landscape page, columns or other headers; remove_section_break (section: the one the break "
         "ends); page_setup (section?, else every section; paper: A4 | Letter | Legal | A3 | A5; orientation: portrait "
         "| landscape; margin: one length for all four, or margins {top, bottom, left, right} — lengths like 2.5cm or "
-        "1in; columns: 1–4, with gap? and line?; page_start: the first page's number); accept_changes / reject_changes take a "
+        "1in; columns: 1–4, with gap? and line?; page_start: the first page's number; page_numbers: digits | roman | "
+        "ROMAN | letters | LETTERS | arabic_letters | abjad); accept_changes / reject_changes take a "
         "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
         "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
         "ops [] for read and create, content \"\" for read and edit.\n"
@@ -128,6 +129,8 @@ DOCS_TOOL = {
                         "gap": {"type": "string", "description": "page_setup: the space between columns, e.g. 1cm"},
                         "line": {"type": "boolean", "description": "page_setup: a line between the columns"},
                         "page_start": {"type": "integer", "description": "page_setup: the number the first page gets"},
+                        "page_numbers": {"type": "string", "enum": ["digits", "roman", "ROMAN", "letters", "LETTERS", "arabic_letters", "abjad"],
+                                         "description": "page_setup: how page numbers are written (arabic_letters: أ، ب، ت; abjad: أ، ب، ج)"},
                         "remove": {"type": "boolean", "description": "header / footer: true for none (no words)"},
                     },
                     "required": ["op"],
