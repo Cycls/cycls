@@ -640,6 +640,36 @@ describe("watching a run the stream no longer carries (docs/notes/runs.md)", () 
     expect(last.content).toBe("half an answer and the rest");
   });
 
+  test("a dropped stream stays running until the poll answers, so nothing queued is sent into the run", async () => {
+    // The 20-minute cut: the stream ends, the run goes on. Idle for even one render, and the
+    // queue drains into the live run — the server refuses each message (409) and they are lost.
+    let answer: (v: unknown) => void = () => {};
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("/chats/"))
+        return new Promise((r) => { answer = r; });   // the poll's answer, held back
+      return { ok: true, body: { getReader: () => {
+        const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                        'data: {"type":"text","text":"working"}\n\n'];   // no [DONE]
+        let i = 0;
+        return { read: async () => i < chunks.length
+          ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+          : { done: true, value: undefined } };
+      } } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("build the deck"); });
+    expect(result.current.attached).toBe(false);
+    expect(result.current.isStreaming).toBe(true);   // before the server has said a word
+
+    await act(async () => {
+      answer({ ok: true, status: 200, json: async () => ({ messages: [], next: 2, run: "done" }) });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(result.current.isStreaming).toBe(false);   // the record's ending, not the stream's
+  });
+
   test("coming back to a tab after a clean turn does not duplicate it", async () => {
     // The path the first fix missed: a clean turn never polls, so nothing
     // reseeds the cursor, and the visibility handler then polls from the

@@ -249,6 +249,7 @@ export function useChat(baseUrl: string = "") {
     // An ending is reported once: a run this poll saw running, or one whose stream just dropped —
     // never the last run's status, which every refocus of a finished chat reads again.
     let ours = dropped;
+    let heard = false;
     try {
       for (;;) {
         if (viewRef.current !== view) return;
@@ -257,6 +258,7 @@ export function useChat(baseUrl: string = "") {
         const res = await api(`/chats/${encodeURIComponent(id)}${q}`);
         if (res.status === 204) return;
         const data = await res.json();
+        heard = true;
         if (viewRef.current !== view) return;
         applyTail(data, full);
         setRunStatus(data.run ?? null);
@@ -276,6 +278,8 @@ export function useChat(baseUrl: string = "") {
       // Leave it: the next trigger (visibility, online, a send) retries.
     } finally {
       pollingRef.current = false;
+      // A run only assumed alive (its stream dropped, the server never answered) is not left on running.
+      if (dropped && !heard && viewRef.current === view) setRunStatus((s) => (s === "running" ? null : s));
     }
   }, [api, applyTail]);
 
@@ -600,8 +604,13 @@ export function useChat(baseUrl: string = "") {
         // is the only thing that knows which. Also covers a clean-looking read
         // that simply ran out, which is what a parked tab produces.
         cursorRef.current = null;   // nothing advanced it while streaming
-        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current, receivedData);
         const stopped = !!abortRef.current?.signal.aborted;
+        if (!sawDone && chatIdRef.current && mine()) {
+          // Until the poll answers, a dropped stream is a run still going: idle here, the queue would
+          // drain into it, the server refuse each message (409), and the reload lose them.
+          if (receivedData && !stopped) setRunStatus("running");
+          void pollRun(chatIdRef.current, receivedData);
+        }
         setAttached(false);
         abortRef.current = null;
         // Server is the sole writer of chat metadata. The harness stamps

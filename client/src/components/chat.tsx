@@ -1125,7 +1125,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
+                      <p className="font-display text-sm font-medium text-foreground truncate">{agentTitle}</p>
                       <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{agentDesc}</p>
                     </div>
                   </a>
