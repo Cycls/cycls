@@ -335,8 +335,9 @@ _ASK_TOOL = {
     "name": "ask",
     "description": (
         "Ask the user up to 3 questions on one card above the composer, and stop. "
-        "They can ignore the options and type anything, so never write 'choose one "
-        "of the following'. Everything in the user's language."
+        "A question with options also gets a line to write their own answer in, so never "
+        "add an 'Other' option, and never write 'choose one of the following'. "
+        "Everything in the user's language."
     ),
     "input_schema": {"type": "object", "properties": {
         "questions": {"type": "array", "minItems": 1, "maxItems": _ASK_MAX_QUESTIONS,

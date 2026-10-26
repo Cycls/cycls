@@ -11,6 +11,11 @@ export type AskQuestion = {
   multi: boolean;
 };
 
+// An option the model wrote for "something else" is this card's own line to write an answer in, not an answer.
+const OTHER = new Set(["other", "others", "something else", "أخرى", "اخرى", "غير ذلك", "شيء آخر", "آخر", "اخر"]);
+const isOther = (label: string) =>
+  OTHER.has(label.toLowerCase().replace(/\(.*\)/g, "").replace(/[\s.…:،,!؟?]+$/u, "").trim());
+
 export function AskCard({ questions, onSubmit, onDismiss }: {
   questions: AskQuestion[];
   onSubmit: (lines: string[]) => void;
@@ -18,6 +23,8 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
 }) {
   const [picked, setPicked] = useState<string[][]>(() => questions.map(() => []));
   const [typed, setTyped] = useState<string[]>(() => questions.map(() => ""));
+  // A question's own line is open: what is written there (`typed`) is an answer too.
+  const [other, setOther] = useState<boolean[]>(() => questions.map(() => false));
   const [step, setStep] = useState(0);
 
   const q = questions[step];
@@ -29,26 +36,31 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
   const rtl = lang === "ar";
   const isLast = step === questions.length - 1;
   const open = q.options.length === 0;
-  // Multi-select and open questions need an explicit commit; a single-select
-  // tap commits itself.
-  const needsButton = q.multi || open;
-  const answered = open ? typed[step].trim().length > 0 : picked[step].length > 0;
+  const choices = q.options.filter((o) => !isOther(o.label));
+  const otherLabel = q.options.find((o) => isOther(o.label))?.label ?? tIn(lang, "other");
+  const writing = open || other[step];
+  const own = typed[step].trim();
+  // Multi-select, open questions and a written answer need an explicit commit;
+  // a single-select tap commits itself.
+  const needsButton = q.multi || writing;
+  const answered = picked[step].length > 0 || (writing && own.length > 0);
+  const count = picked[step].length + (other[step] && own ? 1 : 0);
 
   // Answers in the options' own order, not click order — the card's order is
   // the one the user saw. Several questions come back labelled by header; one
   // sends the bare answer, which reads like a typed message. Takes the arrays
   // explicitly so a tap can commit its own value without waiting for state.
-  const buildLines = (p: string[][], ty: string[]) =>
+  const buildLines = (p: string[][], ty: string[], ot: boolean[]) =>
     questions.map((qq, i) => {
-      const answer = qq.options.length === 0
-        ? ty[i].trim()
-        : qq.options.filter((o) => p[i].includes(o.label)).map((o) => o.label).join(", ");
+      const written = qq.options.length === 0 || ot[i] ? ty[i].trim() : "";
+      const answer = [...qq.options.filter((o) => p[i].includes(o.label)).map((o) => o.label),
+                      ...(written ? [written] : [])].join(", ");
       if (!answer) return null;   // skipped questions simply don't appear
       return questions.length === 1 ? answer : `${qq.header || qq.question}: ${answer}`;
     }).filter((l): l is string => l !== null);
 
-  const send = (p: string[][], ty: string[]) => {
-    const lines = buildLines(p, ty);
+  const send = (p: string[][], ty: string[], ot: boolean[]) => {
+    const lines = buildLines(p, ty, ot);
     if (lines.length) onSubmit(lines);
   };
 
@@ -59,13 +71,13 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
   // just closes.
   const skip = () => {
     if (!isLast) { setStep((n) => n + 1); return; }
-    const lines = buildLines(picked, typed);
+    const lines = buildLines(picked, typed, other);
     if (lines.length) onSubmit(lines);
     else onDismiss();
   };
 
-  const advance = (p: string[][], ty: string[]) => {
-    if (isLast) send(p, ty);
+  const advance = (p: string[][], ty: string[], ot: boolean[]) => {
+    if (isLast) send(p, ty, ot);
     else setStep((n) => n + 1);
   };
 
@@ -75,7 +87,17 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
         : q.multi ? (p.includes(label) ? p.filter((l) => l !== label) : [...p, label])
         : [label]);
     setPicked(next);
-    if (!q.multi) advance(next, typed);   // a single-select tap is the answer
+    if (!q.multi) {   // a single-select tap is the answer, over a line being written
+      const ot = other.map((v, i) => (i === step ? false : v));
+      setOther(ot);
+      advance(next, typed, ot);
+    }
+  };
+
+  // "Other" opens a line to write the answer in: for one choice it stands in for the options, for several it joins them.
+  const writeOwn = () => {
+    setOther((cur) => cur.map((v, i) => (i === step ? true : v)));
+    if (!q.multi) setPicked((cur) => cur.map((p, i) => (i === step ? [] : p)));
   };
 
   return (
@@ -127,7 +149,7 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
                   value={typed[step]}
                   onChange={(e) => setTyped((cur) => cur.map((v, i) => (i === step ? e.target.value : v)))}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && answered) { e.preventDefault(); advance(picked, typed); }
+                    if (e.key === "Enter" && answered) { e.preventDefault(); advance(picked, typed, other); }
                   }}
                   placeholder={tIn(lang, "typeAnswer")}
                   className="w-full rounded-xl border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground/30"
@@ -135,7 +157,7 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
               </div>
             ) : (
               <div className="flex flex-col gap-1.5 px-3.5 py-1.5">
-                {q.options.map((o) => {
+                {choices.map((o) => {
                   const on = picked[step].includes(o.label);
                   return (
                     <button
@@ -168,6 +190,27 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
                     </button>
                   );
                 })}
+                {other[step] ? (
+                  <input
+                    autoFocus
+                    dir={typed[step] ? "auto" : rtl ? "rtl" : "ltr"}
+                    value={typed[step]}
+                    onChange={(e) => setTyped((cur) => cur.map((v, i) => (i === step ? e.target.value : v)))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && answered) { e.preventDefault(); advance(picked, typed, other); }
+                    }}
+                    placeholder={tIn(lang, "typeAnswer")}
+                    className="w-full rounded-xl border border-foreground/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  />
+                ) : (
+                  <button
+                    onClick={writeOwn}
+                    dir="auto"
+                    className="flex w-full items-center rounded-xl border border-dashed border-border px-3 py-2 text-start text-sm text-muted-foreground transition-colors hover:border-foreground/20 hover:bg-secondary/40 hover:text-foreground cursor-pointer"
+                  >
+                    {otherLabel}
+                  </button>
+                )}
               </div>
             )}
           </motion.div>
@@ -193,12 +236,12 @@ export function AskCard({ questions, onSubmit, onDismiss }: {
             </button>
             {needsButton && (
               <button
-                onClick={() => advance(picked, typed)}
+                onClick={() => advance(picked, typed, other)}
                 disabled={!answered}
                 className="rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background transition hover:opacity-80 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
               >
                 {isLast ? tIn(lang, "submit") : tIn(lang, "next")}
-                {q.multi && picked[step].length > 1 ? ` · ${picked[step].length}` : ""}
+                {q.multi && count > 1 ? ` · ${count}` : ""}
               </button>
             )}
           </div>
