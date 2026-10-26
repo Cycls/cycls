@@ -1,0 +1,89 @@
+diff -ru --strip-trailing-cr /c/Users/domin/Downloads/cycls-default-apps/kit/components/theme.tsx kit/components/theme.tsx
+--- /c/Users/domin/Downloads/cycls-default-apps/kit/components/theme.tsx	2026-10-21 08:26:09.791068600 +0000
++++ kit/components/theme.tsx	2026-10-26 14:28:48.435327700 +0000
+@@ -1,5 +1,5 @@
+ import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+-import { getView, setView, useCycls } from "../cycls";
++import { cycls, getView, setView, useCycls, wearHostTokens, type HostTokens } from "../cycls";
+ 
+ export type Theme = "light" | "dark";
+ interface ThemeState { theme: Theme; resolvedTheme: Theme; setTheme: (t: Theme) => void }
+@@ -23,7 +23,21 @@
+     mq.addEventListener("change", f);
+     return () => mq.removeEventListener("change", f);
+   }, []);
+-  const theme: Theme = chosen ?? hostTheme ?? sys;
++  // The host pushes {type: "theme", theme, tokens} when the workspace's app theme or its own light/dark
++  // changes (docs/notes/apps.md, "The theme"): follow its mode live, as the colors already are.
++  const { ctx } = useCycls();
++  const [pushed, setPushed] = useState<Theme | null>(null);
++  useEffect(() => { wearHostTokens(ctx?.tokens); }, [ctx]);
++  useEffect(() => {
++    const on = cycls()?.onCommand;
++    if (typeof on !== "function") return;
++    return on((c) => {
++      if (c?.type !== "theme") return;
++      if (c.theme === "dark" || c.theme === "light") setPushed(c.theme);
++      wearHostTokens((c.tokens as HostTokens | null) ?? null);
++    });
++  }, []);
++  const theme: Theme = chosen ?? pushed ?? hostTheme ?? sys;
+   useEffect(() => {
+     if (pending && !chosen) return;    // the OS-following CSS holds until the host has spoken
+     document.documentElement.dataset.theme = theme;
+diff -ru --strip-trailing-cr /c/Users/domin/Downloads/cycls-default-apps/kit/cycls.ts kit/cycls.ts
+--- /c/Users/domin/Downloads/cycls-default-apps/kit/cycls.ts	2026-10-22 11:20:25.437890700 +0000
++++ kit/cycls.ts	2026-10-26 14:28:55.236971700 +0000
+@@ -26,7 +26,9 @@
+ 
+ // ---- the shim's surface --------------------------------------------------------------
+ 
+-export interface CyclsCtx { path: string; scope: string; theme?: string; locale?: string; canWrite: boolean }
++export type HostTokens = { light: Record<string, string>; dark: Record<string, string> };
++// `tokens`: the workspace's app theme (shadcn variables, light and dark), from a host that has one.
++export interface CyclsCtx { path: string; scope: string; theme?: string; locale?: string; canWrite: boolean; tokens?: HostTokens | null }
+ export interface Row<T = unknown> { key: string; value: T }
+ export interface MemberRow<T = unknown> { user: string; key: string; value: T }
+ export interface Page<R> { rows: R[]; truncated: boolean }
+@@ -605,3 +607,24 @@
+   const rnd = crypto.getRandomValues(new Uint32Array(2));
+   return prefix + Date.now().toString(36) + rnd[0].toString(36).slice(0, 4) + rnd[1].toString(36).slice(0, 2);
+ }
++
++// ---- the workspace's app theme --------------------------------------------------------------
++// The host's shim wears the tokens itself (a <style id="cycls-theme"> that out-ranks theme.css). This
++// is the fallback for a host that passes `ctx.tokens` without wearing them (a phone shim that lags the
++// web one): the same rules, written once, never over the shim's own.
++const TOKEN = /^--[a-z0-9-]{1,40}$/, VALUE = /^[^;{}<>\]{1,120}$/;
++const rules = (sel: string, set: Record<string, string>) => {
++  const out = Object.entries(set || {}).filter(([k, v]) => TOKEN.test(k) && typeof v === "string" && VALUE.test(v)).map(([k, v]) => `${k}:${v}`);
++  return out.length ? `${sel}{${out.join(";")}}` : "";
++};
++export function wearHostTokens(tokens: HostTokens | null | undefined) {
++  if (typeof document === "undefined") return;
++  const el = document.getElementById("cycls-theme");
++  if (!tokens) { if (el?.dataset.kit) el.remove(); return; }
++  if (el && !el.dataset.kit) return;                     // the shim already did
++  const style = el ?? Object.assign(document.createElement("style"), { id: "cycls-theme" });
++  style.dataset.kit = "1";
++  style.textContent = rules(":root:root", tokens.light) + rules(`:root:root.dark,:root:root[data-theme="dark"]`, tokens.dark);
++  if (!el) document.head.appendChild(style);
++  document.documentElement.setAttribute("data-cycls-theme", "");
++}
+diff -ru --strip-trailing-cr /c/Users/domin/Downloads/cycls-default-apps/kit/theme.css kit/theme.css
+--- /c/Users/domin/Downloads/cycls-default-apps/kit/theme.css	2026-10-21 10:49:53.665464200 +0000
++++ kit/theme.css	2026-10-26 14:28:48.435327700 +0000
+@@ -101,6 +101,13 @@
+   --border-strong: #66717e;
+ }
+ 
++/* Wearing the workspace's app theme (the host's shim sets data-cycls-theme on <html>): the kit's own
++ * extras follow its primary instead of staying teal. The status colors keep their measured values. */
++:root[data-cycls-theme] {
++  --primary-soft: color-mix(in oklab, var(--primary) 14%, var(--card));
++  --border-strong: color-mix(in oklab, var(--foreground) 45%, var(--background));
++}
++
+ /* Before the kit sets a theme (first paint; standalone while ready times out) follow the OS. */
+ @media (prefers-color-scheme: dark) {
+   :root:not([data-theme]):not(.dark) {

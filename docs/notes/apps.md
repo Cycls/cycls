@@ -424,6 +424,56 @@ operator can move such a file by hand; carrying migration code for it is not wor
 An app that wants a file still uses `cycls.read`/`write` on its own JSON under `data/`, and those
 are unaffected.
 
+## The catalog
+
+> **Status: proposal** (branch `proposal/apps-catalog`, see `proposal/README.md`).
+
+An agent can ship apps already built, for a workspace to install with one click instead of a prompt:
+
+```python
+web = cycls.Web().auth(cycls.Clerk()).apps("default_apps", theme={"base": "zinc"})
+```
+
+`default_apps/<slug>/` holds what `build_app` would have written — `index.html`, `app.json` (`name`,
+`name_ar`, `icon`, `description`, `description_ar`, `category`, `category_ar`), `README.md`, `src/` — and
+`.apps()` copies the folder into the image. `cycls/_agent/catalog.py` reads it once per process.
+
+An install lands the bundle in `apps/<slug>/` exactly as a build does, so nothing downstream learns a
+new kind of thing: `appScope()`, the bridge, the Apps tab, `app_catalog()` and the trash see an app.
+What marks it is `app.json`'s `"catalog": {"version", "at"}`, the version being the bundle's content hash
+(the super agent's agent-side installer stamped `"default_app"`; both read as the same).
+
+| route | | rule |
+|---|---|---|
+| `GET /apps/catalog` | every entry with its state here: `available` / `installed` / `update` / `conflict` | any member |
+| `POST /apps/install {slug}` | copy it in; a fresh slug's stale rows purged first, as `build_app` does | `_admin` |
+| `POST /apps/update {slug}` | the new bundle; the old index.html trashed; `data/`, rows, name and icon kept | `_admin` |
+| `POST /apps/uninstall {slug}` | a trash move, like a delete; rows stay until the entry is purged | `_admin` |
+
+**A person's own app is never touched.** A folder at that slug with an index.html or app.json and no
+stamp is `conflict`: install, update and uninstall answer 409. The catalog routes exist only on an agent
+that declares a catalog; `config.apps_catalog` turns the Apps section on in the client.
+
+**A purge spares a living app.** `_drop_app_data` skips a slug whose folder exists again: uninstall →
+reinstall (or delete → `build_app`) → empty the trash used to take the new app's rows with the old entry.
+
+## The theme
+
+One choice per workspace — `{base, color, radius, primary?}`, shadcn/ui's four base colors, its accent
+themes, its radii, and an optional brand color — kept as the row `.theme` in the workspace's `.apps` slot
+(not `.settings`, which is per person; a slug cannot contain a dot, so the key collides with no app).
+`GET /apps/theme` returns `{theme, default, admin}`; `PUT /apps/theme {theme}` is `_admin`, `null` resets.
+
+The server keeps the choice; `client/src/lib/app-theme.ts` derives the tokens (the Theme panel previews
+them before anything is saved). `cycls:init` carries `tokens: {light, dark}` beside `theme`, and when an
+admin saves, or the host flips light/dark, the canvas pushes `cycls:command {type: "theme", theme, tokens}`
+down the app's port (the extensions branch's channel and names). The shim wears them as one
+`<style id="cycls-theme">` whose `:root:root` / `:root:root.dark` selectors out-rank an app's own
+`:root` and `.dark`, so any app on shadcn variables re-skins live with no rebuild. No choice and no agent
+default means no tokens and no style: every existing app keeps its look. An app opts out with
+`<meta name="cycls-theme" content="off">`. Tokens are filtered (`--name`, no `;{}<>\`) before they are
+written. Sandbox and CSP are unchanged: `style-src 'unsafe-inline'` already allows the element.
+
 ## Known limitations
 
 Current behaviour, not aspiration. Each is a real constraint someone will hit.

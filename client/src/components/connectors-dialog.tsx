@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icon";
 import { SkillsPanel } from "./skills-panel";
+import { AppsCatalog } from "./apps-catalog";
 import type { ChatApi } from "../hooks/use-chat";
 import { t, useLang, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
@@ -62,8 +63,9 @@ const panel = (stops: string[] | null) => {
 };
 
 
-const RAIL = ["connectors", "skills"] as const;
-type Tab = (typeof RAIL)[number];
+// Apps sits under Skills, and only on an agent that declares a catalog (`cycls.Web().apps(...)`).
+const RAIL = ["connectors", "skills", "apps"] as const;
+export type Tab = (typeof RAIL)[number];
 const H4 = "mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground";
 const CARD = "rounded-xl border border-border bg-background/40 px-4";
 const CHIP = "rounded-full border border-border bg-secondary/50 px-2.5 py-1 text-xs text-foreground";
@@ -79,7 +81,7 @@ export function openAuth(url: string, done: () => void) {
   setTimeout(() => clearInterval(timer), 5 * 60 * 1000);
 }
 
-export function ConnectorsDialog({ api, items, reload, initial, initialTab = "connectors", onClose, onUsePrompt, onAsk }: {
+export function ConnectorsDialog({ api, items, reload, initial, initialTab = "connectors", onClose, onUsePrompt, onAsk, apps }: {
   api: ChatApi["api"];
   items: Connector[] | null;
   reload: () => void;
@@ -88,8 +90,11 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
   onClose: () => void;
   onUsePrompt: (text: string, c: Connector) => void;
   onAsk: (text: string) => void;   // a chat started from the dialog
+  // The Apps section: present when the agent ships a catalog. `onOpen` puts an app in the canvas.
+  apps?: { onOpen: (entry: string, name: string) => void; onChanged?: () => void; view?: "browse" | "theme" };
 }) {
   const isAr = useLang() === "ar";
+  const rail = RAIL.filter((k) => k !== "apps" || !!apps);
   const [tab, setTab] = useState(initialTab);
   const [cat, setCat] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -211,7 +216,7 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
       <div className="fixed inset-0 z-[80] flex flex-col overflow-hidden bg-card sm:inset-auto sm:left-1/2 sm:top-1/2 sm:h-[min(720px,90vh)] sm:w-[min(960px,94vw)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border sm:border-border sm:shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-5 py-4 sm:hidden">
           <div className="flex gap-4">
-            {RAIL.map((k) => (
+            {rail.map((k) => (
               <button key={k} onClick={() => { setTab(k); setOpen(null); }} className={cn("cursor-pointer text-lg font-semibold", tab === k ? "text-foreground" : "text-muted-foreground")}>{t(k)}</button>
             ))}
           </div>
@@ -223,13 +228,15 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
             <button onClick={onClose} className="mb-3 flex size-8 cursor-pointer items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary/80 hover:text-foreground" aria-label="Close">
               <Icon name="x" className="size-4" />
             </button>
-            {RAIL.map((k) => (
+            {rail.map((k) => (
               <button key={k} onClick={() => { setTab(k); setOpen(null); }} className={cn("flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm", tab === k ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:text-foreground")}>{t(k)}</button>
             ))}
           </aside>
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6">
-            {tab === "skills" ? <SkillsPanel api={api} onAsk={(text) => { onAsk(text); onClose(); }} /> : detail ? (
+            {tab === "apps" && apps ? <AppsCatalog api={api} initialView={apps.view} onChanged={apps.onChanged}
+                onOpen={(entry, name) => { apps.onOpen(entry, name); onClose(); }} />
+            : tab === "skills" ? <SkillsPanel api={api} onAsk={(text) => { onAsk(text); onClose(); }} /> : detail ? (
               <Detail c={detail} api={api} onBack={() => setOpen(null)} onConnect={connect} onSaveKey={saveKey} onDisconnect={disconnect} onAllow={allow} onUse={use} onPrompt={usePrompt} />
             ) : (
               <>
