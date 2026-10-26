@@ -80,6 +80,7 @@ class Web:
         self._affiliate: Optional[str] = None
         self._mobile_app: Optional[dict] = None
         self._plans: Optional[dict] = None
+        self._voice = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
         self._workspaces: Optional[str] = None
@@ -298,6 +299,22 @@ class Web:
         if currency is not None and not (isinstance(currency[0], str) and len(currency[0]) == 3 and currency[1] > 0):
             raise ValueError(f'currency is ("SAR", 3.75): a code and a positive rate; got {currency!r}')
         return self._copy(_plans={"pay": list(pay), "currency": list(currency) if currency else None, "words": words or None})
+
+    def voice(self, model, *, base_url: Optional[str] = None, api_key: Optional[str] = None,
+              headers: Optional[dict] = None):
+        """The model that makes the mic's recordings words, on the server: the browser sends the audio and gets
+        back only the text. Any service that speaks OpenAI's audio transcriptions API, set as cycls.LLM is:
+        "vendor/model", `base_url` for any but OpenAI, `api_key` (else VENDOR_API_KEY from the server's
+        environment) and `headers` for an endpoint that authenticates otherwise. Unset, it is
+        "openai/gpt-4o-transcribe" whenever OPENAI_API_KEY is there; False turns the mic off."""
+        if model is False:
+            return self._copy(_voice=False)
+        if not (isinstance(model, str) and "/" in model):
+            raise ValueError(f'voice is "vendor/model", like "openai/gpt-4o-transcribe"; got {model!r}')
+        if base_url is None and not model.startswith("openai/"):
+            raise ValueError(f"voice {model!r}: give base_url, the service's OpenAI-compatible root")
+        return self._copy(_voice={"model": model, "base_url": base_url, "api_key": api_key,
+                                  "headers": dict(headers) if headers else None})
 
     def workspaces(self, create: str = "member"):
         """Enable multi-workspace mode (docs/workspaces.md): every user gets a

@@ -801,6 +801,60 @@ def test_transcribe_keeps_the_recording_format(monkeypatch):
     assert sent == ["voice.webm", "voice.ogg", "voice.m4a", "voice.m4a", "voice.m4a"]
 
 
+def test_voice_runs_on_any_openai_shaped_service_and_names_none(monkeypatch):
+    """Web.voice: the server posts the recording to the service's transcriptions route, with its key and model,
+    and the browser gets the words alone. A failure is a plain 502, the service's own words kept in the log."""
+    import httpx
+    from fastapi.testclient import TestClient
+    sent = []
+
+    async def post(self, url, **kw):
+        sent.append((url, kw["headers"], kw["data"]))
+        if "fail" in url:
+            return httpx.Response(401, json={"error": "Incorrect API key, see platform.openai.com"})
+        return httpx.Response(200, json={"text": "hi", "usage": {"seconds": 2}, "model": "whisper-large-v3-turbo"})
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.setenv("GROQ_API_KEY", "gk")
+    groq = {"model": "groq/whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1/", "headers": {"X-Gate": "1"}}
+    client = lambda setting: TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False, transcription=setting)))
+    audio = {"file": ("voice.webm", b"x" * 2000, "audio/webm")}
+
+    on = client(groq)
+    assert on.get("/config").json()["voice"] is True
+    assert on.post("/transcribe", files=audio).json() == {"text": "hi"}
+    assert sent == [("https://api.groq.com/openai/v1/audio/transcriptions",
+                     {"Authorization": "Bearer gk", "X-Gate": "1"}, {"model": "whisper-large-v3-turbo"})]
+    r = client({**groq, "base_url": "https://fail.example/v1"}).post("/transcribe", files=audio)
+    assert r.status_code == 502 and "openai" not in r.text.lower()
+
+
+def test_voice_unset_is_openai_with_its_key_and_its_model_stays_on_the_server(monkeypatch):
+    """No Web.voice: OpenAI's model when OPENAI_API_KEY is there, no mic when it isn't; False is no mic either
+    way. The model, its endpoint and its key never reach the browser."""
+    import cycls
+    from fastapi.testclient import TestClient
+    client = lambda setting=None: TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False, transcription=setting)))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert client().get("/config").json()["voice"] is False
+    assert client().post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000, "audio/mp4")}).status_code == 501
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert client().get("/config").json()["voice"] is True
+    assert client(False).get("/config").json()["voice"] is False
+
+    @cycls.agent(web=cycls.Web().voice("groq/whisper-large-v3-turbo", base_url="https://api.groq.com/openai/v1", api_key="gk-secret"),
+                 volumes={"/workspace": cycls.Volume("test-chats")})
+    async def my_agent(context):
+        yield "hi"
+    assert my_agent.config.transcription["model"] == "groq/whisper-large-v3-turbo"
+    page = json.dumps(my_agent.config.public())
+    assert "gk-secret" not in page and "whisper" not in page and "groq" not in page
+    assert cycls.Web().voice(False)._voice is False
+    with pytest.raises(ValueError, match="base_url"):
+        cycls.Web().voice("groq/whisper-large-v3-turbo")
+    with pytest.raises(ValueError, match="vendor/model"):
+        cycls.Web().voice("whisper-1")
+
+
 def test_sync_agent_function():
     """Tests that sync generator functions work with web app."""
     print("\n--- Running test: test_sync_agent_function ---")

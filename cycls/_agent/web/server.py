@@ -8,6 +8,7 @@ from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
 from cycls._agent import state
+from cycls._agent.web import voice
 
 
 BRAND_TTL = 300   # how long a container serves the brand it last read from the CMS
@@ -29,7 +30,8 @@ class Config(BaseModel):
     analytics: Optional[list] = None  # analytics plugins: [{provider, ...}] — one event pipe, fanned out client-side
     notifications: Optional[list] = None  # push plugins: [{provider, app_id}] — the FE owns the prompt UI
     suggestions: bool = False
-    voice: bool = False
+    voice: bool = False                # the mic shows: set from `transcription` as the server starts
+    transcription: Optional[Any] = None  # Web.voice: {model, base_url, api_key, headers}, or False; server-side
     pk: Optional[str] = None
     one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
@@ -54,9 +56,10 @@ class Config(BaseModel):
 
     def public(self):
         """Config as sent to the browser — cms (bearer token), volume
-        (internal mount path) and the raw examples mapping (the FE reads the
-        resolved cards from /examples) stay server-side."""
-        data = self.model_dump(exclude={"cms", "volume", "examples"})
+        (internal mount path), the raw examples mapping (the FE reads the
+        resolved cards from /examples) and the voice model and its key stay
+        server-side."""
+        data = self.model_dump(exclude={"cms", "volume", "examples", "transcription"})
         # the .fig editor, a static app on its own origin; unset → .fig shows the download card
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
@@ -520,30 +523,22 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         asyncio.create_task(_refresh())
         return config.public()
 
+    speech = voice.resolve(config.transcription)
+    config.voice = bool(speech)
+
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=501, detail="Transcription not configured")
+        if not speech:
+            raise HTTPException(status_code=501, detail="Voice input isn't set up")
         form = await request.form()
         file = form.get("file")
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
-        audio_bytes = await file.read()
-        # OpenAI reads the format off the name: Firefox records webm, Safari and Chrome m4a.
-        ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-        name = f"voice.{ext}" if ext in ("m4a", "mp4", "webm", "ogg", "mp3", "wav") else "voice.m4a"
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                files={"file": (name, audio_bytes, file.content_type or "audio/mp4")},
-                data={"model": "gpt-4o-transcribe"},
-                timeout=30,
-            )
-            if r.status_code != 200:
-                raise HTTPException(status_code=r.status_code, detail=r.text)
-            return r.json()
+        try:
+            return {"text": await voice.transcribe(speech, await file.read(), file.filename, file.content_type)}
+        except Exception as e:   # the service's own words would name it: they stay in the log
+            log("warn", user=user, chat_id=None, message=f"transcription failed: {type(e).__name__}: {e}"[:500])
+            raise HTTPException(status_code=502, detail="Couldn't transcribe the recording")
 
     for install in (extra_routers or []):
         install(app, required_auth)
@@ -575,8 +570,6 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     from fastapi.responses import HTMLResponse
     from html import escape
     _base_html = (Path(config.public_path) / "index.html").read_text(encoding="utf-8")
-
-    config.voice = bool(os.environ.get("OPENAI_API_KEY"))
 
     _head = ""   # the <head> additions the CMS cannot change, so they are built once
     _gtm_id = next((p.get("id") for p in (config.analytics or [])

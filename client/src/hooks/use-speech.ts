@@ -2,7 +2,6 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { track } from "../lib/analytics";
 import { useToast } from "../lib/toast";
 import { t } from "../lib/i18n";
-import { reasonOf } from "./use-api";
 
 // Safari and Chrome record mp4; Firefox can't, and records webm (or ogg).
 const TYPES = ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
@@ -118,7 +117,7 @@ export function useSpeechRecognition({
             onEnd(text);
           } else {
             track("mic_transcription_failed", { status: res.status });
-            toastError(await reasonOf(res));
+            toastError(t("micFailed"));   // in the reader's language; the server names nothing behind it
             onEnd("");
           }
         } catch {
