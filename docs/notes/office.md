@@ -215,8 +215,14 @@ their author's.
   fields are written as Word fields; the reader gives PAGE and NUMPAGES in headers and footers to the editor as live
   fields, so each page shows its own number. The Header & Footer toolbar's groups sit on one row (they were drawn
   for a two-row ribbon and came out cut off). Still not saved, with a notice: text wrapping set on a picture
-  (it stays inline), shapes, tables inside a new header. Not saved and not told yet: a horizontal line (a paragraph
-  border); a section break added or removed refuses the save, as before.
+  (it stays inline), shapes, tables inside a new header. A section break added or removed refuses the save, as
+  before.
+- **Paragraph borders** (Word's `w:pBdr`) are read and written. The editor's horizontal line (Insert › line) is a
+  bottom border on the paragraph it is put under; a file's own borders (a line under a heading, a box) now show in
+  the editor. Thickness and distance go into Word's units (eighths of a point, whole points) and the editor's values
+  are compared in those units, so the next save does nothing. Solid, dotted and dashed are drawn as such; Word's
+  other lines (double, wavy…) are drawn solid and kept as Word wrote them unless that side is changed. A side
+  taken away is removed, or written as none when the paragraph's style has a border there.
 
 ## Arabic and right-to-left editing
 
@@ -238,8 +244,8 @@ they point in a right-to-left paragraph (Left goes on through the text, Right go
 ## Not built yet
 
 Live co-editing (left out on purpose, 2026-10-24); in Docs, right-to-left mouse work (clicking into and selecting
-mixed Arabic and English lines), right-to-left headers and footers, Arabic-Indic page numbers (D5), horizontal lines
-and section breaks saved. The Docs editor, its Arabic layout, the `docs` agent tool, comments and tracked changes
+mixed Arabic and English lines), right-to-left headers and footers, Arabic-Indic page numbers (D5), section breaks
+saved. The Docs editor, its Arabic layout, the `docs` agent tool, comments and tracked changes
 are deployed (2026-10-25/26); pictures, headers and footers saved from the editor: built 2026-10-26. Built
 2026-10-24: charts drawn
 and kept, pivot tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid
