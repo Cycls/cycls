@@ -215,14 +215,24 @@ their author's.
   fields are written as Word fields; the reader gives PAGE and NUMPAGES in headers and footers to the editor as live
   fields, so each page shows its own number. The Header & Footer toolbar's groups sit on one row (they were drawn
   for a two-row ribbon and came out cut off). Still not saved, with a notice: text wrapping set on a picture
-  (it stays inline), shapes, tables inside a new header. A section break added or removed refuses the save, as
-  before.
+  (it stays inline), shapes, tables inside a new header.
 - **Paragraph borders** (Word's `w:pBdr`) are read and written. The editor's horizontal line (Insert › line) is a
   bottom border on the paragraph it is put under; a file's own borders (a line under a heading, a box) now show in
   the editor. Thickness and distance go into Word's units (eighths of a point, whole points) and the editor's values
   are compared in those units, so the next save does nothing. Solid, dotted and dashed are drawn as such; Word's
   other lines (double, wavy…) are drawn solid and kept as Word wrote them unless that side is changed. A side
   taken away is removed, or written as none when the paragraph's style has a border there.
+- **Sections** (Insert › Breaks: next page, continuous, even or odd page; deleting a break; Page Setup) are saved.
+  The editor's sections are paired with the file's by the paragraph each ends after (then by id, then in order —
+  the editor renames the reader's section ids on load, so the paragraph is what holds). A break added becomes a
+  `w:sectPr` on its paragraph, a copy of the section it was cut from given the editor's settings; a break taken
+  away loses its `w:sectPr` (its paragraphs join the section after, as in Word); when the paragraph that ended a
+  section is deleted, the end moves to the paragraph before. Each section's start (`w:type`), page size and
+  orientation (`w:pgSz`) and margins (`w:pgMar`) are written when they change. When sections were added, removed or
+  moved, every `w:sectPr` is placed again from the editor's paragraphs; if the file's paragraphs do not line up with
+  the editor's, the save is refused rather than guessed. A break inside a paragraph cannot be said in Word: the
+  editor splits the paragraph first when a section break is asked for mid-paragraph, and a save that still holds one
+  is refused with why. Columns changed are said to be not saved yet.
 
 ## Arabic and right-to-left editing
 
@@ -244,9 +254,10 @@ they point in a right-to-left paragraph (Left goes on through the text, Right go
 ## Not built yet
 
 Live co-editing (left out on purpose, 2026-10-24); in Docs, right-to-left mouse work (clicking into and selecting
-mixed Arabic and English lines), right-to-left headers and footers, Arabic-Indic page numbers (D5), section breaks
-saved. The Docs editor, its Arabic layout, the `docs` agent tool, comments and tracked changes
-are deployed (2026-10-25/26); pictures, headers and footers saved from the editor: built 2026-10-26. Built
+mixed Arabic and English lines), right-to-left headers and footers, Arabic-Indic page numbers (D5), columns set in
+the editor. The Docs editor, its Arabic layout, the `docs` agent tool, comments and tracked changes
+are deployed (2026-10-25/26), so are pictures, headers, footers and borders saved from the editor (2026-10-26);
+section breaks and page setup saved: built 2026-10-26. Built
 2026-10-24: charts drawn
 and kept, pivot tables guarded, the file's own fonts (Aptos, Calibri) used for cells without a format and text laid
 out again once a font has loaded, the reload after a file changed some other way, print, comments, the agent's
