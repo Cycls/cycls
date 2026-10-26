@@ -77,6 +77,20 @@ pip install cycls
 
 Get an API key at [cloud.cycls.com](https://cloud.cycls.com). Full documentation at [docs.cycls.com](https://docs.cycls.com).
 
+## Coding agents
+
+Claude Code, Codex, and Cursor can create and deploy an agent from a skill in this repo. Node.js 22.20 or newer:
+
+```bash
+npx skills add Cycls/cycls --skill cycls-agent -g -a claude-code -a codex -a cursor -y
+```
+
+Open a new chat. Claude Code and Cursor use `/cycls-agent`. Codex uses `$cycls-agent`.
+
+ChatGPT and Claude.ai have no install command. Upload [skills/cycls-agent/SKILL.md](skills/cycls-agent/SKILL.md) and tell the chat to follow it.
+
+That folder is for coding agents. Skills an agent loads at runtime with `.skills()` live in the agent project, not here.
+
 ## The Primitives
 
 **Four composable builders, three decorators, one CLI.**
