@@ -7,8 +7,9 @@ from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
 from .extract import _pdf_parts
-from .report import _edit_names, _layout_check, _outline_text
-from .files import _DECK_EXTS, _DESIGN_EXTS, _designs_there, _find_design, _free_design, _opened, _save_pages, _stem_of
+from .report import _edit_names, _fixed_line, _layout_check, _outline_text
+from .files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _find_design, _free_design, _opened, _render_again,
+    _replacing, _save_pages, _stem_of)
 from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comments_note, _exec_comments,
     _exec_design_file, _exec_document, _exec_slides, _render_document, _sections_text, _to_the_room)
 
@@ -131,8 +132,8 @@ async def _design_call(inp, workspace):
                     f"The designs here: {_designs_there(workspace.root)}.")
     page = str(inp.get("page") or "").strip() or None
     if action == "inspect":
-        try:
-            o = await design.outline(await asyncio.to_thread(fig_path.read_bytes), user_id=subject, page=page)
+        try:   # with every frame of the page small on contact sheets: the whole of it at a glance
+            o = await design.outline(await asyncio.to_thread(fig_path.read_bytes), user_id=subject, page=page, sheets=True)
         except design.Unavailable as e:
             return f"Error: design unavailable — {e}"
         except Exception as e:
@@ -142,7 +143,19 @@ async def _design_call(inp, workspace):
             text += "\n\n" + pinned
         keep = o.get("keep") or {}
         doc = keep.get("document") if keep.get("kind") == "document" and isinstance(keep.get("document"), dict) else None
-        return f"{_sections_text(name, doc)}\n\n{text}" if doc else text
+        text = f"{_sections_text(name, doc)}\n\n{text}" if doc else text
+        word, blocks, total = "Pages" if doc else "Slides", [], 0
+        for (first, last), jpg in zip(o.get("sheet_pages") or [], o.get("sheets") or []):
+            if total + len(jpg) > _DESIGN_QA_MAX:
+                break
+            total += len(jpg)
+            blocks += [{"type": "text", "text": f"{word} {first}–{last}, small:"},
+                       {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                    "data": base64.b64encode(jpg).decode()}}]
+        if not blocks:
+            return text
+        return {"_model": [{"type": "text", "text": text + f"\n\nEvery {word[:-1].lower()} is on the sheet below, small: "
+                                                          "how each is laid out, and how they sit together."}, *blocks]}
     # The service applies an edit to the .fig headless first, so a failure reaches the model and a
     # success is saved with or without an open editor; the UI event then replays it live there.
     if action == "edit":
@@ -166,7 +179,7 @@ async def _design_call(inp, workspace):
                 data, base = await asyncio.to_thread(read_fig, workspace.root, rel)
                 try:
                     r = await design.apply(data, script=None if ops else script,
-                                           ops=ops or None, preview=True, user_id=subject, page=page)
+                                           ops=ops or None, preview=True, user_id=subject, page=page, sheets=True)
                 except design.Unavailable as e:
                     return f"Error: design unavailable — {e}"
                 except Exception as e:
@@ -199,10 +212,23 @@ async def _design_call(inp, workspace):
         on = (f" on page {json.dumps(ended, ensure_ascii=False)} — the design's pages are now "
               + ", ".join(json.dumps(p["name"], ensure_ascii=False) for p in pages)) if len(pages) > 1 else ""
         ack = (f"Edit applied and saved to {rel}{on}. If the design is open in the editor, the Super "
-               f"cursor replays the change live there." + _edit_names(r) + _layout_check(r.get("lint"), "png"))
+               f"cursor replays the change live there." + _edit_names(r) + _fixed_line(r.get("fixed"), "png")
+               + _layout_check(r.get("lint"), "png"))
         for credit in credits:
             ack += f" {credit}."
-        # a deck or carousel: show the slides the edit changed, not slide 1
+        # a deck or carousel: show the slides the edit changed, not slide 1 — more than two, small on one sheet
+        blocks, total = [], 0
+        for numbers, jpg in zip(r.get("sheet_frames") or [], r.get("sheets") or []):
+            if total + len(jpg) > _DESIGN_QA_MAX:
+                break
+            total += len(jpg)
+            blocks += [{"type": "text", "text": "Slides " + ", ".join(map(str, numbers)) + ", small:"},
+                       {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                    "data": base64.b64encode(jpg).decode()}}]
+        if blocks:
+            ack += (" The slides it changed are attached, small on one sheet. Check the change landed as intended "
+                    "and nothing else moved or collides; if not, edit again.")
+            return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
         touched, looks = r.get("touched") or [], r.get("previews") or []
         if len(r.get("slides") or []) > 1 and looks and len(looks) == len(touched) and touched != [0]:
             blocks, total = [], 0
@@ -274,25 +300,30 @@ async def _design_call(inp, workspace):
         return f"Error: design {action} failed — {type(e).__name__}: {e}"
     fig, preview, lint = r.fig, r.preview, r.lint
     if len(r.pages) > 1:
-        return await _save_pages(r, name, fmt, workspace, notes)
+        return await _save_pages(r, name, fmt, workspace, notes, inp)
     count = max(len(r.previews), len(r.slides), 1)
     kind = "carousel" if keep["kind"] == "post" and count > 1 else keep["kind"]
-    # never clobber an earlier design: launch → launch-2 → …
+    # never clobber an earlier design: launch → launch-2 → …; `replace` renders this one again
     root = pathlib.Path(workspace.root)
-    requested, name = name, await asyncio.to_thread(_free_design, root, name)
+    replacing = _replacing(root, name, inp)
+    requested, name = name, name if replacing else await asyncio.to_thread(_free_design, root, name)
     fig_rel = f"{name}.fig"
-    await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread((root / fig_rel).write_bytes, fig)
+    if replacing:
+        again = await _render_again(workspace, fig_rel, fig, inp)
+    else:
+        await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread((root / fig_rel).write_bytes, fig)
     from cycls._agent.design import refresh
     refresh.schedule(workspace.root, fig_rel, subject)        # its preview, made ready
     note = (f", named '{name}' so it doesn't overwrite the existing '{requested}'" if name != requested else "")
-    what = (f"{'Deck' if kind == 'deck' else 'Carousel'} saved ({count} slide{'s' if count != 1 else ''}{note})" if count > 1 or kind == "deck"
-            else f"Design saved{f' ({note[2:]})' if note else ''}")
-    ack, ui = _opened(fig_rel, what)
+    saved = "rendered again in place" if replacing else "saved"
+    what = (f"{'Deck' if kind == 'deck' else 'Carousel'} {saved} ({count} slide{'s' if count != 1 else ''}{note})" if count > 1 or kind == "deck"
+            else f"Design {saved}{f' ({note[2:]})' if note else ''}")
+    ack, ui = (f"{what}: {fig_rel}. Its earlier version is kept in its history.", again) if replacing else _opened(fig_rel, what)
     ack += " Change it with Design edit — or, slide by slide, add_slide / update_slide." if count > 1 or kind == "deck" else " Change it with Design edit."
     for line in notes:
         ack += " " + line
-    ack += _layout_check(lint, fmt if count == 1 else "pptx")
+    ack += _fixed_line(r.fixed, fmt if count == 1 else "pptx") + _layout_check(lint, fmt if count == 1 else "pptx")
     # The model QAs its own render: the @1x JPEG previews (a @2x PNG runs MBs; a PPTX isn't
     # an image), else the raster itself within _DESIGN_QA_MAX, else the ack alone.
     fix = "Design edit (the same design — don't re-render)"

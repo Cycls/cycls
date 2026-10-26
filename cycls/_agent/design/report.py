@@ -177,6 +177,21 @@ def _page_changes(before, after):
     return lines[:14]
 
 
+def _fixed_line(fixed, fmt):
+    """What the layout check put right by itself (text raised to the least size that reads, a colour that
+    didn't read on what's behind it), as one line for the ack."""
+    if not fixed:
+        return ""
+    slide = fmt == "pptx" or any(f.get("frame") for f in fixed)
+
+    def line(f):
+        where = f"slide {int(f.get('frame') or 0) + 1}: " if slide else ""
+        return f"{where}{f.get('node', '')} {f.get('done', '')}"
+    items = [line(f) for f in fixed[:6]]
+    more = f" (+{len(fixed) - 6} more)" if len(fixed) > 6 else ""
+    return f" The layout check put right by itself: {'; '.join(items)}{more}."
+
+
 def _layout_check(lint, fmt):
     """The service's layout check of a render, as one line for the ack."""
     if not lint:

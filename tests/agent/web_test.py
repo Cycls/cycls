@@ -2224,6 +2224,24 @@ def test_brand_route_reads_the_brand_kit(tmp_path):
         "colors": {"primary": "#112233", "accent": "#445566"}, "fonts": {"heading": None, "body": "Inter"}}}
 
 
+def test_the_editor_opening_gives_the_workspaces_own_fonts_first(tmp_path, monkeypatch):
+    """The editor asks the design service for a design's fonts as it opens; it once asked before the workspace's
+    fonts had reached the service (they went only with a Design call) and drew stand-ins for the whole session.
+    Opening it (its brand kit) gives them first, and an unchanged file isn't read again."""
+    sent = []
+
+    async def _post(path, body, user_id=None):
+        sent.append("file" if "data" in body else "sha")
+        return {"ok": True, "family": "Brand Sans", "style": "Bold"} if "data" in body else {"ok": True, "need": True}
+    monkeypatch.setattr("cycls._agent.design.client._post", _post)
+    monkeypatch.setattr("cycls._agent.design.client._given", {})
+    client = _ws_routers_client(tmp_path)
+    _seed(tmp_path, {"brand/fonts/Brand-Bold.otf": b"OTTO brand"})
+    client.get("/brand")
+    client.get("/brand")
+    assert sent == ["sha", "file"]   # once: its sha256, then the file the service never had
+
+
 # ---- office module: the office-render /v1/convert client ----
 
 def test_office_convertible_and_configured(monkeypatch):

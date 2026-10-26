@@ -402,6 +402,16 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
       setStatus(s);
       window.setTimeout(() => { if (!disposed) setStatus("ready"); }, 1500);
     };
+    // "Will retry": what didn't save is still the editor's unsaved change, so it is asked for
+    // again, later after each failure in a row. A flush saves only what is still unsaved.
+    let failures = 0;
+    let retry: number | undefined;
+    const failed = () => {
+      flash("saveerror");
+      window.clearTimeout(retry);
+      retry = window.setTimeout(() => { if (!disposed) post({ type: "flush", id: `r${Date.now().toString(36)}` }); },
+                                Math.min(30_000, 2000 * 2 ** failures++));
+    };
 
     const exportFiles = async (files: NonNullable<EditorMessage["files"]>) => {
       const { host, toast } = latest.current;
@@ -570,6 +580,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           if (r && r.version && version.current !== null) version.current = r.version;
           if (r && r.version) known.current.add(r.version);
           retried.current = 0;
+          failures = 0;
           reply(true);
           flash("saved");
         } catch (err) {
@@ -586,7 +597,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
               stale(typeof now === "string" ? now : "", m.fig);
             }
           } else {
-            flash("saveerror");
+            failed();
           }
         }
       } else if (m.type === "flushed" && typeof m.id === "string") {
@@ -668,7 +679,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         setStatus("loading");
         setFrameKey((k) => k + 1);
       } else if (m.type === "error") {
-        if (!disposed) loaded ? flash("saveerror") : setStatus("error");
+        if (!disposed) loaded ? failed() : setStatus("error");
       } else if (m.type === "newDesign" && host) {
         await leaveFullscreen();
         try { await host.newDesign(Array.isArray(m.size) ? m.size : undefined); } catch { toast.error(t("newDesignFailed")); }
@@ -727,6 +738,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     window.addEventListener("cycls:design-command", onCommand as EventListener);
     return () => {
       disposed = true;
+      window.clearTimeout(retry);
       if (pending.current) window.clearTimeout(pending.current.timer);
       pending.current = null;
       if (resetWait.current) window.clearTimeout(resetWait.current);

@@ -25,7 +25,7 @@ def _clear_env(monkeypatch):
 
 def _kept_outline(monkeypatch, frames=()):
     """`inspect` faked: a design gives back the record its render kept in it."""
-    async def _outline(fig, user_id=None, page=None, full=False):
+    async def _outline(fig, user_id=None, page=None, full=False, sheets=False):
         return {"frames": list(frames), "pages": [], "page": "", "keep": _KEPT.get(fig, {})}
     monkeypatch.setattr("cycls._agent.design.outline", _outline)
 
@@ -376,6 +376,28 @@ def test_render_dedupes_name_so_nothing_overwrites(tmp_path, monkeypatch):
     assert (tmp_path / "launch-2.fig").read_bytes() == b"SECONDFIG"
 
 
+def test_another_round_of_a_design_is_rendered_in_place_its_earlier_version_kept(tmp_path, monkeypatch):
+    from cycls._agent import versions
+    from cycls._agent.design.store import version_of
+    ws = _ws(tmp_path)
+    _fake_render(monkeypatch, fig=b"FIRSTFIG")
+    asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}}, ws))
+    said = _fake_room(monkeypatch)
+    _fake_render(monkeypatch, fig=b"SECONDFIG")
+    out = asyncio.run(_exec_design({"action": "render", "name": "launch", "spec": {}, "replace": True}, ws))
+    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["launch.fig"]   # no launch-2
+    assert (tmp_path / "launch.fig").read_bytes() == b"SECONDFIG"
+    [kept] = versions.listing(tmp_path, "launch.fig")
+    assert kept["by"] == "agent" and versions.read(tmp_path, "launch.fig", kept["id"]) == b"FIRSTFIG"
+    # Where it is open it reloads; nothing opens it again.
+    assert said == [("launch.fig", {"kind": "reload", "version": version_of(b"SECONDFIG")})]
+    assert out["_ui"]["action"] == "design_command" and out["_ui"]["reload"] is True
+    assert "rendered again in place" in _text(out) and "kept in its history" in _text(out)
+    # `replace` on a name nothing has yet is a new design, opened as any.
+    fresh = asyncio.run(_exec_design({"action": "render", "name": "poster", "spec": {}, "replace": True}, ws))
+    assert fresh["_ui"] == {"type": "ui", "action": "open_canvas", "path": "poster.fig", "name": "poster.fig"}
+
+
 def test_script_escape_hatch(tmp_path, monkeypatch):
     got = {}
 
@@ -392,19 +414,22 @@ def test_script_escape_hatch(tmp_path, monkeypatch):
 
 
 def _fake_apply(monkeypatch, result=b"EDITED-FIG", error=None, compiled=None, preview=None, lint=(),
-                previews=(), touched=(), slides=(), pages=(), page="", started="", **names):
+                previews=(), touched=(), slides=(), pages=(), page="", started="", fixed=(), sheets=(), sheet_frames=(),
+                **names):
     """`design.apply` faked: records the call, returns the edited .fig (plus the
     compiled script, preview and lint the service sends) or raises the edit's error.
     `refresh.schedule` is captured instead of run."""
     calls = {}
 
     async def _apply(fig, script=None, user_id=None, ops=None, preview_=None, **kw):
-        calls.update(fig=fig, script=script, ops=ops, user_id=user_id, preview=kw.get("preview"), page=kw.get("page"))
+        calls.update(fig=fig, script=script, ops=ops, user_id=user_id, preview=kw.get("preview"), page=kw.get("page"),
+                     sheets=kw.get("sheets"))
         if error:
             raise RuntimeError(error)
         return {"fig": result, "lint": list(lint), "script": compiled, "preview": preview,
                 "previews": list(previews), "touched": list(touched), "slides": list(slides),
                 "pages": list(pages), "page": page, "started": started,
+                "fixed": list(fixed), "sheets": list(sheets), "sheet_frames": list(sheet_frames),
                 **{k: list(names.get(k) or []) for k in ("changed", "added", "resolved", "notes")}}
     monkeypatch.setattr("cycls._agent.design.apply", _apply)
     scheduled = []
@@ -998,7 +1023,8 @@ def test_apply_posts_fig_and_script(monkeypatch):
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
     assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == \
         {"fig": b"EDITED", "lint": [], "script": None, "preview": None, "previews": [], "touched": [], "slides": [],
-         "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": [], "keep": {}}
+         "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": [], "keep": {},
+         "fixed": [], "sheets": [], "sheet_frames": []}
     assert _FakeClient.last["url"] == "https://d/apply"
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
     _mock(monkeypatch, _FakeResp(422, {"ok": False, "error": "null is not an object"}))
@@ -1096,7 +1122,7 @@ def test_an_edit_says_by_name_what_it_changed_and_made(tmp_path, monkeypatch):
 def test_inspect_shows_a_mark_as_one_part_with_its_icon_and_colour(tmp_path, monkeypatch):
     _design(tmp_path)
 
-    async def _outline(fig, user_id=None, page=None):
+    async def _outline(fig, user_id=None, page=None, sheets=False):
         return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
                 {"slide": 1, "name": "slide-1", "size": [1200, 900], "nodes": [
             {"name": "icon-1", "type": "icon", "x": 40, "y": 120, "w": 64, "h": 64, "icon": "lucide:trophy", "color": "#b45309"},
@@ -1113,7 +1139,7 @@ def test_inspect_shows_a_mark_as_one_part_with_its_icon_and_colour(tmp_path, mon
 def test_inspect_says_how_many_parts_a_long_slide_has_beyond_those_it_lists(tmp_path, monkeypatch):
     _design(tmp_path)
 
-    async def _outline(fig, user_id=None, page=None):
+    async def _outline(fig, user_id=None, page=None, sheets=False):
         return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
                 {"slide": 1, "name": "slide-1", "size": [1200, 900], "more": 57, "nodes": [
             {"name": "rect-1", "type": "rect", "x": 0, "y": 0, "w": 10, "h": 10, "fill": "#000000"}]}]}
@@ -1135,7 +1161,7 @@ def test_inspect_lists_frames_and_nodes(tmp_path, monkeypatch):
     _design(tmp_path)
     got = {}
 
-    async def _outline(fig, user_id=None, page=None):
+    async def _outline(fig, user_id=None, page=None, sheets=False):
         got.update(fig=fig, user_id=user_id, page=page)
         return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
                 {"slide": 1, "name": "cover", "title": "Cover", "notes": "Open with the story.", "transition": "fade",
@@ -1164,7 +1190,8 @@ def test_the_client_inspects_and_applies_ops(monkeypatch):
                                        "preview_base64": base64.b64encode(b"J").decode(), "lint": []}))
     r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
     assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J", "previews": [], "touched": [], "slides": [],
-                 "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": [], "keep": {}}
+                 "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": [], "keep": {},
+             "fixed": [], "sheets": [], "sheet_frames": []}
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
     # What the edit changed and made, by name, and which part a name that wasn't one turned out to be.
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"E").decode(), "changed": ["text-1"],
@@ -1183,7 +1210,8 @@ def test_the_client_names_the_page_and_reads_the_pages(monkeypatch):
     b64 = lambda b: base64.b64encode(b).decode()
     paged = {"pages": _PAGES, "page": "Story"}
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "frames": [{"slide": 1, "nodes": []}], **paged}))
-    assert asyncio.run(design.outline(b"FIG", page="Story")) == {"frames": [{"slide": 1, "nodes": []}], **paged, "keep": {}}
+    assert asyncio.run(design.outline(b"FIG", page="Story")) == {"frames": [{"slide": 1, "nodes": []}], **paged, "keep": {},
+                                                                  "sheets": [], "sheet_pages": []}
     assert _FakeClient.last["json"] == {"fig": b64(b"FIG"), "page": "Story"}
     asyncio.run(design.outline(b"FIG"))
     assert "page" not in _FakeClient.last["json"]                            # none named: the first page
@@ -1256,7 +1284,7 @@ def test_inspect_and_edit_work_on_the_page_named(tmp_path, monkeypatch):
     _design(tmp_path)
     got = {}
 
-    async def _outline(fig, user_id=None, page=None):
+    async def _outline(fig, user_id=None, page=None, sheets=False):
         got["page"] = page
         return {"pages": _PAGES, "page": "Story", "frames": [
             {"slide": 1, "name": "slide-1", "size": [1080, 1920], "nodes": []}]}
@@ -1439,7 +1467,7 @@ def _deck(tmp_path, monkeypatch, settings=None, size=(1920, 1080), slides=1):
     (tmp_path / "pitch.fig").write_bytes(b"DECK-FIG")
     asked = []
 
-    async def _outline(fig, user_id=None, page=None, full=False):
+    async def _outline(fig, user_id=None, page=None, full=False, sheets=False):
         asked.append(fig)
         return {"frames": [{"slide": n, "name": f"slide-{n}", "size": list(size), "fill": "#102030", "nodes": []} for n in range(1, slides + 1)],
                 "pages": [], "page": "", "keep": {"kind": "deck", **({"deck": settings} if settings else {})}}
@@ -1466,11 +1494,48 @@ def test_add_slide_lays_it_out_with_the_decks_settings(tmp_path, monkeypatch):
     assert (tmp_path / "pitch.fig").read_bytes() == b"NEW-FIG" and scheduled == ["pitch.fig"]
     assert sorted(p.name for p in tmp_path.iterdir() if not p.name.startswith(".")) == ["attachments", "brand", "pitch.fig"]   # nothing beside it
     from cycls._agent.design.store import version_of
-    assert out["_ui"] == [{"type": "ui", "action": "design_command", "path": "pitch.fig", "script": "S",
-                           "version": version_of(b"NEW-FIG")},   # an open editor's saves go on from it
-                          {"type": "ui", "action": "open_canvas", "path": "pitch.fig", "name": "pitch.fig"}]
+    # Live where the deck is open, an open editor's saves going on from it; nothing opens it again.
+    assert out["_ui"] == {"type": "ui", "action": "design_command", "path": "pitch.fig", "script": "S",
+                          "version": version_of(b"NEW-FIG")}
+    # its layout check clean, it comes back as that: no picture (inspect has the whole deck on one sheet)
+    assert out["_model"].startswith("Slide added at position 2. pitch.fig now has 4 slides") and "Layout check: clean." in out["_model"]
+
+
+def test_add_slide_takes_several_in_one_call_and_shows_only_what_the_check_still_flags(tmp_path, monkeypatch):
+    """Several slides in one call are one change, in order from `at`; what the check put right is said, and of
+    the added slides only one it still flags comes back as a picture."""
+    _deck(tmp_path, monkeypatch, {"theme": "editorial", "size": [1920, 1080]})
+    flags = [{"frame": 2, "node": 'title "Costs"', "issue": "overlaps body", "fix": "move one of them"}]
+    fixed = [{"frame": 3, "node": 'caption "Source"', "done": "14px → 19px"}]
+    calls, _ = _fake_apply(monkeypatch, result=b"NEW-FIG", compiled="S", touched=[1, 2, 3], previews=[b"J1", b"J2", b"J3"],
+                           slides=[{}] * 5, lint=flags, fixed=fixed)
+    out = asyncio.run(_exec_design({"action": "add_slide", "name": "pitch", "at": 2, "slides": [
+        {"layout": "bullets", "title": "Why", "bullets": ["Fresh"]},
+        {"layout": "bullets", "title": "Costs", "bullets": ["Low"]},
+        {"layout": "stats", "title": "Traction", "items": [{"value": "9", "label": "of ten"}]}]}, _ws(tmp_path)))
+    assert [(op["op"], op["at"], op["slide"]["title"]) for op in calls["ops"]] == [
+        ("slide_add", 1, "Why"), ("slide_add", 2, "Costs"), ("slide_add", 3, "Traction")]
     m = out["_model"]
-    assert m[0]["text"] == "Slide 2:" and "Slide added at position 2" in m[-1]["text"] and "now has 4 slides" in m[-1]["text"]
+    assert [b["text"] for b in m if b["type"] == "text"][:-1] == ["Slide 3:"]       # the flagged one alone
+    assert base64.b64decode(m[1]["source"]["data"]) == b"J2"
+    ack = m[-1]["text"]
+    assert ack.startswith("3 slides added at positions 2–4. pitch.fig now has 5 slides")
+    assert 'The layout check put right by itself: slide 4: caption "Source" 14px → 19px.' in ack
+    assert "Layout check found 1 issue" in ack and ack.endswith("The added slides the check flags are attached.")
+    from cycls._agent.design.deck import _intent
+    assert _intent(calls["ops"]) == "add 3 slides"
+    bad = asyncio.run(_exec_design({"action": "add_slide", "name": "pitch", "slides": "three"}, _ws(tmp_path)))
+    assert bad.startswith("Error: `slides` is a list of slides")
+
+
+def test_a_rebuilt_slide_comes_back_as_a_picture(tmp_path, monkeypatch):
+    _deck(tmp_path, monkeypatch, {"theme": "editorial", "size": [1920, 1080]})
+    _fake_apply(monkeypatch, compiled="S", touched=[0], previews=[b"J"], slides=[{}, {}])
+    out = asyncio.run(_exec_design({"action": "update_slide", "name": "pitch", "number": 1,
+                                    "slide": {"layout": "title", "title": "Brewly 2"}}, _ws(tmp_path)))
+    assert out["_model"][0]["text"] == "Slide 1:" and out["_model"][-1]["text"].endswith("It is attached.")
+    moved = asyncio.run(_exec_design({"action": "move_slide", "name": "pitch", "number": 2, "to": 1}, _ws(tmp_path)))
+    assert isinstance(moved["_model"], str)                                 # a move changes no slide's look: no picture
 
 
 def test_a_slide_added_to_a_design_with_no_record_is_its_slides_size(tmp_path, monkeypatch):
@@ -1772,9 +1837,9 @@ def test_replace_renders_the_same_document_again_and_keeps_the_old_one(tmp_path,
     kept = versions.listing(tmp_path, "report.fig")
     assert len(kept) == 1 and kept[0]["by"] == "agent"                         # the earlier pages are in its history
     assert "Document re-rendered (4 pages)" in out["_model"][-1]["text"]
-    # What is open follows: an editor on the .fig re-opens it, the canvas shows it again.
-    assert [e["action"] for e in out["_ui"]] == ["design_command", "open_canvas"]
-    assert out["_ui"][0]["path"] == "report.fig" and out["_ui"][0]["reload"] is True
+    # What is open follows: an editor on the .fig re-opens it. Nothing opens it again.
+    assert out["_ui"]["action"] == "design_command"
+    assert out["_ui"]["path"] == "report.fig" and out["_ui"]["reload"] is True
     # Without `replace`, the same name is a new document beside it — nothing is overwritten.
     asyncio.run(_exec_design({"action": "render", "name": "report", "spec": {"document": plain}}, ws))
     assert (tmp_path / "report-2.fig").is_file() and (tmp_path / "report.fig").read_bytes() == b"FIG-TWO"
@@ -1857,7 +1922,7 @@ def test_a_documents_sections_are_added_rewritten_moved_and_removed_in_place(tmp
     assert calls["spec"]["document"]["sections"][0]["blocks"] == [{"lead": "Demand grew 18%."}, "A paragraph."]
     assert _source(tmp_path)["sections"][1]["blocks"][0] == "Rewritten."
     assert "Document re-rendered (4 pages)" in out["_model"][-1]["text"]
-    assert [e["action"] for e in out["_ui"]] == ["design_command", "open_canvas"]
+    assert out["_ui"]["action"] == "design_command"
     assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["report.fig"]
     assert len(versions.listing(tmp_path, "report.fig")) == 1                               # the earlier pages are kept
 
@@ -1871,6 +1936,14 @@ def test_a_documents_sections_are_added_rewritten_moved_and_removed_in_place(tmp
     assert [s["title"] for s in _source(tmp_path)["sections"]] == ["Executive summary", "Appendix", "Method", "Numbers", "Outlook"]
     run({"action": "delete_section", "number": 2})
     assert [s["title"] for s in _source(tmp_path)["sections"]] == ["Executive summary", "Method", "Numbers", "Outlook"]
+    # Several in one call: in order from `at`, the document laid out once.
+    before = calls["renders"]
+    run({"action": "add_section", "at": 4, "sections": [{"title": "Risks", "blocks": ["Few."]}, {"title": "Costs", "blocks": ["Low."]}]})
+    assert [s["title"] for s in _source(tmp_path)["sections"]] == ["Executive summary", "Method", "Numbers", "Risks", "Costs", "Outlook"]
+    assert calls["renders"] == before + 1
+    assert run({"action": "add_section", "sections": "two"}).startswith("Error: `sections` is a list of sections")
+    for n in (5, 4):
+        run({"action": "delete_section", "number": n})
 
     # Its title, look and cover: the keys given are changed, null takes one away, the sections stay.
     run({"action": "update_document", "document": {"title": "State of Coffee 2026", "theme": "corporate", "author": None,
@@ -2180,7 +2253,7 @@ def _outlines(monkeypatch, by_fig):
     """`design.outline` faked: each saved .fig's pages, by its bytes."""
     asked = []
 
-    async def outline(fig, user_id=None, page=None, full=False):
+    async def outline(fig, user_id=None, page=None, full=False, sheets=False):
         asked.append((bytes(fig), full))
         return {"frames": by_fig.get(bytes(fig), []), "pages": [], "page": "", "keep": _KEPT.get(bytes(fig), {})}
     monkeypatch.setattr("cycls._agent.design.outline", outline)
@@ -2264,7 +2337,7 @@ def test_when_what_changed_cannot_be_told_the_hold_still_asks(tmp_path, monkeypa
     calls = _doc_render(monkeypatch, fig=b"FIG-TWO")
     kept = _KEPT[b"FIG-BY-HAND"]
 
-    async def outline(fig, user_id=None, page=None, full=False):             # its record is read; its pages can't be compared
+    async def outline(fig, user_id=None, page=None, full=False, sheets=False):             # its record is read; its pages can't be compared
         if full:
             raise RuntimeError("service hiccup")
         return {"frames": [], "pages": [], "page": "", "keep": kept}
@@ -2371,7 +2444,7 @@ def test_a_slide_added_to_a_deck_people_have_open_together_is_handed_to_their_ro
                                     "intent": "add the farms slide"}, _ws(tmp_path)))
     assert said == [("pitch.fig", {"kind": "command", "script": "S", "intent": "add the farms slide",
                                            "version": version_of(b"NEW-FIG")})]
-    command = out["_ui"][0]
+    command = out["_ui"]
     assert command["action"] == "design_command" and command["live"] is True
 
 
@@ -2384,7 +2457,7 @@ def test_a_document_rendered_again_tells_the_room_to_open_the_file_again(tmp_pat
     _fake_render(monkeypatch, image=b"%PDF-2", fig=b"FIG-TWO", slides=[b"a"])
     out = asyncio.run(_exec_design({"action": "render", "name": "plan", "spec": spec, "replace": True}, _ws(tmp_path)))
     assert said == [("plan.fig", {"kind": "reload", "version": version_of(b"FIG-TWO")})]
-    command = out["_ui"][0]
+    command = out["_ui"]
     assert command["action"] == "design_command" and command["reload"] is True and command["live"] is True
 
 
@@ -2406,7 +2479,7 @@ def test_a_slide_whose_layout_had_no_room_for_everything_says_so(tmp_path, monke
     _fake_apply(monkeypatch, result=b"NEW-FIG", compiled="S", touched=[1], previews=[b"J"], slides=[{}, {}], notes=[left])
     out = asyncio.run(_exec_design({"action": "add_slide", "name": "pitch", "slide": {
         "layout": "stats", "title": "Numbers", "items": [{"value": f"{n}0%", "label": "x"} for n in range(6)]}}, _ws(tmp_path)))
-    assert left in out["_model"][-1]["text"]
+    assert left in out["_model"]
 
 
 def test_an_edit_of_a_deck_or_a_carousel_shows_the_slides_it_changed(tmp_path, monkeypatch):
@@ -2423,6 +2496,31 @@ def test_an_edit_of_a_deck_or_a_carousel_shows_the_slides_it_changed(tmp_path, m
         _fake_apply(monkeypatch, compiled="/*c*/", preview=b"ONE", previews=[b"ONE"], touched=touched, slides=slides)
         m = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))["_model"]
         assert [b["type"] for b in m] == ["image", "text"] and "The edited design is attached" in m[-1]["text"]
+    # More than two slides changed (one edit with every fix): small, on one sheet; and what the check fixed is said.
+    calls, _ = _fake_apply(monkeypatch, compiled="/*c*/", touched=[1, 3, 4], slides=[{}] * 6, sheets=[b"SHEET"],
+                           sheet_frames=[[2, 4, 5]], fixed=[{"frame": 3, "node": 'note "Fine"', "done": "12px → 19px"}])
+    m = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))["_model"]
+    assert calls["sheets"] is True
+    assert m[0] == {"type": "text", "text": "Slides 2, 4, 5, small:"} and base64.b64decode(m[1]["source"]["data"]) == b"SHEET"
+    assert "attached, small on one sheet" in m[-1]["text"]
+    assert 'The layout check put right by itself: slide 4: note "Fine" 12px → 19px.' in m[-1]["text"]
+
+
+def test_inspect_has_the_whole_deck_on_one_sheet(tmp_path, monkeypatch):
+    """Every slide small on one sheet with the outline: the deck at a glance, for one look once every slide is in."""
+    (tmp_path / "pitch.fig").write_bytes(b"DECK-FIG")
+    asked = {}
+
+    async def _outline(fig, user_id=None, page=None, full=False, sheets=False):
+        asked["sheets"] = sheets
+        return {"frames": [{"slide": n, "name": f"slide-{n}", "size": [1920, 1080], "fill": "#102030", "nodes": []} for n in (1, 2, 3)],
+                "pages": [], "page": "", "keep": {"kind": "deck"}, "sheets": [b"SHEET"], "sheet_pages": [[1, 3]]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    m = asyncio.run(_exec_design({"action": "inspect", "name": "pitch"}, _ws(tmp_path)))["_model"]
+    assert asked["sheets"] is True
+    assert m[0]["text"].startswith("pitch.fig") and m[0]["text"].endswith(
+        "Every slide is on the sheet below, small: how each is laid out, and how they sit together.")
+    assert m[1] == {"type": "text", "text": "Slides 1–3, small:"} and base64.b64decode(m[2]["source"]["data"]) == b"SHEET"
 
 
 _DESCRIBED = "modern Riyadh skyline at dusk, glass towers, deep blue tones"

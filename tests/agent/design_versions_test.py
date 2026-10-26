@@ -71,6 +71,28 @@ def test_keep_mine_writes_over_a_newer_file_and_keeps_it(tmp_path):
     assert versions.read(tmp_path, "designs/a.fig", versions.listing(tmp_path, "designs/a.fig")[0]["id"]) == b"THEIRS"
 
 
+def test_a_design_another_instance_just_rewrote_is_read_again(tmp_path, monkeypatch):
+    # gcsfuse: this instance still names the object another one replaced (Errno 116), for a moment.
+    import errno
+    from pathlib import Path
+    from cycls._agent.design import store
+    _put(tmp_path, "designs/a.fig", b"THEIRS")
+    real, slept, stale = Path.read_bytes, [], [2]
+
+    def read_bytes(self):
+        if stale[0]:
+            stale[0] -= 1
+            raise OSError(errno.ESTALE, "Stale file handle")
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(store.time, "sleep", slept.append)
+    v = asyncio.run(write_fig(tmp_path, "designs/a.fig", b"MINE", base=version_of(b"THEIRS")))
+    assert v == version_of(b"MINE") and slept == [1, 2]
+    stale[0] = 3   # still stale after three seconds: the save fails as before
+    with pytest.raises(OSError):
+        store.read_fig(tmp_path, "designs/a.fig")
+
+
 def test_old_versions_go(tmp_path, monkeypatch):
     monkeypatch.setattr(versions, "KEEP", 3)
     _put(tmp_path, "designs/a.fig", b"V0")

@@ -785,10 +785,12 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
         if file_path.suffix.lower() == ".fig":
             # X-Version of the very bytes served: what a save names as its `base` (design/store.py)
-            from cycls._agent.design.store import version_of
-            data = await asyncio.to_thread(file_path.read_bytes)
+            from cycls._agent.design.store import read_fig
+            data, version = await asyncio.to_thread(read_fig, file_path.parent, file_path.name)
+            if data is None:
+                raise HTTPException(status_code=404, detail="File not found")
             return Response(data, media_type="application/octet-stream",
-                            headers={**_NO_CACHE, "X-Version": version_of(data)})
+                            headers={**_NO_CACHE, "X-Version": version})
         return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")

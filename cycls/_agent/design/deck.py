@@ -46,6 +46,8 @@ def _intent(ops):
     labels = {"slide_add": "add a slide", "slide_update": "change slide {n}", "slide_move": "move slide {n}",
               "slide_duplicate": "duplicate slide {n}", "slide_delete": "delete slide {n}", "slide_meta": "slide {n}'s notes"}
     op = (ops or [{}])[0]
+    if len(ops or []) > 1 and all(o.get("op") == "slide_add" for o in ops):
+        return f"add {len(ops)} slides"
     n = op.get("index", op.get("from"))
     return labels.get(op.get("op"), "change the slides").format(n=(n + 1) if isinstance(n, int) else "")
 

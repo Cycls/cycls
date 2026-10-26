@@ -46,6 +46,25 @@ def _free_design(root, stem):
     return f"{stem}-{n}"
 
 
+def _replacing(root, stem, inp):
+    """`replace`: the render is written over `<stem>.fig` itself, not beside it as `<stem>-2`."""
+    return inp.get("replace") is True and (pathlib.Path(root) / f"{stem}.fig").is_file()
+
+
+async def _render_again(workspace, fig_rel, fig, inp):
+    """A render written over its design, the earlier version kept in its history → the event that brings it
+    where it is open (an editor reloads, a viewer fetches it again). It opens nothing that isn't."""
+    from .actions import _to_the_room
+    from .deck import lock
+    from .store import write_fig
+    async with lock(pathlib.Path(workspace.root) / fig_rel):
+        version = await write_fig(workspace.root, fig_rel, fig, by="agent", reason="agent",
+                                  intent=str(inp.get("intent") or "rendered again")[:80])
+    again = {"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}
+    await _to_the_room(workspace.root, fig_rel, again)
+    return again
+
+
 def _designs_there(root):
     """The workspace's designs, by name — for "no such design: there are …"."""
     root = pathlib.Path(root)
@@ -80,18 +99,23 @@ def _opened(fig_rel, what):
     return ack, {"type": "ui", "action": "open_canvas", "path": fig_rel, "name": fig_rel.rsplit("/", 1)[-1]}   # .fig and all: the mobile app reads it
 
 
-async def _save_pages(r, stem, fmt, workspace, notes):
+async def _save_pages(r, stem, fmt, workspace, notes, inp):
     """Save a multi-page render (a design's variants): its one `.fig`."""
     root = pathlib.Path(workspace.root)
-    requested, stem = stem, _free_design(root, stem)
+    replacing = _replacing(root, stem, inp)
+    requested, stem = stem, stem if replacing else _free_design(root, stem)
     fig_rel = f"{stem}.fig"
-    await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
+    if replacing:
+        again = await _render_again(workspace, fig_rel, r.fig, inp)
+    else:
+        await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
     from cycls._agent.design import refresh
     refresh.schedule(workspace.root, fig_rel, getattr(workspace, "subject", None))
     listed = [json.dumps(p["name"], ensure_ascii=False) + (f" ({p['frames']} slides)" if p["frames"] > 1 else "") for p in r.pages]
     note = f" (named '{stem}' so it doesn't overwrite the existing '{requested}')" if stem != requested else ""
-    ack, ui = _opened(fig_rel, f"Design saved{note}, with {len(r.pages)} pages: {'; '.join(listed)}")
+    what = f"Design {'rendered again in place' if replacing else 'saved'}{note}, with {len(r.pages)} pages: {'; '.join(listed)}"
+    ack, ui = (f"{what}. Its earlier version is kept in its history.", again) if replacing else _opened(fig_rel, what)
     ack += (" The person switches pages above the design. Change a page with Design edit {page: \"<its name>\", ops}; "
             "add or copy one with the page_add / page_duplicate ops.")
     for line in notes:

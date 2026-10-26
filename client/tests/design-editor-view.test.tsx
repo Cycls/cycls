@@ -127,6 +127,41 @@ describe("DesignEditorView", () => {
     expect(frame()).toBe(first);
   });
 
+  it("a save that fails is asked for again, later after each failure in a row", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const failure = () => Object.assign(new Error("HTTP 500"), { status: 500 });
+      const writeFile = vi.fn().mockRejectedValueOnce(failure()).mockRejectedValueOnce(failure()).mockResolvedValue({ version: "v2" });
+      const { frame } = mount({ writeFile, host: versioned(() => "v1") });
+      const { post, load } = await ready(frame(), 2);
+      const asked = () => post.mock.calls.filter((c) => (c[0] as { type: string }).type === "flush").length;
+      const save = async (id: string) => { fromEditor(frame(), "saved", { doc: load.doc, id, fig: b64([1]) }); await flush(); };
+
+      await save("s1");
+      expect(screen.getByText(/will retry/)).toBeTruthy();
+      await act(async () => { vi.advanceTimersByTime(1900); });
+      expect(asked()).toBe(0);
+      await act(async () => { vi.advanceTimersByTime(200); });
+      expect(asked()).toBe(1);                       // 2 s on
+      await save("s2");                              // fails again
+      await act(async () => { vi.advanceTimersByTime(3900); });
+      expect(asked()).toBe(1);
+      await act(async () => { vi.advanceTimersByTime(200); });
+      expect(asked()).toBe(2);                       // 4 s on
+      await save("s3");                              // goes through
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "written", id: "s3", ok: true }), EDITOR);
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(asked()).toBe(2);                       // nothing left to ask for
+
+      fromEditor(frame(), "error", { message: "Building the .fig timed out" });   // the editor's own save failed
+      await flush();
+      await act(async () => { vi.advanceTimersByTime(2100); });
+      expect(asked()).toBe(3);                       // 2 s again: the run of failures started over
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes messages from its own editor only", async () => {
     const { frame, writeFile } = mount();
     await ready(frame());
