@@ -159,7 +159,7 @@ describe("Cycls Docs in the canvas", () => {
     say(frame.contentWindow, { type: "ready", protocol: 1 });
     await waitFor(() => expect(types(posted)).toContain("load"));
     const doc = (posted.find(([m]) => (m as { type: string }).type === "load")![0] as { doc: string }).doc;
-    expect(screen.getByTestId("docs-review-count").textContent).toBe("2");
+    expect(screen.getByTestId("docs-review-count").textContent).toBe("3");   // a row each, formatting included
     fireEvent.click(screen.getByRole("button", { name: /Review/ }));
     expect(screen.getByText(/Replaced “June” → “July”/)).toBeTruthy();
     expect(screen.getByText(/Formatting and layout changes/)).toBeTruthy();
@@ -171,7 +171,7 @@ describe("Cycls Docs in the canvas", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Accept" })[0]);
     await waitFor(() => expect(docsChanges).toHaveBeenCalledWith("r.docx", "d1", "accept", ["3", "4"]));
     await waitFor(() => expect(a.docsOpen).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByTestId("docs-review-count").textContent).toBe("1"));
+    await waitFor(() => expect(screen.getByTestId("docs-review-count").textContent).toBe("2"));
 
     (a.docsOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...OPENED, version: "d3" });
     fireEvent.click(screen.getByTestId("docs-reject-all"));

@@ -262,4 +262,15 @@ def test_a_cell_value_sent_in_cells_counts_as_its_text():
     op = {"op": "cell", "table": "T1", "row": 2, "col": 2, "cells": ["1,550"], "rows": []}
     assert _check_ops([op]) is None and op["text"] == "1,550"
     # an empty `cells` (hosts that fill every field) still says what is missing
-    assert "needs `text`" in _check_ops([{"op": "cell", "table": "T1", "row": 2, "col": 2, "cells": [], "width": 0}])
+    assert "needs `words`" in _check_ops([{"op": "cell", "table": "T1", "row": 2, "col": 2, "cells": [], "width": 0}])
+
+
+def test_words_go_to_the_service_as_text():
+    from cycls._agent.office.docs import DOCS_TOOL, _check_ops
+    props = DOCS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
+    assert "words" in props and "text" not in props   # some hosts' parsers drop a key named `text`
+    reply = {"op": "reply", "comment": 4, "words": "Done.", "done": True}
+    assert _check_ops([reply]) is None and reply == {"op": "reply", "comment": 4, "text": "Done.", "done": True}
+    old = {"op": "replace", "para": "¶3·u22", "text": "Still taken."}   # a model that sends `text` anyway
+    assert _check_ops([old]) is None and old["text"] == "Still taken."
+    assert "needs `words`" in _check_ops([{"op": "reply", "comment": 4, "done": True}])

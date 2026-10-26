@@ -28,7 +28,7 @@ export function DocsReviewBar({ changes, busy, failed, onTake, onReveal }: {
   onReveal: (change: DocsTrackedChange) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const count = changes.filter((c) => !c.other).length || changes.length;
+  const count = changes.length;   // one per row of the list, "Formatting and layout changes" included
   return (
     <div className="shrink-0 border-b border-border bg-secondary/40 text-xs" data-testid="docs-review">
       <div className="flex flex-wrap items-center gap-2 px-3 py-1.5">

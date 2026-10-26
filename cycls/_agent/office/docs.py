@@ -35,16 +35,16 @@ DOCS_TOOL = {
         "- create: a new document at `path` from `content` in markdown: # headings, one paragraph per line, "
         "- bullets and 1. numbers (indent two spaces to nest), | tables |, > quotes, **bold**, *italic*, "
         "[links](url), [page break]. Arabic paragraphs read right to left.\n"
-        "Ops: replace (para, text: the paragraph's new text); find_replace (find, replace, all?); insert_after / "
-        "insert_before (para, text: lines — \"## Heading\", \"- item\", \"1. item\" or plain); delete (para, to?); "
+        "Ops: replace (para, words: the paragraph's new text); find_replace (find, replace, all?); insert_after / "
+        "insert_before (para, words: lines — \"## Heading\", \"- item\", \"1. item\" or plain); delete (para, to?); "
         "style (para or find, to?; style like \"Heading 2\", align, rtl, bold, italic, underline, strike, color, "
         "highlight, size, font — with find, only those words); list (para, to?, list: bullet | numbered | none, "
-        "level?); link (find, url; \"\" removes it); cell (table \"T1\", row, col, text); insert_row (table, after, "
+        "level?); link (find, url; \"\" removes it); cell (table \"T1\", row, col, words); insert_row (table, after, "
         "cells); delete_row (table, row); insert_column (table, after, cells); delete_column (table, col); "
         "insert_table (para, rows: [[\"Name\", \"Owner\"], [\"…\", \"…\"]], header?) adds a table after the paragraph; "
         "picture (para, path: a PNG/JPEG/GIF in the workspace, width? in pixels, align?) adds a picture after it; "
-        "comment (para or find, text) comments on the paragraph or those words; reply (comment: the # in the read's "
-        "Comments, text: your answer, done: true to resolve it too); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
+        "comment (para or find, words) comments on the paragraph or those words; reply (comment: the # in the read's "
+        "Comments, words: your answer, done: true to resolve it too); resolve (comment, done: false opens it again); accept_changes / reject_changes take a "
         "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
         "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
         "ops [] for read and create, content \"\" for read and edit.\n"
@@ -68,7 +68,9 @@ DOCS_TOOL = {
                         "para": {"type": "string", "description": "A paragraph's reference from the read, e.g. ¶7·k3f"},
                         "to": {"type": "string", "description": "The last paragraph of a range (delete, style, list)"},
                         "find": {"type": "string", "description": "Words in the document: they name the paragraph, or are what find_replace, link and style change"},
-                        "text": {"type": "string", "description": "replace / cell: the new text; insert_*: the new lines; comment / reply: what it says"},
+                        # Not "text": some hosts' tool-call parsers drop a key named so (OpenRouter, 2026-10-26:
+                        # Alibaba, Morph, OpenInference, Relace, Makora, Ionstream, PrimeIntellect, Wafer).
+                        "words": {"type": "string", "description": "replace / cell: the new text; insert_*: the new lines; comment / reply: what it says"},
                         "replace": {"type": "string", "description": "find_replace: the new words (\"\" removes them)"},
                         "all": {"type": "boolean", "description": "find_replace / link: every place the words are"},
                         "style": {"type": "string", "description": "A paragraph style the document has, e.g. Heading 2, Title, Normal"},
@@ -137,6 +139,9 @@ def _check_ops(ops):
             return f"op {i} needs an `op` ({', '.join(OPS)})"
         if op["op"] not in OPS:
             return f"op {i}: unknown op {str(op['op'])[:30]!r} (one of {', '.join(OPS)})"
+        # The tool says `words`; the service takes `text` (which a model may still send).
+        if isinstance(op.get("words"), str):
+            op["text"] = op.pop("words")
         # A cell's words sent in `cells` (what insert_row takes) mean the same: one value.
         if op["op"] == "cell" and not isinstance(op.get("text"), str):
             given = op.get("cells")
@@ -146,7 +151,7 @@ def _check_ops(ops):
                 op["text"] = given
         if op["op"] in ("reply", "comment", "replace", "insert_after", "insert_before", "cell") and not isinstance(op.get("text"), str):
             got = ", ".join(sorted(str(k) for k in op)) or "nothing"
-            return f"op {i} ({op['op']}) needs `text`, a string (it came with: {got})"
+            return f"op {i} ({op['op']}) needs `words`, a string (it came with: {got})"
     return None
 
 
@@ -230,7 +235,7 @@ async def exec_docs(inp, workspace, ctx=None):
 
         # edit
         if not ops:
-            return _err("edit needs `ops`: [{\"op\": \"replace\", \"para\": \"¶3·k3f\", \"text\": \"…\"}].")
+            return _err("edit needs `ops`: [{\"op\": \"replace\", \"para\": \"¶3·k3f\", \"words\": \"…\"}].")
         try:
             ops = await asyncio.to_thread(_with_pictures, ops, root)
         except ValueError as e:
@@ -253,7 +258,7 @@ async def exec_docs(inp, workspace, ctx=None):
                         return _err(f"{rel} changed while the edit was being made. Nothing was changed; read it "
                                     "again, then edit.")
     except client.Refused as e:
-        message = str(e)
+        message = str(e).replace("`text`", "`words`")   # the service's name for what the tool calls `words`
         return _err(message if "Nothing was changed" in message else f"{message} — nothing was changed.")
     except client.Unavailable as e:
         return _err(f"Docs is unavailable — {e}")

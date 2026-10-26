@@ -120,7 +120,12 @@ not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-o
   open preview fetches the file again (`cycls:canvas-refresh`). A command naming the version already open does
   nothing; two quick edits open only the latest. A right-to-left paragraph is marked across the page's text area
   (in a table cell too: the row), since a right-to-left line's own box is not reliable.
-- Every call logs `docs_call` with its argument names and op names.
+- Every call logs `docs_call` with its argument names and op names (`op_keys`: each op's field names as sent).
+- An op's words are `words` in the tool (replace, insert_*, cell, comment, reply), `text` to the service: the SDK
+  renames it (a model's `text` is taken too) and says `words` in the service's errors. Some OpenRouter hosts'
+  tool-call parsers drop a key named `text` (probed 2026-10-26: Alibaba, Morph, OpenInference, Relace, Makora,
+  Ionstream, PrimeIntellect, Wafer — a reply failed 6 times on prod); with `words` they keep it. super-dev also
+  skips those hosts (they drop `done` and ramble even so).
 
 ## Configuration
 
