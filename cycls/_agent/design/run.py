@@ -142,7 +142,10 @@ async def _design_call(inp, workspace):
     folder = DESIGN_FOLDER.get()
     if action == "extract" and not inp.get("name") and isinstance(inp.get("path"), str):
         name = _stem_of(inp["path"].rsplit(".", 1)[0])                     # its parts beside the PDF
-    elif action in ("render", "script", "extract"):
+    elif action == "import" and not inp.get("name") and isinstance(inp.get("path"), str):
+        from .importer import import_name
+        name = import_name(inp["path"], folder)                           # beside the .pptx (an upload: the open folder)
+    elif action in ("render", "script", "extract", "import"):
         name = _stem_of(inp.get("name") or "design", folder)
     else:
         name = _find_design(workspace.root, inp.get("name") or "design", folder)
@@ -157,6 +160,9 @@ async def _design_call(inp, workspace):
         return await _exec_document(action, inp, workspace, name)
     if action == "extract":
         return await _pdf_parts(inp, workspace, name)
+    if action == "import":
+        from .importer import import_pptx
+        return await import_pptx(inp, workspace, name)
     if action in _FILE_ACTIONS:
         return await _exec_design_file(action, inp, workspace, name)
     if action == "comments":

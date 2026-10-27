@@ -567,6 +567,43 @@ the pages make themselves.
   KB a text page, an outline of the sections, a contents page whose rows are links.
   `?as=pdf` writes it from the `.fig`, so it is what was last saved.
 
+## A PowerPoint deck brought in
+
+`import {path}` brings an existing `.pptx` (`.ppsx`, `.potx`, macro ones too) in as a
+Design deck: the service (cycls-design `POST /import`, its `src/pptx/`) draws every
+slide as PowerPoint draws it — the master's and layout's artwork behind it,
+placeholders with what they inherit, pictures cropped and recoloured, the 187 preset
+shapes from the standard's own formulas, tables cell by cell, charts from their cached
+values in Design's chart style, SmartArt as the shapes PowerPoint stored for it,
+speaker notes — and names every node after its PowerPoint shape, unique on its slide.
+The deck opens on the canvas like any other, and the agent changes it with `inspect` +
+`edit` (`frame` = the slide's index; a text of several paragraphs is a frame of
+"<name> para N" texts), `duplicate_slide` for a new slide in its look (an imported
+slide has no layout `source`, so `update_slide` can't rebuild it), `export` for a
+`.pptx` back. The `.pptx` itself is never changed.
+
+- **Where it's saved:** beside the `.pptx`; an upload (`attachments/<id>-name.pptx`)
+  lands in the folder the person has open, named as they named the file. Never over an
+  existing design (`deck-2`).
+- **In parts:** the service takes up to 60 slides a call (fewer when they are heavy) and
+  says where the rest start; `importer.py` sends them with the design so far, and they
+  are added after its slides — 150 slides at most. Only the first call asks for previews
+  (the first slides, the rest on contact sheets).
+- **What it keeps:** `keep = {kind: "deck", imported: {from, slides, size, fonts}, deck:
+  {size, theme}}` — `deck.theme` is a Design look made from the deck's theme (its
+  colours, its fonts' stand-ins), so `add_slide` with a layout comes out in its colours;
+  `imported.fonts` says which open face stands for which of the deck's fonts (for the
+  export back).
+- **What it says:** the report — what didn't come across or changed (fonts set in open
+  stand-ins, animations, effects, EMF pictures…), said once each; and that the person's
+  file is as it was.
+- **Limits:** 22 MB a file (the service takes 30 MB a request; base64 is a third more).
+  The layout check doesn't report on or change an imported slide — it is the person's
+  own as they made it.
+- **When not to:** a quick fix the person needs back in their own file and template stays
+  with the pptx skill (the routing lives in super-dev's prompt and the skill): the round
+  trip through Design rebuilds the file.
+
 ## Two smaller things
 
 - **A renamed design is its file moved.** `PATCH /files/<x>.fig` moves the `.fig`, its
@@ -1138,6 +1175,7 @@ every name is still importable from where it used to be.
 | `actions.py` | Slide actions, a document's section actions, the file actions (export, rename, copy, delete, versions), and a document rendered. |
 | `prepare.py` | What the model wrote, made ready for the service: a spec and its pages, a deck of layouts, a document, a slide, an edit's ops. With `brand.py` (colours, the brand kit) and `images.py` (a workspace image placed; the bounds on what is sent and shown). |
 | `extract.py` | A PDF taken apart to be made again as a document. |
+| `importer.py` | A PowerPoint deck brought in as a Design deck (`import`). |
 | `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's file (its name as a path, a free one, the canvas opening it). |
 | `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
 | `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` · `assets.py` | Slide ops on a saved deck (its settings read from the file) · versions and the base a save names · a design's preview made ready after a save · rooms and passes · stock photos · the media library (a named asset fetched and placed; the `assets` listing). |

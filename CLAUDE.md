@@ -73,6 +73,7 @@ cycls/
     │   ├── actions.py      # slide, section and file actions; a document rendered
     │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
     │   ├── extract.py      # a PDF taken apart to be made again; report.py — what the model is told; files.py — a design's files
+    │   ├── importer.py     # a PowerPoint deck brought in as a Design deck (`import`, the service's /import, in parts)
     │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py a design's preview made ready, live.py rooms, stock.py photos, assets.py the media library
     │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
     ├── transcribe/         # cycls Transcribe tool + the mic, two engines: ElevenLabs Scribe (elevenlabs.py) and the cycls-transcribe service on Modal GPUs (client.py: Cohere Transcribe Arabic, Whisper); TRANSCRIBE_ENGINE picks the first; usage.py the daily allowance; docs/notes/transcribe.md
@@ -158,6 +159,7 @@ tests/
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
+│   ├── design_import_test.py    # Design `import`: a .pptx brought in as a deck (where it's saved, in parts, refusals)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
 │   ├── video_test.py            # Video tool: client, signed contract, short/whole forms + the ondemand seam, executor, ?as=player
 │   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry

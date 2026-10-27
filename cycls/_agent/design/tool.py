@@ -277,6 +277,14 @@ _DESIGN_TOOL = {
         "the PDF is not among its pictures: extract {path, page: N} shows that page, and with "
         "\"area\": [left, top, width, height] (parts of the page, 0 to 1) cuts the figure out and saves it. "
         "A scan, or text the reply says can't be trusted, is read from its pages the same way.\n"
+        "- import {path, name?} — an EXISTING PowerPoint deck (.pptx) brought in as a Design deck, each slide "
+        "drawn as PowerPoint draws it (its theme, layouts, pictures, shapes, tables, charts, speaker notes), "
+        "every shape and text keeping its PowerPoint name. Use it when the person wants to work on their deck "
+        "in Cycls — see it, change it, redesign it, present it; it opens on the canvas, and the .pptx itself "
+        "is left as it was. Then change it with inspect + edit (`frame` = the slide's index from 0), "
+        "duplicate_slide + edit for a new slide in its look, `export` for a .pptx back. For a quick fix the "
+        "person needs in their exact PowerPoint file and template (\"fix the typo on slide 3 and send it "
+        "back\"), edit the .pptx itself instead — the round trip through Design rebuilds the file.\n"
         "- script {script, name, format?} — escape hatch: a raw Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
@@ -353,8 +361,8 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
                                               "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
-                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets", "skill"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) and `skill` loads this tool's skills (`skill`) — nothing is made."},
+                                              "import", "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets", "skill"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `import` an existing PowerPoint deck as a design, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) and `skill` loads this tool's skills (`skill`) — nothing is made."},
         "skill": {"type": ["string", "array"], "items": {"type": "string"}, "description": f"For `skill`: the skills to load, in one call — {', '.join(SKILLS)}."},
         "query": {"type": "string", "description": "For `assets`: words to look for in the media library — a thing (paper, marble, rocket, people…), an occasion (ramadan, national day…) or a mood (luxury, minimal…); none lists all of a `kind`."},
         "kind": {"type": "string", "description": "For `assets`: one kind only — texture, pattern, emoji-3d, icon-3d, illustration or art."},
@@ -362,7 +370,7 @@ _DESIGN_TOOL = {
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
         "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, look, cover, size, footnotes, numbering… (null removes one). Not its sections."},
-        "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
+        "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf. For `import`: the PowerPoint deck, e.g. attachments/q3-review.pptx."},
         "page": {"type": ["string", "integer"], "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page). For `extract`: the PDF's page to look at, a number from 1."},
         "area": {"type": "array", "items": {"type": "number"}, "description": "For `extract` with `page`: the part of that page to cut out and save as a picture — [left, top, width, height], each a part of the page from 0 to 1."},
         "pages": {"type": ["string", "integer"], "description": "For `extract`: read on in a long PDF — the pages whose text to show, e.g. \"5-12\" (the reply says which are left)."},
@@ -421,7 +429,7 @@ _DESIGN_SHORT = (
     "banner, a carousel; a slide deck (PowerPoint / PDF); a document that flows over pages (a report, a "
     "proposal, a CV, a newsletter — as a PDF); several variants of one design; and edits to any design "
     "already made (a .fig: text, colours, layout, slides, sections). It can also take an existing PDF apart "
-    "to redesign it.\n\n"
+    "to redesign it, and bring an existing PowerPoint deck in to work on (`import`).\n\n"
     "This is the SHORT form of the tool — how a design is written is not in it. Before your first use of it "
     "in a chat, call it with {\"action\": \"guide\"}: its full instructions load into this description. Then "
     "make the call you meant. (A call made before that is not run — it loads the instructions and asks you "
@@ -476,7 +484,7 @@ def _design_short():
     for key, schema in _DESIGN_TOOL["input_schema"]["properties"].items():
         props[key] = {k: schema[k] for k in ("type", "enum", "items") if k in schema}
     props["action"]["description"] = (
-        "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
+        "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, import, script, "
         "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
         "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments, assets, "
         "skill (loads this tool's skills, and its instructions with them).")

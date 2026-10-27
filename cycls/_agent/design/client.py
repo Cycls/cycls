@@ -203,6 +203,28 @@ async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=Fal
     return _decode(await _post("/render", body, user_id))
 
 
+async def import_pptx(pptx, user_id=None, start=0, fig=None, keep=None, preview=True):
+    """A PowerPoint file (bytes) → its slides as a design, up to 60 a call from `start`: {fig, slides, previews,
+    sheets, sheet_pages, report, fonts, deck, count, next}. `next` (else None): where the rest start — send them
+    with `fig`, the design so far, and they are added after its slides. `keep` (the first call): our record of it."""
+    body = {"pptx": base64.b64encode(pptx).decode(), "from": int(start), "preview": bool(preview)}
+    if fig is not None:
+        body["fig"] = base64.b64encode(fig).decode()
+    if keep:
+        body["keep"] = keep
+    data = await _post("/import", body, user_id)
+    return {"fig": base64.b64decode(data["fig_base64"]),
+            "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)],
+            "previews": _b64s(data.get("previews_base64")),
+            "sheets": _b64s(data.get("sheets_base64")),
+            "sheet_pages": [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2],
+            "report": [str(n) for n in data.get("report") or [] if isinstance(n, str)],
+            "fonts": {str(k): str(v) for k, v in (data.get("fonts") or {}).items()},
+            "deck": data.get("deck") if isinstance(data.get("deck"), dict) else {},
+            "count": int(data.get("count") or 0),
+            "next": int(data["next"]) if isinstance(data.get("next"), int) else None}
+
+
 async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=None):
     """Edit a `.fig` headless by `ops` or a raw plugin-API `script` → {fig, lint, script, preview, …};
     `script` is what the live editor replays. A failing edit raises RuntimeError with the service's error."""
