@@ -54,9 +54,14 @@ the existing empty-state hero — so the identity stays ours by construction.
    hardcoded `suggestions-data.tsx` chips remain the fallback when no
    examples are configured.
 
-8. **Live previews, not screenshots.** Cards render the artifact through
-   `CanvasDoc` (scaled, sandboxed, lazy) — HTML, PDF, images, spreadsheets,
-   3D, code all work because the canvas dispatcher already handles them.
+8. **Text cards, not previews.** A card is the example's prompt and the file
+   it made (its tile and name), in text. Live previews through `CanvasDoc` were
+   tried until October 2026: a PDF looked different on every device (a
+   browser's toolbar in a card on desktop, page 1 on iOS, Android Chrome's
+   placeholder of a blob address and an Open button), and every card loaded
+   its whole file for the empty screen. The share page shows the artifact.
+9. **A new order each visit.** Each category's cards are shuffled once a
+   visit, so no example is always first.
 
 ## API
 
@@ -98,10 +103,10 @@ Config: `Config.examples` (raw mapping, server-side), `examples_enabled` in
 ## FE
 
 - `ExamplesGallery` (new): fetches `/examples`; category chips; cards.
-  Card = scaled `CanvasDoc` preview + title; hover (always-on for touch, the
-  `sm:opacity-0 group-hover` pattern) reveals **Use prompt** (fills the
-  input box — tighter than clipboard: edit → send → sign-in pops → sent) and
-  **View** (→ the share page).
+  Card = the prompt and the file's tile and name; the card opens the share
+  page, and **Use prompt** under it fills the input box (tighter than
+  clipboard: edit → send → sign-in pops → sent). A tutorial card keeps its clip
+  and **Watch**.
 - `chat.tsx` empty state: gallery under the input when `examples_enabled`,
   `Suggestions` otherwise.
 - `shared-view.tsx`: canvas pane (desktop split / mobile drawer) via the
