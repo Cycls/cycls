@@ -1288,13 +1288,14 @@ def test_a_tools_newest_pictures_stay_in_view(agent_env):
     from cycls._agent.harness.compact import PICTURES, SEEN
     from cycls._agent.state import append_messages
     ws, ctx = agent_env
-    (Path(ws) / "p.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    for i in range(PICTURES + 1):
+        (Path(ws) / f"p{i}.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes([48 + i]) * 64)
     attached = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}}
     asyncio.run(append_messages(ctx.workspace, ctx.chat_id, [
         {"role": "user", "content": [{"type": "text", "text": "this logo"}, attached]},
         {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}], 0))
-    read = lambda i: _tool_use_block(i, name="read", inp={"path": "p.png"})
-    responses = iter([*(_make_response([read(f"t{i}")], stop_reason="tool_use") for i in range(PICTURES + 1)),
+    read = lambda i: _tool_use_block(f"t{i}", name="read", inp={"path": f"p{i}.png"})
+    responses = iter([*(_make_response([read(i)], stop_reason="tool_use") for i in range(PICTURES + 1)),
                       _make_response([_text_block("Done")])])
     calls, client = [], MagicMock()
     client.messages.stream = _stream(responses, calls=calls)
@@ -1312,6 +1313,49 @@ def test_a_tools_newest_pictures_stay_in_view(agent_env):
              if b.get("type") == "tool_result"]
     assert [x["type"] for r in saved for x in r["content"]] == ["image"] * (PICTURES + 1)
     assert base64.b64decode(saved[0]["content"][0]["source"]["data"]).startswith(b"\x89PNG")
+
+
+def _notes(ctx):
+    """The repeat notes the tool results carried, in order, as (call index, count)."""
+    from cycls._agent.harness.main import _REPEATED
+    results = [b for m in _read_history(ctx) if isinstance(m["content"], list) for b in m["content"]
+               if b.get("type") == "tool_result"]
+    return [(i, n) for i, r in enumerate(results) for n, note in _REPEATED.items()
+            if note.format(n=n) in json.dumps(r["content"])]
+
+
+def test_the_same_answer_again_is_noted_then_the_run_stops(agent_env):
+    """The same call answered the same way is no news: a note the 3rd and 5th time, and the run stops at the 8th.
+    Counted anywhere in the run, so reading two files in turn (chat a9d536c4's 1, 2, 3, 1, 2…) is caught."""
+    ws, ctx = agent_env
+    (Path(ws) / "a.txt").write_text("a")
+    (Path(ws) / "b.txt").write_text("b")
+    read = lambda i: _tool_use_block(f"t{i}", name="read", inp={"path": "ab"[i % 2] + ".txt"})
+    responses = iter([*(_make_response([read(i)], stop_reason="tool_use") for i in range(20)),
+                      _make_response([_text_block("Done")])])
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(responses, calls=calls)
+    with _mock_anthropic(client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+    assert _notes(ctx) == [(4, 3), (5, 3), (8, 5), (9, 5), (14, 8)]   # b.txt's 8th would have been call 15
+    assert len(calls) == 15
+    assert any(isinstance(i, dict) and i.get("type") == "callout" for i in items)
+
+
+def test_a_call_made_again_after_a_change_is_not_a_repeat(agent_env):
+    """Reading a file again after it changed gets a new answer: never noted, the run goes on."""
+    ws, ctx = agent_env
+
+    def responses():
+        for i in range(6):
+            (Path(ws) / "a.txt").write_text(f"version {i}")
+            yield _make_response([_tool_use_block(f"t{i}", name="read", inp={"path": "a.txt"})], stop_reason="tool_use")
+        yield _make_response([_text_block("Done")])
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(responses(), calls=calls)
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+    assert _notes(ctx) == [] and len(calls) == 7
 
 
 def test_a_new_chat_is_named_beside_the_reply_once_and_a_rename_wins(agent_env, monkeypatch):

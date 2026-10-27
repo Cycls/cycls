@@ -5,7 +5,7 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, json, os, random, re, time, uuid
+import asyncio, hashlib, json, os, random, re, time, uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +38,16 @@ MAX_PAUSES = 8                # pause_turn resends before giving up
 CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
+# The same call answered the same way is no news: a note at these counts in a run, and the run stops at the
+# last. Counted anywhere in the run, not only back to back (chat a9d536c4 read pages 1, 2, 3, 1, 2… 53
+# times); a call made again after a change gets a new answer and starts its own count.
+_REPEATED = {
+    3: ("You made this exact call {n} times in this task and got the same result each time. Repeating it won't "
+        "change it: use what it returned, try another way, or ask the person if something needs clarifying."),
+    5: ("This exact call has now returned the same result {n} times. Don't make it again: decide with what you "
+        "have, or tell the person what's in the way and ask how to go on."),
+    8: "This exact call returned the same result {n} times, so the run stopped here.",
+}
 # Providers report context overflow as an error, each with its own wording.
 # One phrasing per provider, because each says it differently and a miss here is
 # not a smaller context — it is the error reaching the user instead of a compact
@@ -571,6 +581,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             and await session.clear(keep, window * CLEAR_COLD)):
         yield compacted(1, "cold", last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0))
 
+    repeats = {}   # (tool, input, result) → times this run
     while True:
         try:
             async for ev in fold(): yield ev
@@ -694,6 +705,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     error=None if good else (_cause(out) if not ok else out[:200]))
                 if not ok: out = f"Error: {_cause(out)}"
                 content, evs, waits = _shape(block, out, ok, handlers, mcp_names)
+                same = hashlib.sha1(json.dumps([block["name"], block.get("input"), content], sort_keys=True,
+                                               default=str).encode()).hexdigest()
+                repeats[same] = n = repeats.get(same, 0) + 1
                 for ev in evs: yield ev
                 kept += [k for e in evs if (k := _kept(e))]
                 if waits:
@@ -701,7 +715,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
                 if isinstance(content, str) and block["name"] not in ("read", "skill"):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
-                results.append({"type": "tool_result", "tool_use_id": block["id"], "content": content})
+                note = _REPEATED.get(n, "").format(n=n)
+                results.append({"type": "tool_result", "tool_use_id": block["id"],
+                                "content": _with_mention(content, note) if note else content})
+                if note:
+                    log("repeat", user=user, chat_id=session.chat_id, model=bare_model, tool=block["name"], times=n)
+                    if n == max(_REPEATED):
+                        terminal = True
+                        yield events.callout("Stopped: the same step kept giving the same result.", "warning")
                 if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
                     yield {"type": "step", "id": block["id"], "ok": good,
                            **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}

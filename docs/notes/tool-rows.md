@@ -58,6 +58,19 @@ valid across the break.
 `allowed_tools` names: a tool dropped by `vendor_skips` takes its guidance with
 it, and the ordering follows the tools themselves.
 
+## The same answer again (every tool, no field)
+
+The loop counts each call by its tool, its input and what it returned (`_REPEATED` in
+`harness/main.py`). The same call answered the same way is no news: the 3rd time its result
+carries a note (use what it returned, try another way, or ask the person), the 5th a firmer
+one (don't make it again; say what's in the way and ask), and the 8th ends the run with a
+`Stopped:` callout. Each is a `repeat` log row. The count is per run and anywhere in it, not
+only back to back: chat a9d536c4 read pages 1, 2, 3, 1, 2… 53 times, which a back-to-back
+count (DeepSeek's harness reminds at 3, 5 and 8 in a row; opencode asks the person at 3)
+never sees. A call made again after a change gets a new answer and starts its own count,
+so checking work after editing it is never noted. Polling a job that answers "still running"
+each time is the one honest repeat it notes; it ends the run only at the 8th.
+
 ## Return shapes a tool may use
 
 `run` can answer in four ways. The loop checks them in this order:
