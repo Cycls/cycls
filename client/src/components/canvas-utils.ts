@@ -6,6 +6,10 @@ export const ext = (name: string) => name.split(".").pop()?.toLowerCase() || "";
 export const isHtml = (name: string) => ["html", "htm"].includes(ext(name));
 export const isMd = (name: string) => ["md", "markdown"].includes(ext(name));
 export const isPdf = (name: string) => ext(name) === "pdf";
+// The browser shows a PDF inside the page. Chrome on Android has no viewer of its own: an embedded PDF is drawn as
+// its address (a blob's UUID) and an Open button, not the document.
+export const embedsPdf = () =>
+  typeof navigator === "undefined" || (navigator as { pdfViewerEnabled?: boolean }).pdfViewerEnabled !== false;
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
 export const isImage = (name: string) => IMAGE_EXTS.has(ext(name));

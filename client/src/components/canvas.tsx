@@ -11,7 +11,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
+import { isHtml, isMd, isPdf, embedsPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
@@ -213,10 +213,11 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
 
 // Extension tile + download/share — shown for a file with no in-browser
 // renderer, and when an Office file's PDF conversion is unavailable.
-function NoPreviewCard({ file, onDownload, onShare }: {
+function NoPreviewCard({ file, onDownload, onShare, open }: {
   file: CanvasFile;
   onDownload?: () => void;
   onShare?: () => void;
+  open?: string | null;   // a file the browser can show on its own page: opened there
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
@@ -224,11 +225,19 @@ function NoPreviewCard({ file, onDownload, onShare }: {
         <span style={tintLabel(fileKind(file))}>{(tileExt(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
       </div>
       <p className="text-sm font-medium text-foreground">{shownName(file.name)}</p>
-      <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
-      {(onDownload || onShare) && (
+      {!open && <p className="text-xs text-muted-foreground">{t("noPreview")}</p>}
+      {(open || onDownload || onShare) && (
         <div className="mt-1 flex gap-2">
+          {open && (
+            <a href={open} target="_blank" rel="noopener noreferrer"
+               className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity">
+              {t("openInTab")}
+            </a>
+          )}
           {onDownload && (
-            <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
+            <button onClick={onDownload} className={open
+              ? "rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              : "rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"}>
               {t("download")}
             </button>
           )}
@@ -425,6 +434,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   // Office docs arrive here as a converted-PDF blob URL, so they ride the same
   // native PDF viewer (search / zoom / print, mobile open-in-tab).
   if (isPdf(fileKind(file)) || isOffice(fileKind(file))) {
+    // No viewer of the browser's own (Chrome on Android): its card, opened in a tab, not a blob's placeholder.
+    if (!embedsPdf()) return <NoPreviewCard file={file} open={content} onDownload={onDownload} onShare={onShare} />;
     // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
     // Phones can't EMBED PDFs (iOS iframes render page 1 only) but render them
     // fine on direct navigation — so on small screens the iframe doubles as a

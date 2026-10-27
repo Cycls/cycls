@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useFileContent, CanvasDoc } from "./canvas";
-import { isHtml, isRenderable } from "./canvas-utils";
+import { embedsPdf, isHtml, isPdf, isRenderable } from "./canvas-utils";
 import { Icon } from "./icon";
 import { track } from "../lib/analytics";
 import { t, getLang } from "../lib/i18n";
@@ -260,7 +260,8 @@ function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
     return URL.createObjectURL(await r.blob());
   }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const renderable = !!file && isRenderable(file.path);
+  // A PDF where the browser can't show one in the page (Chrome on Android) is its prompt, not a placeholder.
+  const renderable = !!file && isRenderable(file.path) && !(isPdf(file.path) && !embedsPdf());
   const { content, error } = useFileContent(load && renderable && !item.video ? file! : null, readFile, openFile, 0, true);
 
   // Tutorial preview — a muted looping clip for direct files, the thumbnail
