@@ -607,6 +607,58 @@ def test_openai_stream_clamps_cached_above_prompt():
     assert turn.input + turn.cached + turn.cache_create == 127
 
 
+def test_openai_thinking_is_kept_and_goes_back_to_its_own_model():
+    """A host's thinking is saved with the turn and sent back in the field it came in, to the model that
+    wrote it only: DeepSeek with tools expects every earlier turn's reasoning, and without it each step
+    starts its thinking over (chat a9d536c4 read the same three pages 53 times)."""
+    import types
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
+
+    def chunk(delta, finish=None):
+        return types.SimpleNamespace(usage=None, choices=[types.SimpleNamespace(delta=delta, finish_reason=finish)])
+    call = types.SimpleNamespace(index=0, id="c1", function=types.SimpleNamespace(name="read", arguments='{"path": "a.png"}'))
+
+    async def _gen():
+        yield chunk(types.SimpleNamespace(content=None, tool_calls=None, reasoning="Page 1 "))
+        yield chunk(types.SimpleNamespace(content=None, tool_calls=None, reasoning="looks right."))
+        yield chunk(types.SimpleNamespace(content=None, tool_calls=[call]), finish="tool_calls")
+
+    async def _create(**kw): return _gen()
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_create)))
+    p = OpenAIProvider(client, "deepseek/deepseek-v4.1-flash", "openrouter")
+
+    async def run():
+        return [ev async for ev in p.stream(messages=[{"role": "user", "content": "check"}], system="", tools=[], max_tokens=100)]
+    turn = next(e for e in asyncio.run(run()) if isinstance(e, Turn))
+    assert turn.content[0] == {"type": "thinking", "thinking": "Page 1 looks right.", "field": "reasoning"}
+
+    def sent(model):
+        history = [{"role": "user", "content": "check"},
+                   {"role": "assistant", "content": turn.content, "usage": {"model": model}},
+                   {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "ok"}]}]
+        return next(m for m in p._to_messages(history, "")[0] if m["role"] == "assistant")
+    assert sent("deepseek/deepseek-v4.1-flash")["reasoning"] == "Page 1 looks right."
+    assert "reasoning" not in sent("moonshotai/kimi-k3")
+
+
+def test_thinking_from_another_model_never_reaches_claude():
+    """Claude refuses thinking without a signature: an OpenAI-compatible model's is dropped on the way, and
+    clearing old turns empties it. Claude's own, signed, stays whole."""
+    from cycls._agent.harness.providers.anthropic import AnthropicProvider
+    from cycls._agent.harness.compact import clear
+    theirs = {"type": "thinking", "thinking": "Page 1 looks right.", "field": "reasoning"}
+    ours = {"type": "thinking", "thinking": "Fine.", "signature": "sig"}
+    done = {"type": "text", "text": "Done."}
+    msgs = [{"role": "user", "content": "check"},
+            {"role": "assistant", "content": [theirs, done]},
+            {"role": "assistant", "content": [theirs]},
+            {"role": "assistant", "content": [ours, done]}]
+    out = AnthropicProvider(None, "claude-x")._to_messages(msgs)
+    assert [m["content"] for m in out[1:]] == [[done], [ours, done]]
+    assert [b["thinking"] for m in clear(msgs[1:]) for b in m["content"] if b["type"] == "thinking"] == ["", "", "Fine."]
+
+
 def test_web_fetch_strips_html_to_text(monkeypatch):
     import httpx
     from cycls._agent import tools

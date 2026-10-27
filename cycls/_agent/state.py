@@ -465,12 +465,12 @@ class Session:
 
     def context(self):
         """The model's view: the summary (once compacted) standing in for the folded
-        prefix, tool results before `cleared` stubbed, a tool's pictures only on the
-        call after it ran, the rest verbatim."""
-        from .harness.compact import prefix, clear, once
+        prefix, tool results and thinking before `cleared` stubbed, a tool's newest
+        pictures only, the rest verbatim."""
+        from .harness.compact import prefix, clear, recent
         k = max(self.first_kept, self.cleared)
-        return once([*(prefix(self.summary) if self.summary is not None else []),
-                     *clear(self.messages[self.first_kept:k]), *self.messages[k:]])
+        return recent([*(prefix(self.summary) if self.summary is not None else []),
+                       *clear(self.messages[self.first_kept:k]), *self.messages[k:]])
 
     async def clear(self, keep, enough):
         """Stub tool results older than the recent `keep` tokens — the cheap tier.

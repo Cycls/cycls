@@ -83,27 +83,34 @@ def _stub(b):
     if t == "tool_use":   # long arguments (an app's code, an edit's text) go too; paths and commands stay
         return {**b, "input": {k: "[Old input cleared]" if isinstance(v, str) and len(v) > 1_000 else v
                                for k, v in (b.get("input") or {}).items()}}
+    if t == "thinking" and "signature" not in b:   # an OpenAI-compatible model's; Claude's is signed and stays whole
+        return {**b, "thinking": ""}
     return b
 
 
-SEEN = "[picture: looked at when it came back; ask for it again to see it]"
+SEEN = "[picture: seen when it came back]"
+PICTURES = 4   # a tool's newest pictures that stay in the model's view
 
 
-def _seen(b):
-    """A tool result whose pictures were looked at: the same result, a line in place of each."""
-    c = b.get("content") if isinstance(b, dict) and b.get("type") == "tool_result" else None
-    if not (isinstance(c, list) and any(isinstance(x, dict) and x.get("type") == "image" for x in c)):
-        return b
-    return {**b, "content": [{"type": "text", "text": SEEN} if isinstance(x, dict) and x.get("type") == "image" else x
-                             for x in c]}
+def recent(messages, keep=PICTURES):
+    """A tool's newest `keep` pictures stay in the model's view and a line stands in for each older one,
+    so a check over a few pages sees them together. A picture costs time on every call it rides, and
+    when one drops out the host reads again what came after it: a few steps, not the chat. Pictures
+    the person attached stay."""
+    left = keep
 
+    def swap(x):
+        nonlocal left
+        if not (isinstance(x, dict) and x.get("type") == "image"): return x
+        left -= 1
+        return x if left >= 0 else {"type": "text", "text": SEEN}
 
-def once(messages):
-    """A tool's pictures reach the model on the call right after it ran, then a line stands in for each.
-    A picture costs time on every call it rides, cached or not; the swap is in the last call's newest
-    message, so only that is read again. Pictures the person attached stay."""
-    return [{**m, "content": [_seen(b) for b in m["content"]]} if isinstance(m.get("content"), list) else m
-            for m in messages[:-1]] + messages[-1:]
+    def result(b):
+        if not (isinstance(b, dict) and b.get("type") == "tool_result" and isinstance(b.get("content"), list)): return b
+        return {**b, "content": [swap(x) for x in reversed(b["content"])][::-1]}
+
+    return [{**m, "content": [result(b) for b in reversed(m["content"])][::-1]} if isinstance(m.get("content"), list)
+            else m for m in reversed(messages)][::-1]
 
 
 def clear(messages):
