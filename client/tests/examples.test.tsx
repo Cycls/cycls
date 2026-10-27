@@ -68,8 +68,8 @@ describe("example cards", () => {
     const { ExamplesGallery } = await import("../src/components/examples");
     const onUsePrompt = vi.fn();
     render(<ExamplesGallery onUsePrompt={onUsePrompt} />);
-    // Use prompt and View twice a card: over it where a pointer hovers, under it on a touch screen.
-    await waitFor(() => expect(screen.getAllByText("View").length).toBe(items.length * 2));
+    // Use prompt and View once a card, in the bar at its foot (always there on touch, on hover with a pointer).
+    await waitFor(() => expect(screen.getAllByText("View").length).toBe(items.length));
     return onUsePrompt;
   };
   const shares = () => [...new Set(screen.getAllByText("View").map((a) => a.getAttribute("href")))];

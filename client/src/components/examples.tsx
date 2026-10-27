@@ -12,9 +12,10 @@ import { useEscape } from "../hooks/use-escape";
 // The examples gallery — curated public shares on the empty-chat screen
 // (docs/notes/examples-gallery.md), in a new order each visit. A card previews
 // the conversation's final artifact through the same CanvasDoc the canvas uses
-// (its type and prompt when the file can't be drawn there); "Use prompt" drops
-// the example's prompt into the composer, "View" opens the share page
-// (transcript + artifact): over the card on hover, under it on a touch screen.
+// (its type and prompt when the file can't be drawn there); the card and "View"
+// open the share page (transcript + artifact), "Use prompt" drops the example's
+// prompt into the composer: both in a slim bar at the card's foot, always there
+// on a touch screen, on hover where a pointer hovers.
 // Data: GET /examples, resolved server-side from the operator's `.examples()` share list.
 
 export interface ExampleItem {
@@ -209,8 +210,9 @@ function ExampleCard({ item, category, onUsePrompt, onWatch }: {
     : <FileCard item={item} category={category} onUsePrompt={onUsePrompt} />;
 }
 
-// An example: a live, scaled-down render of the file it made. Where a pointer hovers (desktop) Use prompt and View
-// come over it, as before; on a touch screen they sit under it, where they don't cover it.
+// An example: a live, scaled-down render of the file it made; the box opens the example. Use prompt and View sit
+// in a slim bar along its foot: always there on a touch screen, and where a pointer hovers only while it does, so
+// the card is clean until then.
 function FileCard({ item, category, onUsePrompt }: {
   item: ExampleItem;
   category: string;
@@ -218,48 +220,39 @@ function FileCard({ item, category, onUsePrompt }: {
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNear(ref);
-  const actions = (
-    <>
-      {item.prompt && (
-        <button
-          onClick={() => {
-            onUsePrompt(item.prompt!);
-            track("example_prompt_used", { category, share: item.share });
-          }}
-          className="rounded-full bg-background border border-border px-3.5 py-2 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer shadow-sm"
-        >
-          {t("usePrompt")}
-        </button>
-      )}
-      <a
-        href={item.share || "#"}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={() => track("example_viewed", { category, share: item.share })}
-        className="rounded-full bg-foreground px-3.5 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm"
-      >
-        {t("viewExample")}
-      </a>
-    </>
-  );
+  const viewed = () => track("example_viewed", { category, share: item.share });
   return (
     <motion.div
       ref={ref}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
-      className="flex w-[78vw] max-w-[420px] shrink-0 snap-center flex-col gap-2 sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
+      className="group relative aspect-video w-[78vw] max-w-[420px] shrink-0 snap-center overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-foreground/20 sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
     >
-      <div className="group relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-card">
-        <div className="h-full w-full transition-transform duration-300 ease-out group-hover:scale-[1.13]">
+      <a href={item.share || "#"} target="_blank" rel="noopener noreferrer" onClick={viewed} aria-label={t("viewExample")}
+         className="block h-full w-full">
+        <div className="h-full w-full transition-transform duration-300 ease-out group-hover:scale-[1.03]">
           <ExamplePreview item={item} load={near} />
         </div>
-        {/* The scrim is a whisper of background fading from the top, not a sheet. */}
-        <div className="absolute inset-0 hidden items-center justify-center gap-2 bg-[linear-gradient(to_bottom,color-mix(in_oklab,var(--color-background)_35%,transparent)_0%,color-mix(in_oklab,var(--color-background)_12%,transparent)_45%,transparent_75%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100 [@media(hover:hover)]:flex">
-          {actions}
-        </div>
+      </a>
+      <div data-example-actions
+           className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end gap-1.5 bg-gradient-to-t from-background/85 via-background/40 to-transparent px-2.5 pb-2.5 pt-6 transition-opacity duration-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
+        {item.prompt && (
+          <button
+            onClick={() => {
+              onUsePrompt(item.prompt!);
+              track("example_prompt_used", { category, share: item.share });
+            }}
+            className="pointer-events-auto rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground backdrop-blur transition-colors hover:bg-secondary cursor-pointer"
+          >
+            {t("usePrompt")}
+          </button>
+        )}
+        <a href={item.share || "#"} target="_blank" rel="noopener noreferrer" onClick={viewed}
+           className="pointer-events-auto rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90">
+          {t("viewExample")}
+        </a>
       </div>
-      <div className="flex gap-2 [@media(hover:hover)]:hidden">{actions}</div>
     </motion.div>
   );
 }
@@ -337,13 +330,13 @@ function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
 function PreviewFallback({ item }: { item: ExampleItem }) {
   const name = item.file?.name || "";
   return (
-    <div className="flex h-full w-full flex-col justify-between gap-3 bg-secondary/30 p-4" style={tintTile(name)}>
+    <div className="flex h-full w-full flex-col justify-between gap-3 bg-secondary/30 p-4 pb-12" style={tintTile(name)}>
       {name && (
         <span className="flex size-10 items-center justify-center rounded-lg bg-background/70 text-[10px] font-bold" style={tintLabel(name)}>
           {(tileExt(name) || "file").slice(0, 4).toUpperCase()}
         </span>
       )}
-      <p dir="auto" className="line-clamp-3 text-start text-sm leading-relaxed text-foreground/80">{item.prompt || item.title}</p>
+      <p dir="auto" className="line-clamp-2 text-start text-sm leading-relaxed text-foreground/80 sm:line-clamp-3">{item.prompt || item.title}</p>
     </div>
   );
 }

@@ -106,11 +106,11 @@ Config: `Config.examples` (raw mapping, server-side), `examples_enabled` in
 ## FE
 
 - `ExamplesGallery` (new): fetches `/examples`; category chips; cards.
-  Card = the live preview; **Use prompt** (fills the input box — tighter than
-  clipboard: edit → send → sign-in pops → sent) and **View** (→ the share page)
-  come over it on hover where a pointer hovers (`@media (hover: hover)`), and
-  sit under it on a touch screen, where they don't cover it. A tutorial card
-  keeps its clip and **Watch**.
+  Card = the live preview, which opens the share page. **Use prompt** (fills
+  the input box — tighter than clipboard: edit → send → sign-in pops → sent)
+  and **View** sit in a slim bar along the card's foot: always there on a touch
+  screen, and only while hovered where a pointer hovers (`@media (hover: hover)`),
+  so the card is clean until then. A tutorial card keeps its clip and **Watch**.
 - `chat.tsx` empty state: gallery under the input when `examples_enabled`,
   `Suggestions` otherwise.
 - `shared-view.tsx`: canvas pane (desktop split / mobile drawer) via the
