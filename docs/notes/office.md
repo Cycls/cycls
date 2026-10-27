@@ -224,6 +224,28 @@ their author's.
   the editor sends its threads only once a comment changed; a save removes only threads the editor was given
   (those whose words are in the body). The agent's `docs` comment ops write to the same place, so each sees the
   other's.
+- **…and Cycls keeps them too** (2026-10-27, as a workbook's are kept): the `.comments` record mirrors the file
+  (`design/comments.py` kind `doc`: a thread `{para, quote, word}` — the paragraph id, the words, the Word comment
+  id — replies `{word}`; `office/docs_comments.py`). The Docs editor speaks the `comments` feature as the Sheets
+  editor does, by Word id: `comment {op: add|reply|edit|resolve|reopen|delete, word, reply_word?, text, para?,
+  quote?}` goes through the comment store at once (the canvas queues them, so a reply waits for its comment), and
+  the record's list comes back (`comments`): every author gets their picture (the agent its badge); a comment or
+  reply someone else just wrote shows at once (its words found by paragraph id and quote, marked; from elsewhere —
+  not this editor's to save, unless the person answers it, when the thread goes with the answer); the person's own
+  that a save missed (the file changed under it) is put back as theirs and saved. The record follows the file:
+  `mirror_threads` on each fresh read for the editor (`/office/docs/open`, a new version) and after the agent's
+  `docs` edits with comment ops (its items under its badge) — added from the file under the author's name, changed
+  as the file says, and removed when gone from the file and older than its last write (newer ones are on their way
+  in: the editor saves a moment after a comment). Rename, trash and restore carry them as they do a workbook's.
+- **Charts are drawn** (2026-10-27, cycls-office `packages/docx/src/charts.ts`, `packages/charts`): a Word chart
+  (the same DrawingML chart Excel keeps, with its numbers cached) is described by the Sheets chart reader and drawn
+  by the Sheets drawing (ECharts) in the editor, in the file's theme colours; until then, and in a save, it is a
+  placeholder picture that names its part, so patch-back keeps the file's own chart drawing, part and embedded
+  workbook (only its size or place change). The agent's read names it: `[column chart "Sales": Series 1 576×336]`.
+- **The agent's edits go in place** (2026-10-27, cycls-office `apps/docs-editor/src/in-place.ts`): a new version
+  of the open file (`load` with `keepView`) is compared with the file the document was opened from; when only the
+  body's text and its lists changed, the difference is put in as one engine edit from elsewhere (not the person's to
+  undo, not unsaved), checked against the file, and the view and marks kept — otherwise the document opens again.
 - **Tracked changes open in review.** The editor's read marks them as Word's review does (insertions underlined,
   deletions struck through, a colour per person) and lists them (`changes`: ids, author, date, inserted/deleted,
   place; formatting, paragraph-mark and row changes as one `other` item, so taking every listed change leaves

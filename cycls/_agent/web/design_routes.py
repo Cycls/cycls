@@ -422,11 +422,11 @@ def design_router(ws_dep, user_dep, changed):
     # ---- Comments on a design (cycls/_agent/design/comments.py) ----
 
     def _commented(ws, path):
-        """The `.fig` or workbook a comments request is about."""
+        """The `.fig`, workbook or Word document a comments request is about."""
         root = Path(ws.root).resolve()
         src = _safe_path(root, path)
         if not comments.commentable(src.name) or not src.is_file():
-            raise HTTPException(404, "No such design or workbook")
+            raise HTTPException(404, "No such design, workbook or document")
         return src.relative_to(root).as_posix()
 
     def _commenter(ws, user, body):

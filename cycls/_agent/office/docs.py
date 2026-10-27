@@ -322,6 +322,17 @@ async def exec_docs(inp, workspace, ctx=None):
     except client.Unavailable as e:
         return _err(f"Docs is unavailable — {e}")
 
+    # The agent commented, replied or resolved: Cycls's record of the comments follows the file, the agent's under its
+    # badge (office/docs_comments.py) — an open editor shows them from the record.
+    if _comments.usable(workspace) and any(isinstance(o, dict) and o.get("op") in ("comment", "reply", "resolve") for o in ops):
+        from . import docs_comments
+        try:
+            read = await client.read_docx(result["bytes"], name=path.stem)
+            await docs_comments.mirror_file(workspace, rel, read.get("document"), docs_comments.written_at(path),
+                                            agent=_comments.author("agent", agent=True), chat_id=getattr(ctx, "chat_id", None))
+        except (client.Refused, client.Unavailable) as e:
+            log("warn", chat_id=getattr(ctx, "chat_id", None), message=f"docs comments not mirrored: {e}"[:300])
+
     # An open Docs editor takes the new file in at once (read-only while the turn runs), the paragraphs the edit
     # changed marked and in view; an open preview fetches the file again.
     ui = {"type": "ui", "action": "docs_command", "path": rel, "version": version,

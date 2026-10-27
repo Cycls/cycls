@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import type { OfficeEditorApi, OfficeOpen, SheetsOpened } from "../hooks/use-files";
-import { CommentsContext, useComments, type CellSpot, type CommentChange, type SheetCommentThread } from "../lib/comments";
+import { CommentsContext, useComments, type CellSpot, type CommentChange, type CommentStore, type DocCommentThread, type DocSpot, type SheetCommentThread } from "../lib/comments";
 import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { publishSelection } from "./design-editor-view";
@@ -63,7 +63,44 @@ export type SheetsCommand = { path: string; mutations: unknown[] | null; version
 type CommentAsk = {
   rid?: unknown; op?: unknown; id?: unknown; reply?: unknown; text?: unknown;
   sheet?: unknown; sheet_name?: unknown; cell?: unknown;
+  // Cycls Docs names a comment by its Word id (`word`; a reply's `reply_word`), and its words (`para`, `quote`).
+  word?: unknown; reply_word?: unknown; para?: unknown; quote?: unknown;
 };
+const wordId = (v: unknown) => ((typeof v === "string" || typeof v === "number") && /^\d{1,9}$/.test(String(v)) ? String(v) : undefined);
+
+/** What Cycls Docs asks of a comment (its own comment UI), by Word ids, through the comment store. The comment is
+ *  also kept in the file by the editor's save: this is Cycls's record of it. */
+async function answerDoc(ask: CommentAsk, store: CommentStore, done: (ok: boolean, thread: DocCommentThread | null, error?: string) => void) {
+  try {
+    const text = String(ask.text ?? "");
+    if (ask.op === "add") {
+      const word = wordId(ask.word);
+      if (!word) return done(false, null, "Which comment?");
+      const spot: DocSpot = { word, ...(typeof ask.para === "string" ? { para: ask.para.slice(0, 64) } : {}),
+                              ...(typeof ask.quote === "string" ? { quote: ask.quote.slice(0, 300) } : {}) };
+      return done(true, (await store.add(spot, text)) as unknown as DocCommentThread);
+    }
+    const t = (store.get().threads as unknown as DocCommentThread[]).find((x) => x.word === wordId(ask.word));
+    if (!t) return done(false, null, "That comment is not in the record yet.");
+    // A reply named here is one the record has (to change or remove); a new reply brings its own Word id.
+    const named = ask.op !== "reply" && ask.reply_word !== undefined && ask.reply_word !== null;
+    const replyId = named ? t.replies.find((r) => r.word === wordId(ask.reply_word))?.id : undefined;
+    if (named && !replyId) return done(false, null, "That reply is not in the record yet.");
+    let body: CommentChange;
+    switch (ask.op) {
+      case "reply": body = { op: "reply", text, ...(wordId(ask.reply_word) ? { word: wordId(ask.reply_word)! } : {}) }; break;
+      case "edit": body = { op: "edit", text, ...(replyId ? { reply: replyId } : {}) }; break;
+      case "resolve": case "reopen": body = { op: ask.op }; break;
+      case "delete": body = { op: "delete", ...(replyId ? { reply: replyId } : {}) }; break;
+      default: return done(false, null, "Unknown comment change.");
+    }
+    await store.change(t.id, body);
+    return done(true, (store.get().threads as unknown as DocCommentThread[]).find((x) => x.id === t.id) ?? null);
+  } catch (e) {
+    return done(false, null, String((e as Error)?.message ?? e));
+  }
+}
+
 export function sheetsCommandDetail(ev: Record<string, unknown>): SheetsCommand {
   return {
     path: String(ev.path),
@@ -184,16 +221,17 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   const flushes = useRef(new Map<string, (ok: boolean) => void>());
   const reopenRef = useRef<() => void>(() => {});
   const features = useRef<string[]>([]);   // what the editor said it does (ready)
-  // Comments on cells: the workspace's record for this file (the same store as a design's), polled; none on a
-  // view that cannot comment (a share).
-  const comments = useComments(api && product === "sheets" ? path : undefined);
-  // Cycls Docs keeps comments in the Word file: the editor only needs who is writing.
+  // Comments: the workspace's record for this file (the same store as a design's), polled; none on a view that
+  // cannot comment (a share). A workbook's are only there; a Word document's are in the file as well (for Word) and
+  // the record mirrors them (cycls/_agent/office/docs_comments.py) — pictures, the agent's badge, others' at once.
+  const comments = useComments(api ? path : undefined);
   const commentsHost = useContext(CommentsContext);
   const docsMe = product === "docs" && commentsHost?.me
     ? { name: commentsHost.me.name, ...(commentsHost.me.image ? { image: commentsHost.me.image } : {}) }
     : undefined;
   const commentsRef = useRef(comments);
   commentsRef.current = comments;
+  const docsAsks = useRef<Promise<unknown>>(Promise.resolve());
   const answerRef = useRef<(ask: CommentAsk) => Promise<void>>(async () => {});
   // Never "*": anything sent goes to the editor's origin or nowhere.
   const origin = (() => {
@@ -337,6 +375,12 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
     const reply = (ok: boolean, thread: SheetCommentThread | null = null, error?: string) =>
       post({ type: "commentDone", doc: forDoc, rid: ask.rid, ok, thread, ...(error ? { error } : {}) });
     if (!store || typeof ask.rid !== "string") return reply(false, null, "Comments are off here.");
+    if (product === "docs") {
+      // One at a time: a reply waits for the comment it answers to be in the record.
+      const run = docsAsks.current.then(() => answerDoc(ask, store, (ok, thread, error) => reply(ok, thread as unknown as SheetCommentThread | null, error)));
+      docsAsks.current = run.catch(() => undefined);
+      return run;
+    }
     try {
       if (ask.op === "add") {
         const spot: CellSpot = { sheet: String(ask.sheet ?? ""), cell: typeof ask.cell === "string" ? ask.cell : null, ...(ask.sheet_name ? { sheet_name: String(ask.sheet_name).slice(0, 120) } : {}) };

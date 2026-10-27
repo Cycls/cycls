@@ -7,8 +7,9 @@ import type { OfficeEditorApi, SheetsOpened } from "../src/hooks/use-files";
 import { DocsOrPreview, SheetsEditorView } from "../src/components/sheets-editor-view";
 import { designSelection, type DesignSelection } from "../src/components/design-editor-view";
 import { selectionLabel } from "../src/components/selection-chip";
+import { CommentsContext, forgetComments } from "../src/lib/comments";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); forgetComments(); });
 
 const OPENED: SheetsOpened = {
   version: "d1",
@@ -177,6 +178,51 @@ describe("Cycls Docs in the canvas", () => {
     fireEvent.click(screen.getByTestId("docs-reject-all"));
     await waitFor(() => expect(docsChanges).toHaveBeenLastCalledWith("r.docx", "d2", "reject", undefined));
     await waitFor(() => expect(screen.queryByTestId("docs-review")).toBeNull());
+  });
+
+  test("a Word document's comments are Cycls's too: the record goes to the editor, the person's changes come back by Word id", async () => {
+    const at = "2026-10-27T10:00:00+00:00";
+    const omar = { id: "r1", n: 1, word: "0", para: "P1", quote: "Hello", author: { id: "u2", name: "Omar" }, text: "Final?", at, updated: at, resolved: false, replies: [] };
+    let threads: Record<string, unknown>[] = [omar];
+    const commentsApi = {
+      list: vi.fn(async () => ({ threads, version: `v${threads.length}`, me: "u1" })),
+      add: vi.fn(async (_p: string, body: Record<string, unknown>) => {
+        const t = { id: "r2", n: 2, author: { id: "u1", name: "Sara" }, at, updated: at, resolved: false, replies: [], ...body };
+        threads = [...threads, t];
+        return { thread: t };
+      }),
+      change: vi.fn(async (_p: string, id: string, body: Record<string, unknown>) => {
+        const t = { ...threads.find((x) => x.id === id)!, replies: [{ id: "rp", author: { id: "u1", name: "Sara" }, text: body.text, at, word: body.word }] };
+        threads = threads.map((x) => (x.id === id ? t : x));
+        return { thread: t };
+      }),
+    };
+    const a = api({ editor: true, url: "https://office.test/docs/", name: "r.docx" });
+    render(
+      <CommentsContext.Provider value={{ api: commentsApi as never, me: { id: "u1", name: "Sara" }, agent: "Super" }}>
+        <SheetsEditorView url="https://office.test/docs/" path="notes/r.docx" name="r.docx" api={a} product="docs" />
+      </CommentsContext.Provider>,
+    );
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.docsOpen).toHaveBeenCalled());
+    say(frame.contentWindow, { type: "ready", protocol: 1, features: ["load", "save", "comments"] });
+    await waitFor(() => expect(types(posted)).toContain("load"));
+    const doc = (posted.find(([m]) => (m as { type: string }).type === "load")![0] as { doc: string }).doc;
+    say(frame.contentWindow, { type: "loaded", doc });
+    await waitFor(() => expect(types(posted)).toContain("comments"));
+    const sent = posted.find(([m]) => (m as { type: string }).type === "comments")![0] as Record<string, unknown>;
+    expect(sent).toMatchObject({ doc, agent: "Super", me: { id: "u1", name: "Sara" } });
+    expect((sent.threads as Array<{ word: string }>).map((t) => t.word)).toEqual(["0"]);
+
+    say(frame.contentWindow, { type: "comment", doc, rid: "d1", op: "add", word: "5", para: "P2", quote: "World", text: "Why?" });
+    await waitFor(() => expect(commentsApi.add).toHaveBeenCalledWith("notes/r.docx", expect.objectContaining({ word: "5", para: "P2", quote: "World", text: "Why?" })));
+    say(frame.contentWindow, { type: "comment", doc, rid: "d2", op: "reply", word: "0", reply_word: "6", text: "Yes" });
+    await waitFor(() => expect(commentsApi.change).toHaveBeenCalledWith("notes/r.docx", "r1", expect.objectContaining({ op: "reply", text: "Yes", word: "6" })));
+    await waitFor(() => expect(posted.map(([m]) => m)).toContainEqual(expect.objectContaining({ type: "commentDone", rid: "d2", ok: true })));
+    // A comment the record does not have yet is said so, not guessed.
+    say(frame.contentWindow, { type: "comment", doc, rid: "d3", op: "resolve", word: "99" });
+    await waitFor(() => expect(posted.map(([m]) => m)).toContainEqual(expect.objectContaining({ type: "commentDone", rid: "d3", ok: false })));
   });
 
   test("a document with tracked changes opens view only", async () => {

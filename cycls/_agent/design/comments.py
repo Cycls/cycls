@@ -16,19 +16,25 @@ NAME_MAX = 80
 _SPAN = 30000          # a point this far from a slide's corner is not on a slide
 _TRIES = 8
 SHEET_EXTS = (".xlsx", ".xlsm")
+DOC_EXTS = (".docx",)
 _CELL = re.compile(r"\$?([A-Z]{1,3})\$?([1-9][0-9]{0,6})")
 _SHEET_ID = re.compile(r"[A-Za-z0-9_.-]{1,40}")
+_PARA_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+_WORD_ID = re.compile(r"[0-9]{1,9}")
+QUOTE_MAX = 300
 _MAX_ROW, _MAX_COL = 1_048_576, 16_384
 
 
 def kind_of(rel):
-    """What a file's comments are pinned on: a workbook's cells, or a design's slides."""
-    return "sheet" if str(rel).lower().endswith(SHEET_EXTS) else "design"
+    """What a file's comments are pinned on: a workbook's cells, a Word document's words, or a design's slides."""
+    name = str(rel).lower()
+    return "sheet" if name.endswith(SHEET_EXTS) else "doc" if name.endswith(DOC_EXTS) else "design"
 
 
 def commentable(name):
-    """A file that has comments: a design (.fig) or a workbook."""
-    return str(name).lower().endswith((".fig",) + SHEET_EXTS)
+    """A file that has comments: a design (.fig), a workbook, or a Word document (whose comments are also in the
+    file, for Word: this record mirrors them — office/docs_comments.py)."""
+    return str(name).lower().endswith((".fig",) + SHEET_EXTS + DOC_EXTS)
 
 
 class Refused(Exception):
@@ -198,6 +204,26 @@ def _sheet_spot(at, gone_ok=False):
     return spot
 
 
+def _word_id(raw):
+    raw = str(raw) if isinstance(raw, (str, int)) and not isinstance(raw, bool) else ""
+    return raw if _WORD_ID.fullmatch(raw) else None
+
+
+def _doc_spot(at):
+    """Where a Word document comment is: {para (the paragraph's id), quote (the words it is on), word (its Word
+    comment id, which the file names it by)}, checked. The words are what a person reads; the file holds the range."""
+    at = at if isinstance(at, dict) else {}
+    spot = {}
+    para = at.get("para")
+    if isinstance(para, str) and _PARA_ID.fullmatch(para):
+        spot["para"] = para
+    if quote := _words(at.get("quote"), QUOTE_MAX):
+        spot["quote"] = quote
+    if word := _word_id(at.get("word")):
+        spot["word"] = word
+    return spot
+
+
 def author(user_id, name=None, image=None, agent=False):
     """Who wrote it: the signed-in person's id (never the request's) and the browser's name for them."""
     who = {"id": str(user_id), "name": _words(name, NAME_MAX) or ("Super" if agent else "Someone")}
@@ -245,7 +271,8 @@ def _trim(doc):
 async def add(ws, rel, who, text, at):
     """A new thread pinned at `at` (a slide's spot, or a workbook's cell). → (the thread, the version)."""
     text = _text(text)
-    spot = _sheet_spot(at) if kind_of(rel) == "sheet" else _spot(at)
+    kind = kind_of(rel)
+    spot = _sheet_spot(at) if kind == "sheet" else _doc_spot(at) if kind == "doc" else _spot(at)
 
     def change(doc):
         if len(open_threads(doc)) >= THREADS_MAX:
@@ -268,8 +295,11 @@ async def change(ws, rel, tid, op, who, body=None):
         raise Refused("`op` is reply, resolve, reopen, edit, delete or move.")
     text = _text(body.get("text")) if op in ("reply", "edit") else None
     sheet = kind_of(rel) == "sheet"
+    if op == "move" and kind_of(rel) == "doc":
+        raise Refused("A Word document's comment stays on its words.")
     spot = (_sheet_spot(body, gone_ok=True) if sheet else _spot(body)) if op == "move" else None
     rid = body.get("reply") if op in ("edit", "delete") else None
+    word = _word_id(body.get("word")) if op == "reply" else None
 
     def own(item, what):
         if (item.get("author") or {}).get("id") != who["id"]:
@@ -290,7 +320,7 @@ async def change(ws, rel, tid, op, who, body=None):
         elif op == "reply":
             if len(t["replies"]) >= REPLIES_MAX:
                 raise Refused(f"A comment takes {REPLIES_MAX} replies — start a new one.", 409)
-            t["replies"].append({"id": secrets.token_hex(5), "author": who, "text": text, "at": now})
+            t["replies"].append({"id": secrets.token_hex(5), "author": who, "text": text, "at": now, **({"word": word} if word else {})})
             _reopen(t)                       # an answer to a resolved comment opens it again
         elif op == "resolve":
             t.update(resolved=True, resolved_by=who, resolved_at=now)
@@ -364,6 +394,102 @@ async def shift(ws, rel, ops):
     def apply(d):
         shift_threads(d["threads"], ops)
     await _update(ws, rel, apply)
+
+
+def _iso(raw, fallback):
+    """A Word comment's date as this record writes dates (UTC, isoformat); `fallback` when it has none."""
+    if not isinstance(raw, str) or not raw.strip():
+        return fallback
+    try:
+        when = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return fallback
+    return (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat()
+
+
+def mirror_threads(doc, threads, written_at, agent=None):
+    """A Word document's record (`doc`) brought in line with the comments its file holds (`threads`: [{word, author
+    (a name), at, text, resolved, para?, quote?, replies: [{word, author, at, text}]}], office/docs_comments.py).
+    The file is what Word sees: a comment there and not here is added (its author a name, or the agent when it is the
+    agent's name); here and changed there, changed; here, gone from the file and older than the file's last write
+    (`written_at`), removed — newer ones are on their way into the file (the editor saves a moment after a comment).
+    Who wrote what in Cycls (with their picture) is kept. → whether anything changed."""
+    def named(name):
+        name = _words(name, NAME_MAX) or "Someone"
+        if agent and name == agent.get("name"):
+            return dict(agent)
+        return {"id": f"word:{name}", "name": name}
+
+    changed = False
+    now = _now()
+    by_word = {t.get("word"): t for t in doc["threads"] if t.get("word")}
+    in_file = set()
+    for ft in threads:
+        word = _word_id(ft.get("word"))
+        if not word:
+            continue
+        in_file.add(word)
+        text = (ft.get("text") or "").strip()[:TEXT_MAX] or "…"
+        t = by_word.get(word)
+        if t is None:
+            doc["seq"] = int(doc.get("seq") or 0) + 1
+            t = {"id": secrets.token_hex(5), "n": doc["seq"], "word": word, "author": named(ft.get("author")),
+                 "text": text, "at": _iso(ft.get("at"), now), "updated": now, "resolved": bool(ft.get("resolved")),
+                 "replies": []}
+            doc["threads"].append(t)
+            by_word[word] = t
+            changed = True
+        else:
+            if t.get("text") != text:
+                t.update(text=text, updated=now)
+                changed = True
+            if bool(t.get("resolved")) != bool(ft.get("resolved")):
+                if ft.get("resolved"):
+                    t.update(resolved=True, resolved_at=now)
+                else:
+                    _reopen(t)
+                t["updated"] = now
+                changed = True
+        for k, most in (("para", 64), ("quote", QUOTE_MAX)):
+            v = ft.get(k)
+            v = v[:most] if isinstance(v, str) and v.strip() else None
+            if v and t.get(k) != v:
+                t[k] = v
+                changed = True
+        have = {r.get("word"): r for r in t["replies"] if r.get("word")}
+        replied = set()
+        for fr in ft.get("replies") or []:
+            rw = _word_id(fr.get("word"))
+            if not rw:
+                continue
+            replied.add(rw)
+            rtext = (fr.get("text") or "").strip()[:TEXT_MAX] or "…"
+            r = have.get(rw)
+            if r is None:
+                t["replies"].append({"id": secrets.token_hex(5), "author": named(fr.get("author")), "text": rtext,
+                                     "at": _iso(fr.get("at"), now), "word": rw})
+                changed = True
+            elif r.get("text") != rtext:
+                r["text"] = rtext
+                changed = True
+        kept = [r for r in t["replies"] if not r.get("word") or r["word"] in replied or (r.get("at") or "") > written_at]
+        if len(kept) != len(t["replies"]):
+            t["replies"] = kept
+            changed = True
+    before = len(doc["threads"])
+    doc["threads"] = [t for t in doc["threads"]
+                      if not t.get("word") or t["word"] in in_file or (t.get("at") or "") > written_at]
+    return changed or len(doc["threads"]) != before
+
+
+async def mirror(ws, rel, threads, written_at, agent=None):
+    """The record of a Word document brought in line with its file (mirror_threads); written only when it differs."""
+    doc, _ = await read(ws, rel)
+    probe = {"seq": 0, "threads": []} if doc is None else {**doc, "threads": [dict(t, replies=list(t.get("replies") or []))
+                                                                              for t in doc["threads"]]}
+    if not mirror_threads(probe, threads, written_at, agent):
+        return
+    await _update(ws, rel, lambda d: mirror_threads(d, threads, written_at, agent))
 
 
 def _reopen(thread):

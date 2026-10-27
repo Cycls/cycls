@@ -165,6 +165,13 @@ def office_router(ws_dep, required_auth=None, changed=None):
                     raise HTTPException(422, f"This {noun} could not be opened: {e}")
                 body = gzip.compress(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 6)
                 await asyncio.to_thread(_write_cache, Path(ws.root) / cache_dir, version, body)
+                # A new version of a Word document: Cycls's record of its comments brought in line with the file
+                # (comments made in Word, removed there, the agent's) — office/docs_comments.py.
+                if product == "docs":
+                    from cycls._agent.office import docs_comments
+                    rel = file_path.resolve().relative_to(Path(ws.root).resolve()).as_posix()
+                    await docs_comments.mirror_file(ws, rel, payload.get("snapshot"),
+                                                    datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat())
             modified = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
             return Response(body, media_type="application/json", headers={
                 "Content-Encoding": "gzip", "Cache-Control": "no-store", "X-Version": version, "X-Modified": modified,
