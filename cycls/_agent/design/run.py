@@ -183,7 +183,7 @@ async def _design_call(inp, workspace):
         except design.Unavailable as e:
             return f"Error: design unavailable — {e}"
         except Exception as e:
-            return f"Error: couldn't inspect {rel} — {e}"
+            return f"Error: couldn't inspect {rel} — {e}{_slide_not_page(page, e)}"
         text = _outline_text(rel, o["frames"], o["pages"], o["page"])
         if pinned := await _comments_note(workspace, rel, o):
             text += "\n\n" + pinned
@@ -218,7 +218,7 @@ async def _design_call(inp, workspace):
                     return f"Error: design unavailable — {e}"
                 except Exception as e:
                     # a service error with " has: " already lists the nodes
-                    hint = "" if " has: " in str(e) else " (Design inspect lists the nodes)"
+                    hint = _slide_not_page(page, e) or ("" if " has: " in str(e) else " (Design inspect lists the nodes)")
                     return (f"Error: the edit failed on {rel} — {e}. Nothing was changed; fix the "
                             f"{'ops' if ops else 'script'}{hint} and try again.")
                 try:   # a save in the editor meanwhile: apply to that, once
@@ -384,6 +384,14 @@ async def _design_call(inp, workspace):
                                                     "data": base64.b64encode(look).decode()}},
                        {"type": "text", "text": ack}],
             "_ui": ui}
+
+
+def _slide_not_page(page, error):
+    """A slide asked for as a `page` (a deck's slides are frames of its one page): what to say instead."""
+    if page is not None and str(page).strip().isdigit() and "there is no page" in str(error):
+        return (" — a slide isn't a page: a deck's slides are its frames. inspect lists every slide without `page`; "
+                "edit names one with `frame` (its index from 0).")
+    return ""
 
 
 def _design_step(inp):

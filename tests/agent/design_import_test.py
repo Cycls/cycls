@@ -106,3 +106,11 @@ def test_the_tool_offers_import_in_both_forms():
     assert "- import {path, name?}" in _DESIGN_TOOL["description"]
     assert "import" in _DESIGN_TOOL_SHORT["input_schema"]["properties"]["action"]["description"]
     assert "PowerPoint" in _DESIGN_TOOL_SHORT["description"]
+
+
+def test_a_slide_asked_for_as_a_page_is_pointed_to_frame():
+    from cycls._agent.design.run import _slide_not_page
+    said = _slide_not_page("2", RuntimeError('there is no page "2" — this design\'s pages: design'))
+    assert "`frame`" in said and "isn't a page" in said
+    assert _slide_not_page("Story", RuntimeError('there is no page "Story"')) == ""
+    assert _slide_not_page(None, RuntimeError("anything")) == ""
