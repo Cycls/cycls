@@ -6,6 +6,7 @@
     default_apps/<slug>/app.json     name, name_ar, icon, description, description_ar, category, category_ar
     default_apps/<slug>/README.md    the app's data model, for the agent
     default_apps/<slug>/src/**       its source, so `build_app` can rebuild it later
+    default_apps/<slug>/preview.webp optional: the card's picture (never installed)
 
 An install copies one into `apps/<slug>/` exactly as `build_app` lands an app, so nothing downstream —
 the bridge, `appScope()`, the Apps tab, `app_catalog()`, the trash — learns a new kind of thing. What
@@ -37,7 +38,7 @@ from pathlib import Path
 STAMP = "catalog"
 LEGACY_STAMP = "default_app"          # super's agent-side installer (default_apps.py)
 _SLUG = re.compile(r"^[a-z0-9_-]{1,64}$")   # build_app's alphabet (_APP_SLUG_OK)
-_SKIP = {"data", "app.json", "index.html"}   # handled explicitly, or never touched
+_SKIP = {"data", "app.json", "index.html", "preview.webp"}   # handled explicitly, or never touched
 _FIELDS = ("name", "name_ar", "icon", "description", "description_ar", "category", "category_ar")
 _CAPS = {"name": 60, "name_ar": 60, "icon": 512, "description": 300, "description_ar": 300,
          "category": 40, "category_ar": 40}
@@ -89,7 +90,8 @@ class Catalog:
                     html = (d / "index.html").read_bytes()
                     row = {k: str(m[k])[:_CAPS[k]] for k in _FIELDS if isinstance(m.get(k), str) and m[k].strip()}
                     row.setdefault("name", d.name.replace("-", " ").replace("_", " ").title())
-                    out[d.name] = {"slug": d.name, **row, "version": _version(html), "bytes": len(html)}
+                    out[d.name] = {"slug": d.name, **row, "version": _version(html), "bytes": len(html),
+                                   "thumb": (d / "preview.webp").is_file()}
             self._entries = out
         return self._entries
 

@@ -1238,6 +1238,19 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
             rows = await asyncio.to_thread(app_catalog.listing, ws.root, catalog)
             return {"apps": rows, "admin": await _admin(cycls_app, user, ws, volume, base)}
 
+        # Seen before installing: the bundle as is, run by the client in a bare sandbox with no bridge, so
+        # the app shows its own demo data; and its picture, when the bundle ships one.
+        @r.get("/apps/catalog/{slug}/preview")
+        async def preview(slug: str, ws: Workspace = ws_dep, user: Any = user_dep):
+            return FileResponse(catalog.bundle(_slug({"slug": slug})) / "index.html", media_type="text/html", headers=_NO_CACHE)
+
+        @r.get("/apps/catalog/{slug}/thumb")
+        async def thumb(slug: str, ws: Workspace = ws_dep, user: Any = user_dep):
+            f = catalog.bundle(_slug({"slug": slug})) / "preview.webp"
+            if not f.is_file():
+                raise HTTPException(status_code=404, detail="No picture for that app")
+            return FileResponse(f, media_type="image/webp", headers={"Cache-Control": "private, max-age=3600"})
+
         @r.post("/apps/install")
         async def install(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
             slug = _slug(await request.json())

@@ -2,6 +2,7 @@
 // with what this workspace has installed, and the workspace's app theme. Same shapes as the
 // Connectors list beside it — search, category chips, two-column cards, one 28px state slot.
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./icon";
 import { PLATE } from "./connectors-dialog";
 import type { ChatApi } from "../hooks/use-chat";
@@ -17,7 +18,7 @@ type Api = ChatApi["api"];
 export type CatalogApp = {
   slug: string; name: string; name_ar?: string; icon?: string;
   description?: string; description_ar?: string; category?: string; category_ar?: string;
-  version: string; bytes: number; state: "available" | "installed" | "update" | "conflict"; installed_name?: string;
+  version: string; bytes: number; thumb?: boolean; state: "available" | "installed" | "update" | "conflict"; installed_name?: string;
 };
 
 const H4 = "mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground";
@@ -39,6 +40,52 @@ function Glyph({ a, className = "size-10" }: { a: CatalogApp; className?: string
         : a.icon && [...a.icon].length <= 2 ? <span aria-hidden>{a.icon}</span>
         : <span className="text-sm font-semibold text-foreground">{[...appName(a)][0]?.toUpperCase()}</span>}
     </span>
+  );
+}
+
+// The card's picture, fetched with the session's headers (an <img src> would carry none).
+function Thumb({ api, a }: { api: Api; a: CatalogApp }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!a.thumb) return;
+    let u: string | null = null, live = true;
+    api(`/apps/catalog/${a.slug}/thumb`, { silent: true }).then((r) => r.blob())
+      .then((b) => { u = URL.createObjectURL(b); if (live) setUrl(u); }).catch(() => {});
+    return () => { live = false; if (u) URL.revokeObjectURL(u); };
+  }, [a.slug, a.thumb]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!a.thumb) return null;
+  return (
+    <div className="aspect-[16/10] overflow-hidden rounded-xl border border-border bg-secondary">
+      {url && <img src={url} alt="" loading="lazy" className="size-full object-cover object-top" />}
+    </div>
+  );
+}
+
+// The bundle run as is in a bare sandbox: no bridge, so the app opens on its own demo data.
+function AppPreview({ api, a, admin, busy, onInstall, onClose }: {
+  api: Api; a: CatalogApp; admin: boolean; busy: boolean; onInstall: () => void; onClose: () => void;
+}) {
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    api(`/apps/catalog/${a.slug}/preview`).then((r) => r.text()).then(setHtml).catch(onClose);
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", esc, true);
+    return () => window.removeEventListener("keydown", esc, true);
+  }, [a.slug]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return createPortal(   // the connectors window is translated: a fixed child would stay inside it
+    <div role="dialog" aria-modal="true" aria-label={appName(a)} className="fixed inset-0 z-[100] flex flex-col bg-background">
+      <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
+        <Glyph a={a} className="size-8" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground"><bdi>{appName(a)}</bdi></p>
+          <p className="truncate text-[11px] text-muted-foreground">{t("previewAppNote")}</p>
+        </div>
+        {a.state === "available" && admin && <button disabled={busy} onClick={onInstall} className={SOLID}>{t("installApp")}</button>}
+        <button onClick={onClose} aria-label={t("close")} className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground"><Icon name="x" className="size-4" /></button>
+      </div>
+      {html !== null && <iframe srcDoc={html} sandbox="allow-scripts" title={appName(a)} className="min-h-0 w-full flex-1 border-0 bg-background" />}
+    </div>,
+    document.body,
   );
 }
 
@@ -76,6 +123,7 @@ function Browse({ api, onOpen, onChanged }: { api: Api; onOpen: (entry: string, 
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState<string | null>(null);
+  const [peek, setPeek] = useState<CatalogApp | null>(null);
   const load = () => api("/apps/catalog", { silent: true }).then((r) => r.json()).then(setData).catch(() => setData({ apps: [], admin: false }));
   useEffect(() => { load(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -105,6 +153,7 @@ function Browse({ api, onOpen, onChanged }: { api: Api; onOpen: (entry: string, 
     const admin = !!data?.admin;
     return (
       <div key={a.slug} data-app={a.slug} className="flex flex-col gap-3 rounded-2xl border border-border bg-background/40 p-4 text-start">
+        {a.thumb && <button onClick={() => setPeek(a)} aria-label={`${t("previewApp")} ${appName(a)}`} className="cursor-pointer transition hover:opacity-90"><Thumb api={api} a={a} /></button>}
         <div className="flex items-center gap-3">
           <Glyph a={a} />
           <div className="min-w-0 flex-1">
@@ -123,6 +172,7 @@ function Browse({ api, onOpen, onChanged }: { api: Api; onOpen: (entry: string, 
           {a.state === "update" && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">{t("updateAvailable")}</span>}
           {a.state === "conflict" && <span className="text-[11px] text-muted-foreground">{t("appTaken")}</span>}
           <span className="ms-auto flex gap-2">
+            {!has && <button onClick={() => setPeek(a)} className={LINE}>{t("previewApp")}</button>}
             {has && <button onClick={() => onOpen(`apps/${a.slug}/index.html`, appName(a))} className={LINE}>{t("open")}</button>}
             {has && admin && <button disabled={busy === a.slug} onClick={() => act(a, "uninstall")} className={LINE} aria-label={`${t("remove")} ${appName(a)}`}>{t("remove")}</button>}
             {a.state === "update" && admin && <button disabled={busy === a.slug} onClick={() => act(a, "update")} className={SOLID}>{t("updateApp")}</button>}
@@ -163,6 +213,8 @@ function Browse({ api, onOpen, onChanged }: { api: Api; onOpen: (entry: string, 
           {rest.length > 0 && <section>{mine.length > 0 && <h4 className={H4}>{t("discover")}</h4>}<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{rest.map(card)}</div></section>}
         </>
       )}
+      {peek && <AppPreview api={api} a={peek} admin={!!data?.admin} busy={busy === peek.slug}
+        onInstall={() => { const a = peek; setPeek(null); act(a, "install"); }} onClose={() => setPeek(null)} />}
     </>
   );
 }
