@@ -413,6 +413,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         log("warn", user=user, chat_id=session.chat_id,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    # With Docs / Sheets on, bash keeps off the files they look after (office/guard.py).
+    if office := frozenset(t["name"] for t in tools_list if t.get("name") in ("docs", "sheets")):
+        ctx = replace(ctx, office=office)
     # Design's text is nearly half of every request: on demand, a short form until the chat designs
     design_loaded = True
     if os.environ.get("DESIGN_INSTRUCTIONS") == "on-demand" and not design_wanted(messages):

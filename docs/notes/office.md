@@ -96,6 +96,17 @@ The prompt also says to trust the reply: on super-dev (2026-10-26) the agent mad
 to check it, and misreported the result; a 4–5 minute turn. Now: no Bash, zip or XML edits on a .docx, no render or
 convert to check an edit, `docs` read to look again. The same request afterwards: read, one edit, read (2026-10-27).
 
+On super-dev the prompt alone was not enough: the same request there wrote only through `docs` but still read the
+XML with Bash before and after (2026-10-27). So Bash is kept off them (`office/guard.py`): while Docs (Sheets) is on,
+`dispatch` refuses — before any approval card, nothing run, `bash_refused` logged — a command that opens an existing
+.docx (.xlsx) as a package: unzip, zipfile, python-docx, openpyxl, pandoc, to_excel… The paths are found quoted or
+bare, after a `cd`, by a glob, or inside a workspace .py script the command runs. Copying, moving, listing and
+deleting run, and so do pandas reads (`engine="openpyxl"` too). A file a Bash command made this turn
+(`ToolContext.built`: named by the command, missing before, there after) may be opened by later commands of the turn,
+so a skill's own check after building a new file runs; rebuilding a file that already existed is refused. Live
+(asked to "unzip it with bash"): refused, then `docs` read, the answer from it. Scripts under /skills are not read,
+so a skill script given a .docx (document-redlining) still runs.
+
 - Required: `action` (`read` / `edit` / `create`), `path`, `ops` and `content` — the last two even when an action
   takes none (`[]`, `""`): DeepSeek sent 14 creates in a row without `content` while it was optional.
 - `read` → each paragraph on a line: `¶7·k3f [Heading 2] {center} {rtl} 1) text with **bold**, *italic*,

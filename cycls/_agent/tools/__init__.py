@@ -3,7 +3,7 @@ API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
 import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import NamedTuple
@@ -976,8 +976,22 @@ class Tool(NamedTuple):
 
 def _run_bash(inp, workspace, *, timeout, network, ctx=None, **_):
     t = inp.get("timeout")
-    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
-                      catalog=getattr(ctx, "skills", None))
+    run = _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
+                     catalog=getattr(ctx, "skills", None))
+    if not getattr(ctx, "office", None):
+        return run
+    # A Word / Excel file this command makes is the turn's own: later commands may open it (a skill's check).
+    from ..office import guard
+    before = guard.missing(str(inp.get("command") or ""), workspace.root)
+    if not before:
+        return run
+
+    async def tracked():
+        try:
+            return await run
+        finally:
+            ctx.built.update(guard.made(before))
+    return tracked()
 
 
 def _ask_step(inp):
@@ -1318,6 +1332,8 @@ class ToolContext:
     auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
     modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
     skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
+    office: frozenset = frozenset()      # "docs" / "sheets" when on this turn: bash keeps off their files (office/guard.py)
+    built: set = field(default_factory=set)   # Word / Excel files a bash command made this turn (they may be opened)
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)
@@ -1348,6 +1364,12 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
         seen.add(name)
     if entry and entry.run:
         step = {"type": "step", "id": bid, **entry.step(inp)}
+        # Before any approval card: a command opening a Word / Excel file that `docs` / `sheets` look after never runs.
+        if name == "bash" and getattr(ctx, "office", None):
+            from ..office import guard
+            if refused := guard.refusal(str(inp.get("command") or ""), workspace.root, ctx.office, ctx.built):
+                log("bash_refused", user=ctx.user, chat_id=ctx.chat_id, command=str(inp.get("command") or "")[:300])
+                return {**step, "ok": False}, asyncio.sleep(0, result=refused)
         if card := _gate(name, inp, ctx, step):
             return step, asyncio.sleep(0, result=card)
         return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
