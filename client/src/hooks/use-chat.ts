@@ -117,6 +117,7 @@ export interface AppConfig {
   explore_enabled?: boolean;
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
   examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
+  apps_catalog?: boolean;       // Web.apps(): the Apps section (catalog + theme) in the connectors window and the + menu
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
   design_editor_url?: string;   // base URL of the embedded design editor for .fig files (env DESIGN_EDITOR_URL)
 }

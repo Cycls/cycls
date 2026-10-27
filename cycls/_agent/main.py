@@ -77,16 +77,20 @@ class Agent(App):
             colors=web._colors, explore=web._explore,
             explore_enabled=bool(web._explore or (web._cms or {}).get("explore")),
             examples=web._examples, examples_enabled=bool(web._examples),
+            apps_catalog=bool(web._apps),
         )
         self.config._og_image = web._og_bytes
         self._iap = web._iap
         self._on_run = web._on_run
         self.connectors = web._connectors
+        self.apps = web._apps        # {catalog, theme} or None — read by app_catalog_router
 
         # Merge Web's copy_public files under public/. App.__init__ adds
         # the cycls source tree on top.
         image = dict(image or {})
         image["copy"] = {**image.get("copy", {}), **{f: f"public/{f}" for f in self.copy_public}}
+        if self.apps:   # the catalog ships in the image, at the same relative path the server reads
+            image["copy"].setdefault(self.apps["catalog"], self.apps["catalog"])
 
         super().__init__(
             func=func,

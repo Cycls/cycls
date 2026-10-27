@@ -9,6 +9,7 @@ import { Canvas, type CanvasFile } from "./canvas";
 import { editWorkingPath, ext, isDesignEditor } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
+import { setAppTheme, normalize as normalizeAppTheme } from "../lib/app-theme";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, type IconName } from "./icon";
@@ -201,7 +202,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const [connect, setConnect] = useState<{ name: string } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
-  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
+  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" | "apps" } | null>(null);
   // @-pills: connectors this message is about. They ride the request and clear on send.
   const [pills, setPills] = useState<Connector[]>([]);
   const pillsRef = useRef<Connector[]>([]);
@@ -218,7 +219,15 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     if (account) api("/connectors", { silent: true }).then((r) => r.json()).then(setConnectors).catch(() => setConnectors([]));
   }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadConnectors(); }, [loadConnectors]);
-  const openConnectors = (source: string, name?: string, tab?: "skills") => {
+  // The workspace's app theme (docs/notes/apps.md, "The theme"): every app the canvas opens gets its tokens.
+  // None chosen and no agent default means none sent — apps keep their own look.
+  useEffect(() => {
+    if (!account) return;
+    api("/apps/theme", { silent: true }).then((r) => r.json())
+      .then((d) => setAppTheme(normalizeAppTheme(d?.theme) ?? normalizeAppTheme(d?.default)))
+      .catch(() => setAppTheme(null));
+  }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const openConnectors = (source: string, name?: string, tab?: "skills" | "apps") => {
     track("connector_directory_opened", { source, tab: tab ?? "connectors" });
     loadConnectors();
     setConnectorsOpen({ name, tab });
@@ -955,6 +964,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     connectors: connectors?.filter((c) => c.connected),
     onOpenConnectors: account && connectors?.length ? () => openConnectors("plus") : undefined,
     onOpenSkills: account ? () => openConnectors("plus", undefined, "skills") : undefined,
+    apps: config?.apps_catalog ? apps : undefined,
+    onOpenApp: (a: { slug: string }) => { const app = apps.find((x) => x.slug === a.slug); if (app) openApp(app); },
+    onBrowseApps: account && config?.apps_catalog ? () => openConnectors("plus", undefined, "apps") : undefined,
     onToggleConnector: (c: Connector, on: boolean) => {
       setConnectors((prev) => prev?.map((x) => (x.name === c.name ? { ...x, on } : x)) ?? prev);
       track("connector_toggled", { connector: c.name, to: on ? "on" : "off", level: "user" });
@@ -982,6 +994,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           onClose={() => setConnectorsOpen(null)}
           onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
           onAsk={(text) => { setInput(text); textareaRef.current?.focus(); }}
+          apps={config?.apps_catalog ? {
+            onOpen: (entry, appName) => openFileInCanvas(entry, appName),
+            onChanged: () => void refreshApps(),
+          } : undefined}
         />
       )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
