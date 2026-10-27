@@ -373,7 +373,7 @@ def design_router(ws_dep, user_dep, changed):
         if not (live.configured() and user is not None and (ws.ws or "").startswith("t-")):
             return {"live": None}
         rel = src.relative_to(Path(ws.root).resolve()).as_posix()
-        _, version = await asyncio.to_thread(store.read_fig, ws.root, rel)
+        _, version = await store.load_fig(ws.root, rel)
         room = live.room_of(ws.root, rel)
         await live.wake()   # up by the time the editor connects
         return {"live": {"room": room, "url": live.socket_url(), "ticket": live.ticket(room, user.id),

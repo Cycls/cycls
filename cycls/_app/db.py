@@ -272,6 +272,17 @@ class _GCSStore:
                 for it in await self._list("items(name,metadata),nextPageToken", prefix=prefix, glob=glob)]
 
 
+async def object_read(bucket, name):
+    """An object's bytes and generation from the bucket itself, not a server's cached view of the
+    volume: (None, None) when there is none."""
+    r = await _gcs_client_get().get(f"{_GCSStore._STORAGE}/storage/v1/b/{bucket}/o/{quote(name, safe='')}?alt=media",
+                                    headers=await _gcs_auth())
+    if r.status_code == 404: return None, None
+    r.raise_for_status()
+    return r.content, r.headers.get("x-goog-generation")
+
+
+
 def _store(url):
     if url.startswith("file://"): return _FileStore(url)
     if url.startswith("gs://"): return _GCSStore(url)

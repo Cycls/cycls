@@ -93,6 +93,29 @@ def test_a_design_another_instance_just_rewrote_is_read_again(tmp_path, monkeypa
         store.read_fig(tmp_path, "designs/a.fig")
 
 
+def test_a_save_is_checked_against_the_bucket_not_this_servers_view(tmp_path, monkeypatch):
+    """In production a save is checked against the design in the bucket: this server's view of the volume
+    can still hold it as it was before another server's write (the agent's edit), for up to a minute, and a
+    save on top of that write was refused as "This design changed elsewhere"."""
+    from pathlib import Path
+    from cycls._agent.design import store
+    from cycls._app import db
+    _put(tmp_path, "designs/a.fig", b"V1")                 # this server's view: still V1
+    bucket = {"designs/a.fig": b"V2 THE AGENT'S"}          # the bucket: the agent's edit
+
+    async def object_read(name_of_bucket, name):
+        return bucket.get(name), "7"
+    monkeypatch.setattr(db, "object_read", object_read)
+    monkeypatch.setattr(store, "_object", lambda path: ("bucket", Path(path).relative_to(tmp_path).as_posix()))
+    v2 = version_of(bucket["designs/a.fig"])
+    assert asyncio.run(store.load_fig(tmp_path, "designs/a.fig")) == (bucket["designs/a.fig"], v2)
+    assert asyncio.run(write_fig(tmp_path, "designs/a.fig", b"V3 MINE", base=v2)) == version_of(b"V3 MINE")
+    assert (tmp_path / "designs/a.fig").read_bytes() == b"V3 MINE"          # written through the volume
+    with pytest.raises(Stale) as refused:                                  # on top of what was never current
+        asyncio.run(write_fig(tmp_path, "designs/a.fig", b"V4", base=version_of(b"V1")))
+    assert refused.value.current == v2
+
+
 def test_old_versions_go(tmp_path, monkeypatch):
     monkeypatch.setattr(versions, "KEEP", 3)
     _put(tmp_path, "designs/a.fig", b"V0")

@@ -173,10 +173,10 @@ async def _design_call(inp, workspace):
             if err:
                 return err
         from cycls._agent.design.deck import lock
-        from cycls._agent.design.store import Stale, read_fig, write_fig
+        from cycls._agent.design.store import Stale, load_fig, write_fig
         async with lock(fig_path):                          # one change at a time per design
             for attempt in (1, 2):
-                data, base = await asyncio.to_thread(read_fig, workspace.root, rel)
+                data, base = await load_fig(workspace.root, rel)
                 try:
                     r = await design.apply(data, script=None if ops else script,
                                            ops=ops or None, preview=True, user_id=subject, page=page, sheets=True)
