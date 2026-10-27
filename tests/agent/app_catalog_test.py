@@ -109,6 +109,22 @@ def test_install_lands_the_bundle_as_build_app_would(tmp_path, shelf):
     assert client.post("/apps/install", json={"slug": "tasks"}).json()["outcome"] == "current"
 
 
+def test_an_app_is_seen_before_it_is_installed(tmp_path, shelf):
+    """The bundle and its picture are served from the catalog, and the picture never lands in the workspace."""
+    (shelf / "tasks" / "preview.webp").write_bytes(b"RIFF....WEBP")
+    client, vol = _client(tmp_path, shelf)
+    rows = _rows(client)
+    assert rows["tasks"]["thumb"] is True and rows["crm"]["thumb"] is False
+    r = client.get("/apps/catalog/tasks/preview")
+    assert r.status_code == 200 and r.text.endswith("v1</body></html>") and r.headers["content-type"].startswith("text/html")
+    r = client.get("/apps/catalog/tasks/thumb")
+    assert r.status_code == 200 and r.content == b"RIFF....WEBP" and r.headers["content-type"] == "image/webp"
+    assert client.get("/apps/catalog/crm/thumb").status_code == 404
+    assert client.get("/apps/catalog/nope/preview").status_code == 404
+    client.post("/apps/install", json={"slug": "tasks"})
+    assert not (_personal(vol, "user_1") / "apps" / "tasks" / "preview.webp").exists()
+
+
 def test_install_never_overwrites_a_users_own_app(tmp_path, shelf):
     client, vol = _client(tmp_path, shelf)
     mine = _personal(vol, "user_1") / "apps" / "tasks"
