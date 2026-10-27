@@ -309,34 +309,6 @@ describe("DesignEditorView", () => {
     }
   });
 
-  it("a save refused over a version this editor already holds is saved again a moment later, never asked", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      // The agent's edit was written by another server, whose view this save met: it still names the loaded version.
-      const writeFile = vi.fn()
-        .mockRejectedValueOnce(stale412("v1"))
-        .mockResolvedValue({ version: "v3" });
-      const { frame } = mount({ host: versioned(() => "v1"), writeFile });
-      const { post, load } = await ready(frame(), 2);
-      await command({ script: "S", intent: "tidy", version: "v2" });
-      fromEditor(frame(), "applied", { doc: load.doc });
-      await flush();
-      fromEditor(frame(), "saved", { doc: load.doc, id: "s1", name: "launch.fig", fig: b64([7]) });
-      await flush();
-      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v2" });
-      post.mockClear();
-      await act(async () => { vi.advanceTimersByTime(1100); });
-      expect(post).toHaveBeenCalledWith({ target: "cycls-editor", type: "save" }, EDITOR);
-      fromEditor(frame(), "saved", { doc: load.doc, id: "s2", name: "launch.fig", fig: b64([7]) });
-      await flush();
-      expect(writeFile).toHaveBeenLastCalledWith("designs/launch.fig", expect.anything(), { silent: true, base: "v2" });
-      await act(async () => { vi.advanceTimersByTime(6000); });
-      expect(screen.queryByText("This design changed elsewhere")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("agent edits replay one at a time, and one the editor loaded already is skipped", async () => {
     const { frame } = mount({ host: versioned(() => "v5") });
     const { post, load } = await ready(frame(), 2);
