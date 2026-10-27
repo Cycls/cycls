@@ -210,8 +210,8 @@ function ExampleCard({ item, category, onUsePrompt, onWatch }: {
     : <FileCard item={item} category={category} onUsePrompt={onUsePrompt} />;
 }
 
-// An example: a live, scaled-down render of the file it made; the box opens the example. Use prompt and View sit
-// in a slim bar along its foot: always there on a touch screen, and where a pointer hovers only while it does, so
+// An example: a live, scaled-down render of the file it made; the box opens the example. Use prompt and View: on a
+// touch screen in a slim bar along its foot, always there; where a pointer hovers, in its middle while it does, so
 // the card is clean until then.
 function FileCard({ item, category, onUsePrompt }: {
   item: ExampleItem;
@@ -235,21 +235,22 @@ function FileCard({ item, category, onUsePrompt }: {
           <ExamplePreview item={item} load={near} />
         </div>
       </a>
+      {/* Touch: a slim bar at the foot, always there. Pointer: in the middle, only while hovered, nothing else over it. */}
       <div data-example-actions
-           className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end gap-1.5 bg-gradient-to-t from-background/85 via-background/40 to-transparent px-2.5 pb-2.5 pt-6 transition-opacity duration-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
+           className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end gap-1.5 bg-gradient-to-t from-background/85 via-background/40 to-transparent px-2.5 pb-2.5 pt-6 transition-opacity duration-200 [@media(hover:hover)]:inset-0 [@media(hover:hover)]:items-center [@media(hover:hover)]:justify-center [@media(hover:hover)]:gap-2 [@media(hover:hover)]:bg-none [@media(hover:hover)]:px-0 [@media(hover:hover)]:pb-0 [@media(hover:hover)]:pt-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
         {item.prompt && (
           <button
             onClick={() => {
               onUsePrompt(item.prompt!);
               track("example_prompt_used", { category, share: item.share });
             }}
-            className="pointer-events-auto rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground backdrop-blur transition-colors hover:bg-secondary cursor-pointer"
+            className="pointer-events-auto rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground backdrop-blur transition-colors hover:bg-secondary cursor-pointer [@media(hover:hover)]:bg-background [@media(hover:hover)]:px-3.5 [@media(hover:hover)]:py-2 [@media(hover:hover)]:text-sm [@media(hover:hover)]:shadow-sm"
           >
             {t("usePrompt")}
           </button>
         )}
         <a href={item.share || "#"} target="_blank" rel="noopener noreferrer" onClick={viewed}
-           className="pointer-events-auto rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90">
+           className="pointer-events-auto rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90 [@media(hover:hover)]:px-3.5 [@media(hover:hover)]:py-2 [@media(hover:hover)]:text-sm [@media(hover:hover)]:shadow-sm">
           {t("viewExample")}
         </a>
       </div>
