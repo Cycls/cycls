@@ -95,7 +95,11 @@ SHEETS_TOOL = {
 SHEETS_PROMPT = (
     "Excel files: read and change .xlsx files with `sheets`, not openpyxl or a script — it keeps "
     "everything in the file it does not touch (charts, pivots, formats) and the person sees the change "
-    "live. pandas stays fine for analysing data."
+    "live. pandas stays fine for analysing data. Trust what a `sheets` edit replies: it shows the changed "
+    "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
+    "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
+    "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
+    "person's open editor."
 )
 
 

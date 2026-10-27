@@ -65,7 +65,8 @@ One Node process:
 
 Offered like Video: the agent lists `"Sheets"` in its tools, `build_tools` adds it when `OFFICE_URL` is set, and
 `harness/main.py` drops it per run for an organisation not on `SHEETS_ORGS`. While it is on, the prompt says .xlsx
-changes go through `sheets`, not openpyxl (pandas stays fine for analysis).
+changes go through `sheets`, not openpyxl (pandas stays fine for analysis), and that its reply is the check: never
+Bash, zip or XML edits on an .xlsx, nor a render or convert to look again (`sheets` read does that).
 
 - Required: `action` (`read` / `edit` / `create`) and `path`; each op requires `op` and `target`.
 - `read` → the sheets outlined (used range, right-to-left, frozen panes, merges) and a sheet or range as a grid of
@@ -90,6 +91,10 @@ Sheets editor saves what is unsaved, so the agent reads what the person sees.
 Offered like `sheets`: the agent lists `"Docs"`, `build_tools` adds it when `OFFICE_URL` is set, `harness/main.py`
 drops it for an organisation not on `DOCS_ORGS`. While it is on, the prompt says .docx changes go through `docs`,
 not python-docx. The work is the service's (`packages/docx/src/agent` in cycls-office, `/v1/docs/read|apply`).
+The prompt also says to trust the reply: on super-dev (2026-10-26) the agent made seven good `docs` calls, then
+"repaired" a section's footer reference with a Bash zip edit (past the file's lock and versions), converted the file
+to check it, and misreported the result; a 4–5 minute turn. Now: no Bash, zip or XML edits on a .docx, no render or
+convert to check an edit, `docs` read to look again. The same request afterwards: read, one edit, read (2026-10-27).
 
 - Required: `action` (`read` / `edit` / `create`), `path`, `ops` and `content` — the last two even when an action
   takes none (`[]`, `""`): DeepSeek sent 14 creates in a row without `content` while it was optional.

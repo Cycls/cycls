@@ -152,7 +152,11 @@ DOCS_PROMPT = (
     "describes one): it keeps everything in the file it does not touch (layout, headers, comments, pictures) and the "
     "person sees the change. A new Word document (headings, paragraphs, lists, tables, links): `docs` create, from "
     "markdown, then `docs` edit for pictures, headers and footers, page numbers, sections and page setup. Only a Word "
-    "file that needs a designed cover, brand colours or a layout beyond that is built with the docx skill."
+    "file that needs a designed cover, brand colours or a layout beyond that is built with the docx skill. "
+    "Trust what a `docs` edit replies: it is the file as it now is (the changed paragraphs; after a page change, the "
+    "pages, sections, headers and footers), so tell the person what it says, and `docs` read to look again. Never "
+    "change an existing .docx with Bash, a script, zip or XML edits, and don't unzip, render or convert one to check "
+    "a `docs` edit: that goes round the file's lock, its versions and the person's open editor, and takes minutes."
 )
 
 
