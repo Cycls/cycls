@@ -54,37 +54,46 @@ describe("useExamples", () => {
 });
 
 describe("example cards", () => {
-  afterEach(cleanup);
-  const item = (n: number) => ({
-    share: `/shared/u/t${n}?example=1`, title: `T${n}`, prompt: `أبغى ميزانية شهرية رقم ${n}`,
-    file: { path: `budget/budget-${n}.xlsx`, name: `budget-${n}.xlsx`, url: `/share/u/t${n}/file/budget/budget-${n}.xlsx` },
+  afterEach(() => {
+    cleanup();
+    delete (navigator as { pdfViewerEnabled?: boolean }).pdfViewerEnabled;
+  });
+  const item = (n: number, file: { path: string; name: string; url: string } | null = null) => ({
+    share: `/shared/u/t${n}?example=1`, title: `T${n}`, prompt: `أبغى ميزانية شهرية رقم ${n}`, file,
   });
   const gallery = async (items: ReturnType<typeof item>[]) => {
     vi.resetModules();   // the gallery keeps what it fetched for the visit: a fresh one each test
+    vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ categories: [{ label: "Sheets", items }] }) }));
     const { ExamplesGallery } = await import("../src/components/examples");
     const onUsePrompt = vi.fn();
     render(<ExamplesGallery onUsePrompt={onUsePrompt} />);
-    await waitFor(() => expect(screen.getAllByRole("link").length).toBe(items.length));
+    // Use prompt and View twice a card: over it where a pointer hovers, under it on a touch screen.
+    await waitFor(() => expect(screen.getAllByText("View").length).toBe(items.length * 2));
     return onUsePrompt;
   };
+  const shares = () => [...new Set(screen.getAllByText("View").map((a) => a.getAttribute("href")))];
 
-  test("a card is what was asked and the file it made, in text; it opens the example, Use prompt fills the composer", async () => {
+  test("View opens the example, Use prompt fills the composer; a card with no file to draw is its prompt", async () => {
     const onUsePrompt = await gallery([item(1)]);
-    const card = screen.getByRole("link");
-    expect(card.getAttribute("href")).toBe("/shared/u/t1?example=1");
-    expect(card.textContent).toContain("أبغى ميزانية شهرية رقم 1");
-    expect(card.textContent).toContain("budget-1.xlsx");
-    expect(document.querySelector("iframe")).toBeNull();   // no live render of the file
-    fireEvent.click(screen.getByText("Use prompt"));
+    expect(shares()).toEqual(["/shared/u/t1?example=1"]);
+    expect(screen.getByText("أبغى ميزانية شهرية رقم 1")).toBeTruthy();
+    fireEvent.click(screen.getAllByText("Use prompt")[0]);
     expect(onUsePrompt).toHaveBeenCalledWith("أبغى ميزانية شهرية رقم 1");
+  });
+
+  test("a PDF where the browser has no viewer of its own is its type and prompt, never the browser's placeholder", async () => {
+    Object.defineProperty(navigator, "pdfViewerEnabled", { value: false, configurable: true });
+    await gallery([item(1, { path: "r/report.pdf", name: "report.pdf", url: "/share/u/t1/file/r/report.pdf" })]);
+    expect(screen.getByText("PDF")).toBeTruthy();
+    expect(screen.getByText("أبغى ميزانية شهرية رقم 1")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
   });
 
   test("a new order each visit", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     await gallery([item(1), item(2), item(3)]);
-    expect(screen.getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(
-      ["/shared/u/t2?example=1", "/shared/u/t3?example=1", "/shared/u/t1?example=1"]);
+    expect(shares()).toEqual(["/shared/u/t2?example=1", "/shared/u/t3?example=1", "/shared/u/t1?example=1"]);
     vi.restoreAllMocks();
   });
 });

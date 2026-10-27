@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
-import { shownName, tileExt, tintLabel, tintTile } from "./canvas-utils";
+import { useFileContent, CanvasDoc } from "./canvas";
+import { embedsPdf, isHtml, isPdf, isPresentation, isRenderable, isSpreadsheet, tileExt, tintLabel, tintTile } from "./canvas-utils";
+import { parseDeck } from "./deck-view";
 import { Icon } from "./icon";
 import { track } from "../lib/analytics";
 import { t, getLang } from "../lib/i18n";
@@ -8,9 +10,11 @@ import { cn } from "../lib/utils";
 import { useEscape } from "../hooks/use-escape";
 
 // The examples gallery — curated public shares on the empty-chat screen
-// (docs/notes/examples-gallery.md), in a new order each visit. A card is the
-// example's prompt and the file it made, in text; it opens the share page
-// (transcript + artifact), and "Use prompt" drops the prompt into the composer.
+// (docs/notes/examples-gallery.md), in a new order each visit. A card previews
+// the conversation's final artifact through the same CanvasDoc the canvas uses
+// (its type and prompt when the file can't be drawn there); "Use prompt" drops
+// the example's prompt into the composer, "View" opens the share page
+// (transcript + artifact): over the card on hover, under it on a touch screen.
 // Data: GET /examples, resolved server-side from the operator's `.examples()` share list.
 
 export interface ExampleItem {
@@ -178,70 +182,176 @@ function VideoLightbox({ item, onClose }: { item: ExampleItem; onClose: () => vo
   );
 }
 
-// One card. A tutorial plays its clip; an example is what was asked and the file it made, in text: a live
-// render of a PDF or a sheet looks different on every device, and loads the whole file for one card.
+// True once the element scrolls within 200px of the viewport: what a card fetches waits for it.
+function useNear(ref: React.RefObject<HTMLDivElement | null>) {
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting) { setNear(true); io.disconnect(); } },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref]);
+  return near;
+}
+
 function ExampleCard({ item, category, onUsePrompt, onWatch }: {
   item: ExampleItem;
   category: string;
   onUsePrompt: (text: string) => void;
   onWatch: () => void;
 }) {
-  if (item.video) return <VideoCard item={item} category={category} onWatch={onWatch} />;
-  const file = item.file;
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className="flex w-[78vw] max-w-[420px] shrink-0 snap-center flex-col items-start gap-2 sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
-    >
-      <a
-        href={item.share || "#"}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={() => track("example_viewed", { category, share: item.share })}
-        className="flex aspect-video w-full flex-col justify-between gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:bg-secondary/40"
-      >
-        <p dir="auto" className="line-clamp-4 text-start text-sm leading-relaxed text-foreground">{item.prompt || item.title}</p>
-        {file && (
-          <span className="flex w-full min-w-0 items-center gap-2">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-secondary text-[9px] font-bold" style={tintTile(file.name)}>
-              <span style={tintLabel(file.name)}>{(tileExt(file.name) || "file").slice(0, 4).toUpperCase()}</span>
-            </span>
-            <span dir="auto" className="truncate text-xs text-muted-foreground">{shownName(file.name)}</span>
-          </span>
-        )}
-      </a>
+  return item.video
+    ? <VideoCard item={item} category={category} onWatch={onWatch} />
+    : <FileCard item={item} category={category} onUsePrompt={onUsePrompt} />;
+}
+
+// An example: a live, scaled-down render of the file it made. Where a pointer hovers (desktop) Use prompt and View
+// come over it, as before; on a touch screen they sit under it, where they don't cover it.
+function FileCard({ item, category, onUsePrompt }: {
+  item: ExampleItem;
+  category: string;
+  onUsePrompt: (text: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const near = useNear(ref);
+  const actions = (
+    <>
       {item.prompt && (
         <button
           onClick={() => {
             onUsePrompt(item.prompt!);
             track("example_prompt_used", { category, share: item.share });
           }}
-          className="rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+          className="rounded-full bg-background border border-border px-3.5 py-2 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer shadow-sm"
         >
           {t("usePrompt")}
         </button>
       )}
+      <a
+        href={item.share || "#"}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={() => track("example_viewed", { category, share: item.share })}
+        className="rounded-full bg-foreground px-3.5 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm"
+      >
+        {t("viewExample")}
+      </a>
+    </>
+  );
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="flex w-[78vw] max-w-[420px] shrink-0 snap-center flex-col gap-2 sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
+    >
+      <div className="group relative aspect-video w-full overflow-hidden rounded-xl border border-border bg-card">
+        <div className="h-full w-full transition-transform duration-300 ease-out group-hover:scale-[1.13]">
+          <ExamplePreview item={item} load={near} />
+        </div>
+        {/* The scrim is a whisper of background fading from the top, not a sheet. */}
+        <div className="absolute inset-0 hidden items-center justify-center gap-2 bg-[linear-gradient(to_bottom,color-mix(in_oklab,var(--color-background)_35%,transparent)_0%,color-mix(in_oklab,var(--color-background)_12%,transparent)_45%,transparent_75%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100 [@media(hover:hover)]:flex">
+          {actions}
+        </div>
+      </div>
+      <div className="flex gap-2 [@media(hover:hover)]:hidden">{actions}</div>
     </motion.div>
+  );
+}
+
+function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
+  const file = item.file;
+  // The canvas asks for a file by its path, a deck with `?as=slides`: the share's file route takes the same query.
+  const readFile = useCallback(async (path: string) => {
+    const r = await fetch(file!.url + (path.includes("?") ? path.slice(path.indexOf("?")) : ""));
+    if (!r.ok) throw new Error("failed");
+    return r.text();
+  }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const openFile = useCallback(async (path: string) => {
+    const r = await fetch(file!.url + (path.includes("?") ? path.slice(path.indexOf("?")) : ""));
+    if (!r.ok) throw new Error("failed");
+    return URL.createObjectURL(await r.blob());
+  }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A PDF where the browser can't show one in the page (Chrome on Android) can't be drawn in a card either.
+  const renderable = !!file && isRenderable(file.path) && !(isPdf(file.path) && !embedsPdf());
+  const { content, error } = useFileContent(load && renderable ? file! : null, readFile, openFile, 0, true);
+  if (!renderable || error) return <PreviewFallback item={item} />;
+
+  // A PDF fills the card's width, its page and nothing of the viewer (no toolbar, page list or scrollbar), the
+  // frame 10px past every edge so the margin the viewer leaves round a page is cut off.
+  if (isPdf(file!.path)) {
+    return (
+      <div className="pointer-events-none relative h-full w-full overflow-hidden bg-white">
+        {content && (
+          <iframe src={`${content}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} title={file!.name}
+                  className="absolute -inset-[10px] h-[calc(100%+20px)] w-[calc(100%+20px)] border-0" />
+        )}
+      </div>
+    );
+  }
+  // A deck is its first slide, filling the card, not the deck viewer squeezed into it.
+  if (isPresentation(file!.path)) {
+    const first = content != null ? parseDeck(content)?.slides?.[0] : undefined;
+    if (content != null && !first) return <PreviewFallback item={item} />;
+    return (
+      <div className="pointer-events-none h-full w-full bg-secondary/30">
+        {first && <img src={first} alt="" className="h-full w-full object-cover" />}
+      </div>
+    );
+  }
+  // A sheet is its grid: the viewer's note under it falls past the card's foot, and no scrollbars.
+  if (isSpreadsheet(file!.path)) {
+    return (
+      <div className="pointer-events-none relative h-full w-full overflow-hidden [&_*]:[scrollbar-width:none]">
+        <div className="absolute inset-x-0 top-0 h-[calc(100%+3rem)]">
+          <CanvasDoc file={file!} content={content} error={error} shared />
+        </div>
+      </div>
+    );
+  }
+  // HTML renders at desktop width, scaled to card size — the real page, not a
+  // thumbnail of it. pointer-events off: the card owns the interactions.
+  if (isHtml(file!.path)) {
+    return (
+      <div className="pointer-events-none h-full w-full overflow-hidden">
+        <div className="h-[400%] w-[400%] origin-top-left scale-[0.25]">
+          {content != null && <CanvasDoc file={file!} content={content} error={error} shared />}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="pointer-events-none h-full w-full">
+      <CanvasDoc file={file!} content={content} error={error} shared />
+    </div>
+  );
+}
+
+// A card whose file can't be drawn here: its type, in the type's colour, and what was asked.
+function PreviewFallback({ item }: { item: ExampleItem }) {
+  const name = item.file?.name || "";
+  return (
+    <div className="flex h-full w-full flex-col justify-between gap-3 bg-secondary/30 p-4" style={tintTile(name)}>
+      {name && (
+        <span className="flex size-10 items-center justify-center rounded-lg bg-background/70 text-[10px] font-bold" style={tintLabel(name)}>
+          {(tileExt(name) || "file").slice(0, 4).toUpperCase()}
+        </span>
+      )}
+      <p dir="auto" className="line-clamp-3 text-start text-sm leading-relaxed text-foreground/80">{item.prompt || item.title}</p>
+    </div>
   );
 }
 
 // A tutorial: its clip or thumbnail (fetched when the card scrolls near), Watch on top.
 function VideoCard({ item, category, onWatch }: { item: ExampleItem; category: string; onWatch: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { setVisible(true); io.disconnect(); } },
-      { rootMargin: "200px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  const visible = useNear(ref);
 
   const yt = youtubeId(item.video || "");
   const isFile = !yt && !vimeoId(item.video || "");
