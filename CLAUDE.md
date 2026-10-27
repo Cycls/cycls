@@ -89,6 +89,7 @@ cycls/
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
     └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, a composition's ?as=player in video_routes.py, what they share in shared.py), OG images, themes
+        └── voice.py        # the mic's speech-to-text, any OpenAI-shaped service, kept server-side (Web.voice) — behind the Transcribe engines when they are set; docs/notes/voice.md
 ```
 
 ## Core Architecture
@@ -126,15 +127,16 @@ Yield these from app functions:
 - `{"type": "table", "headers": [...]}` / `{"row": [...]}` - Tables
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
-- `{"type": "image", "src": "...", "alt": "...", "caption": "..."}`
-- `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin
+- `{"type": "image", "src": "...", "alt": "...", "caption": "..."}` - pictures side by side make a grid; a workspace picture opens in the canvas
+- `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin, and by any tool as `_ui` with optional `label`, `quote`, `status`, `note`; they survive a reload
+- `{"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}` - a limit, sent with a reply: a line over the composer in its last fifth; the reply that uses the last of it opens the plans as it ends (once a period on each device), and a reply refused for it is a thank-you note
 - `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history (also `open_canvas`, `suggest`, `ask` — see docs/tutorial.md)
 
 ## Environment Variables
 
 - `CYCLS_API_KEY` - API key for production deployment
 - `CYCLS_BASE_URL` - Base URL for deployment service
-- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` - For examples
+- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` - For examples; `OPENAI_API_KEY` also turns on voice input unless `Web().voice()` names another model
 
 ## Code Style
 

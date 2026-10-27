@@ -141,6 +141,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `run_busy` | send refused with 409 — the chat already has a run, or a regenerate named a turn that is no longer the chat's last | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
+| `chat_title_generated` | a new chat named by the agent's model as its first reply ends (`source`, `length`, `language`) | whether named chats are renamed less: `chat_renamed` against `chat_loaded` |
 
 ### Deliverables
 
@@ -195,7 +196,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 |---|---|---|
 | `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), `confirm` (+ `tool`), `design_command` (live design edit relayed to the open editor), `docs_command` (a Word edit opened in the open Docs editor, its paragraphs marked), `refresh_canvas` (an open file fetched again after the agent changed it — a Video edit), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
-| `confirm_approved` / `confirm_dismissed` / `connector_permissions_changed` | the confirm card was approved or waved off (+ `tool`); a tool's mode changed on a connector's page or from the card's Always allow (`scope` = `tool`, `group` or `card`, `to`) | approved ÷ `ui_action{confirm}` says whether *ask* is a safety net or a nag |
+| `confirm_approved` / `confirm_dismissed` / `connector_permissions_changed` | the confirm card was approved or waved off (+ `tool`, `remember`); a tool's mode changed on a connector's page or from the card's *Don't ask again* (`scope` = `tool`, `group` or `card`, `to`) | approved ÷ `ui_action{confirm}` says whether *ask* is a safety net or a nag |
 | `client_crashed` | a render error was caught by the boundary (`message`) | should be zero; each one is a bug with its message attached |
 | `connector_connect_clicked` / `connector_dismissed` / `connector_disconnected` / `connector_directory_opened` / `connector_prompt_used` / `connector_toggled` / `connector_mentioned` | a connector was opened for connecting (`source` = `card` or `directory`; `kind` = `key` when a key was saved), declined from the card, or disconnected (+ `connector`); a connector was switched on or off (`level` = `org` for the admin's switch or `user` for the person's own, `to` = `on` or `off`); the directory was opened (`source` = `plus` or `settings`, `tab` = `connectors` or `skills`) or one of a connector's example prompts taken; an org admin switched one on or off (`to`, `level` = `org`); an @-pill was added (`source` = `picker` or `prompt`) | clicked ÷ `ui_action{connect}` is the connect rate; a high dismiss rate on one connector says its card isn't earning trust |
 | `skill_uploaded` / `skill_written` / `skill_create_chat` | a skill was uploaded from the Skills tab (`scope`), written or edited in its form (`edit`), or a chat to create one was started | how teams bring their own skills, beside the agent's `skill` publishes in the logs |
@@ -210,10 +211,10 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 
 | event | fires when | key props / question |
 |---|---|---|
-| `paywall_shown` | the **agent** forces the plan modal | `reason` (`limit` / `plan_required`) — friction, not curiosity |
+| `paywall_shown` | the **agent** forces the plan modal; a limit opens it once a period on each device, as the reply that used the last of it ends or at the refusal after it, and after that the line and the note carry it | `reason` (`limit` / `plan_required`) — friction, not curiosity |
 | `limit_reached` | free-tier cap specifically | |
-| `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall) | `source`, `method` |
-| `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans |
+| `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall); `source` `usage` is the limit's line or note, `why` `limit` when the limit opened it; closed by `not_now`, `dismiss`, `backdrop` or `select` | `source`, `why`, `method` |
+| `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans, `why` (`limit` or `menu`: what opened the window) |
 | `purchase` | Clerk confirms a **paid** checkout — a free plan is not revenue and never purchases | same, + `transaction_id` |
 | `plan_manage_clicked` | manage-subscription | |
 

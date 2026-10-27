@@ -607,6 +607,58 @@ def test_openai_stream_clamps_cached_above_prompt():
     assert turn.input + turn.cached + turn.cache_create == 127
 
 
+def test_openai_thinking_is_kept_and_goes_back_to_its_own_model():
+    """A host's thinking is saved with the turn and sent back in the field it came in, to the model that
+    wrote it only: DeepSeek with tools expects every earlier turn's reasoning, and without it each step
+    starts its thinking over (chat a9d536c4 read the same three pages 53 times)."""
+    import types
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
+
+    def chunk(delta, finish=None):
+        return types.SimpleNamespace(usage=None, choices=[types.SimpleNamespace(delta=delta, finish_reason=finish)])
+    call = types.SimpleNamespace(index=0, id="c1", function=types.SimpleNamespace(name="read", arguments='{"path": "a.png"}'))
+
+    async def _gen():
+        yield chunk(types.SimpleNamespace(content=None, tool_calls=None, reasoning="Page 1 "))
+        yield chunk(types.SimpleNamespace(content=None, tool_calls=None, reasoning="looks right."))
+        yield chunk(types.SimpleNamespace(content=None, tool_calls=[call]), finish="tool_calls")
+
+    async def _create(**kw): return _gen()
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_create)))
+    p = OpenAIProvider(client, "deepseek/deepseek-v4.1-flash", "openrouter")
+
+    async def run():
+        return [ev async for ev in p.stream(messages=[{"role": "user", "content": "check"}], system="", tools=[], max_tokens=100)]
+    turn = next(e for e in asyncio.run(run()) if isinstance(e, Turn))
+    assert turn.content[0] == {"type": "thinking", "thinking": "Page 1 looks right.", "field": "reasoning"}
+
+    def sent(model):
+        history = [{"role": "user", "content": "check"},
+                   {"role": "assistant", "content": turn.content, "usage": {"model": model}},
+                   {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "ok"}]}]
+        return next(m for m in p._to_messages(history, "")[0] if m["role"] == "assistant")
+    assert sent("deepseek/deepseek-v4.1-flash")["reasoning"] == "Page 1 looks right."
+    assert "reasoning" not in sent("moonshotai/kimi-k3")
+
+
+def test_thinking_from_another_model_never_reaches_claude():
+    """Claude refuses thinking without a signature: an OpenAI-compatible model's is dropped on the way, and
+    clearing old turns empties it. Claude's own, signed, stays whole."""
+    from cycls._agent.harness.providers.anthropic import AnthropicProvider
+    from cycls._agent.harness.compact import clear
+    theirs = {"type": "thinking", "thinking": "Page 1 looks right.", "field": "reasoning"}
+    ours = {"type": "thinking", "thinking": "Fine.", "signature": "sig"}
+    done = {"type": "text", "text": "Done."}
+    msgs = [{"role": "user", "content": "check"},
+            {"role": "assistant", "content": [theirs, done]},
+            {"role": "assistant", "content": [theirs]},
+            {"role": "assistant", "content": [ours, done]}]
+    out = AnthropicProvider(None, "claude-x")._to_messages(msgs)
+    assert [m["content"] for m in out[1:]] == [[done], [ours, done]]
+    assert [b["thinking"] for m in clear(msgs[1:]) for b in m["content"] if b["type"] == "thinking"] == ["", "", "Fine."]
+
+
 def test_web_fetch_strips_html_to_text(monkeypatch):
     import httpx
     from cycls._agent import tools
@@ -662,6 +714,21 @@ def test_registered_label_renders_the_step(monkeypatch):
     # a broken label falls back to the default, never breaks the stream
     tools.register_labels({"legal_search": lambda inp: inp["missing"]})
     assert tools.tool_step("legal_search", {"sql": "SELECT 1"})["step"] == "SELECT 1"
+
+
+def test_a_picture_tool_names_its_shape_on_the_step(monkeypatch):
+    """`.on(picture=)` puts the shape of the picture on the step, live and on reload: the chat holds a frame of it."""
+    from cycls._agent import tools
+    from cycls._agent.harness.llm import LLM
+    monkeypatch.setattr(tools, "_custom_labels", {})
+    monkeypatch.setattr(tools, "_custom_pictures", {})
+    shape = lambda inp: inp.get("aspect_ratio")
+    assert LLM().on("paint", None, label=lambda inp: inp["prompt"], picture=shape)._pictures == {"paint": shape}
+    tools.register_labels({"paint": lambda inp: inp["prompt"]}, pictures={"paint": shape, "sketch": shape})
+    assert tools.tool_step("paint", {"prompt": "a cat", "aspect_ratio": "16:9"}) == \
+        {"tool_name": "paint", "step": "a cat", "picture": "16:9"}
+    assert tools.tool_step("sketch", {"prompt": "a dog"}) == {"tool_name": "sketch", "step": "a dog", "picture": "1:1"}
+    assert "picture" not in tools.tool_step("bash", {"command": "ls"})
 
 
 def test_llm_on_label_registers_via_run(monkeypatch):
@@ -884,6 +951,33 @@ def _stream_kwargs(vendor, thinking=None, extra_body=None):
                                           extra_body=extra_body)]
     asyncio.run(drain())
     return client.kwargs
+
+
+def test_openai_stream_keeps_a_chat_on_one_host_and_says_which():
+    """The chat id goes as `x-session-id`, so a router that balances hosts keeps the chat on one
+    (and its cache warm); the host a router names on its chunks is the Turn's `host`."""
+    import types
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
+
+    seen = {}
+    async def _create(**kw):
+        seen.update(kw)
+        async def gen():
+            delta = types.SimpleNamespace(content="hi", tool_calls=None)
+            yield types.SimpleNamespace(usage=None, provider="Novita",
+                                        choices=[types.SimpleNamespace(delta=delta, finish_reason="stop")])
+        return gen()
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_create)))
+
+    async def run(**kw):
+        return [e async for e in OpenAIProvider(client, "m", "openrouter").stream(
+            messages=[{"role": "user", "content": "q"}], system="", tools=[], max_tokens=100, **kw)]
+    turn = next(e for e in asyncio.run(run(session="chat-1")) if isinstance(e, Turn))
+    assert seen["extra_headers"] == {"x-session-id": "chat-1"} and turn.host == "Novita"
+    seen.clear()
+    asyncio.run(run())
+    assert "extra_headers" not in seen
 
 
 def test_openai_vendor_uses_max_completion_tokens():

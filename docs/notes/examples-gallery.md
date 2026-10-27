@@ -54,9 +54,17 @@ the existing empty-state hero — so the identity stays ours by construction.
    hardcoded `suggestions-data.tsx` chips remain the fallback when no
    examples are configured.
 
-8. **Live previews, not screenshots.** Cards render the artifact through
-   `CanvasDoc` (scaled, sandboxed, lazy) — HTML, PDF, images, spreadsheets,
-   3D, code all work because the canvas dispatcher already handles them.
+8. **Live previews, the prompt as fallback.** Cards render the artifact through
+   `CanvasDoc` (scaled, sandboxed, lazy), each kind framed for a card: a PDF
+   fills its width with nothing of the viewer (`#toolbar=0&navpanes=0&scrollbar=0&view=FitH`,
+   the frame 10px past every edge so the viewer's margin is cut off), a deck is
+   its first slide, a sheet its grid (the viewer's note under it cut off, no
+   scrollbars). A file that can't be drawn there is its type tile, in the
+   type's colour, and the prompt: no file, an unrenderable kind, a load error,
+   or a PDF where the browser has no viewer of its own (`navigator.pdfViewerEnabled`
+   false: Chrome on Android drew its placeholder, a blob's UUID and an Open button).
+9. **A new order each visit.** Each category's cards are shuffled once a
+   visit, so no example is always first.
 
 ## API
 
@@ -98,10 +106,12 @@ Config: `Config.examples` (raw mapping, server-side), `examples_enabled` in
 ## FE
 
 - `ExamplesGallery` (new): fetches `/examples`; category chips; cards.
-  Card = scaled `CanvasDoc` preview + title; hover (always-on for touch, the
-  `sm:opacity-0 group-hover` pattern) reveals **Use prompt** (fills the
-  input box — tighter than clipboard: edit → send → sign-in pops → sent) and
-  **View** (→ the share page).
+  Card = the live preview, which opens the share page. **Use prompt** (fills
+  the input box — tighter than clipboard: edit → send → sign-in pops → sent)
+  and **View**: on a touch screen in a slim bar along the card's foot, always
+  there; where a pointer hovers (`@media (hover: hover)`) in its middle while it
+  does, with nothing else over the preview, so the card is clean until then. A
+  tutorial card keeps its clip and **Watch**.
 - `chat.tsx` empty state: gallery under the input when `examples_enabled`,
   `Suggestions` otherwise.
 - `shared-view.tsx`: canvas pane (desktop split / mobile drawer) via the

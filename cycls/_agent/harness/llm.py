@@ -32,6 +32,7 @@ class LLM:
         self._handlers = {}
         self._labels = {}
         self._icons = {}
+        self._pictures = {}
         self._details = frozenset()
         self._mcp = []
         self._connectors = []
@@ -82,7 +83,7 @@ class LLM:
         that authenticate outside the bearer key (Modal proxy, Cloudflare
         Access, corporate gateways). None clears."""
         return self._copy(_headers=dict(mapping) if mapping else None)
-    def on(self, name, handler, *, label=None, icon=None, details=False):
+    def on(self, name, handler, *, label=None, icon=None, details=False, picture=None):
         """Register an async handler for a custom tool by name. The handler's
         return value is both yielded to the stream (body sees it as a normal
         event) and packaged as the tool_result sent back to the model.
@@ -92,10 +93,14 @@ class LLM:
         `icon` is an image url shown where a connector's logo goes.
         `details=True` gives the step the connector treatment — it opens into
         Request and Response — and the result then goes there instead of into
-        the chat; the model still receives all of it."""
+        the chat; the model still receives all of it.
+        `picture` marks a tool that makes a picture: input → its shape ("16:9").
+        The chat holds a frame of that shape while it runs, and shows the
+        picture the tool opens (`open_canvas`) in its place."""
         return self._copy(_handlers={**self._handlers, name: handler},
                           _labels={**self._labels, name: label} if label else self._labels,
                           _icons={**self._icons, name: icon} if icon else self._icons,
+                          _pictures={**self._pictures, name: picture} if picture else self._pictures,
                           _details=self._details | {name} if details else self._details)
 
     def instructions(self, path):
@@ -180,7 +185,8 @@ class LLM:
             raise ValueError("LLM.model(...) is required before .run()")
         from .main import _run
         from ..tools import register_labels
-        register_labels(self._labels, icons=self._icons, details=self._details)   # also read by the refetch projection
+        register_labels(self._labels, icons=self._icons, details=self._details,   # also read by the refetch projection
+                        pictures=getattr(self, "_pictures", {}))
         loop = self._loop or _run
         # A switch in Settings turns a tool off for this person; it never
         # turns one on the operator didn't allow.
@@ -201,7 +207,8 @@ class LLM:
             handlers=self._handlers,
             mcp_servers=self._mcp,
             api_connectors=self._connectors,
-            approvals=getattr(context, "approvals", None) or (), auto=getattr(context, "auto", True),
+            approvals=getattr(context, "approvals", None) or (), declined=getattr(context, "declined", None) or (),
+            auto=getattr(context, "auto", True),
             mentions=getattr(context, "connectors", None) or (),
             thinking=self._thinking,
             vision=self._vision,

@@ -9,7 +9,7 @@ on the wrong paragraph.
 import asyncio
 
 from ..design.deck import lock
-from ..design.store import Stale, read_fig, write_fig
+from ..design.store import Stale, load_fig, write_fig
 from ..paths import _resolve_path
 from . import client
 
@@ -303,7 +303,7 @@ async def exec_docs(inp, workspace, ctx=None):
         author = _comments.author("agent", agent=True)["name"]
         async with lock(path):   # one change at a time per file: the model calls tools in parallel
             for attempt in (1, 2):
-                data, base = await asyncio.to_thread(read_fig, root, rel)
+                data, base = await load_fig(root, rel)   # as write_fig checks it: the bucket in production
                 if data is None:
                     return _err(f"{rel} does not exist (use create for a new document).")
                 result = await client.docs_apply(data, path.name, ops, author=author)

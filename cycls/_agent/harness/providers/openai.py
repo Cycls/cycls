@@ -9,6 +9,9 @@ Translates cycls Message shape (Anthropic JSON) ↔ OpenAI Chat Completions:
     warning) on vision=False. Documents in tool_results → stubs always.
   - user-content images → image_url data URLs; stubs on vision=False models
   - user-content documents → text stubs (no Chat Completions wire form)
+  - thinking blocks ↔ the reasoning field the host streamed them in, sent back
+    to the model that wrote them (DeepSeek with tools expects every earlier
+    turn's reasoning; without it each step starts its thinking over)
 """
 import json
 import sys
@@ -19,6 +22,7 @@ from ...tools import tool_step
 
 
 _unmapped_thinking_warned = set()
+_REASONING = ("reasoning", "reasoning_content")   # the fields hosts stream thinking in
 
 
 def _thinking_kwargs(vendor, thinking):
@@ -147,7 +151,8 @@ class OpenAIProvider:
                 if parts:
                     out.append({"role": "user", "content": parts})
             elif role == "assistant":
-                text, calls = "", []
+                text, calls, thought = "", [], {}
+                own = (m.get("usage") or {}).get("model") == self.model   # another model's thinking would read as its reply
                 for b in content:
                     t = b.get("type")
                     if t == "text":
@@ -155,7 +160,9 @@ class OpenAIProvider:
                     elif t == "tool_use":
                         calls.append({"id": b["id"], "type": "function", "function": {
                             "name": b["name"], "arguments": json.dumps(b.get("input", {}))}})
-                msg = {"role": "assistant", "content": text or None}
+                    elif t == "thinking" and own and b.get("field") and b.get("thinking"):
+                        thought = {b["field"]: b["thinking"]}
+                msg = {"role": "assistant", "content": text or None, **thought}
                 if calls: msg["tool_calls"] = calls
                 if text or calls: out.append(msg)  # thinking-only turns have no wire form here
         s = system if isinstance(system, str) else (
@@ -174,7 +181,7 @@ class OpenAIProvider:
         ]
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
-                     thinking=None, extra_body=None):
+                     thinking=None, extra_body=None, session=None):
         api_messages, dropped = self._to_messages(messages, system)
         # Capability limits are logged, never shown in chat — the model gets an
         # actionable stub in-context and works around it with tools.
@@ -197,17 +204,24 @@ class OpenAIProvider:
         if extra_body:
             # merged last — deployer keys win, even over top-level params
             kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
+        if session:
+            # A router that balances a model over several hosts keeps one chat on one of them
+            # (OpenRouter's sticky routing), so its cache stays warm; anyone else ignores the header.
+            kwargs["extra_headers"] = {"x-session-id": str(session)[:256]}
 
-        text_buf, calls, stop, usage = [], {}, "end_turn", None
+        text_buf, thought, field, calls, stop, usage, host = [], [], None, {}, "end_turn", None, None
         async for chunk in await self._client.chat.completions.create(**kwargs):
             if chunk.usage: usage = chunk.usage
+            if isinstance(p := getattr(chunk, "provider", None), str): host = p   # the host a router chose
             if not chunk.choices: continue
             d = chunk.choices[0].delta
             if d.content:
                 text_buf.append(d.content)
                 yield events.text(d.content)
-            if (r := getattr(d, "reasoning", None) or getattr(d, "reasoning_content", None)):
-                yield events.thinking(r)
+            if (f := next((f for f in _REASONING if getattr(d, f, None)), None)):
+                field = field or f
+                thought.append(getattr(d, f))
+                yield events.thinking(thought[-1])
             for tc in (d.tool_calls or []):
                 slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": "", "started": False})
                 if tc.id: slot["id"] = tc.id
@@ -227,7 +241,8 @@ class OpenAIProvider:
                 stop = {"tool_calls": "tool_use", "length": "max_tokens"}.get(
                     chunk.choices[0].finish_reason, "end_turn")
 
-        content = [{"type": "text", "text": "".join(text_buf)}] if text_buf else []
+        content = [{"type": "thinking", "thinking": "".join(thought), "field": field}] if thought else []
+        if text_buf: content.append({"type": "text", "text": "".join(text_buf)})
         for _, tc in sorted(calls.items()):
             try: inp = json.loads(tc["args"]) if tc["args"] else {}
             except json.JSONDecodeError: inp = {}
@@ -244,7 +259,7 @@ class OpenAIProvider:
         yield Turn(content=content, stop_reason=stop,
                    input=(usage.prompt_tokens - cached if usage else 0),
                    output=(usage.completion_tokens if usage else 0),
-                   cached=cached)
+                   cached=cached, host=host)
 
     async def complete(self, *, messages, system, max_tokens):
         api_messages, _ = self._to_messages(messages, system)

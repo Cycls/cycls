@@ -11,7 +11,7 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
+import { isHtml, isMd, isPdf, embedsPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
 import { DocsOrPreview, SheetsOrPreview } from "./sheets-editor-view";
 import { officeGlyphFor } from "./file-glyph";
@@ -221,10 +221,11 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
 
 // Extension tile + download/share — shown for a file with no in-browser
 // renderer, and when an Office file's PDF conversion is unavailable.
-function NoPreviewCard({ file, onDownload, onShare }: {
+function NoPreviewCard({ file, onDownload, onShare, open }: {
   file: CanvasFile;
   onDownload?: () => void;
   onShare?: () => void;
+  open?: string | null;   // a file the browser can show on its own page: opened there
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
@@ -232,11 +233,19 @@ function NoPreviewCard({ file, onDownload, onShare }: {
         <span style={tintLabel(fileKind(file))}>{(tileExt(fileKind(file)) || "file").slice(0, 4).toUpperCase()}</span>
       </div>
       <p className="text-sm font-medium text-foreground">{shownName(file.name)}</p>
-      <p className="text-xs text-muted-foreground">{t("noPreview")}</p>
-      {(onDownload || onShare) && (
+      {!open && <p className="text-xs text-muted-foreground">{t("noPreview")}</p>}
+      {(open || onDownload || onShare) && (
         <div className="mt-1 flex gap-2">
+          {open && (
+            <a href={open} target="_blank" rel="noopener noreferrer"
+               className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity">
+              {t("openInTab")}
+            </a>
+          )}
           {onDownload && (
-            <button onClick={onDownload} className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer">
+            <button onClick={onDownload} className={open
+              ? "rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+              : "rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"}>
               {t("download")}
             </button>
           )}
@@ -379,7 +388,34 @@ function VideoComposition({ file, content, openFile, onDownload, onReload, video
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, videoEditor, officeEditor, reloadFile, onReload, onDownload, onShare }: {
+// A markdown document, read. A link to another workspace file opens it in the canvas, read as markdown means it:
+// beside the document. Agents sometimes write paths from the workspace root, so a plain one missing beside it
+// opens from there, as its pictures do.
+function MdDoc({ path, content, shared, readFile, resolveMedia, onOpenFile }: {
+  path: string;
+  content: string;
+  shared?: boolean;
+  readFile?: (path: string, silent?: boolean) => Promise<string>;
+  resolveMedia?: (path: string) => Promise<string>;
+  onOpenFile?: (path: string) => void;
+}) {
+  const folder = path.slice(0, path.lastIndexOf("/") + 1);
+  const open = useCallback((p: string) => {
+    const root = folder && p.startsWith(folder) ? p.slice(folder.length) : "";
+    if (!root || !readFile) return onOpenFile?.(p);
+    readFile(p, true).then(() => onOpenFile?.(p), () => onOpenFile?.(root));
+  }, [folder, readFile, onOpenFile]);
+  return (
+    <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
+      {/* a shared page gives it the whole screen: keep the lines a reading width */}
+      <div className={shared ? "mx-auto max-w-3xl py-6" : undefined}>
+        <TextPart text={content} resolveMedia={resolveMedia} folder={folder} onOpenFile={onOpenFile && open} />
+      </div>
+    </div>
+  );
+}
+
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, videoEditor, officeEditor, reloadFile, onReload, onDownload, onShare, onOpenFile }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -399,6 +435,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onDownload?: () => void;
   onShare?: () => void;
+  onOpenFile?: (path: string) => void;   // another workspace file, opened beside this one
 }) {
   const lang = codeLang(fileKind(file));
   if (content == null && !error) return <LoadingBar />;
@@ -450,6 +487,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   // Office docs arrive here as a converted-PDF blob URL, so they ride the same
   // native PDF viewer (search / zoom / print, mobile open-in-tab).
   if (isPdf(fileKind(file)) || isOffice(fileKind(file))) {
+    // No viewer of the browser's own (Chrome on Android): its card, opened in a tab, not a blob's placeholder.
+    if (!embedsPdf()) return <NoPreviewCard file={file} open={content} onDownload={onDownload} onShare={onShare} />;
     // Desktop's native inline viewer is the best PDF UX (search, zoom, print).
     // Phones can't EMBED PDFs (iOS iframes render page 1 only) but render them
     // fine on direct navigation — so on small screens the iframe doubles as a
@@ -512,12 +551,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
     ) : null;
   }
   if (isMd(fileKind(file))) {
-    return (
-      <div className="h-full overflow-y-auto px-6 py-5 sm:px-8">
-        {/* a shared page gives it the whole screen: keep the lines a reading width */}
-        <div className={shared ? "mx-auto max-w-3xl py-6" : undefined}><TextPart text={content ?? ""} resolveMedia={resolveMedia} /></div>
-      </div>
-    );
+    return <MdDoc path={file.path} content={content ?? ""} shared={shared} readFile={readFile} resolveMedia={resolveMedia} onOpenFile={onOpenFile} />;
   }
   if (lang == null) {
     return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
@@ -706,6 +740,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   designHost={designHost}
                   videoEditor={videoEditor}
                   officeEditor={officeEditor}
+                  onOpenFile={onAddFile}
                 />
               )}
             </div>
@@ -950,8 +985,9 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 }
 
 // Keyed by path from the parent: each open file keeps its own state.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor, officeEditor }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor, officeEditor, onOpenFile }: {
   file: CanvasFile;
+  onOpenFile?: (path: string) => void;   // a link in a document to another workspace file
   uploadFile?: (dir: string, file: File) => Promise<void>;
   readFile: (path: string, silent?: boolean) => Promise<string>;
   openFile: (path: string, silent?: boolean) => Promise<string>;
@@ -1251,7 +1287,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                          fetchConnector={fetchConnector}
                          appData={appData}
                          designEditorUrl={designEditorUrl} designHost={designHost} videoEditor={videoEditor} officeEditor={officeEditor} reloadFile={reloadFile} onReload={onReload}
-                         onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} />
+                         onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} onOpenFile={onOpenFile} />
               </CanvasHeaderSlot.Provider>
             </div>}
             {previewing && (() => {

@@ -9,7 +9,9 @@ export function cn(...inputs: ClassValue[]) {
 export type ThemeMode = "light" | "dark" | "system";
 const THEME_KEY = "cycls_theme";
 
+// A shared page has no toggle: it always follows the system, and leaves the saved choice to the app.
 export const getThemeMode = (): ThemeMode => {
+  if (window.location.pathname.startsWith("/shared/")) return "system";
   const v = localStorage.getItem(THEME_KEY);
   return v === "light" || v === "dark" ? v : "system";
 };

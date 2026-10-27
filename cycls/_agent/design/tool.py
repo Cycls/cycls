@@ -133,9 +133,10 @@ _DESIGN_TOOL = {
         "whichever reads on its background.\n"
         "  LAYOUT: put text blocks in a stack. Text outside one needs room to WRAP — "
         "give any multi-word text a `w` and put the next node below the whole wrapped "
-        "block. Every render comes back with a LAYOUT CHECK (overlapping text, text off or "
-        "crowding an edge, text too small, low contrast on what's behind it) — fix what "
-        "it lists before you present.\n"
+        "block. Every render and change comes back with a LAYOUT CHECK (overlapping text, text off or "
+        "crowding an edge, text too small, low contrast on what's behind it). Text too small, and a colour "
+        "that doesn't read on a plain colour behind it, it puts right by itself and says so; fix what "
+        "else it lists before you present.\n"
         "  RTL: for Arabic / Hebrew set text `align`:\"right\" and give it a `w`, then "
         "ANCHOR it to the right margin — place the box so its right edge (`x`+`w`) sits "
         "inside the frame (`x` ≈ frameW − margin − `w`), NOT at the small `x` you'd use "
@@ -259,7 +260,8 @@ _DESIGN_TOOL = {
         "four to read, the rest small on contact sheets — look at how each is laid out). A small fix on one page is "
         "an `edit` (ops with `frame`: the page, from 0). Anything that changes the length is made on the "
         "document itself, and only the part that changes is sent: update_section {name, number, section: "
-        "{title?, blocks?}} · add_section {name, section, at?} · move_section {name, number, to} · "
+        "{title?, blocks?}} · add_section {name, section, at?} (several in one call, in order: sections: [section, …]) · "
+        "move_section {name, number, to} · "
         "delete_section {name, number} · update_document {name, document: {title?, theme?, cover?, …}} — "
         "`inspect` lists its sections; it is rendered again in place (the earlier version is kept). Or "
         "the whole render again with \"replace\": true. Never a new name for a change. If the user edited "
@@ -280,16 +282,19 @@ _DESIGN_TOOL = {
         "- script {script, name, format?} — escape hatch: a raw Figma "
         "plugin-API script for what the spec can't express. It MUST end with "
         "`console.log('__FRAME__'+frame.id)` naming the frame to export.\n"
-        "- Change a DECK's slides (name = the deck): add_slide {name, slide, at?} · update_slide {name, "
-        "number, slide} (rebuild it — take its layout `source` from inspect and change what you need) or "
-        "{name, number, notes?|title?|transition?} · move_slide {name, number, to} · duplicate_slide "
-        "{name, number} · delete_slide {name, number}. Slides are numbered from 1; a new slide takes the "
-        "deck's theme and footer, and page numbers follow any change. Use these — not a re-render — to "
-        "change a deck's structure; `edit` ops still tweak nodes on a slide.\n"
+        "- Change a DECK's slides (name = the deck): add_slide {name, slide, at?}, or several in one call, "
+        "in order: {name, slides: [slide, …], at?} · update_slide {name, number, slide} (rebuild it: take "
+        "its layout `source` from inspect and change what you need) or {name, number, notes?|title?|transition?} "
+        "· move_slide {name, number, to} · duplicate_slide {name, number} · delete_slide {name, number}. "
+        "Slides are numbered from 1; a new slide takes the deck's theme and footer, and page numbers follow "
+        "any change. Added slides come back as their layout check, with a picture only of a slide it still "
+        "flags; a rebuilt slide comes back as a picture. Use these, not a re-render, to change a deck's "
+        "structure; `edit` ops still tweak nodes on a slide.\n"
         "- inspect {name, page?} — the design's frames and every node by name (its `id`, else "
         "text-1, rect-2…), with its box, text, font and colour. Do this before an edit you "
-        "can't name from the spec you wrote. A design with several pages lists them, and shows "
-        "ONE: `page` (its name), the first when you give none. A message that carries "
+        "can't name from the spec you wrote. A deck, a document or a carousel comes back with every "
+        "slide or page as well, small on one sheet: the whole of it at a glance. A design with several pages "
+        "lists them, and shows ONE: `page` (its name), the first when you give none. A message that carries "
         "\"[Selected in <name>.fig › <frame>: <node> (<type>), …]\" is the person "
         "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names "
         "(\"[… page \"Story\" › …]\" says which page they are on: pass it as `page`).\n"
@@ -323,7 +328,7 @@ _DESIGN_TOOL = {
         "applied to the saved design first: names that don't exist are ONE error naming all "
         "of them and listing the parts that do, and nothing changes; on success the "
         ".fig is saved, and the edited design comes back to you to "
-        "check, with a layout check. If the design is open, the user WATCHES a labeled "
+        "check (more than two slides changed: small, on one sheet), with a layout check. If the design is open, the user WATCHES a labeled "
         "'Super' cursor replay the change live — pass a short `intent` ('making the "
         "headline gold') shown on it. Use `edit` to tweak a design ('bigger headline', "
         "'move the button down'); `render` to CREATE one. A chart's or table's DATA (values, "
@@ -347,8 +352,11 @@ _DESIGN_TOOL = {
         "download (PowerPoint, PDF, images or the design file); nothing is written beside it. Every render "
         "also comes back to YOU as an image (a deck: every slide) — look at it and "
         "fix what's off before you present it. A fresh "
-        "`render`/`script` NEVER overwrites an earlier design — if the name is taken "
-        "it gets a numeric suffix (`launch-2`); to CHANGE an existing design use `edit`."
+        "`render`/`script` never overwrites an earlier design: if the name is taken it gets a numeric suffix "
+        "(`launch-2`). Another round of the SAME design (the user's feedback, a redo) is that design, not a new "
+        "file: change it with `edit`, or render it again under its name with \"replace\": true. Every version of "
+        "it is kept in its history, so never a `-2` or `-v2` copy to keep the old one; `duplicate` only when the "
+        "user wants both."
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
@@ -361,14 +369,16 @@ _DESIGN_TOOL = {
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
+        "sections": {"type": "array", "items": {"type": "object"}, "description": "For add_section: several sections added in one call, in order, each as `section` is; the document is laid out once. With `at`, the first lands there and the rest follow it."},
         "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, look, cover, size, footnotes, numbering… (null removes one). Not its sections."},
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
         "page": {"type": ["string", "integer"], "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page). For `extract`: the PDF's page to look at, a number from 1."},
         "area": {"type": "array", "items": {"type": "number"}, "description": "For `extract` with `page`: the part of that page to cut out and save as a picture — [left, top, width, height], each a part of the page from 0 to 1."},
         "pages": {"type": ["string", "integer"], "description": "For `extract`: read on in a long PDF — the pages whose text to show, e.g. \"5-12\" (the reply says which are left)."},
-        "replace": {"type": "boolean", "description": "For `render` of a document: re-render it under the SAME name (after changing its content) instead of making a new one; the earlier version is kept in its history."},
+        "replace": {"type": "boolean", "description": "For `render`: render the design again under its SAME name, in place of a new one beside it; the earlier version is kept in its history."},
         "discard_edits": {"type": "boolean", "description": "For a document's re-render (`replace`, or a section action) after the tool said its pages were edited by hand since the last render: true once those edits are accounted for — their wording put into what you send, the user told what can't be kept."},
         "slide": {"type": "object", "description": "For add_slide / update_slide: the slide — a layout slide {layout, …slots, notes?} laid out with the deck's own theme and footer, or a hand-built one {nodes, fill?}. update_slide replaces the slide whole: start from its `source` in inspect and change what you need."},
+        "slides": {"type": "array", "items": {"type": "object"}, "description": "For add_slide: several slides added in one call, in order, each as `slide` is. With `at`, the first lands there and the rest follow it."},
         "number": {"type": "integer", "description": "For update_slide / move_slide / duplicate_slide / delete_slide: the slide's number, from 1. For update_section / move_section / delete_section: the section's. For `comments`: the comment's (its #)."},
         "reply": {"type": "string", "description": "For `comments` with `number`: your answer to that comment — what you changed, or what you need to know."},
         "resolve": {"type": "boolean", "description": "For `comments` with `number`: true closes the comment (its change is made), false opens it again."},

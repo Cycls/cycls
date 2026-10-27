@@ -58,6 +58,24 @@ valid across the break.
 `allowed_tools` names: a tool dropped by `vendor_skips` takes its guidance with
 it, and the ordering follows the tools themselves.
 
+## The same answer again (every tool, no field)
+
+The loop counts each call by its tool, its input and what it returned (`_REPEATED` in
+`harness/main.py`). The same call answered the same way is no news: the 3rd time its result
+carries a note (use what it returned, try another way, or ask the person), the 5th a firmer
+one (don't make it again; say what's in the way and ask), and the 8th ends the run with a
+`Stopped:` callout. Each is a `repeat` log row. The count is per run and anywhere in it, not
+only back to back: chat a9d536c4 read pages 1, 2, 3, 1, 2… 53 times, which a back-to-back
+count (DeepSeek's harness reminds at 3, 5 and 8 in a row; opencode asks the person at 3)
+never sees. A call made again after a change gets a new answer and starts its own count,
+so checking work after editing it is never noted. Polling a job that answers "still running"
+each time is the one honest repeat it notes; it ends the run only at the 8th.
+
+Failed calls in a row, each one different, are counted apart (`STREAK_WARN`, `STREAK_STOP`): the
+10th failure running carries a note (rethink the approach, or say what is in the way), and the
+25th stops the turn with a `Stopped:` callout. A call that works resets the count, so a long
+working turn is never cut off. A result carries one note at most, the repeat's first.
+
 ## Return shapes a tool may use
 
 `run` can answer in four ways. The loop checks them in this order:
@@ -75,10 +93,12 @@ return {
 }
 ```
 
-`_ui` is optional. The `_model` payload is what lands on disk, which is what
-makes citations survive a reload: `to_ui_messages` parses that same JSON back
-into the same `sources` part the live stream sent. One format, both paths, no
-prose to re-parse — the same discipline `step` follows.
+`_ui` is optional. A `ui` event never reaches the transcript, so the batch keeps
+what a reload needs on its own message, as `ui`: the `sources` (bounded) and,
+for a file the tool opened, the canvas card it stands as in the chat. That is
+what makes any tool's citations and pictures survive a reload. `web_search`'s
+`_model` is the same rows as JSON, which is how a chat saved before `ui` still
+gets its citations back.
 
 **3. A UI event — `{"type": "ui", ...}` with an optional `ack`** — for a tool
 whose whole effect is on the client (`canvas`, `suggest`, `ask`). The event is

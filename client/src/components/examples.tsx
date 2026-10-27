@@ -1,19 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useFileContent, CanvasDoc } from "./canvas";
-import { isHtml, isRenderable } from "./canvas-utils";
+import { embedsPdf, isHtml, isPdf, isPresentation, isRenderable, isSpreadsheet, tileExt, tintLabel, tintTile } from "./canvas-utils";
+import { parseDeck } from "./deck-view";
 import { Icon } from "./icon";
 import { track } from "../lib/analytics";
 import { t, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
 import { useEscape } from "../hooks/use-escape";
 
-// The examples gallery — curated public shares rendered as artifact cards on
-// the empty-chat screen (docs/notes/examples-gallery.md). Cards preview the
-// conversation's final artifact through the same CanvasDoc the canvas uses;
-// "Use prompt" drops the example's prompt into the composer, "View" opens the
-// share page (transcript + artifact). Data: GET /examples, resolved
-// server-side from the operator's `.examples()` share list.
+// The examples gallery — curated public shares on the empty-chat screen
+// (docs/notes/examples-gallery.md), in a new order each visit. A card previews
+// the conversation's final artifact through the same CanvasDoc the canvas uses
+// (its type and prompt when the file can't be drawn there); the card and "View"
+// open the share page (transcript + artifact), "Use prompt" drops the example's
+// prompt into the composer: both in a slim bar at the card's foot, always there
+// on a touch screen, on hover where a pointer hovers.
+// Data: GET /examples, resolved server-side from the operator's `.examples()` share list.
 
 export interface ExampleItem {
   share?: string | null;   // artifact card: /shared/<user>/<token>?example=1
@@ -43,6 +46,16 @@ export interface ExampleCategory {
 // Module-level cache: the gallery re-mounts on every new chat; the cards don't.
 let cached: ExampleCategory[] | null = null;
 
+// A new order each visit, kept for the visit: no example is always first.
+function shuffled<T>(xs: T[]): T[] {
+  const out = [...xs];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 export function useExamples() {
   const [categories, setCategories] = useState<ExampleCategory[]>(cached || []);
   useEffect(() => {
@@ -51,7 +64,7 @@ export function useExamples() {
     fetch("/examples")
       .then((r) => (r.ok ? r.json() : { categories: [] }))
       .then((d) => {
-        cached = d.categories || [];
+        cached = ((d.categories || []) as ExampleCategory[]).map((c) => ({ ...c, items: shuffled(c.items || []) }));
         if (!cancelled) setCategories(cached!);
       })
       .catch(() => {});
@@ -170,78 +183,76 @@ function VideoLightbox({ item, onClose }: { item: ExampleItem; onClose: () => vo
   );
 }
 
-// One card: a live, scaled-down render of the artifact (lazy — fetched when
-// the card scrolls near the viewport), hover/touch actions on top.
+// True once the element scrolls within 200px of the viewport: what a card fetches waits for it.
+function useNear(ref: React.RefObject<HTMLDivElement | null>) {
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting) { setNear(true); io.disconnect(); } },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref]);
+  return near;
+}
+
 function ExampleCard({ item, category, onUsePrompt, onWatch }: {
   item: ExampleItem;
   category: string;
   onUsePrompt: (text: string) => void;
   onWatch: () => void;
 }) {
+  return item.video
+    ? <VideoCard item={item} category={category} onWatch={onWatch} />
+    : <FileCard item={item} category={category} onUsePrompt={onUsePrompt} />;
+}
+
+// An example: a live, scaled-down render of the file it made; the box opens the example. Use prompt and View: on a
+// touch screen in a slim bar along its foot, always there; where a pointer hovers, in its middle while it does, so
+// the card is clean until then.
+function FileCard({ item, category, onUsePrompt }: {
+  item: ExampleItem;
+  category: string;
+  onUsePrompt: (text: string) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { setVisible(true); io.disconnect(); } },
-      { rootMargin: "200px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-
+  const near = useNear(ref);
+  const viewed = () => track("example_viewed", { category, share: item.share });
   return (
     <motion.div
       ref={ref}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
-      className="group relative w-[78vw] max-w-[420px] shrink-0 snap-center overflow-hidden rounded-xl border border-border bg-card sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
+      className="group relative aspect-video w-[78vw] max-w-[420px] shrink-0 snap-center overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-foreground/20 sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
     >
-      <div className="aspect-video w-full overflow-hidden transition-transform duration-300 ease-out sm:group-hover:scale-[1.13]">
-        <ExamplePreview item={item} load={visible} />
-      </div>
-
-      {/* Hover actions — always reachable on touch, hover-revealed on desktop.
-          The scrim is a whisper of background fading from the top, not a sheet. */}
-      <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[linear-gradient(to_bottom,color-mix(in_oklab,var(--color-background)_35%,transparent)_0%,color-mix(in_oklab,var(--color-background)_12%,transparent)_45%,transparent_75%)] opacity-100 sm:opacity-0 transition-opacity duration-300 sm:group-hover:opacity-100">
-        {item.video ? (
-          // Tutorial card: one action — play it right here on the page.
+      <a href={item.share || "#"} target="_blank" rel="noopener noreferrer" onClick={viewed} aria-label={t("viewExample")}
+         className="block h-full w-full">
+        <div className="h-full w-full transition-transform duration-300 ease-out group-hover:scale-[1.03]">
+          <ExamplePreview item={item} load={near} />
+        </div>
+      </a>
+      {/* Touch: a slim bar at the foot, always there. Pointer: in the middle, only while hovered, nothing else over it. */}
+      <div data-example-actions
+           className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end gap-1.5 bg-gradient-to-t from-background/85 via-background/40 to-transparent px-2.5 pb-2.5 pt-6 transition-opacity duration-200 [@media(hover:hover)]:inset-0 [@media(hover:hover)]:items-center [@media(hover:hover)]:justify-center [@media(hover:hover)]:gap-2 [@media(hover:hover)]:bg-none [@media(hover:hover)]:px-0 [@media(hover:hover)]:pb-0 [@media(hover:hover)]:pt-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
+        {item.prompt && (
           <button
             onClick={() => {
-              onWatch();
-              track("example_watched", { category, video: item.video });
+              onUsePrompt(item.prompt!);
+              track("example_prompt_used", { category, share: item.share });
             }}
-            className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm cursor-pointer"
+            className="pointer-events-auto rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground backdrop-blur transition-colors hover:bg-secondary cursor-pointer [@media(hover:hover)]:bg-background [@media(hover:hover)]:px-3.5 [@media(hover:hover)]:py-2 [@media(hover:hover)]:text-sm [@media(hover:hover)]:shadow-sm"
           >
-            {t("watch")}
+            {t("usePrompt")}
           </button>
-        ) : (
-          <>
-            {item.prompt && (
-              <button
-                onClick={() => {
-                  onUsePrompt(item.prompt!);
-                  track("example_prompt_used", { category, share: item.share });
-                }}
-                className="rounded-full bg-background border border-border px-3.5 py-2 text-sm font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer shadow-sm"
-              >
-                {t("usePrompt")}
-              </button>
-            )}
-            <a
-              href={item.share || "#"}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() => track("example_viewed", { category, share: item.share })}
-              className="rounded-full bg-foreground px-3.5 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm"
-            >
-              {t("viewExample")}
-            </a>
-          </>
         )}
+        <a href={item.share || "#"} target="_blank" rel="noopener noreferrer" onClick={viewed}
+           className="pointer-events-auto rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition-opacity hover:opacity-90 [@media(hover:hover)]:px-3.5 [@media(hover:hover)]:py-2 [@media(hover:hover)]:text-sm [@media(hover:hover)]:shadow-sm">
+          {t("viewExample")}
+        </a>
       </div>
     </motion.div>
   );
@@ -249,58 +260,55 @@ function ExampleCard({ item, category, onUsePrompt, onWatch }: {
 
 function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
   const file = item.file;
-  const readFile = useCallback(async () => {
-    const r = await fetch(file!.url);
+  // The canvas asks for a file by its path, a deck with `?as=slides`: the share's file route takes the same query.
+  const readFile = useCallback(async (path: string) => {
+    const r = await fetch(file!.url + (path.includes("?") ? path.slice(path.indexOf("?")) : ""));
     if (!r.ok) throw new Error("failed");
     return r.text();
   }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const openFile = useCallback(async () => {
-    const r = await fetch(file!.url);
+  const openFile = useCallback(async (path: string) => {
+    const r = await fetch(file!.url + (path.includes("?") ? path.slice(path.indexOf("?")) : ""));
     if (!r.ok) throw new Error("failed");
     return URL.createObjectURL(await r.blob());
   }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const renderable = !!file && isRenderable(file.path);
-  const { content, error } = useFileContent(load && renderable && !item.video ? file! : null, readFile, openFile, 0, true);
+  // A PDF where the browser can't show one in the page (Chrome on Android) can't be drawn in a card either.
+  const renderable = !!file && isRenderable(file.path) && !(isPdf(file.path) && !embedsPdf());
+  const { content, error } = useFileContent(load && renderable ? file! : null, readFile, openFile, 0, true);
+  if (!renderable || error) return <PreviewFallback item={item} />;
 
-  // Tutorial preview — a muted looping clip for direct files, the thumbnail
-  // for YouTube, a play glyph for other hosted players (Vimeo has no free
-  // thumbnail URL); only fetched once the card scrolls into view.
-  if (item.video) {
-    const yt = youtubeId(item.video);
-    const isFile = !yt && !vimeoId(item.video);
+  // A PDF fills the card's width, its page and nothing of the viewer (no toolbar, page list or scrollbar), the
+  // frame 10px past every edge so the margin the viewer leaves round a page is cut off.
+  if (isPdf(file!.path)) {
     return (
-      <div className="pointer-events-none flex h-full w-full items-center justify-center bg-secondary/30">
-        {load && (yt ? (
-          <img src={`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" className="h-full w-full object-cover" />
-        ) : isFile ? (
-          <video
-            src={item.video}
-            muted
-            loop
-            autoPlay
-            playsInline
-            preload="metadata"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <svg viewBox="0 0 24 24" className="size-10 text-muted-foreground/60" fill="currentColor">
-            <path d="M8 5.14v13.72c0 .9.98 1.45 1.74.98l10.02-6.86a1.15 1.15 0 000-1.96L9.74 4.16A1.15 1.15 0 008 5.14z" />
-          </svg>
-        ))}
+      <div className="pointer-events-none relative h-full w-full overflow-hidden bg-white">
+        {content && (
+          <iframe src={`${content}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`} title={file!.name}
+                  className="absolute -inset-[10px] h-[calc(100%+20px)] w-[calc(100%+20px)] border-0" />
+        )}
       </div>
     );
   }
-
-  // No artifact (or unrenderable): the prompt itself is the preview.
-  if (!renderable) {
+  // A deck is its first slide, filling the card, not the deck viewer squeezed into it.
+  if (isPresentation(file!.path)) {
+    const first = content != null ? parseDeck(content)?.slides?.[0] : undefined;
+    if (content != null && !first) return <PreviewFallback item={item} />;
     return (
-      <div className="h-full w-full bg-secondary/30 p-4">
-        <p className="text-xs leading-relaxed text-muted-foreground line-clamp-5">{item.prompt}</p>
+      <div className="pointer-events-none h-full w-full bg-secondary/30">
+        {first && <img src={first} alt="" className="h-full w-full object-cover" />}
       </div>
     );
   }
-
+  // A sheet is its grid: the viewer's note under it falls past the card's foot, and no scrollbars.
+  if (isSpreadsheet(file!.path)) {
+    return (
+      <div className="pointer-events-none relative h-full w-full overflow-hidden [&_*]:[scrollbar-width:none]">
+        <div className="absolute inset-x-0 top-0 h-[calc(100%+3rem)]">
+          <CanvasDoc file={file!} content={content} error={error} shared />
+        </div>
+      </div>
+    );
+  }
   // HTML renders at desktop width, scaled to card size — the real page, not a
   // thumbnail of it. pointer-events off: the card owns the interactions.
   if (isHtml(file!.path)) {
@@ -316,5 +324,61 @@ function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
     <div className="pointer-events-none h-full w-full">
       <CanvasDoc file={file!} content={content} error={error} shared />
     </div>
+  );
+}
+
+// A card whose file can't be drawn here: its type, in the type's colour, and what was asked.
+function PreviewFallback({ item }: { item: ExampleItem }) {
+  const name = item.file?.name || "";
+  return (
+    <div className="flex h-full w-full flex-col justify-between gap-3 bg-secondary/30 p-4 pb-12" style={tintTile(name)}>
+      {name && (
+        <span className="flex size-10 items-center justify-center rounded-lg bg-background/70 text-[10px] font-bold" style={tintLabel(name)}>
+          {(tileExt(name) || "file").slice(0, 4).toUpperCase()}
+        </span>
+      )}
+      <p dir="auto" className="line-clamp-2 text-start text-sm leading-relaxed text-foreground/80 sm:line-clamp-3">{item.prompt || item.title}</p>
+    </div>
+  );
+}
+
+// A tutorial: its clip or thumbnail (fetched when the card scrolls near), Watch on top.
+function VideoCard({ item, category, onWatch }: { item: ExampleItem; category: string; onWatch: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const visible = useNear(ref);
+
+  const yt = youtubeId(item.video || "");
+  const isFile = !yt && !vimeoId(item.video || "");
+  return (
+    <motion.div
+      ref={ref}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="group relative w-[78vw] max-w-[420px] shrink-0 snap-center overflow-hidden rounded-xl border border-border bg-card sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
+    >
+      <div className="pointer-events-none flex aspect-video w-full items-center justify-center bg-secondary/30">
+        {visible && (yt ? (
+          <img src={`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" className="h-full w-full object-cover" />
+        ) : isFile ? (
+          <video src={item.video || undefined} muted loop autoPlay playsInline preload="metadata" className="h-full w-full object-cover" />
+        ) : (
+          <svg viewBox="0 0 24 24" className="size-10 text-muted-foreground/60" fill="currentColor">
+            <path d="M8 5.14v13.72c0 .9.98 1.45 1.74.98l10.02-6.86a1.15 1.15 0 000-1.96L9.74 4.16A1.15 1.15 0 008 5.14z" />
+          </svg>
+        ))}
+      </div>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <button
+          onClick={() => {
+            onWatch();
+            track("example_watched", { category, video: item.video });
+          }}
+          className="rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90 transition-opacity shadow-sm cursor-pointer"
+        >
+          {t("watch")}
+        </button>
+      </div>
+    </motion.div>
   );
 }

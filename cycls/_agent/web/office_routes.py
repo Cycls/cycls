@@ -67,7 +67,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
     from fastapi import APIRouter, Depends, HTTPException, Request, Response
     from fastapi.responses import JSONResponse
 
-    from cycls._agent.design.store import Stale, read_fig, version_of, write_fig
+    from cycls._agent.design.store import Stale, load_fig, write_fig
     from cycls._agent.logs import log
     from cycls._agent.office import client as office
     from cycls._agent.web.shared import _safe_path, person
@@ -147,8 +147,10 @@ def office_router(ws_dep, required_auth=None, changed=None):
             st = file_path.stat()
             if st.st_size > MAX_BYTES:
                 raise HTTPException(413, f"The {noun} is larger than {MAX_BYTES // (1024 * 1024)} MB.")
-            data = await asyncio.to_thread(file_path.read_bytes)
-            version = version_of(data)
+            rel = file_path.resolve().relative_to(Path(ws.root).resolve()).as_posix()
+            data, version = await load_fig(ws.root, rel)   # as a save checks it: the bucket in production
+            if data is None:
+                raise HTTPException(404, "There is no such file.")
             cache = Path(ws.root) / cache_dir / f"{version}.json.gz"
             body = None
             if cache.is_file():
@@ -169,7 +171,6 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 # (comments made in Word, removed there, the agent's) — office/docs_comments.py.
                 if product == "docs":
                     from cycls._agent.office import docs_comments
-                    rel = file_path.resolve().relative_to(Path(ws.root).resolve()).as_posix()
                     await docs_comments.mirror_file(ws, rel, payload.get("snapshot"),
                                                     datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat())
             modified = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
@@ -182,9 +183,10 @@ def office_router(ws_dep, required_auth=None, changed=None):
             have changed some other way, and takes the new file in (or asks, with unsaved changes)."""
             file_path = _file(ws, path)
             _on(ws)
-            data = await asyncio.to_thread(file_path.read_bytes)
+            rel = file_path.resolve().relative_to(Path(ws.root).resolve()).as_posix()
+            _, version = await load_fig(ws.root, rel)
             modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
-            return {"version": version_of(data), "modified": modified}
+            return {"version": version, "modified": modified}
 
         async def save(path: str, request: Request, base: str = "", force: bool = False,
                        ws: Workspace = ws_dep, user=user_dep):
@@ -209,7 +211,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
                     force=force, bytes=len(body), summary=summary, trail=trail, **fields)
             from cycls._agent.design.deck import lock
             async with lock(file_path):     # one read → patch → write at a time per file
-                data, version = await asyncio.to_thread(read_fig, ws.root, rel)
+                data, version = await load_fig(ws.root, rel)
                 if data is None:
                     raise HTTPException(404, "There is no such file.")
                 if base and base != version and not force:
@@ -261,7 +263,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
             op = {"op": f"{action}_changes", **({"ids": ids} if ids else {})}
             from cycls._agent.design.deck import lock
             async with lock(file_path):
-                data, version = await asyncio.to_thread(read_fig, ws.root, rel)
+                data, version = await load_fig(ws.root, rel)
                 if data is None:
                     raise HTTPException(404, "There is no such file.")
                 if base and base != version:

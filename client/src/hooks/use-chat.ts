@@ -14,6 +14,12 @@ export interface Source {
   title: string;
   url: string;
   snippet?: string;
+  // Any tool may say more about what it cites: the chip's words in place of the site's name, the words
+  // cited as the source has them, a short state ("In force"), and one line of context.
+  label?: string;
+  quote?: string;
+  status?: string;
+  note?: string;
 }
 
 export interface Part {
@@ -33,6 +39,7 @@ export interface Part {
   at?: number;       // when this tab first saw the step (not stored), for its elapsed time
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
+  picture?: string;  // a tool that makes a picture, from `.on(picture=…)`: its shape ("16:9")
   result?: string;   // a connector call's outcome, bounded — the block's Response
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
@@ -47,11 +54,18 @@ export interface Part {
   first?: boolean;   // chat_id event: the account's first chat in this workspace
   action?: string;
   sources?: Source[];
+  card?: Record<string, unknown>;   // a confirm card, standing in the conversation where its step was
+  state?: string;   // its answer: waiting · approved · done · failed · declined · skipped
+  remembered?: boolean;   // answered with "Don't ask again"
+  used?: number;     // a `usage` part: how much of a limit is used, of how much, per what ("month"), and the day it comes back
+  limit?: number;
+  per?: string;
+  resets?: string;
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
 export type SendExtra = {
-  approvals?: string[]; connectors?: string[]; selection?: DesignSelection;
+  approvals?: string[]; declined?: string[]; connectors?: string[]; selection?: DesignSelection;
   folder?: string;   // the folder open in Files: where the agent saves a design named without one
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
 };
@@ -95,6 +109,10 @@ export interface AppConfig {
   suggestions?: boolean;
   affiliate?: string;
   mobile_app?: { ios?: string; android?: string } | null;   // store links for the phone banner
+  // Web.plans: the ways checkout takes payment (official marks), a local currency at a fixed rate, and plan and
+  // feature words in other languages by their billing slug.
+  plans?: { pay?: string[]; currency?: [string, number] | null;
+            words?: Record<string, Record<string, { name?: string; description?: string }>> | null } | null;
   max_upload?: number;   // per-file upload cap in MB
   explore_enabled?: boolean;
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
@@ -115,6 +133,18 @@ async function sha256Hex(text: string): Promise<string | null> {
     return null;   // no WebCrypto (an insecure origin)
   }
 }
+
+// A confirm card's parts, changed where they stand.
+const withCards = (msgs: Message[], change: (p: Part) => Part) =>
+  msgs.map((m) => (m.parts?.some((p) => p.type === "card") ? { ...m, parts: m.parts.map((p) => (p.type === "card" ? change(p) : p)) } : m));
+// A card still waiting when the person typed something else was skipped; the server reads it the same way.
+const skipWaiting = (msgs: Message[]) => withCards(msgs, (p) => (p.state === "waiting" ? { ...p, state: "skipped" } : p));
+// After an approval's run, its card reads how the call went: the step made again, by the same name and words.
+const settle = (msgs: Message[], keys: string[], ran: Part[]) => withCards(msgs, (p) => {
+  if (p.state !== "approved" || !keys.includes(String(p.card?.key))) return p;
+  const step = ran.find((s) => s.type === "step" && s.tool_name === p.card?.tool_name && s.step === p.card?.step);
+  return step ? { ...p, state: step.ok === false ? "failed" : "done" } : p;
+});
 
 export function useChat(baseUrl: string = "") {
   const [messages, _setMessages] = useState<Message[]>([]);
@@ -222,6 +252,7 @@ export function useChat(baseUrl: string = "") {
     // An ending is reported once: a run this poll saw running, or one whose stream just dropped —
     // never the last run's status, which every refocus of a finished chat reads again.
     let ours = dropped;
+    let heard = false;
     try {
       for (;;) {
         if (viewRef.current !== view) return;
@@ -230,6 +261,7 @@ export function useChat(baseUrl: string = "") {
         const res = await api(`/chats/${encodeURIComponent(id)}${q}`);
         if (res.status === 204) return;
         const data = await res.json();
+        heard = true;
         if (viewRef.current !== view) return;
         applyTail(data, full);
         setRunStatus(data.run ?? null);
@@ -249,6 +281,8 @@ export function useChat(baseUrl: string = "") {
       // Leave it: the next trigger (visibility, online, a send) retries.
     } finally {
       pollingRef.current = false;
+      // A run only assumed alive (its stream dropped, the server never answered) is not left on running.
+      if (dropped && !heard && viewRef.current === view) setRunStatus((s) => (s === "running" ? null : s));
     }
   }, [api, applyTail]);
 
@@ -303,7 +337,7 @@ export function useChat(baseUrl: string = "") {
       const silent = origin === "confirm";
       const view = viewRef.current;
       const mine = () => viewRef.current === view;
-      setMessages((prev) => [...prev, ...(silent ? [] : [userMessage]), assistantMessage]);
+      setMessages((prev) => [...(silent ? prev : skipWaiting(prev)), ...(silent ? [] : [userMessage]), assistantMessage]);
       setAttached(true);
       setRunStartedAt((prev) => prev ?? new Date().toISOString());
       const sentAt = Date.now();
@@ -365,6 +399,7 @@ export function useChat(baseUrl: string = "") {
                                  detach: true,   // we poll, and we stop through the endpoint
                                  ...(autoApprove() ? {} : { auto: false }),
                                  ...(extra?.approvals?.length ? { approvals: extra.approvals } : {}),
+                                 ...(extra?.declined?.length ? { declined: extra.declined } : {}),
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
                                  ...(extra?.selection ? { selection: extra.selection } : {}),
                                  ...(extra?.folder ? { folder: extra.folder } : {}),
@@ -424,17 +459,19 @@ export function useChat(baseUrl: string = "") {
                 continue;
               }
 
-              // Agent-driven UI action — dispatch to handler, don't add as part,
-              // don't persist in chat history
+              // Agent-driven UI action — dispatch to handler, don't add as part. A confirm card is the
+              // one that stays: it stands in the conversation, in the place of the step it holds back.
               if (type === "ui" && item.action) {
                 const ev = item as unknown as UIAction;
                 uiHandlerRef.current?.(ev);
-                continue;
-              }
-
+                if (ev.action !== "confirm") continue;
+                const held = parts.findIndex((p) => p.type === "step" && p.id === ev.id);
+                if (held >= 0) parts.splice(held, 1);
+                currentPart = { type: "card", card: ev, state: "waiting" };
+                parts.push(currentPart);
               // Tool-call argument stream — fold the partial JSON into the
               // step it belongs to (a live preview of what the model is writing).
-              if (type === "step_arg" && item.id) {
+              } else if (type === "step_arg" && item.id) {
                 const t = parts.find((p) => p.type === "step" && p.id === item.id);
                 if (t) t.args = (t.args || "") + (item.delta || "");
               } else if (type === "step" && item.id) {
@@ -448,29 +485,16 @@ export function useChat(baseUrl: string = "") {
                   currentPart = { ...item, at: Date.now() };
                   parts.push(currentPart);
                 }
-              } else if (currentPart && currentPart.type === type) {
-                // Same type as current? Merge
-                if (item.row && currentPart.rows) {
-                  currentPart.rows.push(item.row);
-                } else if (
-                  type in item &&
-                  item[type as keyof Part] !== undefined
-                ) {
-                  const key = type as keyof Part;
-                  // A non-string payload is a whole value, not a delta — two
-                  // parallel searches each yield a complete `sources` array, and
-                  // concatenating them would stringify both into garbage.
-                  if (type === "step" || typeof item[key] !== "string") {
-                    currentPart = { ...item };
-                    parts.push(currentPart);
-                  } else {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    (currentPart as any)[key] =
-                      ((currentPart[key] as string) || "") +
-                      (item[key] as string);
-                  }
-                }
+              } else if (currentPart && currentPart.type === type && item.row && currentPart.rows) {
+                currentPart.rows.push(item.row);
+              } else if (currentPart && currentPart.type === type && type !== "step" && typeof item[type as keyof Part] === "string") {
+                // A string under the part's own name is a delta: text, thinking and code stream in pieces.
+                // Anything else is a whole part, and the next of a kind (two images, two searches) is its own.
+                const key = type as keyof Part;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (currentPart as any)[key] = ((currentPart[key] as string) || "") + (item[key] as string);
               } else {
+                if (type === "usage") uiHandlerRef.current?.({ ...item, action: "usage" } as unknown as UIAction);
                 // New part
                 currentPart = { ...item };
                 if (item.headers) currentPart.rows = [];
@@ -519,6 +543,7 @@ export function useChat(baseUrl: string = "") {
             return updated;
           });
         }
+        if (mine() && extra?.approvals?.length) setMessages((prev) => settle(prev, extra.approvals!, finalParts));
 
         // Success — clear retry ref
         lastRequestRef.current = null;
@@ -586,8 +611,13 @@ export function useChat(baseUrl: string = "") {
         // is the only thing that knows which. Also covers a clean-looking read
         // that simply ran out, which is what a parked tab produces.
         cursorRef.current = null;   // nothing advanced it while streaming
-        if (!sawDone && chatIdRef.current && mine()) void pollRun(chatIdRef.current, receivedData);
         const stopped = !!abortRef.current?.signal.aborted;
+        if (!sawDone && chatIdRef.current && mine()) {
+          // Until the poll answers, a dropped stream is a run still going: idle here, the queue would
+          // drain into it, the server refuse each message (409), and the reload lose them.
+          if (receivedData && !stopped) setRunStatus("running");
+          void pollRun(chatIdRef.current, receivedData);
+        }
         setAttached(false);
         abortRef.current = null;
         // Server is the sole writer of chat metadata. The harness stamps
@@ -856,8 +886,13 @@ export function useChat(baseUrl: string = "") {
     track("chat_favorited", { chat_id: id, on });
   }, [api]);
 
+  // A confirm card's answer, shown at once; the turn that carries it saves it.
+  const markCard = useCallback((key: string, patch: Partial<Part>) =>
+    setMessages((prev) => withCards(prev, (p) => (p.card?.key === key ? { ...p, ...patch } : p))), []);
+
   return {
     messages,
+    markCard,
     isStreaming,
     attached,    // a stream is feeding this tab right now
     runStatus,   // "running" while the server still has work, even with no stream

@@ -130,19 +130,29 @@ async def add_cost(workspace, chat_id, delta):
     await put_meta(workspace, chat_id, existing)
 
 
+def _first_line(text, most=80):
+    """A title from what the person wrote, until a better one: cut at a word, with "…", not mid-word."""
+    text = " ".join(text.split())
+    if len(text) <= most:
+        return text
+    return (text[:most].rsplit(" ", 1)[0] or text[:most]) + "…"
+
+
 async def touch_meta(workspace, chat_id, content):
     """Stamp `updatedAt` for chat-list ordering; on the first turn also derive
     title from the user message and set createdAt. Sole writer of chat meta —
-    the FE shouldn't PUT this back."""
+    the FE shouldn't PUT this back. A new chat's title is its first line until the
+    run names it (`titleSource`: "first", then "auto"; a rename makes it "user")."""
     existing = (await get_meta(workspace, chat_id)) or {}
     now = datetime.now(timezone.utc).isoformat()
     meta = {**existing, "id": chat_id, "updatedAt": now}
     if "createdAt" not in meta:
         meta["createdAt"] = now
+        meta["titleSource"] = "first"
     if not meta.get("title"):
         text = content if isinstance(content, str) else next(
             (b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"), "")
-        if (title := text.strip()[:80]):
+        if (title := _first_line(text)):
             meta["title"] = title
     await put_meta(workspace, chat_id, meta)
 
@@ -455,11 +465,12 @@ class Session:
 
     def context(self):
         """The model's view: the summary (once compacted) standing in for the folded
-        prefix, tool results before `cleared` stubbed, the rest verbatim."""
-        from .harness.compact import prefix, clear
+        prefix, tool results and thinking before `cleared` stubbed, a tool's newest
+        pictures only, the rest verbatim."""
+        from .harness.compact import prefix, clear, recent
         k = max(self.first_kept, self.cleared)
-        return [*(prefix(self.summary) if self.summary is not None else []),
-                *clear(self.messages[self.first_kept:k]), *self.messages[k:]]
+        return recent([*(prefix(self.summary) if self.summary is not None else []),
+                       *clear(self.messages[self.first_kept:k]), *self.messages[k:]])
 
     async def clear(self, keep, enough):
         """Stub tool results older than the recent `keep` tokens — the cheap tier.
@@ -485,9 +496,11 @@ class Session:
             await put_compaction(self.workspace, self.chat_id,
                                  {"summary": self.summary, "first_kept": self.first_kept, "cleared": self.cleared})
 
-    async def add_user(self, content, *, attachments=None, internal=False, selection=None, connectors=None):
-        """`internal` marks a turn the person did not type — an approval carried back from a confirm
-        card. The model reads it, the chat never shows it, and it never becomes the chat's title.
+    async def add_user(self, content, *, attachments=None, internal=False, selection=None, connectors=None,
+                       approvals=(), declined=()):
+        """`internal` marks a turn the person did not type — a confirm card's approval or "Not now",
+        which it also keeps, so the card reads its state after a reload. The model reads it, the chat
+        never shows it, and it never becomes the chat's title.
 
         The turn is durable when this returns. It used to reach disk only at the
         first checkpoint, after the first tool batch, so a run that died before
@@ -500,8 +513,13 @@ class Session:
             self.replay = False
             return
         msg = {"role": "user", "content": content}
+        internal = internal or bool(approvals or declined)
         if internal:
             msg["internal"] = True
+        if approvals:
+            msg["approvals"] = list(approvals)
+        if declined:
+            msg["declined"] = list(declined)
         if attachments:
             msg["attachments"] = attachments
         if selection:   # the chat shows it as a chip

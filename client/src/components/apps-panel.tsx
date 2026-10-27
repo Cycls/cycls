@@ -90,7 +90,7 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
                     <span className="absolute end-2 top-2" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => setMenuFor(menuFor === app.slug ? null : app.slug)}
-                        className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-100 transition-opacity hover:bg-secondary hover:text-foreground sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
+                        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-secondary hover:text-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 cursor-pointer"
                         aria-label={t("more")} title={t("more")}
                       >
                         <svg className="size-4" fill="currentColor" viewBox="0 0 24 24">

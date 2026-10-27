@@ -5,7 +5,7 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, json, os, random, re, time, uuid
+import asyncio, hashlib, json, os, random, re, time, uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,14 +53,22 @@ _DROPPED_SAID = ("connection error", "peer closed connection", "incomplete chunk
 _FAILED = ("Error:", "Build failed:")   # how a tool says it failed — it returns, it does not raise
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
-# A model that sends a failing call again as it is gets the same failure back: one suite turn sent
-# the same `edit` 394 times. The same call failing the same way is told so from its third time and
-# stops the turn at its sixth; failed calls in a row, whatever they are, are told at 10, stop at 25.
-REPEAT_WARN, REPEAT_STOP = 3, 6
+# Failed calls in a row, whatever they are, are told at 10 and stop the turn at 25 (one suite turn sent the
+# same failing `edit` 394 times). The same call answered the same way again is _REPEATED's, below.
 STREAK_WARN, STREAK_STOP = 10, 25
 CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
+# The same call answered the same way is no news: a note at these counts in a run, and the run stops at the
+# last. Counted anywhere in the run, not only back to back (chat a9d536c4 read pages 1, 2, 3, 1, 2… 53
+# times); a call made again after a change gets a new answer and starts its own count.
+_REPEATED = {
+    3: ("You made this exact call {n} times in this task and got the same result each time. Repeating it won't "
+        "change it: use what it returned, try another way, or ask the person if something needs clarifying."),
+    5: ("This exact call has now returned the same result {n} times. Don't make it again: decide with what you "
+        "have, or tell the person what's in the way and ask how to go on."),
+    8: "This exact call returned the same result {n} times, so the run stopped here.",
+}
 # Providers report context overflow as an error, each with its own wording.
 # One phrasing per provider, because each says it differently and a miss here is
 # not a smaller context — it is the error reaching the user instead of a compact
@@ -167,16 +175,13 @@ def _with_selection(content, sel):
     return [*blocks, {"type": "text", "text": line}]
 
 
-def _stuck_note(repeats, streak, stopped):
-    """What a failed call's result adds when the model is going round in circles (REPEAT_*, STREAK_*)."""
-    if stopped:
-        return ("\n\n[The turn was stopped here: this kept failing. Do not send it again as it is — work out "
-                "why it fails first, or tell the person what is in the way.]")
-    if repeats >= REPEAT_WARN:
-        return (f"\n\n[This exact call has now failed {repeats} times with the same result, and it will fail again "
-                "as it is. Look at why (read the file as it is now), change the call, or tell the person what is in the way.]")
+def _streak_note(streak):
+    """What a failed call's result adds when calls keep failing in a row (STREAK_*)."""
+    if streak >= STREAK_STOP:
+        return ("[The turn was stopped here: tool calls kept failing. Do not send them again as they are — "
+                "work out why they fail first, or tell the person what is in the way.]")
     if streak >= STREAK_WARN:
-        return (f"\n\n[{streak} tool calls in a row have failed. Stop and rethink the approach, "
+        return (f"[{streak} tool calls in a row have failed. Stop and rethink the approach, "
                 "or tell the person what is in the way.]")
     return ""
 
@@ -189,19 +194,38 @@ def _shape(block, out, ok, handlers, mcp_names):
     if ok and isinstance(out, dict) and "_model" in out:
         # Two channels: `_model` lands in tool_result, `_ui` (one event or a list) goes to the client.
         ui = out.get("_ui")
-        return out["_model"], [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])], False
+        evs = [{**e, "id": block["id"]} for e in (ui if isinstance(ui, list) else [ui] if ui else [])]
+        # A file the tool opened stands in the chat too, as the canvas tool's own card does.
+        evs += [{"type": "step", "id": f"{block['id']}:file", "tool_name": "Canvas", "step": e["path"], "ok": True}
+                for e in evs if e.get("action") == "open_canvas" and isinstance(e.get("path"), str)]
+        return out["_model"], evs, False
     if ok and isinstance(out, dict) and out.get("type") == "ui":
         # A UI tool drives the client; the model gets a short ack so tool_result
         # stays a valid string. `ack` overrides the wording and never ships.
         ack = out.pop("ack", None)
         waiting = out.get("action") in ("confirm", "connect")
         return (ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user.",
-                [out], waiting)
+                [{**out, "id": block["id"]}], waiting)
     if ok and handlers and name in handlers and name not in mcp_names and not detailed(name):
         # A custom handler's result is both the chat's and the model's; a
         # connector's is the model's alone — the chat sees the step.
         return (out if isinstance(out, str) else json.dumps(out, default=str)), [out], False
     return out, [], False
+
+
+_SOURCE = {"title": 300, "url": 2000, "snippet": 600, "label": 120, "quote": 2000, "status": 60, "note": 300}
+
+
+def _kept(ev):
+    """What of a tool's chat events the transcript keeps, since `ui` events never reach it: its sources, bounded,
+    and the card of a file it opened. Without this a reload shows neither."""
+    if not isinstance(ev, dict): return None
+    if ev.get("type") == "sources":
+        rows = [{k: v[:n] for k, n in _SOURCE.items() if isinstance(v := r.get(k), str) and v}
+                for r in ev.get("sources") or () if isinstance(r, dict) and isinstance(r.get("url"), str)]
+        return {"type": "sources", "id": ev.get("id"), "sources": rows[:20]} if rows else None
+    if ev.get("type") == "step" and str(ev.get("id", "")).endswith(":file"):
+        return ev
 
 
 async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace):
@@ -213,7 +237,7 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
     for t in tasks:
         if not t.done(): t.cancel()
     await asyncio.wait(tasks, timeout=CANCEL_DRAIN)
-    results = []
+    results, kept = [], []
     for block, t in zip(blocks, tasks):
         if t.cancelled() or not t.done():
             content, failed = interrupted_note(block["name"], reason), True
@@ -221,13 +245,14 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
             out, _ = t.result()
             failed = isinstance(out, BaseException)
             if failed: out = f"Error: {_cause(out)}"
-            content, _, _ = _shape(block, out, not failed, handlers, mcp_names)
+            content, evs, _ = _shape(block, out, not failed, handlers, mcp_names)
+            kept += [k for e in evs if (k := _kept(e))]
         if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
             content = spill.spill(content, workspace.root, session.chat_id,
                                   f"{block['name']}-{block['id'][-6:]}")
         results.append({"type": "tool_result", "tool_use_id": block["id"],
                         "content": content, "is_error": failed})
-    session.messages.append({"role": "user", "content": results})
+    session.messages.append({"role": "user", "content": results, **({"ui": kept} if kept else {})})
     await asyncio.shield(session.checkpoint())
 
 
@@ -344,13 +369,60 @@ async def _stream_with_retry(provider, **kw):
 
 # ---- Loop ----
 
+TITLE_WAIT = 2   # seconds a finished run waits for its new chat's title, at most
+_NAMING = set()  # titles being made: a task needs a reference until it ends
+
+
+def _said(messages, most=3):
+    """The person's first few messages, as they wrote them (tool results and approvals aren't theirs)."""
+    out = []
+    for m in messages:
+        if m.get("role") != "user" or m.get("internal"):
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else " ".join(
+            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+        if text := " ".join(text.split()):
+            out.append(text[:500])
+        if len(out) == most:
+            break
+    return out
+
+
+async def _chat_title(provider, said, **kw):
+    """A new chat's title, from one small call to the agent's own model: a few words on what the person wants,
+    in their language. "" when it can't."""
+    prompt = ("Write a title for this conversation: 3 to 6 words on what the person wants, in the language they "
+              "wrote in. Reply with the title alone, no quotes and no full stop.\n\nThey wrote:\n" + said)
+    turn = None
+    try:
+        async for ev in provider.stream(messages=[{"role": "user", "content": prompt}],
+                                        system="You name conversations.", tools=[], **kw):
+            if isinstance(ev, Turn): turn = ev
+    except Exception:
+        return ""
+    text = "".join(b.get("text", "") for b in (turn.content if turn else [])
+                   if isinstance(b, dict) and b.get("type") == "text").strip()
+    line = text.split("\n", 1)[0] if text else ""
+    return " ".join(line.split()).strip("\"'«»“”`").rstrip(".").strip()[:80]
+
+
+async def _settled(task, wait):
+    """The task's result if it ends within `wait` seconds, else "" and it is called off."""
+    done, _ = await asyncio.wait({task}, timeout=wait)
+    if not done:
+        task.cancel()
+        return ""
+    return task.result()
+
+
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
-               extra_body=None, approvals=(), mentions=(), auto=True, api_connectors=()):
+               extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=()):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
@@ -386,9 +458,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
-        await session.add_user(content, attachments=incoming.get("attachments"), internal=bool(approvals),
+        await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
     messages = session.messages
+    # A new chat is named from the person's words while the reply is made, so naming never holds the reply up;
+    # a greeting alone waits for more to name it by.
+    naming = None
+    if session.chat_id and len(said := _said(messages, 4)) <= 3:
+        enough = " ".join(said)
+        if (len(enough.split()) >= 3 or "[Attached:" in enough) and \
+                ((await state.get_meta(workspace, session.chat_id)) or {}).get("titleSource") == "first":
+            naming = asyncio.create_task(_chat_title(provider, "\n\n".join(said), max_tokens=max_tokens,
+                                                     thinking=thinking, extra_body=extra_body,
+                                                     session=session.chat_id))
+            _NAMING.add(naming)
+            naming.add_done_callback(_NAMING.discard)
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
     if instructions:
@@ -511,8 +595,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         if not o.api or o.servers or o.name in hidden or not await o.bearer(workspace):
             continue
         schema, fn, label, writes = connectors.api_tool(o)
+        chosen = (await connectors.permissions(workspace, o.name)).get(schema["name"])   # its one tool's Ask / Always allow / Never
+        if chosen == "never":
+            continue
         tools_list.append(schema)
-        handlers[schema["name"]] = connectors.gated(fn, schema["name"], label, o.name, writes)
+        handlers[schema["name"]] = connectors.gated(fn, schema["name"], label, o.name, writes,
+                                                    hard=chosen == "ask", allowed=chosen == "allow")
         mcp_names.add(schema["name"])
         owners[schema["name"]] = o
         register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))
@@ -536,7 +624,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     continuations = 0
     pauses = 0
     overflowed = False
-    repeats, streak = {}, 0   # failed calls this run, by call and outcome; failures in a row
+    streak = 0   # failed calls in a row this run
 
     def request():
         """Everything a call sends besides its messages. The summary sends it too, so its prefix is cached."""
@@ -548,7 +636,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             design_loaded = True
             DESIGN_LOADED.set(True)
         ondemand.advance(demand, tools_list, messages)
-        return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body)
+        return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body,
+                    session=session.chat_id)
 
     def compacted(tier, reason, tokens, ok=True):
         """The analytics record of one compaction: a log row, and a `ui` event the client tracks."""
@@ -594,6 +683,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             and await session.clear(keep, window * CLEAR_COLD)):
         yield compacted(1, "cold", last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0))
 
+    repeats = {}   # (tool, input, result) → times this run
     while True:
         try:
             async for ev in fold(): yield ev
@@ -635,7 +725,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 model=bare_model,
                 input=turn.input, output=turn.output,
                 cached=turn.cached, cache_create=turn.cache_create,
-                cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason)
+                cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason,
+                **({"host": turn.host} if turn.host else {}))
             if session.chat_id:
                 try: await state.add_cost(workspace, session.chat_id, turn_cost)
                 except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
@@ -706,7 +797,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                               handlers, mcp_names, workspace)
                 raise
 
-            results, terminal, waiting, cards, stuck = [], False, False, [], False
+            results, terminal, waiting, cards, kept, stuck = [], False, False, [], [], False
             for block, (out, ms) in zip(blocks, timed):
                 # `ok` routes the result; `good` is the outcome, and a returned error is one
                 ok = not isinstance(out, BaseException)
@@ -719,22 +810,28 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     error=None if good else (_cause(out) if not ok else out[:200]))
                 if not ok: out = f"Error: {_cause(out)}"
                 content, evs, waits = _shape(block, out, ok, handlers, mcp_names)
+                same = hashlib.sha1(json.dumps([block["name"], block.get("input"), content], sort_keys=True,
+                                               default=str).encode()).hexdigest()
+                repeats[same] = n = repeats.get(same, 0) + 1
                 for ev in evs: yield ev
+                kept += [k for e in evs if (k := _kept(e))]
                 if waits:
                     waiting = True   # the person has to answer before anything else can happen
                     cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
                 if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
-                note = ""
-                if good: streak = 0
-                else:
-                    streak += 1
-                    key = (block["name"], json.dumps(block.get("input"), sort_keys=True, default=str), str(out)[:300])
-                    repeats[key] = n = repeats.get(key, 0) + 1
-                    stuck = stuck or n >= REPEAT_STOP or streak >= STREAK_STOP
-                    note = _stuck_note(n, streak, stuck)
+                streak = 0 if good else streak + 1
+                note = _REPEATED.get(n, "").format(n=n)
+                if note:
+                    log("repeat", user=user, chat_id=session.chat_id, model=bare_model, tool=block["name"], times=n)
+                    if n == max(_REPEATED):
+                        terminal = True
+                        yield events.callout("Stopped: the same step kept giving the same result.", "warning")
+                elif not good:   # one note a result: the repeat's, else the failures in a row
+                    note = _streak_note(streak)
+                    stuck = stuck or streak >= STREAK_STOP
                 results.append({"type": "tool_result", "tool_use_id": block["id"],
-                                "content": content + note if note and isinstance(content, str) else content})
+                                "content": _with_mention(content, note) if note else content})
                 if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
                     yield {"type": "step", "id": block["id"], "ok": good,
                            **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}
@@ -745,9 +842,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # A card is a `ui` event, which the transcript does not keep — so a
             # run that ends waiting looks finished after a reload, with nothing to
             # approve. Ride it on the message the batch already writes.
-            messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {})})
+            messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {}),
+                             **({"ui": kept} if kept else {})})
             await session.checkpoint()
-            if stuck:
+            if stuck and not terminal:   # a repeat's stop has said so already
                 log("warn", user=user, chat_id=session.chat_id, model=bare_model,
                     message=f"turn stopped: tool calls kept failing ({streak} in a row)")
                 yield events.callout("Stopped: the same step kept failing. Reply to go on, or say what to try instead.", "warning")
@@ -780,3 +878,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             raise
 
     async for ev in fold(): yield ev   # now, while the answer is read — not when the next message waits on it
+
+    # Written last, when nothing else writes the chat's meta; a rename made meanwhile wins.
+    if naming and (title := await _settled(naming, TITLE_WAIT)):
+        meta = (await state.get_meta(workspace, session.chat_id)) or {}
+        if meta.get("titleSource") == "first":
+            await state.put_meta(workspace, session.chat_id, {**meta, "title": title, "titleSource": "auto"})
+            log("chat_title", user=user, chat_id=session.chat_id, length=len(title))
+            yield {"type": "ui", "action": "title", "chat_id": session.chat_id, "title": title}

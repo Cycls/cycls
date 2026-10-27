@@ -150,11 +150,13 @@ Fontsource. The service's `fonts.ts` makes that dependable before every render:
   fonts an edit leaves on the page the same way.
 - **A workspace's own fonts.** The `.ttf` / `.otf` files in `brand/fonts/` — and any one a design
   names by its path, as a `font` or a theme's `heading` / `body` (`run._font_files`) — reach the
-  service (`POST /fonts`) on a Design call (`client.give_font`): their sha256 first, once a process,
-  and the file itself only when the service has never had it. The service reads the family and
-  weight from the file and keeps it beside its baked faces, on a volume, so renders, PDFs and
-  the editor's `/font` find it like any other; one on Google Fonts is refused. The first call
-  to give a font tells the model its family name.
+  service (`POST /fonts`) on a Design call, as the editor opens a design (`GET /brand`) and as a
+  preview is made (`design_routes._give_fonts`): their sha256 first, once a process (an unchanged
+  file isn't read again), and the file itself only when the service has never had it. The service
+  reads the family and the style the file gives (else its weight class: BR Omny's Thin declares the
+  Light weight) and keeps it beside its baked faces, on a volume, so renders, PDFs and the editor's
+  `/font` find it like any other; one on Google Fonts is refused. The first call to give a font
+  tells the model its family name.
 
 The service returns `notes` for what it changed; the SDK appends them to the ack.
 
@@ -165,7 +167,18 @@ bundled Noto Naskh — was fine). The bridge replaces the font manager's remote 
 one that asks the service's `GET /font` first: one complete file per face, fetched with
 the renderer's own resolver — so the editor and the PNG shape text from the same file. It
 also drops cached text pictures whenever the font set changes, so text drawn before a
-late font arrived re-shapes.
+late font arrived re-shapes. `/font` and a saved design's render find a face the same way:
+however its style is spelled (Figma's "SemiBold"), an added family's nearest weight for one it
+lacks. A face the service hasn't got is asked for again after ten seconds and on every design
+opened, and `/font` keeps no miss: an editor that once asked before a workspace's fonts had
+arrived drew stand-ins for the session while the preview was right.
+
+**A file made in Figma.** Figma means a text's left and right as the sides of its box; the
+engine reads them, on right-to-left text, as that text's start and end, so a Figma file's
+left-aligned Arabic drew on the right. The service and the editor swap the two on
+right-to-left text as they open a file Figma wrote (`figma-import.ts`, told by its
+`meta.json`), the same swap the builder makes for a spec's `align`; what they save is the
+engine's own file and isn't swapped again.
 
 `size` is `[W, H]` or a **preset** the SDK
 resolves before the request: `square` 1080², `post-portrait` 1080×1350, `story` /
@@ -367,13 +380,17 @@ its section changes. The tool description and the `deck-design`, `document-desig
 `design-direction` skills teach choosing one per piece.
 
 **Slide actions** change a deck's structure on the saved `.fig`, through the
-service's `/apply` like an `edit`: `add_slide {slide, at?}`, `update_slide {number,
-slide}` (or just `notes` / `title` / `transition`), `move_slide {number, to}`,
-`duplicate_slide`, `delete_slide` — slides numbered from 1. A new slide is laid out
-with the deck's settings; after any change the slides are re-placed and their page
-numbers follow (`relayoutDeck`). Only the touched slides are previewed back to the
-model. The result both replays in an open editor (`design_command`) and opens the deck
-viewer (`open_canvas`) — a tool's `_ui` may be a list. Changes to one design are
+service's `/apply` like an `edit`: `add_slide {slide, at?}` (or several in one call,
+`{slides: [...], at?}`: one change, one `/apply` of several `slide_add` ops),
+`update_slide {number, slide}` (or just `notes` / `title` / `transition`), `move_slide
+{number, to}`, `duplicate_slide`, `delete_slide` — slides numbered from 1. A new slide is
+laid out with the deck's settings; after any change the slides are re-placed and their page
+numbers follow (`relayoutDeck`). What comes back to the model: added slides as their layout
+check, with a picture only of a slide it still flags; a rebuilt slide as its picture; a
+move, a copy or a deletion, neither. The result replays in an open editor or refreshes an open viewer
+(`design_command`), and opens nothing: a deck that isn't open stays closed. It used to
+send `open_canvas` as well, which pulled the canvas back to the deck and put another file
+card in the chat on every slide of a long deck. Changes to one design are
 serialized (`design/deck.py` `lock`): the model calls tools in parallel, and two slide
 actions in one turn each read the same `.fig` — the later write dropped the other's
 change until they queued. The deck viewer's own changes — drag-to-reorder, duplicate,
@@ -454,17 +471,17 @@ the pages make themselves.
   (ops with `frame`: the page, from 0). Anything that changes the length is made on the
   document itself — **`update_section {name, number, section}`** (just the keys that
   change: `{blocks}` rewrites it, `{title}` renames it), **`add_section {name, section,
-  at?}`**, **`move_section {name, number, to}`**, **`delete_section {name, number}`**,
+  at?}`** (or several, laid out once: `sections: [...]`), **`move_section {name, number, to}`**, **`delete_section {name, number}`**,
   **`update_document {name, document}`** (its title, theme, cover… — `null` removes a
   key): the SDK changes the kept source (`_exec_document`) and renders it again in place,
   so the model sends the part that changes, not the whole document; `inspect` lists the
   sections by number. Nothing is saved unless the render succeeds. Or the whole
   `render` again with **`replace: true`**: the same name, the earlier `.fig` kept as a
-  version (History restores it), and what is open follows — the event list is a
-  `design_command` with `reload` (an open editor re-opens the file, the viewer fetches
-  its pages) and `open_canvas`. Without `replace`, the same name makes `<name>-2`, as
-  any render does. A page edited by hand does not re-flow the pages after it; the
-  tool's reply says so.
+  version (History restores it), and what is open follows: a `design_command` with
+  `reload` (an open editor re-opens the file, the viewer fetches its pages), and no
+  `open_canvas`: a design opens when it is made, not on each change. Without `replace`,
+  the same name makes `<name>-2`, as any render does. A page edited by hand does not
+  re-flow the pages after it; the tool's reply says so.
 - **Arguments as text.** Some models hand a large nested argument over as a JSON string;
   `spec`, `ops` and `slide` given that way are read as the object (seen on prod with a
   document's spec — it used to cost a refused call).
@@ -592,6 +609,14 @@ kept in it — then returns the two-channel result the loop already understands:
 model reads a short ack (plus the render itself, for self-QA), and the client gets an
 `open_canvas` event for the `.fig` (the same event the Canvas tool and browser
 screenshots use).
+
+A design opens when it is made. A change to it (an `edit`, a slide action, a document
+section, a render with `replace`) sends `design_command` only: it lands live where the
+design is open and opens nothing that isn't. A name that is taken makes `<name>-2`;
+`replace: true` renders the design again in place, its earlier version kept in its
+history, so another round of the same design (the person's feedback, a redo) is the same
+file and never a `-v2` copy. On 2026-10-25 one teaser went teaser → teaser-2 → teaser-v2
+→ teaser-v3 over three rounds, and each slide added to the last pulled the canvas back to it.
 
 **A design's tab** opens as its preview; **Edit | Preview** in its header swaps in the
 design editor (loaded the first time it is wanted, then kept under the preview). A
@@ -830,8 +855,14 @@ Cycls tab opened, and everything it makes lands in the workspace.
     agent's event travels apart from the save's answer) asks: **Load the latest**,
     **Keep mine** (`?force=1`: written over, the other kept as a version), or **Save
     mine as a copy**. Nothing is written while the dialog is open.
-  - Known limit: each instance's gcsfuse metadata cache is a window between
-    instances no file-level check closes; session affinity keeps a person on one.
+  - Known limit: each instance's gcsfuse metadata cache (60 s) is a window between
+    instances no file-level check closes. Session affinity was to keep a person on one,
+    and doesn't: on 2026-10-25 one person's saves landed on three instances within
+    minutes. A file another instance has just rewritten reads as a stale handle
+    (Errno 116) for a second or so; 43 saves in a week failed with a 500 on it.
+    `read_fig` reads again after 1 s and 2 s, and the editor retries a failed save
+    (after 2 s, then 4, 8, up to 30) until one lands; it used to say "will retry" and
+    wait for the next change.
 - **Version history** (`cycls/_agent/versions.py`). What a write replaces is kept:
   `.versions/<path>/<id>` and one `index.json` (`{id, at, by, reason, intent?, size}`).
   Autosaves keep one per five minutes per file (an editing session's start, then its
@@ -1191,6 +1222,22 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   returns `lint` (overlapping text, off/crowded edges, too-small text, low contrast on
   what's behind it); `_exec_design` turns it into the ack's "Layout check" line, next
   to the QA image. Nodes carry names from the spec's `id`.
+- **What the check puts right itself** (2026-10-26). Two findings need no eye: text too
+  small for its frame, and a colour that doesn't read on the plain colour behind it. The
+  service fixes them before it saves: the size raised to the least that reads, the colour
+  taken toward white or black, a twentieth at a time, until it reads (`lint.ts`
+  `readable`), as `style` ops on what the job made (every frame of a render, the frames an
+  edit touched), only on a node its name finds alone, and never resizing a document's
+  page (its flow lays it out). The ops are added to the script the live editor replays,
+  so the open editor and the file agree; the reply's `fixed` lists them, and the ack says
+  "The layout check put right by itself: …". Overlaps and edges are still the model's.
+  Why: in one chat (fb6b062f) a twelve-page piece took eleven fix steps, 30–60 s each, two
+  of them only raising small text and contrast.
+- **Contact sheets for a look at the whole.** `inspect` asks the service for `sheets`:
+  a deck, a document or a carousel comes back with every frame small on sheets of twelve,
+  numbered as in the design. An `edit` asks too: more than two slides changed come back
+  on one sheet (`sheet_frames`: their numbers) instead of a picture each. The skills build
+  a deck in batches and look once, at the end, on this sheet.
 - **Edits by name.** `inspect` returns a design's outline (frames, named nodes with
   box/text/font/colour); `edit` takes `ops` — set_text, style, move, resize, delete,
   duplicate, replace_image, add, and background (the slide's own fill) — which the
@@ -1292,14 +1339,15 @@ client. It's a Bun HTTP server wrapping the engine's headless CLI:
 - `GET  /health`
 - `POST /render { spec, format?, scale?, preview?, every? }` — the primary, safe path (declarative)
 - `POST /eval   { script, format?, scale? }` — a raw Figma-API escape hatch
-- `POST /apply  { fig, ops | script, preview? }` — an edit, checked and applied headless
-- `POST /inspect { fig }` — the outline: frames (with title / notes / transition) and named nodes
+- `POST /apply  { fig, ops | script, preview?, sheets? }` — an edit, checked and applied headless
+- `POST /inspect { fig, sheets? }` — the outline: frames (with title / notes / transition) and named nodes;
+  with `sheets`, every frame small on contact sheets
 - `POST /export { fig, format?, scale?, width?, every? }` — re-export an edited `.fig`
 - `POST /slides { fig, scale?, format? }` — every slide's image, size and metadata (the deck viewer)
 - `POST /assets { q?, kind?, limit? }` — what the media library holds, by words; `{ id, pick?, kind? }` — one asset's row and its bytes
 
 A render returns `{ ok, frameId, frames, format, image_base64, fig_base64, slides,
-lint, notes? }` plus `preview_base64` / `previews_base64` (a @1x JPEG of the first /
+lint, fixed?, notes? }` plus `preview_base64` / `previews_base64` (a @1x JPEG of the first /
 every frame) when asked and `images_base64` (every frame) with `every`. It's
 stateless (state is the caller's workspace), so it scales horizontally.
 

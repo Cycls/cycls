@@ -84,7 +84,7 @@ export function TrashView({ rows, loading, canPurge, filter, onBack, onRestore, 
                 <li key={r.id} className="group flex items-center gap-3 px-4 py-2.5">
                   <Tile row={r} name={name} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm">{name}</span>
+                    <span dir="auto" className="block truncate text-sm">{name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {ago(r.deleted_at)} · {r.by === "agent" ? t("byAgent") : t("byYou")}
                       {r.reason === "overwrite" ? ` · ${t("overwritten")}` : ""}

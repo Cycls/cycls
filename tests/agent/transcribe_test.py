@@ -578,7 +578,11 @@ def test_the_mic_on_scribe_and_its_fallback(monkeypatch):
     assert r.json() == {"text": "من الخدمة", "language": "ar", "engine": "cycls"}
 
 
-def test_the_openai_fallback_is_the_mini_model(monkeypatch):
+def test_without_an_engine_the_mic_is_web_voices_model(monkeypatch):
+    """No engine set up: the mic is Web.voice's service, unset its default (main's e87f8fde). Note: this
+    branch had pinned gpt-4o-mini-transcribe — gpt-4o-transcribe dropped what followed a pause
+    (cycls-transcribe docs/quirks.md, 2026-10-20); Web.voice now chooses it."""
+    from cycls._agent.web.voice import resolve
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     sent = {}
 
@@ -588,7 +592,7 @@ def test_the_openai_fallback_is_the_mini_model(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "post", post)
     assert _app().post("/transcribe", files={"file": ("voice.m4a", b"x" * 2000)}).json() == {"text": "hi"}
-    assert sent["model"] == "gpt-4o-mini-transcribe"        # gpt-4o-transcribe dropped text after the first sentence
+    assert sent["model"] == resolve(None)["model"].split("/", 1)[1]
 
 
 # ---- the allowance, names and speakers ---------------------------------------------------------

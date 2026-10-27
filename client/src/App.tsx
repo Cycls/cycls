@@ -303,7 +303,7 @@ function popParams(): string {
   return params.toString() ? `/?${params}` : "/";
 }
 
-function SharedViewAuthed({ agent }: { agent?: string }) {
+function SharedViewAuthed({ agent, oneTap }: { agent?: string; oneTap?: boolean }) {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   // Share URL: /shared/<subject>/<token>. Subject is `<org_id>:<user_id>` for
   // org-context owners, plain `<user_id>` otherwise. Mint the viewer's token
@@ -324,9 +324,15 @@ function SharedViewAuthed({ agent }: { agent?: string }) {
   const [signingIn, setSigningIn] = useState(false);
   if (!isLoaded) return null;
   if (signingIn && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
+  // One Tap, as on the home page, brings a visitor back to this share signed in.
   return (
-    <SharedView getToken={fetchToken} signedIn={!!isSignedIn} agent={agent}
-                onSignIn={() => setSigningIn(true)} />
+    <>
+      {oneTap && !isSignedIn && (
+        <GoogleOneTap signInForceRedirectUrl={window.location.href} signUpForceRedirectUrl={window.location.href} />
+      )}
+      <SharedView getToken={fetchToken} signedIn={!!isSignedIn} agent={agent}
+                  onSignIn={() => setSigningIn(true)} />
+    </>
   );
 }
 
@@ -517,7 +523,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
         >
           <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
         </button>
-        <IconButton name="moon" onClick={() => toggleDark("sign_in")} label="Toggle theme" />
+        {!returnTo && <IconButton name="moon" onClick={() => toggleDark("sign_in")} label="Toggle theme" />}
       </div>
       <main className="relative flex flex-1 flex-col items-center justify-center px-4 py-16">
         <div className="w-full max-w-sm">
@@ -725,7 +731,7 @@ export default function App() {
     if (!clerkKey) return <SharedView agent={agent} />;
     return (
       <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }}>
-        <SharedViewAuthed agent={agent} />
+        <SharedViewAuthed agent={agent} oneTap={config?.one_tap} />
       </ClerkProvider>
     );
   }

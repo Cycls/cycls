@@ -8,6 +8,7 @@ from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
 from cycls._agent import state
+from cycls._agent.web import voice
 
 
 BRAND_TTL = 300   # how long a container serves the brand it last read from the CMS
@@ -29,11 +30,13 @@ class Config(BaseModel):
     analytics: Optional[list] = None  # analytics plugins: [{provider, ...}] — one event pipe, fanned out client-side
     notifications: Optional[list] = None  # push plugins: [{provider, app_id}] — the FE owns the prompt UI
     suggestions: bool = False
-    voice: bool = False
+    voice: bool = False                # the mic shows: set from `transcription` as the server starts
+    transcription: Optional[Any] = None  # Web.voice: {model, base_url, api_key, headers}, or False; server-side
     pk: Optional[str] = None
     one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
     mobile_app: Optional[dict] = None # {ios, android} store links — the phone banner
+    plans: Optional[dict] = None      # the plans window: {pay, currency, words} (Web.plans)
     max_upload: int = 512             # per-file upload cap in MB
     workspaces: Optional[str] = None  # multi-workspace mode: None off, else team-create policy ("member"|"admin")
     volume: str = "/workspace"
@@ -53,9 +56,10 @@ class Config(BaseModel):
 
     def public(self):
         """Config as sent to the browser — cms (bearer token), volume
-        (internal mount path) and the raw examples mapping (the FE reads the
-        resolved cards from /examples) stay server-side."""
-        data = self.model_dump(exclude={"cms", "volume", "examples"})
+        (internal mount path), the raw examples mapping (the FE reads the
+        resolved cards from /examples) and the voice model and its key stay
+        server-side."""
+        data = self.model_dump(exclude={"cms", "volume", "examples", "transcription"})
         # the .fig editor, a static app on its own origin; unset → .fig shows the download card
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
@@ -376,6 +380,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         workspace_id: Optional[str] = None
         disabled_tools: list = []   # tools the person switched off in Settings (e.g. ["WebSearch"]); LLM.run() honours it
         approvals: list = []       # approval keys from the confirm card — this turn only
+        declined: list = []        # keys the confirm card's "Not now" turned down, saved with this turn
         auto: bool = True          # the composer's switch; absent means Auto
         connectors: list = []      # connectors the person @-mentioned — the turn gets a "[Using: …]" line
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
@@ -439,7 +444,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
                           workspace_id=ws_id,
                           disabled_tools=[t for t in (data.get("disabled_tools") or []) if isinstance(t, str)][:20],
-                          approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
+                          approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20],
+                          declined=[t for t in (data.get("declined") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
                           selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")))
 
@@ -536,35 +542,39 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         asyncio.create_task(_refresh())
         return config.public()
 
+    # The mic: our transcription engines first when they are set (ElevenLabs and/or the cycls-transcribe
+    # service: the first, then the other), then the Web.voice service behind them (unset, OpenAI's
+    # gpt-4o-transcribe whenever OPENAI_API_KEY is there). Web.voice(False) is no mic at all.
+    from cycls._agent import transcribe as service
+    speech = voice.resolve(config.transcription)
+
+    def engines():
+        return config.transcription is not False and service.configured()
+    config.voice = bool(speech) or engines()
+
     @app.post("/transcribe/warm")
     async def transcribe_warm(user: Optional[User] = auth):
         """The microphone started recording: a listener starts while the person speaks. A hint only."""
-        from cycls._agent import transcribe as service
-        if service.engine() == "cycls":
+        if engines() and service.engine() == "cycls":
             asyncio.create_task(service.warm(subject=service.subject_of(user)))
         return {"ok": True}
 
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
-        # The transcription engines when one is configured (ElevenLabs and/or the cycls-transcribe
-        # service: the first, then the other); OpenAI's gpt-4o-mini-transcribe only when neither is set,
-        # or as the last resort when both are down. (gpt-4o-transcribe was dropped: on clips with pauses
-        # it returned only the first sentence — cycls-transcribe docs/quirks.md, 2026-10-20.)
-        from cycls._agent import transcribe as service
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not service.configured() and not api_key:
-            raise HTTPException(status_code=501, detail="Transcription not configured")
+        ours = engines()
+        if not speech and not ours:
+            raise HTTPException(status_code=501, detail="Voice input isn't set up")
         form = await request.form()
         file = form.get("file")
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
         audio_bytes = await file.read()
-        if len(audio_bytes) > service.client.SHORT_BYTES:
-            raise HTTPException(status_code=413, detail="The recording is too long for the microphone")
-        # OpenAI reads the format off the name: Firefox records webm, Safari and Chrome m4a.
-        ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-        name = f"voice.{ext}" if ext in ("m4a", "mp4", "webm", "ogg", "mp3", "wav") else "voice.m4a"
-        if service.configured():
+        if ours:
+            if len(audio_bytes) > service.client.SHORT_BYTES:
+                raise HTTPException(status_code=413, detail="The recording is too long for the microphone")
+            # The engine reads the format off the name: Firefox records webm, Safari and Chrome m4a.
+            ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+            name = f"voice.{ext}" if ext in voice.FORMATS else "voice.m4a"
             hint = form.get("language")
             language = hint if hint in ("ar", "en") else "auto"
             from cycls._agent.transcribe import usage
@@ -577,7 +587,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 raise HTTPException(status_code=429, detail=reason)
             try:
                 # With another engine behind it, a listener that is slow to start is not waited for long.
-                behind = bool(service.fallback() or api_key)
+                behind = bool(service.fallback() or speech)
                 t0 = time.monotonic()
                 heard = await service.hear_short(audio_bytes, filename=name, language=language,
                                                  subject=subject, timeout=45.0 if behind else 130.0)
@@ -591,20 +601,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             except service.Refused as e:
                 raise HTTPException(status_code=422, detail=str(e))
             except (service.Unavailable, RuntimeError) as e:
-                if not api_key:
+                if not speech:
                     raise HTTPException(status_code=503, detail=f"Transcription is unavailable: {e}")
-                log("warn", user=getattr(user, "id", None), message=f"transcribe fell back to OpenAI: {str(e)[:200]}")
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                files={"file": (name, audio_bytes, file.content_type or "audio/mp4")},
-                data={"model": "gpt-4o-mini-transcribe"},
-                timeout=30,
-            )
-            if r.status_code != 200:
-                raise HTTPException(status_code=r.status_code, detail=r.text)
-            return r.json()
+                log("warn", user=getattr(user, "id", None), message=f"transcribe fell back to Web.voice: {str(e)[:200]}")
+        try:
+            return {"text": await voice.transcribe(speech, audio_bytes, file.filename, file.content_type)}
+        except Exception as e:   # the service's own words would name it: they stay in the log
+            log("warn", user=user, chat_id=None, message=f"transcription failed: {type(e).__name__}: {e}"[:500])
+            raise HTTPException(status_code=502, detail="Couldn't transcribe the recording")
 
     for install in (extra_routers or []):
         install(app, required_auth)
@@ -636,9 +640,6 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     from fastapi.responses import HTMLResponse
     from html import escape
     _base_html = (Path(config.public_path) / "index.html").read_text(encoding="utf-8")
-
-    from cycls._agent.transcribe import configured as _transcribe_configured
-    config.voice = bool(os.environ.get("OPENAI_API_KEY")) or _transcribe_configured()
 
     _head = ""   # the <head> additions the CMS cannot change, so they are built once
     _gtm_id = next((p.get("id") for p in (config.analytics or [])

@@ -13,7 +13,7 @@ import pytest
 
 from cycls._agent.harness import providers as _providers
 from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES, MAX_DROPPED, _dropped, _stream_with_retry,
-                                      REPEAT_WARN, REPEAT_STOP, STREAK_WARN, STREAK_STOP,
+                                      STREAK_WARN, STREAK_STOP,
                                       _is_retryable, _ingest, DEFAULT_WINDOW, DEFAULT_MAX_TOKENS)
 
 
@@ -25,6 +25,7 @@ def _clear_client_cache():
     yield
     _providers._clients.clear()
 from cycls._agent.harness.compact import COMPACT_AT, COMPACT_BUFFER, compact
+from cycls._agent.harness.main import _chat_title as _named   # the real one: tests stub it (conftest)
 from cycls._agent.harness.events import Turn, to_ui
 from cycls._agent.tools import MAX_OUTPUT, _exec_bash, _exec_read, _exec_edit, _resolve_path, skills
 from cycls._agent.state import load_messages, load_tail
@@ -1111,15 +1112,19 @@ def _failing_rounds(ctx, command, out="Error: old_str not found in videos/a.vide
 
 
 def test_the_same_failing_call_is_told_then_stops_the_turn(agent_env):
-    """A suite turn sent the same failing `edit` 394 times: the third time the model is told it
-    will keep failing, and at REPEAT_STOP the turn stops, with a word to the person."""
+    """A suite turn sent the same failing `edit` 394 times: a failing call sent again as it is gets the same
+    answer, so it is the same answer again's (_REPEATED) — told the 3rd and 5th time, the turn stopped at
+    the 8th — and carries no second note about failures in a row."""
+    from cycls._agent.harness.main import _REPEATED
     ws, ctx = agent_env
-    rounds, items, results = _failing_rounds(ctx, lambda i: "sed -i s/a/b/ a.html")
-    assert rounds == REPEAT_STOP
-    assert all("failed" not in r for r in results[:REPEAT_WARN - 1])
-    assert f"has now failed {REPEAT_WARN} times" in results[REPEAT_WARN - 1]
-    assert "The turn was stopped here" in results[-1]
-    assert any(isinstance(i, dict) and "kept failing" in str(i.get("callout", "")) for i in items)
+    out = "Error: old_str not found in videos/a.video.html"
+    rounds, items, results = _failing_rounds(ctx, lambda i: "sed -i s/a/b/ a.html", out=out)
+    stop = max(_REPEATED)
+    assert rounds == stop
+    assert results[0] == results[1] == out
+    assert results[2].endswith(_REPEATED[3].format(n=3)) and results[4].endswith(_REPEATED[5].format(n=5))
+    assert results[-1].endswith(_REPEATED[stop].format(n=stop))
+    assert any(isinstance(i, dict) and "kept giving the same result" in str(i.get("callout", "")) for i in items)
 
 
 def test_failures_in_a_row_stop_the_turn_even_when_each_call_differs(agent_env):
@@ -1349,6 +1354,163 @@ def test_a_chat_back_after_a_pause_is_cleared_before_its_first_call(agent_env):
         assert ("[Old tool result cleared]" in str(sent[0])) is cold
         assert ([i for i in items if isinstance(i, dict) and i.get("action") == "compacted"]
                 == ([{"type": "ui", "action": "compacted", "tier": 1, "reason": "cold", "tokens": 601_000, "ok": True}] if cold else []))
+
+
+def test_a_tools_newest_pictures_stay_in_view(agent_env):
+    """A tool's newest pictures stay in the model's view, so a check over a few pages sees them together; a
+    line stands in for each older one. A picture the person attached stays, and the transcript keeps all."""
+    import base64
+    from cycls._agent.harness.compact import PICTURES, SEEN
+    from cycls._agent.state import append_messages
+    ws, ctx = agent_env
+    for i in range(PICTURES + 1):
+        (Path(ws) / f"p{i}.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes([48 + i]) * 64)
+    attached = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"}}
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, [
+        {"role": "user", "content": [{"type": "text", "text": "this logo"}, attached]},
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}], 0))
+    read = lambda i: _tool_use_block(f"t{i}", name="read", inp={"path": f"p{i}.png"})
+    responses = iter([*(_make_response([read(i)], stop_reason="tool_use") for i in range(PICTURES + 1)),
+                      _make_response([_text_block("Done")])])
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(responses, calls=calls)
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    def pictures(call):
+        results = [b for m in call["messages"] if isinstance(m["content"], list) for b in m["content"]
+                   if b.get("type") == "tool_result"]
+        return [[x.get("type") if x.get("type") == "image" else x.get("text") for x in r["content"]] for r in results]
+    assert pictures(calls[PICTURES]) == [["image"]] * PICTURES
+    assert pictures(calls[PICTURES + 1]) == [[SEEN]] + [["image"]] * PICTURES
+    assert attached in calls[PICTURES + 1]["messages"][0]["content"]
+    saved = [b for m in _read_history(ctx) if isinstance(m["content"], list) for b in m["content"]
+             if b.get("type") == "tool_result"]
+    assert [x["type"] for r in saved for x in r["content"]] == ["image"] * (PICTURES + 1)
+    assert base64.b64decode(saved[0]["content"][0]["source"]["data"]).startswith(b"\x89PNG")
+
+
+def _notes(ctx):
+    """The repeat notes the tool results carried, in order, as (call index, count)."""
+    from cycls._agent.harness.main import _REPEATED
+    results = [b for m in _read_history(ctx) if isinstance(m["content"], list) for b in m["content"]
+               if b.get("type") == "tool_result"]
+    return [(i, n) for i, r in enumerate(results) for n, note in _REPEATED.items()
+            if note.format(n=n) in json.dumps(r["content"])]
+
+
+def test_the_same_answer_again_is_noted_then_the_run_stops(agent_env):
+    """The same call answered the same way is no news: a note the 3rd and 5th time, and the run stops at the 8th.
+    Counted anywhere in the run, so reading two files in turn (chat a9d536c4's 1, 2, 3, 1, 2…) is caught."""
+    ws, ctx = agent_env
+    (Path(ws) / "a.txt").write_text("a")
+    (Path(ws) / "b.txt").write_text("b")
+    read = lambda i: _tool_use_block(f"t{i}", name="read", inp={"path": "ab"[i % 2] + ".txt"})
+    responses = iter([*(_make_response([read(i)], stop_reason="tool_use") for i in range(20)),
+                      _make_response([_text_block("Done")])])
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(responses, calls=calls)
+    with _mock_anthropic(client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+    assert _notes(ctx) == [(4, 3), (5, 3), (8, 5), (9, 5), (14, 8)]   # b.txt's 8th would have been call 15
+    assert len(calls) == 15
+    assert any(isinstance(i, dict) and i.get("type") == "callout" for i in items)
+
+
+def test_a_call_made_again_after_a_change_is_not_a_repeat(agent_env):
+    """Reading a file again after it changed gets a new answer: never noted, the run goes on."""
+    ws, ctx = agent_env
+
+    def responses():
+        for i in range(6):
+            (Path(ws) / "a.txt").write_text(f"version {i}")
+            yield _make_response([_tool_use_block(f"t{i}", name="read", inp={"path": "a.txt"})], stop_reason="tool_use")
+        yield _make_response([_text_block("Done")])
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(responses(), calls=calls)
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+    assert _notes(ctx) == [] and len(calls) == 7
+
+
+def test_a_new_chat_is_named_beside_the_reply_once_and_a_rename_wins(agent_env, monkeypatch):
+    """A new chat is named from the person's words by a call made beside the reply, written as the run ends with
+    a `title` event. A greeting alone waits for more; a chat is named once; a rename made meanwhile wins; an older
+    chat (no `titleSource`) keeps the title it has."""
+    from cycls._agent.harness import main
+    from cycls._agent.state import get_meta, put_meta
+    seen = []
+
+    async def named(provider, said, **kw):
+        seen.append(said)
+        return "Riyadh trip plan"
+    monkeypatch.setattr(main, "_chat_title", named)
+    ws, ctx = agent_env
+
+    def run(text):
+        ctx.messages.raw = [{"role": "user", "content": text}]
+        client = MagicMock()
+        client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("Sure")]))
+        with _mock_anthropic(client):
+            return asyncio.run(_drain(_run(context=ctx)))
+    meta = lambda: asyncio.run(get_meta(ctx.workspace, ctx.chat_id))
+    titled = lambda out: [e for e in out if isinstance(e, dict) and e.get("action") == "title"]
+
+    assert titled(run("hi")) == [] and seen == []
+    assert (meta()["title"], meta()["titleSource"]) == ("hi", "first")
+    out = run("Plan a trip to Riyadh next week")
+    assert seen == ["hi\n\nPlan a trip to Riyadh next week"]
+    assert titled(out) == [{"type": "ui", "action": "title", "chat_id": ctx.chat_id, "title": "Riyadh trip plan"}]
+    assert (meta()["title"], meta()["titleSource"]) == ("Riyadh trip plan", "auto")
+    run("and book the hotel too")
+    assert len(seen) == 1
+
+    ctx.chat_id = "renamed-meanwhile"
+
+    async def renamed(provider, said, **kw):
+        now = await get_meta(ctx.workspace, ctx.chat_id)
+        await put_meta(ctx.workspace, ctx.chat_id, {**now, "title": "Mine", "titleSource": "user"})
+        return "Riyadh trip plan"
+    monkeypatch.setattr(main, "_chat_title", renamed)
+    assert titled(run("Plan a trip to Riyadh next week")) == [] and meta()["title"] == "Mine"
+
+    ctx.chat_id = "older"
+    asyncio.run(put_meta(ctx.workspace, "older", {"id": "older", "createdAt": "2026-01-01T00:00:00+00:00",
+                                                  "title": "the first line"}))
+    seen.clear()
+    monkeypatch.setattr(main, "_chat_title", named)
+    run("Plan a trip to Riyadh next week")
+    assert seen == [] and meta()["title"] == "the first line" and "titleSource" not in meta()
+
+
+def test_a_new_chats_first_line_is_cut_at_a_word_until_it_is_named(agent_env):
+    """Until the run names it, a new chat is called by its first line, cut at a word with "…", never mid-word."""
+    from cycls._agent.state import get_meta, touch_meta
+    ws, ctx = agent_env
+    said = "Please prepare a detailed quarterly report on the specialty coffee market in Riyadh with all the numbers"
+    asyncio.run(touch_meta(ctx.workspace, "fresh", said))
+    meta = asyncio.run(get_meta(ctx.workspace, "fresh"))
+    assert meta["titleSource"] == "first" and meta["title"].endswith("…") and len(meta["title"]) <= 81
+    assert said.startswith(meta["title"][:-1]) and said[len(meta["title"]) - 1] == " "
+
+
+def test_a_chats_title_is_the_first_line_the_model_writes_without_quotes_or_a_full_stop():
+    """The title call goes to the agent's own model with its settings, and keeps what it wrote first, bare."""
+    class Model:
+        async def stream(self, **kw):
+            self.kw = kw
+            yield "x"
+            yield Turn(content=[{"type": "thinking", "thinking": "..."},
+                                {"type": "text", "text": '"خطة رحلة إلى الرياض."\nIt names the trip.'}], stop_reason="end_turn")
+    model = Model()
+    assert asyncio.run(_named(model, "أبي أخطط رحلة للرياض", max_tokens=100, thinking="adaptive")) == "خطة رحلة إلى الرياض"
+    assert model.kw["tools"] == [] and model.kw["thinking"] == "adaptive" and "أبي أخطط رحلة للرياض" in str(model.kw["messages"])
+
+    class Down:
+        async def stream(self, **kw):
+            raise RuntimeError("503")
+            yield
+    assert asyncio.run(_named(Down(), "plan a trip please")) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1660,9 +1822,10 @@ def test_web_search_yields_sources_and_stores_json(agent_env):
     assert {"type": "sources", "sources": rows, "id": "s1"} in items   # the id threads them onto the search's own step
 
     history = _read_history(ctx)
-    result = next(b for m in history if m["role"] == "user" and isinstance(m["content"], list)
-                  for b in m["content"] if b.get("type") == "tool_result")
+    batch = next(m for m in history if m["role"] == "user" and isinstance(m["content"], list))
+    result = next(b for b in batch["content"] if b.get("type") == "tool_result")
     assert _json.loads(result["content"])["results"] == rows
+    assert batch["ui"] == [{"type": "sources", "id": "s1", "sources": rows}]   # kept, so any tool's come back
 
 
 def test_two_channel_tool_without_ui_still_answers_the_model(agent_env):
@@ -1878,7 +2041,7 @@ def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
         events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
 
     cards = [e for e in events if isinstance(e, dict) and e.get("action") == "connect"]
-    assert cards == [{"type": "ui", "action": "connect", "connector": "google"}]
+    assert cards == [{"type": "ui", "action": "connect", "connector": "google", "id": "t1"}]   # a card names the call it holds
     result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
                   for b in msg["content"] if b.get("type") == "tool_result")
     assert "not connected" in result["content"] and "end your turn" in result["content"]
@@ -2111,6 +2274,21 @@ def test_a_tool_can_send_several_ui_events():
     assert [e["action"] for e in evs] == ["a", "b"] and all(e["id"] == "t1" for e in evs)
     assert _shape({"name": "design", "id": "t2"}, {"_model": "ok", "_ui": {"type": "ui", "action": "c"}}, True, {}, set())[1] == \
         [{"type": "ui", "action": "c", "id": "t2"}]
+
+
+def test_a_file_a_tool_opens_stands_in_the_chat_and_is_kept():
+    """A two-channel tool that opens a file gets the canvas tool's card, under its own id. The transcript keeps
+    that card and the tool's sources, bounded, since `ui` events never reach it: a reload shows both."""
+    from cycls._agent.harness.main import _shape, _kept
+    _, evs, _ = _shape({"name": "image", "id": "t1"},
+                       {"_model": "Saved a.png", "_ui": {"type": "ui", "action": "open_canvas", "path": "a.png"}},
+                       True, {}, set())
+    card = {"type": "step", "id": "t1:file", "tool_name": "Canvas", "step": "a.png", "ok": True}
+    assert evs[-1] == card and _kept(evs[0]) is None and _kept(card) == card
+    rows = [{"title": "T", "url": "https://x.sa/1", "quote": "q" * 5000, "status": "ساري", "extra": 1}, {"title": "no url"}]
+    assert _kept({"type": "sources", "id": "t2", "sources": rows}) == {"type": "sources", "id": "t2", "sources": [
+        {"title": "T", "url": "https://x.sa/1", "quote": "q" * 2000, "status": "ساري"}]}
+    assert _kept({"type": "sources", "id": "t3", "sources": [{"title": "no url"}]}) is None
 
 
 # ---------------------------------------------------------------------------

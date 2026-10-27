@@ -75,13 +75,18 @@ async def _post(path, body, user_id=None):
 
 
 _given = {}        # a font file's sha256 → its face as the service named it, or why it can't be used (this process)
+_hashed = {}       # a font file as it stands (path, size, mtime) → its sha256: a file unchanged isn't read again
 
 
 async def give_font(path, user_id=None):
     """A font file given to the service — its sha256 first, the file itself only if the service never had it →
     (its face {"family", "style"}, or why it can't be used; new to this process?). Unavailable passes."""
+    st = await asyncio.to_thread(os.stat, path)
+    if (sha := _hashed.get((str(path), st.st_size, st.st_mtime_ns))) in _given:
+        return _given[sha], False
     data = await asyncio.to_thread(pathlib.Path(path).read_bytes)
-    if (sha := hashlib.sha256(data).hexdigest()) in _given:
+    sha = _hashed[(str(path), st.st_size, st.st_mtime_ns)] = hashlib.sha256(data).hexdigest()
+    if sha in _given:
         return _given[sha], False
     try:
         r = await _post("/fonts", {"sha": sha}, user_id)
@@ -118,7 +123,8 @@ async def add_fonts(root, user_id=None):
 class Rendered(NamedTuple):
     """A render. `image` is the output (pptx/pdf: the whole deck, else the first frame), `fig` the editable
     source, `preview`/`previews` @1x JPEGs for QA, `lint` [{frame, node, issue, fix}], `pages` [{name, frames}].
-    `hashes` are frame fingerprints to send back as `known`; `preview_of` is then the differing frames (None: all)."""
+    `hashes` are frame fingerprints to send back as `known`; `preview_of` is then the differing frames (None: all).
+    `fixed` [{frame, node, done}] is what the layout check put right by itself."""
     image: bytes
     fig: bytes
     frame_id: object
@@ -138,6 +144,7 @@ class Rendered(NamedTuple):
     sheet_pages: list = []
     hashes: list = []
     preview_of: object = None
+    fixed: list = []
 
 
 def _b64s(values):
@@ -182,7 +189,18 @@ def _decode(data):
         _b64s(data.get("sheets_base64")),
         [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2],
         [str(h) for h in data.get("page_hashes") or []],
-        [int(n) for n in data["preview_of"]] if isinstance(data.get("preview_of"), list) else None)
+        [int(n) for n in data["preview_of"]] if isinstance(data.get("preview_of"), list) else None,
+        _fixed(data))
+
+
+def _fixed(data):
+    """What the layout check put right by itself → [{frame, node, done}]."""
+    return [{"frame": int(f.get("frame") or 0), "node": str(f.get("node") or ""), "done": str(f.get("done") or "")}
+            for f in data.get("fixed") or [] if isinstance(f, dict)]
+
+
+def _numbers(lists):
+    return [[int(n) for n in group] for group in lists or [] if isinstance(group, list)]
 
 
 async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=False, known=None, lead=None, keep=None):
@@ -203,9 +221,11 @@ async def render(spec, fmt="png", scale=2, user_id=None, every=False, sheets=Fal
     return _decode(await _post("/render", body, user_id))
 
 
-async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=None):
+async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=None, sheets=False):
     """Edit a `.fig` headless by `ops` or a raw plugin-API `script` → {fig, lint, script, preview, …};
-    `script` is what the live editor replays. A failing edit raises RuntimeError with the service's error."""
+    `script` is what the live editor replays. `sheets`: more than two slides touched come back small on
+    contact sheets (`sheets`, `sheet_frames`: the slides on each, from 1) instead of a preview each.
+    A failing edit raises RuntimeError with the service's error."""
     body = _paged({"fig": base64.b64encode(fig).decode()}, page)
     if ops is not None:
         body["ops"] = ops
@@ -213,6 +233,8 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
         body["script"] = script
     if preview:
         body["preview"] = True
+    if sheets:
+        body["sheets"] = True
     data = await _post("/apply", body, user_id)
     return {"fig": base64.b64decode(data["fig_base64"]),
             "lint": [dict(i) for i in data.get("lint") or [] if isinstance(i, dict)],
@@ -228,14 +250,18 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             "resolved": [[str(p[0]), str(p[1])] for p in data.get("resolved") or []
                          if isinstance(p, list) and len(p) == 2],
             "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)],
-            "keep": _kept(data)}
+            "keep": _kept(data), "fixed": _fixed(data),
+            "sheets": _b64s(data.get("sheets_base64")), "sheet_frames": _numbers(data.get("sheet_frames"))}
 
 
-async def outline(fig, user_id=None, page=None, full=False):
+async def outline(fig, user_id=None, page=None, full=False, sheets=False):
     """One page of a `.fig` → {frames: [{slide, name, size, nodes}], pages, page}: nodes by name, measured.
-    `full`: every text whole, not its first lines."""
-    data = await _post("/inspect", _paged({"fig": base64.b64encode(fig).decode(), **({"full": True} if full else {})}, page), user_id)
-    return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or ""), "keep": _kept(data)}
+    `full`: every text whole, not its first lines. `sheets`: every frame as well, small on contact sheets
+    (`sheet_pages`: [first, last] from 1, each)."""
+    body = {"fig": base64.b64encode(fig).decode(), **({"full": True} if full else {}), **({"sheets": True} if sheets else {})}
+    data = await _post("/inspect", _paged(body, page), user_id)
+    return {"frames": data.get("frames") or [], "pages": _pages(data), "page": str(data.get("page") or ""), "keep": _kept(data),
+            "sheets": _b64s(data.get("sheets_base64")), "sheet_pages": _numbers(data.get("sheet_pages"))}
 
 
 async def inspect(fig, user_id=None, page=None):

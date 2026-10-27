@@ -71,6 +71,18 @@ def _poll_of(raw):
 _building = {}   # a manifest being made → its task: who asks meanwhile waits for it
 
 
+async def _give_fonts(root, user_id):
+    """The workspace's own fonts (brand/fonts) given to the design service before it draws a preview or the editor
+    asks it for them, not only on a Design call: the editor asked first, found nothing and drew stand-ins for the
+    whole session. Best effort: a font not given is no reason to fail what was asked."""
+    from cycls._agent import design
+    from cycls._agent.logs import log
+    try:
+        await design.add_fonts(root, user_id)
+    except Exception as e:
+        log("warn", message=f"design fonts not given: {type(e).__name__}: {e}")
+
+
 async def _design_slides(root, src, user_id, page=None):
     """A cached slide manifest of one page of design `src` (a .fig) → its path. Raises design.Unavailable,
     FileNotFoundError, ValueError."""
@@ -90,6 +102,7 @@ async def _design_slides(root, src, user_id, page=None):
 
 async def _make_slides(root, fig, cache_dir, stem, key, dst, user_id, page):
     from cycls._agent import design
+    await _give_fonts(root, user_id)
     # ~1920px on the long side: sharp on the stage and in present mode.
     s = await design.slides(await asyncio.to_thread(fig.read_bytes), fit=1920, user_id=user_id, page=page)
     mime = "image/png" if s["format"] == "png" else "image/jpeg"
@@ -360,7 +373,7 @@ def design_router(ws_dep, user_dep, changed):
         if not (live.configured() and user is not None and (ws.ws or "").startswith("t-")):
             return {"live": None}
         rel = src.relative_to(Path(ws.root).resolve()).as_posix()
-        _, version = await asyncio.to_thread(store.read_fig, ws.root, rel)
+        _, version = await store.load_fig(ws.root, rel)
         room = live.room_of(ws.root, rel)
         await live.wake()   # up by the time the editor connects
         return {"live": {"room": room, "url": live.socket_url(), "ticket": live.ticket(room, user.id),
@@ -368,8 +381,10 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.get("/brand")
     async def brand(ws: Workspace = ws_dep):
-        """The workspace brand kit's colours and fonts for the design editor, or null."""
+        """The workspace brand kit's colours and fonts for the design editor, or null. The editor asks for it as
+        it opens a design, so the workspace's own fonts reach the design service first."""
         from cycls._agent.design.brand import _brand_palette, _load_brand
+        await _give_fonts(ws.root, getattr(ws, "subject", None))
         colors = await asyncio.to_thread(_brand_palette, ws.root)
         kit = await asyncio.to_thread(_load_brand, ws.root) or {}
         fonts = {"heading": kit.get("heading"), "body": kit.get("body")}

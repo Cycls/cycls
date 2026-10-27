@@ -72,6 +72,15 @@ web = (
     .affiliate("059168")  # Rewardful referral tracking
     .mobile_app(ios="https://apps.apple.com/app/cycls/id6802279454",   # phones get a banner to the store
                 android="https://play.google.com/store/apps/details?id=com.cycls.app")
+    # Voice input (docs/notes/voice.md): the mic's recording made words on the server, so the page never
+    # sees the model. Unset, it is this one whenever OPENAI_API_KEY is there. Any service that speaks
+    # OpenAI's audio transcriptions API works, set as cycls.LLM is:
+    .voice("openai/gpt-4o-transcribe")
+    # .voice("openrouter/elevenlabs/scribe-v2", base_url="https://openrouter.ai/api/v1")   # any of OpenRouter's 28
+    # .voice("groq/whisper-large-v3-turbo", base_url="https://api.groq.com/openai/v1")   # key: GROQ_API_KEY
+    # .voice("modal/whisper", base_url="https://<app>.modal.run/v1",
+    #        headers={"Modal-Key": "...", "Modal-Secret": "..."})                         # your own Whisper
+    # .voice(False)   # no mic
     .title("The agent for getting things done")
     # .theme("default")   # "default" or "dev"
     # .suggestions(True)  # show starter prompts on the empty chat

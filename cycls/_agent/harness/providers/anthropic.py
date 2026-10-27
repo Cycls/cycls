@@ -24,9 +24,12 @@ class AnthropicProvider:
         self.model = model
 
     def _to_messages(self, messages):
-        """Drop FE-only sidecars; attach `cache_control` to the last user
+        """Drop FE-only sidecars, and thinking without a signature (another model's, kept on an
+        OpenAI-compatible host: Claude refuses it); attach `cache_control` to the last user
         message's tail block so the entire conversation prefix is cacheable."""
-        out = [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+        signed = lambda c: [b for b in c if not (isinstance(b, dict) and b.get("type") == "thinking" and "signature" not in b)]
+        out = [{"role": m["role"], "content": signed(c) if isinstance(c := m.get("content"), list) else c} for m in messages]
+        out = [m for m in out if m["content"] != []]
         for i in range(len(out) - 1, -1, -1):
             if out[i]["role"] != "user": continue
             c = out[i]["content"]
@@ -44,7 +47,7 @@ class AnthropicProvider:
         return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
 
     async def stream(self, *, messages, system, tools, max_tokens, mcp_servers=None,
-                     thinking="adaptive", extra_body=None):
+                     thinking="adaptive", extra_body=None, session=None):
         kwargs = {
             "model": self.model,
             "max_tokens": max_tokens,

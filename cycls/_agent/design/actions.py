@@ -5,8 +5,9 @@ from .. import trash
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
 from .prepare import _num, _prepare_document, _prepare_slide, _settle_look
-from .report import _layout_check, _page_changes
-from .files import _DECK_EXTS, _DESIGN_EXTS, _designs_there, _free_design, _opened, _rendered_copy, _stem_of, _write_beside
+from .report import _fixed_line, _layout_check, _page_changes
+from .files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _free_design, _opened, _render_again, _rendered_copy,
+    _replacing, _stem_of, _write_beside)
 
 
 _SLIDE_ACTIONS = ("add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide")
@@ -67,15 +68,19 @@ async def _exec_document(action, inp, workspace, name):
         return int(v) - 1
 
     section = inp.get("section")
+    many = inp.get("sections") if action == "add_section" else None   # several added in one call, in order
     try:
-        if action in ("add_section", "update_section") and not isinstance(section, dict):
+        if many is not None and not (isinstance(many, list) and many and all(isinstance(x, dict) for x in many)):
+            return "Error: `sections` is a list of sections, each {title, blocks: […]}."
+        if many is None and action in ("add_section", "update_section") and not isinstance(section, dict):
             return f"Error: `{action}` needs `section` — {{title, blocks: […]}}" + (" (or just the keys that change)." if action == "update_section" else ".")
         if action == "add_section":
-            if not isinstance(section.get("blocks"), list):
+            new = many or [section]
+            if not all(isinstance(x.get("blocks"), list) for x in new):
                 return "Error: a new section needs `blocks` — a list of blocks."
             at = number("at", len(sections) + 1) if inp.get("at") is not None else len(sections)
-            sections.insert(at, section)
-            intent = f"add section {at + 1}"
+            sections[at:at] = new
+            intent = f"add section {at + 1}" if len(new) == 1 else f"add sections {at + 1}–{at + len(new)}"
         elif action == "update_section":
             n = number("number", len(sections))
             sections[n] = {**(sections[n] if isinstance(sections[n], dict) else {}), **section}
@@ -196,6 +201,9 @@ async def _exec_slides(action, inp, workspace, name):
     fig_path = pathlib.Path(root) / fig_rel
     if not fig_path.is_file():
         return f"Error: {fig_rel} doesn't exist — slide actions work on a deck you rendered. The designs here: {_designs_there(root)}."
+    many = inp.get("slides") if action == "add_slide" else None     # several added in one call, in order
+    if many is not None and not (isinstance(many, list) and many and all(isinstance(x, dict) for x in many)):
+        return "Error: `slides` is a list of slides, each an object: {layout, …slots, notes?} or {nodes, fill?}."
     settings = {}
     if action == "add_slide" or (action == "update_slide" and inp.get("slide") is not None):
         try:   # what the deck's added slides are laid out with, as its file keeps it
@@ -205,11 +213,12 @@ async def _exec_slides(action, inp, workspace, name):
         except Exception as e:
             return f"Error: couldn't read {fig_rel} — {e}"
     credits = []   # {"stock": "…"}, {"asset": "…"} pictures → saved workspace files
-    if isinstance(inp.get("slide"), dict):
+    for slide in many or ([inp["slide"]] if isinstance(inp.get("slide"), dict) else []):
         from cycls._agent.design import assets
-        credits, err = await assets.named(inp["slide"], root, subject)
+        got, err = await assets.named(slide, root, subject)
         if err:
             return err
+        credits += got
 
     def number(key):
         v = _num(inp.get(key))
@@ -217,24 +226,31 @@ async def _exec_slides(action, inp, workspace, name):
             raise ValueError(f"`{key}` is a slide number from 1, not {inp.get(key)!r}")
         return int(v) - 1
 
-    def slide_op(kind, extra):
+    def given():   # the one `slide`, with any notes / title / transition said beside it
         slide = dict(inp.get("slide") or {})
         for k in ("notes", "title", "transition"):
             if inp.get(k) is not None and k not in slide:
                 slide[k] = inp[k]
-        slide, resolved, err = _prepare_slide(slide, settings, root)
+        return slide
+
+    def slide_op(kind, extra, slide):
+        slide, resolved, err = _prepare_slide(dict(slide), settings, root)
         if err:
             raise ValueError(err.removeprefix("Error: "))
         return {"op": kind, **extra, "slide": slide, "deck": resolved}
 
     try:
         if action == "add_slide":
-            op = slide_op("slide_add", {"at": number("at")} if inp.get("at") is not None else {})
-            what = "Slide added" + (f" at position {op['at'] + 1}" if "at" in op else " at the end")
+            at = number("at") if inp.get("at") is not None else None
+            ops = [slide_op("slide_add", {} if at is None else {"at": at + i}, slide)
+                   for i, slide in enumerate(many or [given()])]
+            n = len(ops)
+            what = (("Slide added" if n == 1 else f"{n} slides added")
+                    + (" at the end" if at is None else f" at position {at + 1}" if n == 1 else f" at positions {at + 1}–{at + n}"))
         elif action == "update_slide":
             index = number("number")
             if inp.get("slide") is not None:
-                op, what = slide_op("slide_update", {"index": index}), f"Slide {index + 1} rebuilt"
+                op, what = slide_op("slide_update", {"index": index}, given()), f"Slide {index + 1} rebuilt"
             else:
                 meta = {k: inp[k] for k in ("notes", "title", "transition") if inp.get(k) is not None}
                 if not meta:
@@ -251,14 +267,17 @@ async def _exec_slides(action, inp, workspace, name):
             what = f"Slide {op['index'] + 1} deleted"
     except ValueError as e:
         return f"Error: {e}."
+    if action != "add_slide":
+        ops = [op]
     try:
-        r = await decks.apply_ops(root, fig_rel, [op], user_id=subject, preview=True)
+        r = await decks.apply_ops(root, fig_rel, ops, user_id=subject, preview=True)
     except design.Unavailable as e:
         return f"Error: design unavailable — {e}"
     except Exception as e:
         return f"Error: {action} failed on {fig_rel} — {e}. Nothing was changed."
     count = len(r.get("slides") or [])
-    ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; the canvas shows it." + _layout_check(r.get("lint"), "pptx"))
+    ack = (f"{what}. {fig_rel} now has {count} slide{'s' if count != 1 else ''}; where it's open, the change lands live."
+           + _fixed_line(r.get("fixed"), "pptx") + _layout_check(r.get("lint"), "pptx"))
     for line in r.get("notes") or []:          # what the slide's layout had no room for
         ack += f" Note — {line}"
     for credit in credits:
@@ -268,18 +287,21 @@ async def _exec_slides(action, inp, workspace, name):
     if intent := inp.get("intent"):
         command["intent"] = str(intent)[:80]
     await _to_the_room(root, fig_rel, command)
-    # (re)open the deck so the change shows even when it wasn't open
-    ui = [command, _opened(fig_rel, "")[1]]
+    ui = command   # an open deck shows the change live; one that isn't open stays closed
+    # A rebuilt slide comes back to look at; added ones as their layout check, with a picture only of
+    # one it still flags (inspect has the whole deck on one sheet); a move, a copy or a deletion, neither.
+    rebuilt = action == "update_slide" and inp.get("slide") is not None
+    flagged = {int(i.get("frame") or 0) for i in r.get("lint") or []}
     blocks, total = [], 0
     for i, jpg in zip(r.get("touched") or [], r.get("previews") or []):
-        if total + len(jpg) > _DESIGN_QA_MAX:
-            break
+        if not (rebuilt or (action == "add_slide" and i in flagged)) or total + len(jpg) > _DESIGN_QA_MAX:
+            continue
         total += len(jpg)
         blocks += [{"type": "text", "text": f"Slide {i + 1}:"},
                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                 "data": base64.b64encode(jpg).decode()}}]
     if blocks:
-        ack += " The changed slide is attached — check it matches the rest of the deck; fix it with update_slide if not."
+        ack += " It is attached." if rebuilt else " The added slides the check flags are attached."
         return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
     return {"_model": ack, "_ui": ui}
 
@@ -457,10 +479,8 @@ async def _render_document(inp, workspace, name, kept=False):
     section action — its look stays what it was (none: classic)."""
     from cycls._agent import design
     from cycls._agent.design import assets, refresh
-    from cycls._agent.design.deck import lock
-    from cycls._agent.design.store import write_fig
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
-    replacing = inp.get("replace") is True and (root / f"{name}.fig").is_file()
+    replacing = _replacing(root, name, inp)
     # hand edits since the last render aren't in the source: held until discard_edits
     edited = await _edits_since_render(workspace, f"{name}.fig") if replacing else None
     if edited is not None and inp.get("discard_edits") is not True:
@@ -500,11 +520,8 @@ async def _render_document(inp, workspace, name, kept=False):
         name = await asyncio.to_thread(_free_design, root, name)
     fig_rel = f"{name}.fig"
     await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
-    version = None
     if replacing:
-        async with lock(root / fig_rel):
-            version = await write_fig(workspace.root, fig_rel, r.fig, by="agent", reason="agent",
-                                      intent=str(inp.get("intent") or "re-rendered")[:80])
+        again = await _render_again(workspace, fig_rel, r.fig, {**inp, "intent": inp.get("intent") or "re-rendered"})
     else:
         await asyncio.to_thread((root / fig_rel).write_bytes, r.fig)
     refresh.schedule(workspace.root, fig_rel, subject)
@@ -520,7 +537,8 @@ async def _render_document(inp, workspace, name, kept=False):
     await asyncio.to_thread(keep_rendered)
     count = max(len(r.slides), 1)
     note = f", named '{name}' so it doesn't overwrite the existing '{requested}'" if name != requested else ""
-    ack, ui = _opened(fig_rel, f"Document {'re-rendered' if replacing else 'saved'} ({count} pages{note})")
+    what = f"Document {'re-rendered' if replacing else 'saved'} ({count} pages{note})"
+    ack, ui = (f"{what}: {fig_rel}. Its earlier version is kept in its history.", again) if replacing else _opened(fig_rel, what)
     ack += (f" Its pages were laid out from the content — so a small fix on one page (a word, a colour) is Design edit "
             f"{{name: \"{name}\", ops}} with `frame` = the page from 0, and anything that changes the length is made on the "
             f"document: update_section {{name: \"{name}\", number, section}} (or add_section / move_section / delete_section / "
@@ -528,11 +546,7 @@ async def _render_document(inp, workspace, name, kept=False):
             f"\"replace\": true. A page edited by hand does not re-flow the pages after it.")
     for line in notes:
         ack += " " + line
-    ack += _layout_check(r.lint, "pptx")
-    if replacing:      # an open viewer refetches, an open editor reloads
-        again = {"type": "ui", "action": "design_command", "path": fig_rel, "script": "", "version": version, "reload": True}
-        await _to_the_room(workspace.root, fig_rel, again)
-        ui = [again, ui]
+    ack += _fixed_line(r.fixed, "pptx") + _layout_check(r.lint, "pptx")
     blocks, total, held = [], 0, []
     numbers = r.preview_of if r.preview_of is not None else range(1, len(r.previews) + 1)
     for n, jpg in list(zip(numbers, r.previews))[:_DESIGN_QA_SLIDES]:

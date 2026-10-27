@@ -5,11 +5,12 @@
 The context window is a budget. A fixed part (system prompt, tool schemas, skills and
 app catalogs, `AGENT.md`) is paid on every call; connectors cost ~15 tokens each until
 the model loads one (decisions 21–22 in [plugins-connectors.md](plugins-connectors.md)).
-The rest is the conversation, and it only grows. Three layers keep it bounded:
+The rest is the conversation, and it only grows. Four layers keep it bounded:
 
 | layer | when | model call | code |
 | --- | --- | --- | --- |
 | cap at ingest | as a tool result or attachment arrives | no | `_exec_read`, `spill.spill` |
+| a tool's newest pictures | every call: the newest four stay, a line for each older one | no | `compact.recent` |
 | clear (tier 1) | past the trigger, or when a run starts after a pause | no | `Session.clear`, `compact.clear` |
 | summarize (tier 2) | past the trigger when clearing frees too little, or on overflow | yes | `Session.compact`, `compact.compact` |
 
@@ -37,6 +38,41 @@ Why the `read` cap exists: one user's 2.19M-character HTML deck was inlined whol
 1.48M tokens against a 1,048,576 window — and overflowed before the model ran, seven
 times across four chats. Compaction cannot rescue a single turn bigger than the window,
 so the only defence is not letting it in.
+
+## A tool's newest pictures
+
+A picture a tool returns (a design's render or sheet, a page, a browser screenshot, a `read`
+of an image) stays in the model's view while it is among the newest four (`PICTURES`). A line
+stands in for each older one, `[picture: seen when it came back]`, in the model's view only
+(`compact.recent`, applied by `Session.context()`); the transcript keeps the picture.
+Pictures the person attached stay.
+
+Why not all: a picture is cheap in tokens (~580 on DeepSeek V4.1 Flash, ~1.5k on Claude) and
+dear in time, on every call it rides, cached or not. Measured on Super's hosts (2026-10-26): a
+264k-token chat started in ~4.4 s with a warm cache, and the same chat with 40 pictures (9 MB)
+in ~40 s, every call. One chat (fb6b062f) built a document page by page and carried up to 44
+pictures a call; clearing, which counts tokens, never saw them: they were ~25k of its 185k.
+
+Why not one: for a day (2026-10-27) only the newest picture rode, the line said "ask for it
+again to see it", and the model's thinking was dropped every step (below). A check over three
+pages never ended: chat a9d536c4 read the same three page pictures 53 times, each step starting
+its review over. Replayed with the pictures kept, or the thinking kept, it read each page once
+and went on to fix what it saw, on Modal and Crusoe alike. Four cost little there: a 57k-token
+chat's first token came in 1.4 s on Crusoe with one picture, 1.4 s with three, 2.3 s with all
+thirteen (Modal: 1.6, 2.5 and 3.6 s).
+
+The cache: when a picture drops out of the four, the host reads again what came after it, a
+few steps rather than the chat.
+
+## The model's own thinking
+
+A model on an OpenAI-compatible host streams its thinking in `reasoning` or
+`reasoning_content`. The provider saves it with the turn, a `thinking` block naming the field,
+and sends it back in that field on every later call, to the model that wrote it only
+(`usage.model`). DeepSeek with tools expects every earlier turn's reasoning (its own API refuses
+a request without it); pi and DeepSeek's own harness keep it the same way. Without it, each
+step started its thinking over. Claude's thinking was always kept; thinking without a signature
+never reaches Claude. Tier 1 clearing empties old turns' thinking along with their tool results.
 
 ## When the loop looks
 
@@ -67,6 +103,8 @@ model with:
 - tool results → `[Old tool result cleared]`
 - string tool arguments over 1,000 characters (an app's code, an edit's text) →
   `[Old input cleared]`
+- an OpenAI-compatible model's thinking → empty, so it is not sent (Claude's is signed and
+  stays whole)
 
 Paths, commands and short arguments stay, so the model still knows what it did and the
 file ledger still finds files. A loaded skill's result is never stubbed: it is the skill's
@@ -245,4 +283,4 @@ with edited tool inputs in old turns), OpenRouter, Moonshot, Fireworks.
 ## Related
 
 - [plugins-connectors.md](plugins-connectors.md) — the tool-block budget and the spill design.
-- [runs.md](runs.md) — stream cuts and the 1200s request cap.
+- [runs.md](runs.md) — stream cuts, the request cap (an hour) and the run budget (45 minutes).

@@ -13,7 +13,7 @@ import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
-import { ConfirmCard } from "./confirm-card";
+import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
 import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
@@ -24,12 +24,13 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig, SendExtra } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig, SendExtra, Part } from "../hooks/use-chat";
+import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
-import { t, getLang, setLang, useLang, stepText } from "../lib/i18n";
+import { t, getLang, setLang, useLang, stepText, langOf } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
@@ -91,7 +92,7 @@ export interface FilesPanelProps {
   onRestoreTrash?: (id: string, kind: string, method: string) => Promise<string>;
   onPurgeTrash?: (id: string, kind: string) => Promise<void>;
   onEmptyTrash?: () => Promise<void>;
-  onOpenFile: (path: string) => Promise<string>;
+  onOpenFile: (path: string, silent?: boolean) => Promise<string>;
   readFile: (path: string) => Promise<string>;
   writeFile: WriteFile;   // binary too — the .fig editor writes raw bytes
   writeNew?: (path: string, data: BlobPart) => Promise<string>;  // never overwrites: the server picks a free name
@@ -142,7 +143,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   config?: AppConfig | null;
   view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -203,8 +204,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
   // The agent's connect card: a tool needed an account the user hasn't linked.
   const [connect, setConnect] = useState<{ name: string } | null>(null);
-  // A tool the user set to "ask": approve sends the next turn with the approval attached.
-  const [confirm, setConfirm] = useState<{ tool: string; key: string; connector?: string; label: string; args: unknown } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
@@ -268,7 +267,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setFollowUp(null);
     setAsk(null);
     setConnect(null);
-    setConfirm(null);
     setPills([]);
     queuedRef.current = [];
     setQueued([]);
@@ -397,10 +395,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     input, attachments, send: (origin, extra) => handleSubmitRef.current(undefined, origin, extra),
   });
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
-  const openPricing = useCallback((payer: "user" | "organization", source: string) => {
+  const [pricingWhy, setPricingWhy] = useState<string | undefined>();   // "limit" when the agent's limit opened it
+  const openPricing = useCallback((payer: "user" | "organization", source: string, why?: string) => {
     setPricingFor(payer);
-    track("plan_modal_opened", { payer_type: payer, source });
+    setPricingWhy(why);
+    track("plan_modal_opened", { payer_type: payer, source, ...(why ? { why } : {}) });
   }, []);
+  const upgrade = useCallback(() => openPricing(activeOrg ? "organization" : "user", "usage", usedUp(usageRef.current) ? "limit" : undefined),
+    [openPricing, activeOrg]);
+  const upgradeWith = useMemo(() => ({ upgrade, agent: meta?.name || name }), [upgrade, meta?.name, name]);
+  // The agent's limit, as its last reply reported it. The ref is read by the same stream's plans event.
+  const [usage, setUsage] = useState<Part | null>(null);
+  const usageRef = useRef<Part | null>(null);
   const closePricing = useCallback((method: string) => {
     setPricingFor((cur) => {
       if (cur) track("plan_modal_closed", { payer_type: cur, method });
@@ -413,14 +419,25 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else if (plans === "b2b") activeOrg ? openPricing("organization", "url_param") : onCreateOrg?.();
   });
 
+  const limitPlans = useCallback(() => {
+    track("paywall_shown", { reason: "limit" });
+    openPricing(activeOrg ? "organization" : "user", "agent_event", "limit");
+  }, [openPricing, activeOrg]);
+  useLimitOpensPlans(name, usage, isStreaming, limitPlans);
+
   useEffect(() => {
     if (!setUIHandler) return;
     setUIHandler((ev) => {
-      if (ev.action === "open_plan_modal") {
+      if (ev.action === "usage") {
+        usageRef.current = ev as unknown as Part;
+        setUsage(usageRef.current);
+      } else if (ev.action === "open_plan_modal") {
         // The agent blocked the user — a paywall, not a curious plans click.
-        track("paywall_shown", { reason: ev.reason || "unspecified" });
         if (ev.reason === "limit") track("limit_reached", {});
-        openPricing(activeOrg ? "organization" : "user", "agent_event");
+        const u = usageRef.current;
+        if (ev.reason === "limit" && usedUp(u) && !firstTime(name, u)) return;
+        track("paywall_shown", { reason: ev.reason || "unspecified" });
+        openPricing(activeOrg ? "organization" : "user", "agent_event", typeof ev.reason === "string" ? ev.reason : undefined);
       } else if (ev.action === "open_canvas" && typeof ev.path === "string") {
         const done = ev.path;
         track("artifact_completed", { path: done, kind: ext(done) });
@@ -486,10 +503,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       } else if (ev.action === "connect" && typeof ev.connector === "string") {
         setConnect({ name: ev.connector });
         track("ui_action", { action: "connect", connector: ev.connector });
-      } else if (ev.action === "confirm" && typeof ev.tool === "string" && typeof ev.key === "string") {
-        setConfirm({ tool: ev.tool, key: ev.key, connector: typeof ev.connector === "string" ? ev.connector : undefined,
-                     label: typeof ev.label === "string" ? ev.label : ev.tool, args: ev.args });
-        track("ui_action", { action: "confirm", tool: ev.tool });
+      } else if (ev.action === "confirm" && typeof ev.tool === "string") {
+        track("ui_action", { action: "confirm", tool: ev.tool });   // the card itself is a part of the agent's message
+      } else if (ev.action === "title" && typeof ev.title === "string" && typeof ev.chat_id === "string") {
+        // A new chat named while its first reply was made: the list says so without a reload.
+        const id = ev.chat_id, title = ev.title;
+        setChats((prev) => (prev.some((x) => x.id === id) ? prev.map((x) => (x.id === id ? { ...x, title } : x))
+                                                          : [{ id, title, updatedAt: new Date().toISOString() }, ...prev]));
+        track("chat_title_generated", { source: "auto", length: title.length, language: langOf(title) });
       } else if (ev.action === "compacted") {
         track("context_compacted", { tier: ev.tier, reason: ev.reason, tokens: ev.tokens, ok: ev.ok });
       } else {
@@ -630,6 +651,21 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else go();
   }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
 
+  // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
+  const approval = useMemo(() => waitingCard(messages), [messages]);
+  // A confirm card's answer is a turn of its own, carrying the card's key: the model reads it, the chat shows
+  // no bubble for it, and the card's line in the chat says how it went. "Don't ask again" is Always allow for that tool.
+  const answerCard = useCallback<Answer>((card, yes, remember, title) => {
+    track(yes ? "confirm_approved" : "confirm_dismissed", { tool: card.tool, chat_id: chatId, remember });
+    markCard(card.key, { state: yes ? "approved" : "declined", ...(remember ? { remembered: true } : {}) });
+    if (yes && remember) {
+      track("connector_permissions_changed", { connector: card.connector ?? "_builtin", scope: "card", to: "allow" });
+      api(card.connector ? `/connectors/${card.connector}/tools/${card.tool}` : `/tools/${card.tool}`,
+          { method: "PUT", json: { mode: "allow" } }).catch(() => {});
+    }
+    handleSubmit(`${t(yes ? "approved" : "cardNotNow")}: ${title}`, "confirm", yes ? { approvals: [card.key] } : { declined: [card.key] });
+  }, [chatId, markCard, api, handleSubmit]);
+
   // Drain on the falling edge of `isStreaming` — one message per edge, and the
   // send it triggers raises the flag again, so the rest follow in order.
   useEffect(() => {
@@ -644,6 +680,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     onSend(next.text, next.attachments, "queued", next.extra);
     setTimeout(() => scrollToBottom(), 0);
   }, [isStreaming, onSend, scrollToBottom, chatId]);
+
+  // A picture in a message is a workspace file, fetched with the person's credentials. Silent: a picture since
+  // deleted shows its placeholder, not an error.
+  const openFileQuiet = files?.onOpenFile;
+  const resolveMedia = useMemo(() => (openFileQuiet ? (p: string) => openFileQuiet(p, true) : undefined), [openFileQuiet]);
 
   // Newest step on the transcript — a run this tab never streamed still has one.
   const currentStep = useMemo(() => {
@@ -1155,7 +1196,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-foreground truncate">{agentTitle}</p>
+                      <p className="font-display text-sm font-medium text-foreground truncate">{agentTitle}</p>
                       <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{agentDesc}</p>
                     </div>
                   </a>
@@ -1183,6 +1224,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       {/* rtl:flex-row-reverse keeps the canvas on the right in Arabic */}
       <div className="flex min-h-0 flex-1 rtl:flex-row-reverse">
       <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && rightExpanded && rightOpen && "hidden")}>
+      <UpgradeContext.Provider value={upgradeWith}>
       <LayoutGroup>
         <LoadingBar active={chatLoading} />
         {!chatLoading && (isEmpty ? (
@@ -1231,7 +1273,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
             <div ref={scrollRef} className="isolate relative flex-1 overflow-y-auto" dir="ltr">
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
-                <ConnectorsContext.Provider value={connectors ?? []}>{messages.map((msg, i) => {
+                <ConnectorsContext.Provider value={connectors ?? []}>
+                <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
                   return (
@@ -1249,14 +1292,24 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                           ? onRegenerate : undefined
                       }
                       onOpenFile={openFileInCanvas}
+                      resolveMedia={resolveMedia}
                     />
                   );
-                })}</ConnectorsContext.Provider>
+                })}
+                {runStatus === "interrupted" && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
+                  <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
+                )}</ApprovalContext.Provider>
+                </ConnectorsContext.Provider>
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
             <div className="shrink-0 px-6 pb-2 pt-1">
               <div className="max-w-3xl mx-auto">
+                {approval && !isStreaming && (
+                  <ConnectorsContext.Provider value={connectors ?? []}>
+                    <ApprovalCard key={String(approval.card?.key)} part={approval} agent={meta?.name || ""} answer={answerCard} />
+                  </ConnectorsContext.Provider>
+                )}
                 {ask && (
                   <AskCard
                     key={ask.questions.map((q) => q.question).join("|")}
@@ -1287,48 +1340,20 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
                   />
                 )}
-                {confirm && !ask && !connect && (
-                  <ConfirmCard
-                    key={confirm.tool}
-                    label={confirm.label}
-                    args={confirm.args}
-                    onApprove={() => {
-                      track("confirm_approved", { tool: confirm.tool, chat_id: chatId });
-                      const c = confirm;
-                      setConfirm(null);
-                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
-                    }}
-                    onAlways={() => {
-                      track("connector_permissions_changed", { connector: confirm.connector ?? "_builtin", scope: "card", to: "allow" });
-                      const c = confirm;
-                      setConfirm(null);
-                      const path = c.connector ? `/connectors/${c.connector}/tools/${c.tool}` : `/tools/${c.tool}`;
-                      api(path, { method: "PUT", json: { mode: "allow" } }).catch(() => {});
-                      handleSubmit(`${t("approved")}: ${c.label}`, "confirm", { approvals: [c.key] });
-                    }}
-                    onDismiss={() => { track("confirm_dismissed", { tool: confirm.tool }); setConfirm(null); }}
-                  />
-                )}
-                {!ask && !connect && survey && !hushed && !isStreaming && (
+                {!ask && !connect && !approval && survey && !hushed && !isStreaming && (
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>
-                  {queued.map((m) => (
-                    <QueuedChip
-                      key={m.id}
-                      text={m.text}
-                      held={heldRef.current}
-                      onEdit={() => editQueued(m.id)}
-                      onDismiss={() => dropQueued(m.id)}
-                    />
-                  ))}
+                  {queued.length > 0 && (
+                    <MessageQueue items={queued} held={heldRef.current} onEdit={editQueued} onDrop={dropQueued} />
+                  )}
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
                   {runStatus === "running" && !attached && (
                     <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
                   )}
                 </AnimatePresence>
-                {followUpsOn && followUp && !isStreaming && !ask && (
+                {followUpsOn && followUp && !isStreaming && !ask && !approval && (
                   <FollowUpChip
                     text={followUp}
                     onAccept={() => {
@@ -1338,44 +1363,40 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     onDismiss={() => setFollowUp(null)}
                   />
                 )}
+                {nearLimit(usage) && <UsageLine usage={usage} />}
                 <InputBox {...inputProps} />
               </div>
             </div>
           </>
         ))}
       </LayoutGroup>
+      </UpgradeContext.Provider>
 
       {pricingFor && (
-        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-center justify-center pointer-events-none">
-          <div dir="ltr" className="pointer-events-auto fixed top-1 right-1 bottom-1 w-[calc(100%-0.5rem)] flex flex-col rounded-xl border border-border bg-background shadow-xl sm:relative sm:inset-auto sm:w-auto sm:max-h-[90vh] sm:rounded-2xl">
-            <div className="flex items-center justify-between px-6 pt-5 pb-3">
-              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                {pricingFor === "organization" ? (
-                  activeOrg ? (
-                    <>
-                      <span>{t("orgPlansFor")}</span>
-                      <span className="inline-flex items-center gap-1.5 text-sm font-medium bg-secondary text-foreground rounded-lg px-2.5 py-1">
-                        {activeOrg.imageUrl && (
-                          <div
-                            className="size-4 rounded-full bg-secondary shrink-0"
-                            style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
-                          />
-                        )}
-                        {activeOrg.name}
-                      </span>
-                    </>
-                  ) : t("orgPlans")
-                ) : t("personalPlans")}
+        <Popover open onClose={() => closePricing("backdrop")} dim className="inset-0 flex items-end justify-center pointer-events-none sm:items-center">
+          <div className="pointer-events-auto flex max-h-[92vh] w-full flex-col rounded-t-2xl border border-border bg-background pb-[env(safe-area-inset-bottom)] shadow-xl sm:w-[440px] sm:rounded-2xl sm:pb-0">
+            <div className="flex items-center justify-between gap-3 px-5 pt-4">
+              <h2 className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
+                {pricingFor === "organization" && (activeOrg ? (
+                  <>
+                    <span>{t("orgPlansFor")}</span>
+                    <span className="inline-flex min-w-0 items-center gap-1.5 rounded-lg bg-secondary px-2.5 py-1 font-medium text-foreground">
+                      {activeOrg.imageUrl && (
+                        <div className="size-4 shrink-0 rounded-full bg-secondary" style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }} />
+                      )}
+                      <span className="truncate">{activeOrg.name}</span>
+                    </span>
+                  </>
+                ) : t("orgPlans"))}
               </h2>
-              <button
-                onClick={() => closePricing("dismiss")}
-                className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              >
-                <Icon name="x" className="w-4 h-4" />
+              <button onClick={() => closePricing("dismiss")} aria-label={t("close")}
+                      className="shrink-0 cursor-pointer text-muted-foreground transition-colors hover:text-foreground">
+                <Icon name="x" className="size-4" />
               </button>
             </div>
-            <div className="px-6 pb-5 overflow-y-auto">
-              <PricingCards payerType={pricingFor} onSelect={() => closePricing("select")} />
+            <div className="overflow-y-auto px-5 pb-5 pt-1">
+              <PricingCards payerType={pricingFor} why={pricingWhy} usage={usage} agent={meta?.name || name} setup={config?.plans}
+                            onSelect={() => closePricing("select")} onLater={() => closePricing("not_now")} />
             </div>
           </div>
         </Popover>
@@ -1578,7 +1599,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                               </svg>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <span className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                              <span dir="auto" className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
                               <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1594,7 +1615,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                                       setShares((prev) => prev.filter((x) => x.token !== s.token));
                                     }).finally(() => setSharesLoading(false));
                                   }}
-                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
+                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
                                   aria-label="Delete share"
                                 >
                                   <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1726,7 +1747,8 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
           return (
             <div
               key={s.id}
-              className={`group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary/30" : ""}`}
+              className={`group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 transition-colors cursor-pointer ${activeId === s.id ? "bg-secondary" : "hover:bg-secondary/50"}`}
+              aria-current={activeId === s.id ? "true" : undefined}
               onClick={() => onLoad(s.id)}
             >
               <button
@@ -1747,11 +1769,12 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span className="text-sm text-foreground truncate block">
+                  <span dir="auto" className={`text-sm text-foreground truncate block ${activeId === s.id ? "font-medium" : ""}`}
+                        onDoubleClick={(e) => { e.stopPropagation(); setRenaming(s.id); }}>
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}
                     {s.run === "running" && (
-                      <span className="mr-1.5 inline-block size-1.5 rounded-full bg-emerald-500 animate-pulse align-middle"
+                      <span className="me-1.5 inline-block size-1.5 rounded-full bg-emerald-500 animate-pulse align-middle"
                             aria-label={t("working")} />
                     )}
                     {s.title || t("untitled")}
@@ -1764,7 +1787,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
               <div className="relative shrink-0">
                 <button
                   onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === s.id ? null : s.id); }}
-                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
                   aria-label="Actions"
                 >
                   <svg className="size-4" fill="currentColor" viewBox="0 0 24 24">
@@ -1841,11 +1864,13 @@ function RunIndicator({ step, startedAt, onStop }: {
   );
 }
 
-function QueuedChip({ text, held, onEdit, onDismiss }: {
-  text: string;
+// Messages written while the agent works, in the order they'll go: each can be edited (tap it) or dropped. After
+// Stop the queue holds until something is sent.
+function MessageQueue({ items, held, onEdit, onDrop }: {
+  items: { id: string; text: string }[];
   held: boolean;
-  onEdit: () => void;
-  onDismiss: () => void;
+  onEdit: (id: string) => void;
+  onDrop: (id: string) => void;
 }) {
   return (
     <motion.div
@@ -1853,26 +1878,47 @@ function QueuedChip({ text, held, onEdit, onDismiss }: {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 4 }}
       transition={{ duration: 0.15 }}
-      className="mb-2 flex justify-end px-1"
+      className="mb-2 rounded-2xl border border-dashed border-border bg-secondary/30 px-2 py-1.5"
     >
-      <div className="flex max-w-full items-center gap-0.5 rounded-2xl border border-dashed border-border bg-secondary/40 py-1.5 ps-3.5 pe-1.5">
-        <button
-          onClick={onEdit}
-          title={held ? t("queuedHeld") : t("queuedHint")}
-          className="min-w-0 text-start text-sm leading-snug break-words text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          dir="auto"
-        >
-          {text}
-        </button>
-        <button
-          onClick={onDismiss}
-          className="shrink-0 rounded-full p-1 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-          aria-label={t("dismiss")}
-        >
-          <Icon name="x" className="size-3" />
-        </button>
+      <div className="flex items-center justify-between gap-3 px-1.5 pb-1 text-xs text-muted-foreground">
+        <span>{t("queueCount").replace("{n}", String(items.length))}</span>
+        <span className="truncate">{t(held ? "queueHeldNote" : "queueSendsAfter")}</span>
       </div>
+      <ul className="flex flex-col">
+        <AnimatePresence initial={false}>
+          {items.map((m) => (
+            <motion.li key={m.id} layout initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                       transition={{ duration: 0.15 }} className="flex items-center gap-1 rounded-xl py-0.5 ps-1.5 hover:bg-secondary/60">
+              <Icon name="arrow-right" className="size-3 shrink-0 text-muted-foreground/70 rtl:-scale-x-100" />
+              <button onClick={() => onEdit(m.id)} title={held ? t("queuedHeld") : t("queuedHint")} dir="auto"
+                      className="min-w-0 flex-1 cursor-pointer truncate text-start text-sm text-foreground/80 transition-colors hover:text-foreground">
+                {m.text}
+              </button>
+              <button onClick={() => onDrop(m.id)} aria-label={t("queueRemove")}
+                      className="shrink-0 cursor-pointer rounded-full p-1.5 text-muted-foreground/60 transition-colors hover:bg-secondary hover:text-foreground">
+                <Icon name="x" className="size-3" />
+              </button>
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ul>
     </motion.div>
+  );
+}
+
+// A run the server lost before it finished (a deploy, a crash, its time cap) ends the chat here, not in silence.
+function ContinueLine({ onContinue }: { onContinue: () => void }) {
+  return (
+    <div className="flex w-full max-w-3xl flex-wrap items-center gap-2.5 px-6 pb-4 text-[13px] text-muted-foreground">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" className="size-4" aria-hidden>
+        <path d="M12 21a9 9 0 100-18 9 9 0 000 18zM10 15V9m4 6V9" />
+      </svg>
+      <span>{t("runCutOff")}</span>
+      <button type="button" onClick={onContinue}
+              className="cursor-pointer rounded-full border border-border px-3 py-1.5 text-foreground transition-colors hover:bg-secondary">
+        {t("continueRun")}
+      </button>
+    </div>
   );
 }
 

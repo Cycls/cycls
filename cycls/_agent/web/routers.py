@@ -19,6 +19,7 @@ from cycls._agent.web import office
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt, skills
+from cycls._agent.connectors import approval_key
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
@@ -54,18 +55,36 @@ def to_ui_messages(raw):
     # calls from a file card back to a plain step.
     errored, results = set(), {}   # tool_use id → its stored result, for a connector step's Response
     search_ids = set()   # client-side `web_search` calls, by tool_use id
+    # A confirm card's state comes from what followed it: the turn that carried its approval or "Not now",
+    # then the same call made again and how it went. Keys are hashed, so only a carded tool's calls are keyed.
+    carded = {k.split(":")[0] for m in raw for card in (m.get("cards") or []) if (k := card.get("key"))}
+    decided, calls = {}, {}   # key → "approved" | "declined"; key → its calls' ids, in order
     for msg in raw:
         c = msg.get("content")
+        for k in msg.get("approvals") or ():
+            decided[k] = "approved"
+        for k in msg.get("declined") or ():
+            decided[k] = "declined"
         if msg.get("role") == "assistant" and isinstance(c, list):
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "web_search":
                     search_ids.add(b.get("id"))
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in carded:
+                    calls.setdefault(approval_key(b["name"], b.get("input")), []).append(b.get("id"))
         if msg.get("role") == "user" and isinstance(c, list):
             for b in c:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     body = results[b.get("tool_use_id")] = b.get("content")
                     if b.get("is_error") or (isinstance(body, str) and body.startswith("Error")):
                         errored.add(b.get("tool_use_id"))
+
+    def card_state(card):
+        answer = decided.get(card.get("key"))
+        if answer != "approved":
+            return answer or "waiting"
+        ids = calls.get(card.get("key")) or []
+        after = ids[ids.index(card["id"]) + 1:] if card.get("id") in ids else ids[1:]
+        return ("failed" if after[0] in errored else "done") if after else "approved"
 
     out = []
     for msg in raw:
@@ -80,17 +99,24 @@ def to_ui_messages(raw):
                     # assistant turn that ran the search, where the live stream
                     # put them (after the search step, before the answer).
                     if out and out[-1]["role"] == "assistant":
-                        for b in c:
-                            if b.get("tool_use_id") not in search_ids or b.get("is_error"):
+                        kept = [p for p in msg.get("ui") or () if isinstance(p, dict)]   # any tool's sources and files
+                        stored = {p.get("id") for p in kept}
+                        for b in c:   # a search saved before the batch kept its own
+                            if b.get("tool_use_id") not in search_ids or b.get("tool_use_id") in stored or b.get("is_error"):
                                 continue
                             if rows := _search_rows(b.get("content")):
                                 out[-1]["parts"].append({"type": "sources", "sources": rows, "id": b.get("tool_use_id")})
+                        out[-1]["parts"] += kept
                     # A run that ended waiting on the person: the card is stored
                     # on the batch, because `ui` events never reach the
                     # transcript. Without this a reload shows a finished-looking
                     # chat with nothing to approve.
                     if msg.get("cards") and out and out[-1]["role"] == "assistant":
-                        out[-1]["parts"] += [{"type": "card", "card": card} for card in msg["cards"]]
+                        held = {card["id"] for card in msg["cards"] if card.get("id")}   # the card stands where its step was
+                        out[-1]["parts"] = [p for p in out[-1]["parts"] if not (p.get("type") == "step" and p.get("id") in held)]
+                        out[-1]["parts"] += [{"type": "card", "card": card,
+                                              **({"state": card_state(card)} if card.get("action") == "confirm" else {})}
+                                             for card in msg["cards"]]
                     continue
             elif not isinstance(c, str):
                 continue
@@ -140,6 +166,14 @@ def to_ui_messages(raw):
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
                 out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    waiting = []   # a card still waiting when the person typed something else was skipped
+    for m in out:
+        if m["role"] == "assistant":
+            waiting += [p for p in m["parts"] if p.get("type") == "card" and p.get("state") == "waiting"]
+        else:
+            for p in waiting:
+                p["state"] = "skipped"
+            waiting = []
     return out
 
 
@@ -275,6 +309,8 @@ def chats_router(ws_dep):
         for k, v in patch.items():
             if v is None: merged.pop(k, None)
             else: merged[k] = v
+        if patch.get("title"):
+            merged["titleSource"] = "user"   # a name the person gave is never written over
         now = datetime.now(timezone.utc).isoformat()
         merged["id"] = chat_id
         merged.setdefault("createdAt", now)
@@ -758,12 +794,15 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
         if _versioned(file_path.name):
-            # X-Version of the very bytes served (a design, a video or its words): what a save names as its `base`
-            from cycls._agent.design.store import version_of
-            data = await asyncio.to_thread(file_path.read_bytes)
+            # X-Version of the very bytes served (a design, a video or its words): what a save names as its
+            # `base`, read as the save checks it — from the bucket in production (design/store.py)
+            from cycls._agent.design.store import load_fig
+            data, version = await load_fig(file_path.parent, file_path.name)
+            if data is None:
+                raise HTTPException(status_code=404, detail="File not found")
             kind = ("application/octet-stream" if file_path.suffix.lower() == ".fig"
                     else "text/html; charset=utf-8" if _composition(file_path.name) else "application/json")
-            return Response(data, media_type=kind, headers={**_NO_CACHE, "X-Version": version_of(data)})
+            return Response(data, media_type=kind, headers={**_NO_CACHE, "X-Version": version})
         return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")
@@ -1891,6 +1930,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
                         "icon": o.icon or row.get("icon") or None,
                         "prompts": [p for p in (oauth.bilingual(x) for x in (o.prompts or row.get("prompts") or [])) if p],
                         "showcase": row.get("showcase") or "prompts", "gallery": row.get("gallery") or [],
+                        "actions": [a for a in (row.get("actions") or []) if isinstance(a, dict)],   # the confirm card's words
                         "gradient": row.get("gradient") or None, "links": oauth.links_of(row, o),
                         "use_cases": o.use_cases, "skills": o.skills,
                         "developer": o.developer or row.get("developer") or None, "website": o.website,

@@ -123,7 +123,9 @@ export function useSpeechRecognition({
             onEnd(text);
           } else {
             track("mic_transcription_failed", { status: res.status });
-            toastError(await reasonOf(res));
+            // In the reader's language; the server names nothing behind it. A day's allowance used up
+            // (429) is the server's own sentence: it says when the mic is back.
+            toastError(res.status === 429 ? await reasonOf(res) : t("micFailed"));
             onEnd("");
           }
         } catch {

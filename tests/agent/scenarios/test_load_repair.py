@@ -472,6 +472,17 @@ def test_a_replay_session_adds_the_turn_once_not_twice(tmp_path):
     assert [m["content"] for m in _run(chat.load_messages(ws, cid))] == ["again", "and more"]
 
 
+def test_a_card_answer_is_saved_with_its_keys(tmp_path):
+    """An approval or a "Not now" is a turn the person did not type: internal, so the chat shows no bubble,
+    and carrying its keys, so the card reads its state after a reload."""
+    ws, cid = _ws(tmp_path), "test"
+    session = _run(chat.Session.open(types.SimpleNamespace(workspace=ws, chat_id=cid, user=object(), replay=False)))
+    _run(session.add_user("Approved: Send this email?", approvals=["k1"]))
+    _run(session.add_user("Not now: Delete 3 files?", declined=["k2"]))
+    saved = _run(chat.load_messages(ws, cid))
+    assert [(m.get("internal"), m.get("approvals"), m.get("declined")) for m in saved] == [(True, ["k1"], None), (True, None, ["k2"])]
+
+
 # ---- create-only turn writes (docs/notes/runs.md) ----
 
 def test_append_returns_how_many_landed(tmp_path):

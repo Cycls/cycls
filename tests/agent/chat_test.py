@@ -473,6 +473,29 @@ def test_brave_search_result_projects_sources():
     assert out[1]["parts"][1]["sources"] == rows
 
 
+def test_any_tools_kept_sources_and_files_come_back_on_reload():
+    """The batch keeps what a tool showed in the chat: any tool's sources and the picture it opened come back
+    after a reload, where once only web search's did, and a search kept that way is not projected twice."""
+    import json
+    rows = [{"title": "نظام العمل", "url": "https://ncar.gov.sa/d/1", "label": "نظام العمل · م٧٧", "quote": "ما لم يتضمن العقد"}]
+    card = {"type": "step", "id": "I1:file", "tool_name": "Canvas", "step": "images/a.png", "ok": True}
+    web = [{"title": "W", "url": "https://w.com"}]
+    raw = [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "L1", "name": "load_document", "input": {"id": "x"}},
+            {"type": "tool_use", "id": "I1", "name": "image", "input": {"path": "images/a.png"}},
+            {"type": "tool_use", "id": "S1", "name": "web_search", "input": {"query": "q"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "L1", "content": "# نظام العمل"},
+            {"type": "tool_result", "tool_use_id": "I1", "content": "Saved images/a.png"},
+            {"type": "tool_result", "tool_use_id": "S1", "content": json.dumps({"results": web})}],
+         "ui": [{"type": "sources", "id": "L1", "sources": rows}, card, {"type": "sources", "id": "S1", "sources": web}]},
+    ]
+    parts = to_ui_messages(raw)[0]["parts"]
+    assert [p["type"] for p in parts] == ["step", "step", "step", "sources", "step", "sources"]
+    assert parts[3]["sources"] == rows and parts[4] == card and parts[5]["sources"] == web
+
+
 def test_search_sources_skip_errors_and_junk():
     """An errored search, a non-JSON body, and a row with no URL all have to
     leave the transcript clean rather than render an empty chip row."""
@@ -571,7 +594,39 @@ def test_a_waiting_card_survives_a_reload():
     ])
     parts = ui[-1]["parts"]
     assert ui[-1]["role"] == "assistant"
-    assert [p for p in parts if p["type"] == "card"] == [{"type": "card", "card": card}]
+    assert [p for p in parts if p["type"] == "card"] == [{"type": "card", "card": card, "state": "waiting"}]
+
+
+def test_a_card_reads_its_state_from_what_followed():
+    """The card stays in the chat as a record. Its state is what happened next: approved and the call made
+    again (done, or failed), "Not now", or a message typed instead (skipped). It stands where its step was."""
+    from cycls._agent.web.routers import to_ui_messages
+    from cycls._agent.connectors import approval_key
+    args = {"command": "mkdir out"}
+    key = approval_key("bash", args)
+    card = {"type": "ui", "action": "confirm", "tool": "bash", "key": key, "label": "Bash · mkdir out", "args": args, "id": "A"}
+    asked = [
+        {"role": "user", "content": "make the folder"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "A", "name": "bash", "input": args}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "needs approval"}], "cards": [card]},
+    ]
+    again = lambda result: [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "B", "name": "bash", "input": args}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "B", "content": result}]},
+        {"role": "assistant", "content": "done"}]
+    def state(raw):
+        cards = [p for m in to_ui_messages(raw) if m["role"] == "assistant" for p in m["parts"] if p["type"] == "card"]
+        return cards[0]["state"]
+    approve = {"role": "user", "content": "Approved", "internal": True, "approvals": [key]}
+    assert state(asked) == "waiting"
+    assert state(asked + [approve]) == "approved"
+    assert state(asked + [approve] + again("ok")) == "done"
+    assert state(asked + [approve] + again("Error: no space")) == "failed"
+    assert state(asked + [{"role": "user", "content": "Not now", "internal": True, "declined": [key]},
+                          {"role": "assistant", "content": "ok, I won't"}]) == "declined"
+    assert state(asked + [{"role": "user", "content": "actually, rename it"}]) == "skipped"
+    first = next(m for m in to_ui_messages(asked) if m["role"] == "assistant")
+    assert [p["type"] for p in first["parts"]] == ["card"]   # the step it held back is gone
 
 
 def test_a_batch_with_no_card_projects_unchanged():

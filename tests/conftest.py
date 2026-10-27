@@ -20,6 +20,17 @@ def _no_parser(monkeypatch):
     monkeypatch.setattr(tools, "PARSER", "")
 
 
+@pytest.fixture(autouse=True)
+def _no_naming(monkeypatch):
+    """A new chat's title is one more model call, which would take a scripted reply: tests name no chat, unless
+    they put the real `_chat_title` back."""
+    from cycls._agent.harness import main
+
+    async def unnamed(provider, said, **kw):
+        return ""
+    monkeypatch.setattr(main, "_chat_title", unnamed)
+
+
 # ---- Live LLM tests ----
 # Tests marked @pytest.mark.live hit real Anthropic. Off by default; opt
 # in with `pytest --live`. Also auto-skips if ANTHROPIC_API_KEY is unset.

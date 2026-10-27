@@ -533,6 +533,27 @@ describe("sources — citation parts from web search", () => {
     expect(sources[1].sources).toEqual(rows("argaam.com"));
   });
 
+  test("two pictures in a row are two parts, and the limit a reply reports reaches the chat", async () => {
+    // A part of the same kind used to merge as a text delta, and one with no string to merge was dropped.
+    global.fetch = vi.fn(async () =>
+      sseLines([
+        JSON.stringify({ type: "usage", used: 11, limit: 14, resets: "2027-01-01" }),
+        JSON.stringify({ type: "image", src: "https://img.test/1.png" }),
+        JSON.stringify({ type: "image", src: "https://img.test/2.png" }),
+        JSON.stringify({ type: "text", text: "Two takes." }),
+      ]),
+    ) as any;
+
+    const { result } = renderHook(() => useChat("http://api.test"));
+    const seen = vi.fn();
+    act(() => result.current.setUIHandler(seen));
+    await act(async () => { await result.current.send("hi"); });
+
+    expect(result.current.messages[1].parts!.map((p: any) => p.src ?? p.type))
+      .toEqual(["usage", "https://img.test/1.png", "https://img.test/2.png", "text"]);
+    expect(seen).toHaveBeenCalledWith(expect.objectContaining({ action: "usage", used: 11, limit: 14 }));
+  });
+
   test("a sources part survives alongside the search step and the answer", async () => {
     global.fetch = vi.fn(async () =>
       sseLines([
@@ -617,6 +638,36 @@ describe("watching a run the stream no longer carries (docs/notes/runs.md)", () 
     const last = result.current.messages[result.current.messages.length - 1];
     expect(last.role).toBe("assistant");
     expect(last.content).toBe("half an answer and the rest");
+  });
+
+  test("a dropped stream stays running until the poll answers, so nothing queued is sent into the run", async () => {
+    // The 20-minute cut: the stream ends, the run goes on. Idle for even one render, and the
+    // queue drains into the live run — the server refuses each message (409) and they are lost.
+    let answer: (v: unknown) => void = () => {};
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("/chats/"))
+        return new Promise((r) => { answer = r; });   // the poll's answer, held back
+      return { ok: true, body: { getReader: () => {
+        const chunks = ['data: {"type":"chat_id","chat_id":"c1"}\n\n',
+                        'data: {"type":"text","text":"working"}\n\n'];   // no [DONE]
+        let i = 0;
+        return { read: async () => i < chunks.length
+          ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+          : { done: true, value: undefined } };
+      } } } as any;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useChat(""));
+    await act(async () => { await result.current.send("build the deck"); });
+    expect(result.current.attached).toBe(false);
+    expect(result.current.isStreaming).toBe(true);   // before the server has said a word
+
+    await act(async () => {
+      answer({ ok: true, status: 200, json: async () => ({ messages: [], next: 2, run: "done" }) });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(result.current.isStreaming).toBe(false);   // the record's ending, not the stream's
   });
 
   test("coming back to a tab after a clean turn does not duplicate it", async () => {

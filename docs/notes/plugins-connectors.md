@@ -463,7 +463,8 @@ top, so what the API demands of every caller cannot be overridden by an app.
 It contributes one `{name}_request` tool. Without it, a pasted key could be stored, encrypted,
 scoped and listed in the directory while the agent never learned the connector existed — the loop
 only ever walks servers. Declare it on `cycls.Web().connectors(...)` as usual **and** on
-`cycls.LLM().connectors(...)`, which is how the loop sees a connector with no server to walk.
+`cycls.LLM().connectors(...)`, which is how the loop sees a connector with no server to walk. Its one
+tool takes the page's *Allow / Ask / Never* like any other.
 
 ### What bounds an app
 
@@ -641,8 +642,9 @@ stroked at 1. A group of rows summarises as *Used {connector}* when every row is
 **Mid-chat, two cards.** Not connected: *"This needs Salla."* with
 **Connect Salla** and *Not now*; Connect runs the flow above and the user re-sends. Confirm
 (`writes=True` under the *ask when risky* preset): the action in words, not JSON — *"Refund
-order #91823 — 340 SAR to ahmed@…?"* — with **Refund** and *Cancel*, the label coming from
-the same `tool_step` text as the step line. One question component across web and mobile
+order #91823 — 340 SAR to ahmed@…?"* — with **Refund** and *Not now*, the words coming from
+the connector's `actions` in the CMS (below), and for a call none of them matches a plain *"Let
+Super make a change in Salla?"* over the agent's own line about the call. One question component across web and mobile
 ([mention-picker-cache.md](mention-picker-cache.md) is what a second copy costs); defined as
 a protocol — a question with options resolving to an answer — not a React component.
 
@@ -654,11 +656,12 @@ of running and the model ends its turn. Only choices that differ from the defaul
 tool nobody has touched keeps following the switch below. Stored per user beside their grants.
 
 **Approve is bound to the call, not the tool.** The card carries a key — the tool name plus a hash of
-its arguments — and **Approve** sends *Approved: drive · create_file* as the next message with that key
-in `approvals`. The same tool called with different arguments in the same turn asks again, which the
-bare tool name did not do. Consent lives in the transcript and a replay cannot reuse it. The card also
-carries **Always allow**, which sets that one tool to *Allow* through `PUT /connectors/{name}/tools/{tool}`
-and then runs the call — one tap instead of a trip to the page.
+its arguments — and **Approve** sends *Approved:* and the card's question as the next message with that
+key in `approvals`; *Not now* sends it in `declined`. The same tool called with different arguments in
+the same turn asks again, which the bare tool name did not do. Consent lives in the transcript and a
+replay cannot reuse it. The card's **Don't ask again** is Always allow: it sets that one tool to *Allow*
+through `PUT /connectors/{name}/tools/{tool}` and then runs the call — one tap instead of a trip to the
+page. It is not offered on a delete, and a delete asks even after it.
 
 **The composer switch — Auto or Manual, per person, per device.** A pill in the composer's action row,
 shown only where the deployment has connectors. *Auto* (the default) lets a write run and pauses only
@@ -666,7 +669,7 @@ for the destructive: the server's `destructiveHint`, a name that reads delete / 
 refund, or a destructive command on a one-tool server. *Manual* asks before every write. It rides the
 request as `auto: false` (absent means Auto), reaches the gate through `ToolContext.auto`, and sits under
 the page's per-tool choices — a tool explicitly set to *Ask* asks in both modes, one set to *Allow* runs
-in both. Every gated call writes an `approval` audit line saying which of *approved*, *auto* or *asked*
+in both, short of a destructive call, which always asks. Every gated call writes an `approval` audit line saying which of *approved*, *auto* or *asked*
 it took, with the user, the chat and the connector.
 
 **Masking.** Keys and endpoints render masked with a reveal toggle. Presentation only —
@@ -697,7 +700,7 @@ happened to also spell out.
 **Code owns behaviour, the CMS owns copy.** `name`, `kind`, `scope`, `hint`, the OAuth endpoints and the
 servers stay in the agent file — nothing a CMS edit can reach may change what a connector is able to do.
 The CMS owns `title`, `description`, `category`, `story`, `prompts`, `icon`, `showcase`, `gallery`,
-`gradient`, `links`, `developer`. `examples/agents/catalog.py` is the worked example: every connector,
+`gradient`, `links`, `developer`, `actions`. `examples/agents/catalog.py` is the worked example: every connector,
 not one line of copy among them, and a test that keeps it that way.
 
 **The showcase leads the content**, with no heading over it: prompts on their gradient, or the gallery
@@ -715,6 +718,7 @@ what a developer who wrote one means.
 | `links` (`label: url` per line) | the fixed `website` / `privacy` / `terms` / `docs`, which remain the fallback with their translated labels |
 | `gradient` (three stops) | the one hardcoded ember on the prompt panel |
 | `showcase` + `gallery` | opens the page with a carousel instead of prompts — snapped, swipeable, dots for position; falls back to the prompts when a gallery is empty |
+| `actions` (`match`, `ask`, `who`, `button`, `done`, `show`) | the approval card's generic question: `match` is a tool's name, or `METHOD path` with `*` for one segment on a REST connector; `show` turns arguments (`from`, into the body too) into rows, and an `id` on one puts it in the sentences as `{id}` |
 
 `story` is HTML from TipTap, so the page injects it. The source is the team's own Clerk-gated admin, and
 the record is first-party; that is the assumption the rendering rests on, and it is why `published` and
@@ -784,7 +788,9 @@ runs until the person answers.
 
 **The approval never appears as a message.** Approve sends *Approved: Bash · …* so the model learns the
 person said yes, but the turn is stored `internal`: the chat renders no bubble for it, live or on reload,
-and it never becomes the chat's title. What the person sees is the card going away and the work carrying on.
+and it never becomes the chat's title. The card is a part of the agent's message, in place of the step it
+holds back, and stays there as a one-line receipt — approved, done, failed, declined, or skipped when the
+person typed something else instead — read on reload from the turn that answered it and the call that followed.
 
 **The ack asks for the call back verbatim.** Binding the approval to the arguments has a cost: a model
 that rewrites its own command between the ask and the approval gets a second card, correctly but
@@ -798,7 +804,8 @@ a reworded sentence invalidates is an approval that asks forever; **Approve** re
 key in `approvals` on the next message. It authorises that call with those arguments, once, in that turn:
 a second call with different arguments asks again, a replay of the transcript cannot reuse it, and no
 key ever unlocks a whole tool. **Always allow** is the deliberate escape — it writes *Allow* at layer 2
-and runs the call.
+and runs the call — and it stops at deletes: a destructive call asks even for a tool set to *Allow*,
+built-in or connector.
 
 **Roles.**
 

@@ -46,6 +46,8 @@ def _intent(ops):
     labels = {"slide_add": "add a slide", "slide_update": "change slide {n}", "slide_move": "move slide {n}",
               "slide_duplicate": "duplicate slide {n}", "slide_delete": "delete slide {n}", "slide_meta": "slide {n}'s notes"}
     op = (ops or [{}])[0]
+    if len(ops or []) > 1 and all(o.get("op") == "slide_add" for o in ops):
+        return f"add {len(ops)} slides"
     n = op.get("index", op.get("from"))
     return labels.get(op.get("op"), "change the slides").format(n=(n + 1) if isinstance(n, int) else "")
 
@@ -54,10 +56,10 @@ async def apply_ops(root, fig_rel, ops, user_id=None, preview=False, by="agent")
     """Run slide `ops` (service form, 0-based) on design `fig_rel` → the service's result; its preview follows.
     Raises FileNotFoundError, design.Unavailable, RuntimeError."""
     from cycls._agent import design
-    from .store import Stale, read_fig, write_fig
+    from .store import Stale, load_fig, write_fig
     async with lock(Path(root) / fig_rel):
         for attempt in (1, 2):
-            data, base = await asyncio.to_thread(read_fig, root, fig_rel)
+            data, base = await load_fig(root, fig_rel)
             if data is None:
                 raise FileNotFoundError(fig_rel)
             r = await design.apply(data, ops=ops, preview=preview, user_id=user_id)

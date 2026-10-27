@@ -155,6 +155,7 @@ yield {"type": "table", "row": ["web-2", "Online", "62%"]}
 yield {"type": "callout", "callout": "Operation completed!", "style": "success"}
 yield {"type": "status", "status": "Connecting to database..."}
 yield {"type": "image", "src": "/public/chart.png", "alt": "Chart"}
+yield {"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}   # a limit: a line near its end; the reply that uses it up opens the plans, one it refuses is a note
 ```
 
 ### UI actions
@@ -292,7 +293,9 @@ web = (
 | `.suggestions(on=True)` | Show prompt-starter suggestions on the empty-chat screen. Off by default |
 | `.affiliate(api_key)` | Affiliate/referral tracking (e.g. a Rewardful key); the FE loads the tracker and reports conversions on checkout |
 | `.mobile_app(ios=, android=)` | Store links for the Cycls app. Each browser's own way comes first: the App Store link adds Apple's `apple-itunes-app` tag, so Safari shows its banner, and the Play link adds a web manifest naming the app, so Open on Android Chrome brings up Google's install sheet. Everywhere else (Chrome on iPhone, in-app browsers) a glass bar under the header, as wide as the composer, links to the store. Dismissing it or tapping Open rests it for two weeks. Off when unset |
+| `.plans(pay=, currency=, words=)` | The plans window. `pay` lists the ways checkout takes payment, shown under its button as each brand's official mark (`"apple_pay"`, `"google_pay"`, `"visa"`, `"mastercard"`); list only what it takes. `currency=("SAR", 3.75)` shows each price also in a local currency at that fixed rate. `words` gives plan and feature names and one-liners in other languages, by the billing slug: `{"pro": {"ar": {"name": "برو"}}}` |
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
+| `.voice(model, base_url=, api_key=, headers=)` | The model that makes the mic's recordings words, run on the server: the browser gets only the text. Any service that speaks OpenAI's audio transcriptions API, set as `cycls.LLM` is: `"groq/whisper-large-v3-turbo"` with `base_url="https://api.groq.com/openai/v1"`; the key is `api_key`, else `GROQ_API_KEY` (the vendor's) from the environment. Unset, it is `openai/gpt-4o-transcribe` whenever `OPENAI_API_KEY` is there; `False` hides the mic |
 | `.analytics(bool)` | Enable usage metrics |
 | `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md) |
 | `.suggestions(bool)` | Prompt-starter suggestions on the empty-chat screen (default off) |
@@ -650,6 +653,8 @@ async def render_image(args):
 
 llm = cycls.LLM().tools(TOOLS).on("render_image", render_image)
 ```
+
+A tool that makes a picture says so with `picture=` (input → its shape, like `"16:9"`): the chat holds a frame of that shape while it runs, and shows the picture the tool opens (`open_canvas`) in its place. A tool can also cite what it used, the way web search does: return `{"_model": ..., "_ui": {"type": "sources", "sources": [...]}}`, each source a `title` and `url` with optional `label` (the chip's words), `quote`, `status` and `note`. A link to one of those URLs in the answer becomes its chip.
 
 ### Workspace instructions and skills
 

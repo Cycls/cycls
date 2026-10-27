@@ -346,8 +346,9 @@ _ASK_TOOL = {
     "name": "ask",
     "description": (
         "Ask the user up to 3 questions on one card above the composer, and stop. "
-        "They can ignore the options and type anything, so never write 'choose one "
-        "of the following'. Everything in the user's language."
+        "A question with options also gets a line to write their own answer in, so never "
+        "add an 'Other' option, and never write 'choose one of the following'. "
+        "Everything in the user's language."
     ),
     "input_schema": {"type": "object", "properties": {
         "questions": {"type": "array", "minItems": 1, "maxItems": _ASK_MAX_QUESTIONS,
@@ -1211,19 +1212,30 @@ def interrupted_note(name, reason):
             + (f" {row.interrupted}" if row and row.interrupted else ""))
 
 
-_custom_labels, _custom_names, _custom_owners, _custom_icons = {}, {}, {}, {}
+_custom_labels, _custom_names, _custom_owners, _custom_icons, _custom_pictures = {}, {}, {}, {}, {}
 _detailed = {"build_app"}   # step row carries Request/Response, and can show a failure; MCP tools join at runtime
 
 
-def register_labels(labels, names=None, owners=None, icons=None, details=()):
+def register_labels(labels, names=None, owners=None, icons=None, details=(), pictures=None):
     """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
-    acts with, an icon url, and whether the row opens into request and response. Registered by LLM.run() and by
-    MCP discovery so both live steps and the refetch projection render them."""
+    acts with, an icon url, whether the row opens into request and response, and the shape of a picture it makes.
+    Registered by LLM.run() and by MCP discovery so both live steps and the refetch projection render them."""
     _custom_labels.update(labels or {})
     _custom_names.update(names or {})
     _custom_owners.update(owners or {})
     _custom_icons.update(icons or {})
+    _custom_pictures.update(pictures or {})
     _detailed.update(details)
+
+
+def _picture(name, inp):
+    """A tool that makes a picture: its shape, for the frame the chat holds while it runs."""
+    if not (fn := _custom_pictures.get(name)):
+        return {}
+    try:
+        return {"picture": str(fn(inp) or "1:1")}
+    except Exception:
+        return {"picture": "1:1"}
 
 
 def detailed(name):
@@ -1245,7 +1257,7 @@ def tool_step(name, input):
     shown = _custom_names.get(name, name)
     if fn := _custom_labels.get(name):
         try:
-            return {"tool_name": shown, "step": str(fn(inp))}
+            return {"tool_name": shown, "step": str(fn(inp)), **_picture(name, inp)}
         except Exception:
             pass
     # No label. A connector's tool (it registered a display name) shows the `context` line its server asks the model
@@ -1259,7 +1271,7 @@ def tool_step(name, input):
         out["connector"] = _custom_owners[name]
     if name in _custom_icons:
         out["icon"] = _custom_icons[name]
-    return out
+    return {**out, **_picture(name, inp)}
 
 
 # ---- What a builtin risks (docs/notes/plugins-connectors.md, Approvals) ----
@@ -1294,7 +1306,8 @@ def _reads(cmd):
 
 
 def risk(name, inp):
-    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes)."""
+    """None (a read — always runs), "write" (follows the composer switch) or "destructive" (asks in both modes,
+    and even after Always allow)."""
     if name == "bash":
         cmd = str(inp.get("command") or "")
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
@@ -1309,13 +1322,14 @@ def _gate(name, inp, ctx, step):
     if r is None or ctx is None:
         return None
     key, chosen = approval_key(name, inp), (getattr(ctx, "modes", None) or {}).get(name)
-    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow"
+    how = ("approved" if key in ctx.approvals else "allow" if chosen == "allow" and r != "destructive"
            else "asked" if chosen == "ask" else "auto" if getattr(ctx, "auto", True) and r != "destructive" else "asked")
     log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=name, risk=r, how=how)
     if how != "asked":
         return None
     label = f"{step['tool_name']} · {step['step']}".strip(" ·")[:80]
     return {"type": "ui", "action": "confirm", "tool": name, "key": key, "label": label, "args": inp,
+            "tool_name": step["tool_name"], "step": step["step"], "risk": r,
             "ack": f"{label} needs the user's approval — a card is asking them. End your turn now. "
                        "If they approve, make this call again with exactly the same arguments: the approval covers "
                        "this call, so any change to the arguments asks them a second time."}

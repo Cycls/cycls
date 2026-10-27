@@ -116,8 +116,10 @@ class App(Function):
         image = dict(image or {})
         image["copy"] = {str(CYCLS_PATH): "cycls", **image.get("copy", {})}
 
+        # timeout: a request may stream for an hour, Cloud Run's most, so a run ends by its own
+        # budget (an agent's 45 minutes) and not by the request being cut under it.
         super().__init__(func=func, name=name, image=image, memory=memory,
-                         volumes=volumes,
+                         timeout=3600, volumes=volumes,
                          base_url=_get_base_url(), api_key=_get_api_key())
 
     def __call__(self, *args, **kwargs):

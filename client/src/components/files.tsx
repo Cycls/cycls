@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { t, useLang, getLang } from "../lib/i18n";
+import { t, useLang, getLang, timeAgo } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
@@ -29,14 +29,9 @@ function formatSize(bytes: number) {
 
 function formatDate(iso: string) {
   if (!iso) return "";   // empty folders have no meaningful date
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  if (diff < 60000) return "just now";
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  // Within the week, how long ago; past it, the day: both in the UI's language.
+  return Date.now() - Date.parse(iso) < 604800000 ? timeAgo(iso)
+    : new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
 type MenuItem = { label: string; danger?: boolean; divider?: boolean; onClick: () => void };
@@ -650,7 +645,13 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                         onCancel={() => setRenaming(null)}
                       />
                     ) : (
-                      <span className="text-sm text-foreground truncate block select-none" title={shownName(entry.name)}>{shownName(entry.name)}</span>
+                      <>
+                        <span className="text-sm text-foreground truncate block select-none" title={shownName(entry.name)}>{shownName(entry.name)}</span>
+                        {/* Too narrow for their columns: the size and date under the name */}
+                        <span className="@lg:hidden block truncate text-xs text-muted-foreground select-none">
+                          {[isDir ? "" : formatSize(entry.size), formatDate(entry.modified)].filter(Boolean).join(" · ")}
+                        </span>
+                      </>
                     )}
                   </div>
 
@@ -658,13 +659,13 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                   {!isDir && (
                     <span className="hidden @lg:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatSize(entry.size)}</span>
                   )}
-                  <span className="hidden @md:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatDate(entry.modified)}</span>
+                  <span className="hidden @lg:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatDate(entry.modified)}</span>
 
                   {/* More menu */}
                   <div className="relative shrink-0">
                     <button
                       onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === entry.name ? null : entry.name); }}
-                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground hover:bg-secondary transition-all cursor-pointer"
                       aria-label="Actions"
                     >
                       <svg className="size-4" fill="currentColor" viewBox="0 0 24 24">
