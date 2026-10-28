@@ -642,6 +642,12 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
       });
     }
   }, [draining]);
+  // An editor full screen (a design, a workbook, a document) whose tab stops being the one shown — the agent
+  // opened another file — would leave a blank screen: full screen ends with it.
+  useEffect(() => {
+    const tab = typeof document !== "undefined" ? document.fullscreenElement?.closest("[data-canvas-tab]") : null;
+    if (tab && tab.getAttribute("data-canvas-tab") !== file?.path) void document.exitFullscreen?.().catch(() => {});
+  }, [file?.path]);
   // The last tab unmounts the canvas, leaving nothing to drain: its design or video editor flushes first.
   const closeTab = (path: string) => {
     if (tabs.length === 1 && (designEditorUrl || videoEditorOpen(path)))
@@ -716,7 +722,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
           // A hidden tab catches up on the agent's writes when it is shown, not at every turn's end.
           const reload = on ? (seen.current[f.path] = reloadKey) : (seen.current[f.path] ??= reloadKey);
           return (
-            <div key={f.path} inert={!on} aria-hidden={on ? undefined : true}
+            <div key={f.path} inert={!on} aria-hidden={on ? undefined : true} data-canvas-tab={f.path}
                  className={on ? "flex min-h-0 flex-1 flex-col" : "pointer-events-none invisible absolute inset-0 flex flex-col"}>
               {on && working?.includes(f.path) ? (
                 <CanvasWorking name={f.name} />

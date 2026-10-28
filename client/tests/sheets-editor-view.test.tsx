@@ -1,9 +1,10 @@
 // Cycls Sheets in the canvas: a file opens in the editor only when the workspace has it; the editor is
 // framed with the theme and language, gets the workbook once it says it is ready, and only its own
 // origin and frame are heard.
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OfficeEditorApi, SheetsOpened } from "../src/hooks/use-files";
+import { CanvasHeaderSlot } from "../src/components/canvas-header-slot";
 import { flushAllSheetsEditors, SheetsEditorView, SheetsOrPreview } from "../src/components/sheets-editor-view";
 import { designSelection } from "../src/components/design-editor-view";
 
@@ -94,6 +95,46 @@ describe("Cycls Sheets in the canvas", () => {
     fireEvent.click(screen.getByRole("button", { name: /Open/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Excel/ }));
     expect(download).toHaveBeenCalled();
+  });
+
+  test("full screen, from the canvas header, is the editor's box: nothing reloads, and Saved, Open and the way out come along", async () => {
+    // The browser's full screen (jsdom has none): one element at a time, with its change event.
+    let el: Element | null = null;
+    const change = () => document.dispatchEvent(new Event("fullscreenchange"));
+    const exit = vi.fn(async () => { el = null; change(); });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => el });
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+    Object.defineProperty(Element.prototype, "requestFullscreen", {
+      configurable: true, value: async function (this: Element) { el = this; change(); },
+    });
+    const end = document.body.appendChild(document.createElement("div"));
+    try {
+      const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });
+      render(
+        <CanvasHeaderSlot.Provider value={{ start: null, end }}>
+          <SheetsEditorView url="https://office.test/sheets/" path="b.xlsx" name="b.xlsx" api={a} />
+        </CanvasHeaderSlot.Provider>);
+      const frame = document.querySelector("iframe")!;
+      const button = await waitFor(() => within(end).getByRole("button", { name: "Full screen" }));
+      await act(async () => { fireEvent.click(button); await new Promise((r) => setTimeout(r, 0)); });
+      const box = screen.getByTestId("sheets-editor");
+      expect(document.fullscreenElement).toBe(box);
+      expect(document.querySelector("iframe")).toBe(frame);                    // the same editor, not reloaded
+      expect(box.contains(screen.getByTestId("sheets-status"))).toBe(true);    // the header is left behind: its row comes in
+      expect(box.contains(screen.getByRole("button", { name: /Open/ }))).toBe(true);
+      expect(within(end).queryByRole("button", { name: "Full screen" })).toBeNull();
+
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Exit full screen" })); });
+      expect(exit).toHaveBeenCalledOnce();
+      expect(end.contains(screen.getByTestId("sheets-status"))).toBe(true);    // back in the canvas header
+      expect(within(end).getByRole("button", { name: "Full screen" })).toBeTruthy();
+      expect(document.querySelector("iframe")).toBe(frame);
+    } finally {
+      end.remove();
+      for (const k of ["fullscreenElement", "fullscreenEnabled", "exitFullscreen"]) delete (document as unknown as Record<string, unknown>)[k];
+      delete (Element.prototype as unknown as Record<string, unknown>).requestFullscreen;
+    }
   });
 });
 

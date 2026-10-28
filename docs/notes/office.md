@@ -52,7 +52,10 @@ One Node process:
   server-side).
 - `client/src/components/sheets-editor-view.tsx`: `SheetsOrPreview` asks the route once per file (without Sheets
   the SheetJS preview stays). The editor puts its items into the canvas's file header (last modified, status,
-  Open ⌄ with Excel/PDF) and shows the conflict bar (Load the latest / Keep mine). Each time the canvas fetches
+  Open ⌄ with Excel/PDF, Full screen) and shows the conflict bar (Load the latest / Keep mine). Full screen is
+  the view's own box, as a design's (the editor doesn't reload); the canvas header stays behind, so meanwhile
+  the box shows the file's own row (status, Open ⌄, Exit full screen). It ends when the agent shows another
+  canvas tab (the canvas checks; designs too). Each time the canvas fetches
   the file again (a turn ended, a refresh), once the agent is done the view checks the file's version: a file
   changed some other way (the agent's other tools, another tab or person) is taken in, or, with changes not yet
   saved, the conflict bar asks.

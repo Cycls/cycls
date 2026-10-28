@@ -5,7 +5,7 @@ import type { OfficeEditorApi, OfficeOpen, SheetsOpened } from "../hooks/use-fil
 import { CommentsContext, useComments, type CellSpot, type CommentChange, type CommentStore, type DocCommentThread, type DocSpot, type SheetCommentThread } from "../lib/comments";
 import { getLang, t, useLang } from "../lib/i18n";
 import { CanvasHeaderSlot } from "./canvas-header-slot";
-import { publishSelection } from "./design-editor-view";
+import { canFullscreen, publishSelection } from "./design-editor-view";
 import { DocGlyph, SheetGlyph } from "./file-glyph";
 import { DocsReviewBar } from "./docs-review-bar";
 import { LoadingBar } from "./loading-bar";
@@ -634,6 +634,37 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   const printRef = useRef(printPdf);
   printRef.current = printPdf;
 
+  // Full screen is this view's box (as a design's), not the page, so the editor doesn't reload. The canvas's
+  // header stays behind, so the box shows the file's own row meanwhile: Saved, Open ⌄ and the way out.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
+  const [hint, setHint] = useState(false);   // "Exit full screen" spelled out for a moment on entry
+  const enterFullscreen = useCallback(() => {
+    const box = boxRef.current;
+    if (!box?.requestFullscreen || document.fullscreenElement) return;
+    box.requestFullscreen({ navigationUI: "hide" }).then(() => {
+      frameRef.current?.focus();   // keys go to the editor, not the button left behind
+    }).catch(() => {});
+  }, []);
+  const leaveFullscreen = useCallback(async () => {
+    if (boxRef.current && document.fullscreenElement === boxRef.current) await document.exitFullscreen().catch(() => {});
+  }, []);
+  useEffect(() => {
+    let timer: number | undefined;
+    const onChange = () => {
+      const on = !!boxRef.current && document.fullscreenElement === boxRef.current;
+      setFull(on);
+      setHint(on);
+      window.clearTimeout(timer);
+      if (on) timer = window.setTimeout(() => setHint(false), 2500);
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   if (!origin) return null;
   if (failed && fallback) return <>{fallback}</>;
   const crumbs = path.split("/").slice(0, -1);
@@ -700,9 +731,27 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
           </div>
         )}
       </div>
+      {full ? (
+        <button onClick={() => void leaveFullscreen()} aria-label={t("exitFullScreen")} title={t("exitFullScreen")}
+                data-testid="exit-fullscreen"
+                className={cn("flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground",
+                              hint ? "px-2.5 text-xs" : "w-8")}>
+          <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3.75v4.5h-4.5m12-4.5v4.5h4.5m0 7.5h-4.5v4.5m-7.5 0v-4.5h-4.5" />
+          </svg>
+          {hint && t("exitFullScreen")}
+        </button>
+      ) : canFullscreen() && (
+        <button onClick={enterFullscreen} aria-label={t("fullScreen")} title={t("fullScreen")} data-testid={`${product}-fullscreen`}
+                className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground">
+          <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 8.25v-4.5h4.5m7.5 0h4.5v4.5m0 7.5v4.5h-4.5m-7.5 0h-4.5v-4.5" />
+          </svg>
+        </button>
+      )}
     </>
   );
-  const inCanvas = !!slots.end;
+  const inCanvas = !!slots.end && !full;
 
   // Tracked changes accepted or rejected (some, or all), then the file opened again: the rest still marked, or the
   // document editable once none are left.
@@ -722,7 +771,8 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   }
 
   return (
-    <div className="flex h-full w-full flex-col" data-testid={`${product}-editor`} data-path={path}>
+    // `data-toasts`: Cycls's toasts show inside it while it's full screen.
+    <div ref={boxRef} data-toasts="" className="flex h-full w-full flex-col bg-background" data-testid={`${product}-editor`} data-path={path}>
       {inCanvas ? (
         <>
           {slots.start && startItems && createPortal(startItems, slots.start)}
