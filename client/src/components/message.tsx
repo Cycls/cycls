@@ -14,6 +14,7 @@ import { Gallery, IMAGE_FILE } from "./parts/gallery";
 import { UsageNote, usedUp } from "./usage";
 import { SelectionChip } from "./selection-chip";
 import { SourcesPart } from "./parts/sources-part";
+import { ChartPart } from "./parts/chart-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
@@ -51,6 +52,8 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       );
     case "sources":
       return <SourcesPart key={index} sources={part.sources || []} />;
+    case "chart":
+      return <ChartPart key={index} part={part} />;
     case "card":   // a confirm card's line, where the agent asked; the card itself waits over the message box
       return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} /> : null;
     case "step":

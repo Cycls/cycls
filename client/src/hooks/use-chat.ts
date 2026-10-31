@@ -22,6 +22,24 @@ export interface Source {
   note?: string;
 }
 
+// A chart part's series and markers (parts/chart-part.tsx): candles are [time, open, high, low, close], the rest
+// [time, value]; time is "YYYY-MM-DD" for days, epoch seconds for intraday.
+export interface ChartSeries {
+  name?: string;
+  kind?: "candles" | "line" | "area" | "histogram";
+  pane?: number;
+  color?: string;
+  data: (string | number)[][];
+}
+export interface ChartMarker {
+  time: string | number;
+  text?: string;
+  position?: "aboveBar" | "belowBar" | "inBar";
+  shape?: "circle" | "square" | "arrowUp" | "arrowDown";
+  color?: string;
+  series?: number;
+}
+
 export interface Part {
   type: string;
   text?: string;
@@ -61,6 +79,14 @@ export interface Part {
   limit?: number;
   per?: string;
   resets?: string;
+  series?: ChartSeries[];   // a `chart` part: what it draws, its markers, the URL that moves its last point, its labels
+  markers?: ChartMarker[];
+  live?: { url: string; every?: number };
+  subtitle?: string;
+  source?: string;
+  as_of?: string;
+  currency?: string;
+  precision?: number;
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
