@@ -169,9 +169,13 @@ export function DeckView({ data, path, openFile, onReload, onSlideOp: changeSlid
     track("deck_presented", { slides: count, from: from === 0 ? "start" : "current" });
     setPresenting(from);
   };
-  const download = (format: "pptx" | "pdf" | "images") => {
+  const download = (format: "pptx" | "pdf" | "images" | "fig") => {
     if (!openFile) return;
     track("deck_exported", { format });
+    if (format === "fig") {   // the design itself, last: what opens in Cycls, not elsewhere
+      openFile(path).then((url) => saveBlob(url, `${name}.fig`)).catch(() => {});
+      return;
+    }
     // A multi-page design exports only the page on screen.
     const page = deck.pages && deck.pages.length > 1 ? deck.page : undefined;
     openFile(`${path}?as=${format}${page ? `&page=${encodeURIComponent(page)}` : ""}`)
@@ -188,6 +192,7 @@ export function DeckView({ data, path, openFile, onReload, onSlideOp: changeSlid
     { label: t("pptxFile"), onClick: () => download("pptx") },
     ...(paper ? [] : [pdf]),
     ...(w <= h && !paper ? [] : [images]),
+    { label: t("figFile"), onClick: () => download("fig") },
   ];
   // An editor open on this .fig saves first and reloads after, so its next save doesn't undo the change.
   const slideOp = async (op: DeckOp) => {

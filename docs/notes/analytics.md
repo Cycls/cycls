@@ -162,7 +162,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
 | `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |
 | `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |
-| `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf`) — which file people take away |
+| `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf` / `images` / `fig`) — which file people take away |
 | `deck_slide_changed` | the owner changed the slides in the deck viewer: moved (drag), duplicated or deleted one, added one to start from, or wrote a slide's speaker notes | `op` (`move` / `duplicate` / `delete` / `add` / `notes`) — do people shape decks by hand, or ask the agent? |
 | `design_created` | "New design" — the canvas `+`, the Files panel, or File › New design in the editor | `source` (`canvas` / `files` / `editor`), `size` (the preset or `WxH`) — do people start designs by hand, not only by asking? |
 | `design_previewed` | the Edit \| Preview switch of a design in the canvas, to Preview | — how often a design is looked at without the editor |

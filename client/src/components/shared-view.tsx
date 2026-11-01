@@ -2,8 +2,8 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon } from "./icon";
-import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isComposition, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
+import { useFileContent, CanvasDoc, designKind, type CanvasFile } from "./canvas";
+import { isHtml, isComposition, isDesignEditor, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
 import { AppBanner } from "./app-banner";
 import type { Message } from "../hooks/use-chat";
 import { encPath, type OfficeEditorApi, type SheetsOpened } from "../hooks/use-files";
@@ -77,7 +77,7 @@ export function SharedView({ getToken, signedIn, onSignIn, agent }: {
         if (d.type === "chat") {
           document.title = d.title ? `Cycls | ${d.title}` : "Cycls";
         } else {
-          document.title = `Cycls | ${d.path.split("/").pop()}`;
+          document.title = `Cycls | ${shownName(d.path.split("/").pop() || d.path)}`;
         }
         track("share_viewed", {
           type: d.type,
@@ -390,6 +390,9 @@ function SharedFile({ share, getToken, signedIn, agent, onSignIn }: { share: Fil
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
   const renderable = isRenderable(name) && !isComposition(name);   // a shared composition is a download
+  // A design is its preview, as its owner sees it: it downloads from its viewer in the formats people open
+  // (PDF, PowerPoint, images; a picture), never as the .fig, which nothing outside Cycls opens.
+  const design = isDesignEditor(name);
   // `?ws=` names the workspace that minted the share — without it the server
   // has to guess, and a share from a team workspace isn't found at all.
   const get = useShareFetch(getToken);
@@ -414,17 +417,19 @@ function SharedFile({ share, getToken, signedIn, agent, onSignIn }: { share: Fil
   // The file is the page: one bar above it, and nothing around it.
   return (
     <div dir="ltr" className="flex h-dvh flex-col bg-background">
-      <ShareBar name={shownName(name)} author={share} signedIn={signedIn} agent={agent} onSignIn={onSignIn}>
+      <ShareBar name={shownName(name)} kind={design ? designKind(content)?.label : undefined} author={share} signedIn={signedIn} agent={agent} onSignIn={onSignIn}>
         {isHtml(name) && !isComposition(name) && content != null && (
           <button onClick={openInTab} className={action} title={t("openInTab")}>
             <Icon name="arrow-up-right" className="size-4" /><span className="hidden sm:inline">{t("openInTab")}</span>
           </button>
         )}
-        <button onClick={download} className={action} aria-label={t("download")} title={t("download")}>
-          <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-          </svg>
-        </button>
+        {!design && (
+          <button onClick={download} className={action} aria-label={t("download")} title={t("download")}>
+            <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+          </button>
+        )}
       </ShareBar>
       <div className="min-h-0 flex-1 overflow-hidden">
         {renderable ? (
@@ -453,8 +458,8 @@ const CTA = "shrink-0 rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medi
 // "Sign in" for a visitor (the sign-in page, back to this share), "Go to <agent>" once signed in. A chat
 // share passes no name: the conversation names itself below the bar. No theme toggle: a shared page
 // follows the system.
-function ShareBar({ name, author, signedIn, agent, onSignIn, children }: {
-  name?: string; author?: Author; signedIn?: boolean; agent?: string; onSignIn?: () => void; children?: React.ReactNode;
+function ShareBar({ name, kind, author, signedIn, agent, onSignIn, children }: {
+  name?: string; kind?: string; author?: Author; signedIn?: boolean; agent?: string; onSignIn?: () => void; children?: React.ReactNode;
 }) {
   const clicked = () => track("share_cta_clicked", { share_url: window.location.href, signed_in: !!signedIn });
   return (
@@ -463,6 +468,7 @@ function ShareBar({ name, author, signedIn, agent, onSignIn, children }: {
         <CyclsLogo className="h-5 fill-muted-foreground" />
       </a>
       {name && <span className="min-w-0 truncate text-sm font-medium text-foreground" dir="auto">{name}</span>}
+      {kind && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">· {kind}</span>}
       {author && <span className="hidden shrink-0 sm:flex"><Byline author={author} small /></span>}
       <div className="flex-1" />
       {children}

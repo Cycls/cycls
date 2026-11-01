@@ -352,6 +352,7 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
         <div className="absolute bottom-4 end-4 flex gap-2">
           <button onClick={() => save("png")} className={pill}>{t("downloadImage")}</button>
           <button onClick={() => save("pdf")} className={pill}>{t("downloadPdf")}</button>
+          <button onClick={() => openFile(file.path).then((url) => saveBlob(url, `${stem}.fig`)).catch(() => {})} className={pill}>{t("downloadFig")}</button>
         </div>
       )}
     </div>
