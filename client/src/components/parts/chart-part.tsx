@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   AreaSeries,
   CandlestickSeries,
@@ -22,6 +22,8 @@ import type { ChartMarker, ChartSeries, Part } from "../../hooks/use-chat";
 // ([time, value]); `pane` stacks it below the first. Time is "YYYY-MM-DD" for days, epoch seconds for intraday.
 // `live.url` is polled (with the person's sign-in) while the chart is on screen, and the answer moves the last
 // point of the first series: {time, value} or {time, open, high, low, close}.
+// The legend names every series in its color, with its value under the crosshair (else its last). The library's
+// logo is off.
 
 const PALETTE = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#06b6d4", "#ec4899", "#84cc16"];
 const UP = "#16a34a";
@@ -37,8 +39,15 @@ function points(s: ChartSeries): Point[] {
   );
 }
 
+const colorOf = (s: ChartSeries, i: number) => s.color || PALETTE[i % PALETTE.length];
+const swatch = (s: ChartSeries, i: number) => (s.kind === "candles" ? UP : s.kind === "histogram" ? `${colorOf(s, i)}88` : colorOf(s, i));
+const lastOf = (s: ChartSeries) => {
+  const d = s.data?.[s.data.length - 1];
+  return d ? Number(s.kind === "candles" ? d[4] : d[1]) : null;
+};
+
 function addSeries(chart: IChartApi, s: ChartSeries, i: number, precision: number): ISeriesApi<SeriesType> {
-  const color = s.color || PALETTE[i % PALETTE.length];
+  const color = colorOf(s, i);
   const priceFormat = { type: "price" as const, precision, minMove: 1 / 10 ** precision };
   const pane = s.pane || 0;
   if (s.kind === "candles")
@@ -59,8 +68,15 @@ export const ChartPart = memo(function ChartPart({ part }: { part: Part }) {
   const first = useRef<ISeriesApi<SeriesType> | null>(null);
   const dark = useDarkMode();
   const [liveAt, setLiveAt] = useState<string | null>(null);
+  const [hovered, setHovered] = useState<(number | null)[] | null>(null);
   const series = part.series || [];
   const panes = Math.max(0, ...series.map((s) => s.pane || 0));
+  const last = useMemo(() => series.map(lastOf), [part]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = hovered || last;
+  const precision = part.precision ?? 2;
+  const fmt = (v: number, s: ChartSeries) => s.kind === "histogram"
+    ? new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(v)
+    : v.toLocaleString("en", { minimumFractionDigits: precision, maximumFractionDigits: precision });
 
   useEffect(() => {
     if (!box.current || !series.length) return;
@@ -69,14 +85,14 @@ export const ChartPart = memo(function ChartPart({ part }: { part: Part }) {
     const intraday = series.some((s) => typeof s.data?.[0]?.[0] === "number");
     const chart = createChart(box.current, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: text, fontFamily: "inherit" },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: text, fontFamily: "inherit", attributionLogo: false },
       grid: { vertLines: { color: grid }, horzLines: { color: grid } },
       rightPriceScale: { borderVisible: false },
       timeScale: { borderVisible: false, timeVisible: intraday },
       crosshair: { horzLine: { labelBackgroundColor: text }, vertLine: { labelBackgroundColor: text } },
     });
     const made = series.map((s, i) => {
-      const api = addSeries(chart, s, i, part.precision ?? 2);
+      const api = addSeries(chart, s, i, precision);
       api.setData(points(s) as never);
       return api;
     });
@@ -98,8 +114,16 @@ export const ChartPart = memo(function ChartPart({ part }: { part: Part }) {
       for (const [i, list] of bySeries)
         if (made[i]) createSeriesMarkers(made[i], list.sort((a, b) => String(a.time).localeCompare(String(b.time))));
     }
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time) return setHovered(null);
+      setHovered(made.map((api) => {
+        const d = param.seriesData.get(api) as { value?: number; close?: number } | undefined;
+        return d ? d.close ?? d.value ?? null : null;
+      }));
+    });
     chart.timeScale().fitContent();
     return () => {
+      setHovered(null);
       first.current = null;
       chart.remove();
     };
@@ -137,11 +161,13 @@ export const ChartPart = memo(function ChartPart({ part }: { part: Part }) {
   }, [part.live?.url]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!series.length) return null;
+  // The words follow the language they're written in (an Arabic title reads from the right); the plot doesn't.
+  const dir = /[\u0600-\u06FF]/.test([part.title, part.subtitle, ...series.map((s) => s.name)].join(" ")) ? "rtl" : "ltr";
   return (
-    <div dir="ltr" className="my-3 rounded-xl border border-border p-3">
+    <div dir={dir} className="my-3 rounded-xl border border-border p-3">
       {(part.title || part.subtitle || part.live) && (
         <div className="mb-2 flex items-start justify-between gap-3">
-          <div dir="auto" className="min-w-0">
+          <div className="min-w-0 flex-1">
             {part.title && <div className="font-medium text-foreground">{part.title}</div>}
             {part.subtitle && <div className="text-xs text-muted-foreground">{part.subtitle}</div>}
           </div>
@@ -156,9 +182,18 @@ export const ChartPart = memo(function ChartPart({ part }: { part: Part }) {
           )}
         </div>
       )}
-      <div ref={box} style={{ height: 300 + panes * 110 }} />
+      <div data-testid="chart-legend" className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        {series.map((s, i) => (
+          <span key={i} className="flex items-center gap-1.5">
+            <span className="inline-block size-2.5 shrink-0 rounded-sm" style={{ background: swatch(s, i) }} />
+            <span dir="auto" className="text-muted-foreground">{s.name || (s.kind === "histogram" ? "Volume" : `Series ${i + 1}`)}</span>
+            {shown[i] != null && Number.isFinite(shown[i]) && <span className="tabular-nums text-foreground">{fmt(shown[i] as number, s)}</span>}
+          </span>
+        ))}
+      </div>
+      <div ref={box} dir="ltr" style={{ height: 300 + panes * 110 }} />
       {(part.source || part.as_of) && (
-        <div dir="auto" className="mt-2 text-xs text-muted-foreground">
+        <div className="mt-2 text-xs text-muted-foreground">
           {[part.source, part.as_of].filter(Boolean).join(" · ")}
         </div>
       )}
