@@ -1212,15 +1212,17 @@ def interrupted_note(name, reason):
             + (f" {row.interrupted}" if row and row.interrupted else ""))
 
 
-_custom_labels, _custom_names, _custom_owners, _custom_icons, _custom_pictures = {}, {}, {}, {}, {}
+_custom_labels, _custom_names, _custom_owners, _custom_icons, _custom_pictures, _custom_titles = {}, {}, {}, {}, {}, {}
 _detailed = {"build_app"}   # step row carries Request/Response, and can show a failure; MCP tools join at runtime
 
 
-def register_labels(labels, names=None, owners=None, icons=None, details=(), pictures=None):
+def register_labels(labels, names=None, owners=None, icons=None, details=(), pictures=None, titles=None):
     """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
-    acts with, an icon url, whether the row opens into request and response, and the shape of a picture it makes.
-    Registered by LLM.run() and by MCP discovery so both live steps and the refetch projection render them."""
+    acts with, an icon url, whether the row opens into request and response, the shape of a picture it makes, and
+    what it did in plain words. Registered by LLM.run() and by MCP discovery so both live steps and the refetch
+    projection render them."""
     _custom_labels.update(labels or {})
+    _custom_titles.update(titles or {})
     _custom_names.update(names or {})
     _custom_owners.update(owners or {})
     _custom_icons.update(icons or {})
@@ -1249,11 +1251,41 @@ def excerpt(content, limit=3000):
     return s if len(s) <= limit else s[:limit] + "\n…"
 
 
+def _langs(v):
+    """Plain words given once or per UI language ({"en": …, "ar": …}): the English (else the first), and the map."""
+    if isinstance(v, dict):
+        return str(v.get("en") or next(iter(v.values()), "")), {k: str(x) for k, x in v.items() if x}
+    return str(v or ""), {}
+
+
+def tool_head(name):
+    """A step before its input has streamed in: the tool's name, or what it does in plain words when it has a title."""
+    if name not in _custom_titles:
+        return {"tool_name": tool_step(name, {})["tool_name"]}
+    title, titles = _langs(_custom_titles[name])
+    return {"tool_name": title, "plain": True, **({"i18n": {k: {"tool_name": v} for k, v in titles.items()}} if titles else {})}
+
+
+def _plain_step(name, inp):
+    """A titled tool's step: its label as a sentence, with each UI language's words under `i18n`."""
+    out = tool_head(name)
+    try:
+        step, steps = _langs(fn(inp)) if (fn := _custom_labels.get(name)) else ("", {})
+    except Exception:
+        step, steps = "", {}
+    i18n = out.pop("i18n", {})
+    for k, v in steps.items():
+        i18n.setdefault(k, {})["step"] = v
+    return {**out, "step": step[:200], **({"i18n": i18n} if i18n else {}), **_picture(name, inp)}
+
+
 def tool_step(name, input):
     inp = input or {}
     entry = _TOOLS.get(name)
     if entry:
         return entry.step(inp)
+    if name in _custom_titles:
+        return _plain_step(name, inp)
     shown = _custom_names.get(name, name)
     if fn := _custom_labels.get(name):
         try:

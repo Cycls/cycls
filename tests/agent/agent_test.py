@@ -2215,6 +2215,26 @@ def test_a_connector_result_reaches_the_model_but_never_the_chat(agent_env):
     assert "RAW CONNECTOR RESULT" in results                               # the model still gets it
 
 
+def test_a_titled_custom_tool_says_what_it_did_in_plain_words_in_each_language():
+    """`.on(title=…)`: the step is the label as a sentence, never `name(input)`, and each UI language's words
+    ride under `i18n`, both before the input has streamed in and once it has."""
+    from cycls import LLM
+    from cycls._agent.tools import register_labels, tool_head, tool_step
+    llm = LLM().on("tasi_sql", AsyncMock(), title={"en": "checked market data", "ar": "راجعت بيانات السوق"},
+                   label=lambda i: {"en": f"Checking prices for {i.get('symbol', '')}", "ar": f"أراجع أسعار {i.get('symbol', '')}"})
+    register_labels(llm._labels, titles=llm._titles)
+    assert tool_head("tasi_sql") == {"tool_name": "checked market data", "plain": True,
+                                     "i18n": {"en": {"tool_name": "checked market data"}, "ar": {"tool_name": "راجعت بيانات السوق"}}}
+    step = tool_step("tasi_sql", {"symbol": "2222", "sql": "SELECT 1"})
+    assert step["step"] == "Checking prices for 2222" and step["plain"]
+    assert step["i18n"]["ar"] == {"tool_name": "راجعت بيانات السوق", "step": "أراجع أسعار 2222"}
+
+    register_labels({"macro": lambda i: "Brent oil price"}, titles={"macro": "checked economic data"})   # one string
+    assert tool_step("macro", {}) == {"tool_name": "checked economic data", "plain": True, "step": "Brent oil price"}
+    register_labels({"broken": lambda i: 1 / 0}, titles={"broken": "did a thing"})
+    assert tool_step("broken", {})["step"] == ""                                     # a label that throws says nothing
+
+
 def test_a_custom_tool_can_carry_an_icon_and_its_own_request_and_response(agent_env):
     """`.on(icon=…, details=True)` gives a custom tool the connector treatment: an image on the step,
     the result in the block instead of the chat, and the whole thing still reaching the model."""
