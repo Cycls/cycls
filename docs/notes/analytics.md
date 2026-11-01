@@ -152,6 +152,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `artifact_completed` | agent's `canvas` call | `path`, `kind` — output per session |
 | `canvas_loader_shown` | the canvas opens in its loader state during a live edit | do users see work happening? |
 | `file_saved` / `file_shared` / `file_deleted` / `file_renamed` / `folder_created` | files panel & canvas ops | is the workspace a real home? |
+| `file_downloaded` | a file taken from its card in the chat (`source: card`, `ext`); a design goes as its PDF | do people take the work away, and what kind |
 | `file_uploaded` / `file_upload_failed` | uploads, `context` = `chat_attachment` or `files_panel` | `file_type`, `file_size` |
 | `file_deleted` | a file/dir/app goes to the trash (never a real delete from the UI) | `kind`, `by: user`, `permanent: false` |
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |

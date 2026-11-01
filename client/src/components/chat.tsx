@@ -6,7 +6,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
-import { editWorkingPath, ext, isDesignEditor } from "./canvas-utils";
+import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
@@ -15,6 +15,7 @@ import { Icon, IconButton, Spinner, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
 import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
+import { FileActions } from "./parts/file-part";
 import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
 import { GlowStar } from "./cycls-star";
@@ -632,6 +633,22 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // A picture in a message is a workspace file, fetched with the person's credentials. Silent: a picture since
   // deleted shows its placeholder, not an error.
   const openFileQuiet = files?.onOpenFile;
+
+  // A file card's quick actions. Download takes a design as its PDF, what people know, and any other file as it is;
+  // Share opens the file's share dialog, as the canvas does.
+  const [sharingFile, setSharingFile] = useState<string | null>(null);
+  const openFileLoud = files?.onOpenFile;
+  const shareFileFn = files?.onShareFile;
+  const fileActions = useMemo(() => openFileLoud ? {
+    download: (path: string) => {
+      const name = path.split("/").pop() || path;
+      const design = isDesignEditor(name);
+      track("file_downloaded", { source: "card", ext: ext(name) });
+      openFileLoud(design ? `${path}?as=pdf` : path)
+        .then((url) => saveBlob(url, design ? `${shownName(name)}.pdf` : name)).catch(() => {});
+    },
+    share: shareFileFn ? (path: string) => setSharingFile(path) : undefined,
+  } : null, [openFileLoud, shareFileFn]);
   const resolveMedia = useMemo(() => (openFileQuiet ? (p: string) => openFileQuiet(p, true) : undefined), [openFileQuiet]);
 
   // Newest step on the transcript — a run this tab never streamed still has one.
@@ -1210,6 +1227,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
                 <ConnectorsContext.Provider value={connectors ?? []}>
+                <FileActions.Provider value={fileActions}>
                 <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
@@ -1236,7 +1254,19 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
                 )}</ApprovalContext.Provider>
+                </FileActions.Provider>
                 </ConnectorsContext.Provider>
+                {sharingFile && shareFileFn && (
+                  <ShareDialog
+                    onClose={() => setSharingFile(null)}
+                    mode="file"
+                    subtitle={sharingFile.split("/").pop()}
+                    org={files?.org}
+                    onShare={(audience) => shareFileFn(sharingFile, audience)}
+                    path={`file/${sharingFile}`}
+                    links={shareLinks}
+                  />
+                )}
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
