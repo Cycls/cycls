@@ -1,10 +1,21 @@
 import { createContext, memo, useContext } from "react";
-import { tintTile, tintLabel } from "../canvas-utils";
+import { isDesignEditor, shownName, tintTile, tintLabel, tileExt } from "../canvas-utils";
 import { Icon } from "../icon";
 import { t } from "../../lib/i18n";
 
 // What a file's card does besides open: given by the chat that owns the file, so a shared view has none.
 export const FileActions = createContext<{ download: (path: string) => void; share?: (path: string) => void } | null>(null);
+
+// A file's tile, the same in the chat and the Files panel: its tint, a design's grid, else its kind ("pdf", "video").
+export function FileTile({ name, className }: { name: string; className: string }) {
+  return (
+    <div className={`bg-secondary flex shrink-0 items-center justify-center rounded-lg ${className}`} style={tintTile(name)}>
+      {isDesignEditor(name)
+        ? <span style={tintLabel(name)}><Icon name="grid" className="size-4" /></span>
+        : <span className="text-[10px] font-medium uppercase text-muted-foreground" style={tintLabel(name)}>{tileExt(name)}</span>}
+    </div>
+  );
+}
 
 const ACTION = "flex size-8 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground";
 
@@ -20,8 +31,7 @@ export const FilePart = memo(function FilePart({
 }) {
   const actions = useContext(FileActions);
   const name = path.split("/").pop() || path;
-  const ext = name.includes(".") ? name.split(".").pop()! : "file";
-  const location = path !== name ? path : `workspace / ${name}`;
+  const location = shownName(path !== name ? path : `workspace / ${name}`);
   return (
     <div dir="ltr" className="my-1.5 flex w-fit max-w-full items-center rounded-2xl border border-border bg-background">
       <button
@@ -31,11 +41,9 @@ export const FilePart = memo(function FilePart({
           onOpen ? "hover:bg-secondary/50 cursor-pointer" : "cursor-default"
         }`}
       >
-        <div className="bg-secondary flex size-10 shrink-0 items-center justify-center rounded-lg" style={tintTile(name)}>
-          <span className="text-[10px] font-medium uppercase text-muted-foreground" style={tintLabel(name)}>{ext}</span>
-        </div>
+        <FileTile name={name} className="size-10" />
         <div className="flex min-w-0 flex-col overflow-hidden">
-          <span className="truncate text-xs font-medium text-foreground">{name}</span>
+          <span className="truncate text-xs font-medium text-foreground">{shownName(name)}</span>
           <span className="truncate text-xs text-muted-foreground">{location}</span>
         </div>
       </button>
