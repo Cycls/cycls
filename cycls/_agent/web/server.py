@@ -278,9 +278,12 @@ async def encoder(stream, *, chat_id=None, user=None, first=False, run=None):
         log("error", user=user, chat_id=chat_id,
             error_id=error_id, message=str(e), stack=traceback.format_exc())
         if run is not None: run.failed, run.error_id = True, error_id   # the callout would read as `done`
+        from cycls._agent.harness.main import _is_retryable   # the service, still busy after the loop's own retries
+        busy = _is_retryable(e)
         yield sse({"type": "callout",
-                   "callout": f"Something went wrong. Reference: `{error_id}`",
-                   "style": "error", "error_id": error_id})
+                   "callout": (f"The service is busy right now. Try again in a minute. Reference: `{error_id}`" if busy
+                               else f"Something went wrong. Reference: `{error_id}`"),
+                   "style": "error", "error_id": error_id, **({"code": "busy"} if busy else {})})
     yield "data: [DONE]\n\n"
 
 class Messages(list):

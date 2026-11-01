@@ -1048,9 +1048,24 @@ def test_max_tokens_continuation_is_bounded(agent_env):
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Continuing past the output limit..."]
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Continuing the reply..."]
     assert len(steps) == MAX_CONTINUATIONS
-    assert any(isinstance(i, dict) and "max_tokens" in str(i.get("callout", "")) for i in items)
+    # not an error: the line the web chat shows a cut-off reply with, and its Continue
+    assert [i for i in items if isinstance(i, dict) and i.get("type") == "callout"] == [
+        {"type": "callout", "callout": "Stopped before it finished.", "style": "info", "code": "cut_off"}]
+
+
+def test_a_refusal_says_so_in_plain_words(agent_env):
+    """A request the model won't answer: our words and a code for the web chat, never `Stopped: refusal`."""
+    ws, ctx = agent_env
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("")], stop_reason="refusal"))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert [i for i in items if isinstance(i, dict) and i.get("type") == "callout"] == [
+        {"type": "callout", "callout": "This request couldn't be answered. Try rewording it.", "style": "warning",
+         "code": "declined"}]
 
 
 def test_pause_turn_resume_is_bounded(agent_env):
@@ -1067,7 +1082,7 @@ def test_pause_turn_resume_is_bounded(agent_env):
         items = asyncio.run(_drain(_run(context=ctx)))
 
     assert calls["n"] == MAX_PAUSES + 1
-    assert any(isinstance(i, dict) and "pause_turn" in str(i.get("callout", "")) for i in items)
+    assert any(isinstance(i, dict) and i.get("code") == "cut_off" for i in items)   # Continue picks it up
 
 
 def _seeded_env(agent_env):
@@ -1494,9 +1509,9 @@ def test_auto_retry_on_overloaded(agent_env):
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert not callouts
     assert call_count == 3
-    # The attempts are one line that counts up: they share a step id.
-    notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "retrying" in i.get("step", "")]
-    assert ["attempt 1/" in notices[0]["step"], "attempt 2/" in notices[1]["step"]] == [True, True]
+    # The attempts are one line in plain words: they share a step id.
+    notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "busy" in i.get("step", "")]
+    assert [n["step"] for n in notices] == ["The service is busy, trying again..."] * 2
     assert notices[0]["id"] == notices[1]["id"] and notices[0]["id"].startswith("retry-")
 
 

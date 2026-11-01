@@ -74,6 +74,24 @@ def test_a_handled_stream_error_is_a_failed_run():
     assert run.failed is True, "a handled error must still mark the run failed"
 
 
+def test_a_service_still_busy_says_so_with_its_reference():
+    """Overloaded past the loop's own retries: the person reads that the service is busy, not that
+    something went wrong, and the web client words it by its code."""
+    import asyncio, json
+    from cycls._agent.web.server import Run, encoder
+
+    async def busy():
+        yield {"type": "text", "text": "partial"}
+        raise RuntimeError("overloaded")
+
+    async def go():
+        return [c async for c in encoder(busy(), chat_id="c1", run=Run(detach=False, chat_id="c1"))]
+
+    shown = [json.loads(c[6:]) for c in asyncio.run(go()) if '"callout"' in c]
+    assert shown[0]["code"] == "busy"
+    assert shown[0]["callout"] == f"The service is busy right now. Try again in a minute. Reference: `{shown[0]['error_id']}`"
+
+
 def test_messages_extracts_text_content():
     """Tests that Messages extracts text-only content from raw messages."""
     print("\n--- Running test: test_messages_extracts_text_content ---")

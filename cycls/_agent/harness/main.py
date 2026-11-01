@@ -283,7 +283,7 @@ async def _stream_with_retry(provider, **kw):
             attempt += 1
             if not (_is_retryable(e) and attempt <= MAX_RETRIES): raise
             delay = _retry_delay(attempt, e)
-            yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
+            yield events.step("The service is busy, trying again...", id=notice)
             await asyncio.sleep(delay)
 
 
@@ -650,7 +650,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     continuations += 1
                     if not ids:
                         messages.append({"role": "user", "internal": True, "content": _CONTINUE})
-                    yield events.step("Continuing past the output limit...")
+                    yield events.step("Continuing the reply...")
                     await session.checkpoint()
                     continue
 
@@ -659,8 +659,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await session.checkpoint()
                 continue
 
-            if turn.stop_reason not in ("tool_use", "end_turn"):
-                yield events.callout(f"Stopped: {turn.stop_reason}", "warning")
+            if turn.stop_reason == "refusal":
+                yield events.callout("This request couldn't be answered. Try rewording it.", "warning", code="declined")
+            elif turn.stop_reason not in ("tool_use", "end_turn"):
+                # Cut short (the output limit past its continuations, a server tool still paused): not an error.
+                # The web chat shows its "Stopped before it finished" line with Continue in its place.
+                yield events.callout("Stopped before it finished.", "info", code="cut_off")
             if turn.stop_reason != "tool_use":
                 await session.checkpoint(); break
 

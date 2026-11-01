@@ -248,17 +248,17 @@ def test_haiku_works_without_adaptive_thinking(tmp_path):
 
 @pytest.mark.live
 def test_max_tokens_stops_cleanly_real(tmp_path):
-    """When the model hits max_tokens, the loop ends the turn with a
-    `Stopped: max_tokens` callout — no auto-retry (pi-style). Partial output is
-    preserved in the stream; the user re-sends to continue if they want."""
+    """When the model keeps hitting max_tokens past its continuations, the turn
+    ends with the `cut_off` callout (the web chat's "Stopped before it finished"
+    line, with Continue). Partial output is preserved in the stream."""
     _, ctx = _ctx(tmp_path,
         "Count from 1 to 200. List each number on its own line, no skipping.")
     llm = cycls.LLM().model(SONNET).max_tokens(80)  # ~150 tokens worth of digits
     events = asyncio.run(_collect(llm, ctx))
 
     callouts = [c for c in events if isinstance(c, dict) and c.get("type") == "callout"]
-    assert any("max_tokens" in c.get("callout", "") for c in callouts), \
-        f"expected `Stopped: max_tokens` callout; got callouts={callouts!r}"
+    assert any(c.get("code") == "cut_off" for c in callouts), \
+        f"expected the `cut_off` callout; got callouts={callouts!r}"
     # Partial output was preserved in the stream (the digits the model managed to emit).
     assert _text_of(events).strip(), f"no partial text preserved; events={events!r}"
 
