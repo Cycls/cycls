@@ -349,9 +349,9 @@ def _is_plain_user(msg):
 
 
 # What the harness adds to what was typed (`_ingest`, `_with_mention`, `_with_selection`): an
-# attached file's name with its contents after it, and a line each for an @-mention and a selection.
-_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ")
-_MENTION = re.compile(r"(?:\n\n)?\[Using: [^\n]*\]\Z")   # on a turn sent as a string
+# attached file's name with its contents after it, and a line each for an @-mention, a selection and a spoken turn.
+_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ", "[Spoken")
+_MENTION = re.compile(r"(?:(?:\n\n)?\[(?:Using: |Spoken)[^\n]*\])+\Z")   # on a turn sent as a string
 
 
 def user_text(msg):

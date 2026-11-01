@@ -159,7 +159,15 @@ class MCP:
         key = (at, token or self._token)
         hit = _discovered.get(key)
         if not hit or hit[0] < time.monotonic():
-            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, await _list(at, self._headers(token)))
+            try:
+                found = await _list(at, self._headers(token))
+            except Exception as e:
+                if key[1]: raise   # a listing with a credential that failed is tried again next turn
+                # One that won't list for nobody keeps refusing: remembered like a catalog, not asked again every
+                # turn (7 of Super's 8 servers, up to 2 s a turn before the model was asked, 2026-10-29).
+                found = e
+            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, found)
+        if isinstance(hit[1], Exception): raise hit[1]
         return [t for t in hit[1] if not self._allow or t.name in self._allow]
 
     async def discover(self, token=None, url=None):

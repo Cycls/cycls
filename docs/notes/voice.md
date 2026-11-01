@@ -101,3 +101,61 @@ of them names the model.
 - Tests in `tests/agent/web_test.py`: `test_transcribe_keeps_the_recording_format`,
   `test_voice_runs_on_any_openai_shaped_service_and_names_none`,
   `test_voice_unset_is_openai_with_its_key_and_its_model_stays_on_the_server`.
+
+## Voice conversation: the reply read aloud
+
+`Web().speech(...)` adds a second button beside the mic, a voice conversation. It needs the mic too (`Config.talk`
+is both set). It listens, sends what was said, reads the reply aloud while it streams, then listens again:
+
+```
+tap → mic on (use-speech) → the level falls quiet 1.3 s after speech → /transcribe → sent with `spoken: true`
+    → the reply streams → each finished sentence (Intl.Segmenter: knows ؟ and ۔, not ،) → POST /speak {text}
+    → voice.speak → the service's /audio/speech → MP3 → played in order, 3 fetched ahead → all said: mic on again
+```
+
+```python
+cycls.Web().speech("openrouter/x-ai/grok-voice-tts-1.0", voice="ara", base_url="https://openrouter.ai/api/v1")
+```
+
+The setting has the shape of `.voice()`, plus the service's `voice`. OpenRouter's `/audio/speech` carries ElevenLabs,
+Gemini, Grok, MiniMax and others in this one shape (`GET /api/v1/models?output_modalities=speech`, voices in each
+model's `supported_voices`). One Najdi sentence, read and heard back by Scribe v2 word for word (2026-10-28):
+
+| | first byte | per 1M characters |
+|---|---|---|
+| `x-ai/grok-voice-tts-1.0` (`ara`) | 0.7 s | $15 |
+| `elevenlabs/eleven-v4-turbo` (`sarah`) | 1.7 s | $40 |
+| `elevenlabs/eleven-flash-v2.5` (`sarah`) | 2.8 s | $40 |
+| `google/gemini-3.8-flash-tts` (`Kore`, PCM only, so not here) | 3.4 s | per token |
+
+- **The mic is off while a reply is read**, so the speakers never answer themselves. "Stop speaking" drops what is
+  left and listens; the mic doesn't hear the person over the reply.
+- **What is read**: the reply's text parts without code blocks, table rows, addresses and markdown marks
+  (`speakable`, kept a prefix of itself as the reply grows, so a sentence read stays read).
+- **A spoken turn** reaches the agent as `context.spoken`, and the harness adds one line the model reads,
+  `[Spoken: …]` (`SPOKEN`): short spoken sentences, no tables, lists, code or links. The chat shows only what was said.
+  An agent may also turn its model's thinking off for these turns: the reply starts sooner.
+- **Ends itself** after 30 s with nothing said, or when the mic can't start.
+- `/speak` takes up to 1000 characters a call, a sentence and not a book.
+
+## Live conversation: a speech-to-speech model as the agent's voice
+
+`Web().realtime("openai/gpt-realtime-2.1-mini", voice="marin", instructions=...)` puts a live conversation in place
+of the turn-by-turn one, whenever `OPENAI_API_KEY` (or `api_key`) is there (`Config.live`). The person can cut in.
+
+```
+tap → RTCPeerConnection + mic → POST /realtime (the offer) → voice.call opens the call at OpenAI's /realtime/calls
+    with the session set on the server (model, voice, instructions, the one tool) → the answer → audio both ways
+the person speaks → the voice says a word or two and calls ask_agent {request: their words, word for word}
+    → sent to the chat as a spoken turn → the reply ends → function_call_output → the voice says it
+```
+
+- **Everything goes to the agent.** Left to answer small talk itself, the voice called itself ChatGPT and its words
+  never reached the chat (2026-10-28). Now the chat shows the whole conversation, the agent answers as itself, and
+  the voice only says its answers. `LIVE` and `ASK` in `voice.py` say so; an agent's `instructions` replace `LIVE`.
+- **The page holds no key**: it posts its offer and gets the answer, OpenAI's "all-in-one" flow. No `OpenAI-Beta`
+  header (the GA API).
+- Measured locally (2026-10-28), from the end of the question: the voice speaks after 0.6 s, the agent's answer after
+  about 6.6 s (the turn-by-turn conversation: 6.9 s, and nothing before).
+- Testing without a mic: a `getUserMedia` that plays an MP3 into a MediaStreamDestination, **with faint noise under
+  it**. Perfect digital silence sends nothing, so the far side never hears the speech end.

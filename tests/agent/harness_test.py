@@ -642,6 +642,34 @@ def test_openai_thinking_is_kept_and_goes_back_to_its_own_model():
     assert "reasoning" not in sent("moonshotai/kimi-k3")
 
 
+def test_deepseek_markup_that_reaches_the_text_is_cut_and_never_shown():
+    """A host that fails to parse DeepSeek's tool-call markup lets it into the reply (`</｜DSML｜ parameter>` on screen,
+    Crusoe, 2026-10-29). From its ｜ on, nothing is streamed or kept; another model's text is left alone."""
+    import types
+    from cycls._agent.harness.providers.openai import OpenAIProvider
+    from cycls._agent.harness.events import Turn
+
+    def chunk(text):
+        return types.SimpleNamespace(usage=None, choices=[types.SimpleNamespace(
+            delta=types.SimpleNamespace(content=text, tool_calls=None), finish_reason=None)])
+
+    def run(model, pieces):
+        async def _gen():
+            for t in pieces: yield chunk(t)
+        async def _create(**kw): return _gen()
+        client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_create)))
+        p = OpenAIProvider(client, model, "openrouter")
+        async def go(): return [ev async for ev in p.stream(messages=[{"role": "user", "content": "hi"}], system="", tools=[], max_tokens=100)]
+        evs = asyncio.run(go())
+        shown = "".join(e.get("text", "") for e in evs if isinstance(e, dict) and e.get("type") == "text")
+        return shown, next(e for e in evs if isinstance(e, Turn)).content
+
+    pieces = ["وش أكثر شي ", "يتكرر عليك؟", "</", "｜DSML｜ parameter>", " </｜DSML｜ invoke>"]
+    shown, content = run("deepseek/deepseek-v4.1-flash-1017", pieces)
+    assert "｜" not in shown and content == [{"type": "text", "text": "وش أكثر شي يتكرر عليك؟"}]
+    assert run("moonshotai/kimi-k3", ["a ｜ b"])[1] == [{"type": "text", "text": "a ｜ b"}]
+
+
 def test_thinking_from_another_model_never_reaches_claude():
     """Claude refuses thinking without a signature: an OpenAI-compatible model's is dropped on the way, and
     clearing old turns empties it. Claude's own, signed, stays whole."""

@@ -81,6 +81,8 @@ class Web:
         self._mobile_app: Optional[dict] = None
         self._plans: Optional[dict] = None
         self._voice = None
+        self._speech = None
+        self._realtime = None
         self._max_upload: int = 512
         self._copy_public: List[str] = []
         self._workspaces: Optional[str] = None
@@ -315,6 +317,29 @@ class Web:
             raise ValueError(f"voice {model!r}: give base_url, the service's OpenAI-compatible root")
         return self._copy(_voice={"model": model, "base_url": base_url, "api_key": api_key,
                                   "headers": dict(headers) if headers else None})
+
+    def speech(self, model, *, voice: Optional[str] = None, base_url: Optional[str] = None,
+               api_key: Optional[str] = None, headers: Optional[dict] = None):
+        """The voice that reads replies aloud in a voice conversation: the composer's conversation button, which
+        listens, sends what was said, reads the reply sentence by sentence and listens again. Any service that
+        speaks OpenAI's audio speech API, set as Web.voice is, and the service's `voice`. Unset, no button; it
+        shows only when the mic (Web.voice) is on too."""
+        if not (isinstance(model, str) and "/" in model):
+            raise ValueError(f'speech is "vendor/model", like "openai/gpt-4o-mini-tts"; got {model!r}')
+        if base_url is None and not model.startswith("openai/"):
+            raise ValueError(f"speech {model!r}: give base_url, the service's OpenAI-compatible root")
+        return self._copy(_speech={"model": model, "voice": voice, "base_url": base_url, "api_key": api_key,
+                                   "headers": dict(headers) if headers else None})
+
+    def realtime(self, model="openai/gpt-realtime-2.1-mini", *, voice: Optional[str] = "marin",
+                 instructions: Optional[str] = None, api_key: Optional[str] = None):
+        """A live voice conversation in place of the turn-by-turn one: a speech-to-speech model talks with the
+        person (they can cut in), and hands everything they say to the agent with one tool, `ask_agent`, so the
+        agent answers as itself with its own tools, and the chat shows the whole conversation. OpenAI's Realtime API over WebRTC; the server opens each call,
+        so the key, the model and its instructions never reach the page. `api_key`, else OPENAI_API_KEY."""
+        if not (isinstance(model, str) and model.startswith("openai/")):
+            raise ValueError(f'realtime is an OpenAI Realtime model, like "openai/gpt-realtime-2.1-mini"; got {model!r}')
+        return self._copy(_realtime={"model": model, "voice": voice, "instructions": instructions, "api_key": api_key})
 
     def workspaces(self, create: str = "member"):
         """Enable multi-workspace mode (docs/workspaces.md): every user gets a

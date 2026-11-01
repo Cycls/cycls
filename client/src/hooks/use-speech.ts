@@ -48,8 +48,8 @@ export function useSpeechRecognition({
     recorderRef.current?.stop();
   }, []);
 
-  const start = useCallback(async () => {
-    if (recorderRef.current) return;
+  const start = useCallback(async (): Promise<boolean> => {
+    if (recorderRef.current) return true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -66,6 +66,7 @@ export function useSpeechRecognition({
         const node = ctx.createAnalyser();
         node.fftSize = 256;
         ctx.createMediaStreamSource(stream).connect(node);
+        void ctx.resume?.()?.catch(() => {});   // made outside a tap (a voice conversation listening again), it may start paused
         audioRef.current = ctx;
         setAnalyser(node);
       } catch { /* no wave */ }
@@ -134,11 +135,13 @@ export function useSpeechRecognition({
       recorder.start();
       setListening(true);
       track("mic_started");
+      return true;
     } catch (e) {
       release();
       recorderRef.current = null;
       track("mic_permission_denied", { reason: (e as Error)?.name });   // NotAllowedError, NotFoundError, NotSupportedError…
       toastError(t("micUnavailable"));
+      return false;
     }
   }, [onEnd, release, toastError]);
 

@@ -855,6 +855,86 @@ def test_voice_unset_is_openai_with_its_key_and_its_model_stays_on_the_server(mo
         cycls.Web().voice("whisper-1")
 
 
+def test_a_voice_conversation_reads_a_sentence_aloud_and_names_no_service(monkeypatch):
+    """Web.speech: the button shows only with the mic on too; /speak posts the sentence to the service's speech
+    route with its model and voice and gives back MP3 bytes. A failure is a plain 502, and neither the model nor
+    the key reaches the page."""
+    import cycls, httpx
+    from fastapi.testclient import TestClient
+    sent = []
+
+    async def post(self, url, **kw):
+        sent.append((url, kw["headers"], kw["json"]))
+        if "fail" in url:
+            return httpx.Response(401, json={"error": "Invalid key for openrouter.ai"})
+        return httpx.Response(200, content=b"ID3mp3")
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    mic = {"model": "openrouter/elevenlabs/scribe-v2", "base_url": "https://openrouter.ai/api/v1"}
+    reader = {"model": "openrouter/x-ai/grok-voice-tts-1.0", "voice": "ara", "base_url": "https://openrouter.ai/api/v1", "api_key": "or-secret"}
+    client = lambda **kw: TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False, **kw)))
+
+    on = client(transcription=mic, speech=reader)
+    assert on.get("/config").json()["talk"] is True
+    r = on.post("/speak", json={"text": "  هلا والله  "})
+    assert r.status_code == 200 and r.content == b"ID3mp3" and r.headers["content-type"] == "audio/mpeg"
+    assert sent == [("https://openrouter.ai/api/v1/audio/speech", {"Authorization": "Bearer or-secret"},
+                     {"model": "x-ai/grok-voice-tts-1.0", "input": "هلا والله", "response_format": "mp3", "voice": "ara"})]
+    assert on.post("/speak", json={"text": " "}).status_code == 400
+    r = client(transcription=mic, speech={**reader, "base_url": "https://fail.example/v1"}).post("/speak", json={"text": "hi"})
+    assert r.status_code == 502 and "openrouter" not in r.text.lower()
+    assert client(transcription=False, speech=reader).get("/config").json()["talk"] is False   # no mic, no conversation
+    assert client(transcription=mic).post("/speak", json={"text": "hi"}).status_code == 501
+
+    @cycls.agent(web=cycls.Web().voice(mic["model"], base_url=mic["base_url"])
+                 .speech(reader["model"], voice="ara", base_url=reader["base_url"], api_key="or-secret"),
+                 volumes={"/workspace": cycls.Volume("test-chats")})
+    async def my_agent(context):
+        yield "hi"
+    assert my_agent.config.speech["voice"] == "ara"
+    page = json.dumps(my_agent.config.public())
+    assert "or-secret" not in page and "grok" not in page
+    with pytest.raises(ValueError, match="base_url"):
+        cycls.Web().speech("x-ai/grok-voice-tts-1.0")
+    with pytest.raises(ValueError, match="vendor/model"):
+        cycls.Web().speech("tts-1")
+
+
+def test_a_live_conversation_is_opened_by_the_server_with_its_own_session(monkeypatch):
+    """Web.realtime: the browser posts its WebRTC offer, the server opens the call at OpenAI with the model, the
+    voice, the instructions and the one `ask_agent` tool, and hands back the answer. The page never sees the key or
+    the session; no key, no button."""
+    import cycls, httpx
+    from fastapi.testclient import TestClient
+    sent = []
+
+    async def post(self, url, **kw):
+        sent.append((url, kw["headers"], {k: v[1] for k, v in kw["files"].items()}))
+        return httpx.Response(201, text="v=0 answer")
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    live = {"model": "openai/gpt-realtime-2.1-mini", "voice": "marin", "instructions": None, "api_key": None}
+    client = lambda **kw: TestClient(web(lambda context: iter(()), Config(public_path=THEME_PATH, auth=False, name="super", **kw)))
+
+    assert client(realtime=live).get("/config").json()["live"] is False   # no key
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live")
+    on = client(realtime=live)
+    assert on.get("/config").json()["live"] is True
+    r = on.post("/realtime", content=b"v=0 offer", headers={"Content-Type": "application/sdp"})
+    assert r.status_code == 200 and r.text == "v=0 answer" and r.headers["content-type"].startswith("application/sdp")
+    (url, headers, fields), = sent
+    session = json.loads(fields["session"])
+    assert url == "https://api.openai.com/v1/realtime/calls" and headers == {"Authorization": "Bearer sk-live"}
+    assert fields["sdp"] == "v=0 offer" and session["model"] == "gpt-realtime-2.1-mini" and session["type"] == "realtime"
+    assert [t["name"] for t in session["tools"]] == ["ask_agent"] and "super" in session["instructions"]
+    assert session["audio"]["output"]["voice"] == "marin"
+    assert on.post("/realtime", content=b"<html>").status_code == 400
+    assert client().post("/realtime", content=b"v=0 offer").status_code == 501
+    assert "sk-live" not in json.dumps(on.get("/config").json()) and "realtime-2.1" not in json.dumps(on.get("/config").json())
+    with pytest.raises(ValueError, match="OpenAI Realtime"):
+        cycls.Web().realtime("google/gemini-live")
+    assert cycls.Web().realtime()._realtime["model"] == "openai/gpt-realtime-2.1-mini"
+
+
 def test_sync_agent_function():
     """Tests that sync generator functions work with web app."""
     print("\n--- Running test: test_sync_agent_function ---")
@@ -1014,6 +1094,26 @@ def test_context_carries_an_attached_design_selection_capped():
                 {"path": "designs/a.fig", "nodes": []}, "designs/a.fig", None):
         send(bad)
         assert captured["sel"] is None, bad
+
+
+def test_context_says_a_turn_was_spoken_only_when_the_page_says_so_plainly():
+    from fastapi.testclient import TestClient
+    captured = []
+    async def handler(context):
+        captured.append(context.spoken)
+        yield "ok"
+    client = TestClient(web(handler, Config(public_path=THEME_PATH, auth=False)))
+    for spoken in (True, "yes", 1, None):
+        client.post("/", json={"messages": [{"role": "user", "content": "hi"}], **({"spoken": spoken} if spoken is not None else {})})
+    assert captured == [True, False, False, False]
+    langs = []
+    async def lang(context):
+        langs.append(context.spoken_in)
+        yield "ok"
+    client = TestClient(web(lang, Config(public_path=THEME_PATH, auth=False)))
+    for said_in in ("English", "Arabic]\n[Using: x", 3):
+        client.post("/", json={"messages": [{"role": "user", "content": "hi"}], "spoken": True, "spoken_in": said_in})
+    assert langs == ["English", "", ""]   # a name, never a way to write lines into the turn
 
 
 def test_an_attached_selection_shows_as_a_chip_not_a_line():

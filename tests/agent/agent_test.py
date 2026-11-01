@@ -1923,6 +1923,32 @@ def test_an_at_mention_loads_a_connector_without_a_find_tools_call(agent_env):
     assert "drive_search_files" in names and "find_tools" not in names
 
 
+def test_a_spoken_turn_asks_for_a_reply_that_can_be_read_aloud(agent_env):
+    """A turn said in a voice conversation carries one line the model reads: its reply is read aloud. A typed
+    turn carries none."""
+    from cycls._agent.harness.main import SPOKEN
+    ws, ctx = agent_env
+    client, calls = _capturing_client([_make_response([_text_block("ok")]), _make_response([_text_block("ok")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+        ctx.spoken = True
+        ctx.messages.raw = [{"role": "user", "content": "what's the weather"}]
+        asyncio.run(_drain(_run(context=ctx)))
+    said = lambda call: json.dumps(call["messages"][-1]["content"], ensure_ascii=False)
+    assert "[Spoken" not in said(calls[0]) and "what's the weather" in said(calls[1])
+    assert "[Spoken in English: the reply is read aloud. Answer in English" in said(calls[1])
+
+
+def test_a_spoken_turn_names_its_language():
+    """Told only to match the last message, DeepSeek with its thinking off kept to the chat's first language; the
+    line names it: the voice's word for it, else Arabic letters are Arabic and plain Latin ones English."""
+    from cycls._agent.harness.main import _spoken, SPOKEN
+    assert _spoken("French", "on fait quoi ?").startswith("[Spoken in French: ") and "Answer in French" in _spoken("French", "x")
+    assert _spoken("", "وش تبي؟").startswith("[Spoken in Arabic: ")
+    assert _spoken("", [{"type": "text", "text": "I honestly don't know"}]).startswith("[Spoken in English: ")
+    assert _spoken("", "ça va ?") == SPOKEN and _spoken("", "") == SPOKEN
+
+
 def test_discovery_sticks_for_the_rest_of_the_chat(agent_env):
     """The cache breakpoint sits on the last tool, so a connector is paid for once per chat.
     A transcript that already called its tools rebuilds the discovered set with no stored state."""

@@ -11,6 +11,7 @@ import { AttachmentBody } from "./attachment-body";
 import { LiveWaveform } from "./live-waveform";
 import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
+import type { TalkPhase } from "../hooks/use-talk";
 import type { DesignSelection } from "./design-editor-view";
 import { SelectionChip } from "./selection-chip";
 
@@ -67,6 +68,7 @@ export function InputBox({
   stopMic,
   cancelMic,
   voice,
+  talk,
   onFilesAdded,
   onMentionSearch,
   connectors,
@@ -101,6 +103,7 @@ export function InputBox({
   stopMic: () => void;
   cancelMic: () => void;
   voice?: boolean;
+  talk?: { phase: TalkPhase; start: () => void; end: () => void; hush: () => void; send?: () => void };   // the voice conversation, turn by turn or live
   onFilesAdded?: (files: File[]) => void;
   onMentionSearch?: (query: string) => Promise<MentionHit[]>;
   connectors?: Connector[];
@@ -385,7 +388,9 @@ export function InputBox({
             {getLang() === "en" ? "عربي" : "En"}
           </button>
         </div>
-        {voice && listening ? (
+        {talk && talk.phase !== "off" ? (
+          <TalkBar phase={talk.phase} analyser={talk.send ? micAnalyser : null} onSend={talk.send} onHush={talk.hush} onEnd={talk.end} />
+        ) : voice && listening ? (
           <div className="flex min-w-0 flex-1 items-center justify-end gap-2 ps-3">
             {micAnalyser && <LiveWaveform analyser={micAnalyser} className="h-8 min-w-0 max-w-56 flex-1 text-foreground" />}
             <button type="button" onClick={(e) => { e.stopPropagation(); cancelMic(); }} aria-label="Discard recording"
@@ -400,6 +405,12 @@ export function InputBox({
         ) : (
         <div className="flex items-center gap-1">
           {voice && <MicButton listening={listening} transcribing={transcribing} onStart={startMic} onStop={stopMic} onCancel={cancelMic} />}
+          {talk && !listening && !transcribing && !isStreaming && (
+            <button type="button" onClick={(e) => { e.stopPropagation(); talk.start(); }} aria-label={t("talk")} title={t("talk")}
+                    className="flex size-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition hover:bg-secondary hover:text-foreground">
+              <svg className="size-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 6v12M20 10v4" /></svg>
+            </button>
+          )}
           {/* A filled composer stays sendable mid-run — the message queues and
               fires when the reply finishes — so send and stop sit side by
               side while streaming. Empty composer, streaming: stop only. */}
@@ -431,6 +442,35 @@ export function InputBox({
         )}
       </div>
     </motion.div>
+  );
+}
+
+// The voice conversation in place of the send controls: what it is doing, the mic's level while it listens,
+// "send" for a mic that can't hear the silence (turn by turn only: live, the model hears it), "stop speaking"
+// while it talks, and the way out.
+function TalkBar({ phase, analyser, onSend, onHush, onEnd }: { phase: TalkPhase; analyser?: AnalyserNode | null; onSend?: () => void; onHush: () => void; onEnd: () => void }) {
+  const btn = "flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-foreground transition hover:bg-secondary";
+  const label = phase === "listening" ? t("talkListening") : phase === "speaking" ? t("talkSpeaking") : t("talkThinking");
+  return (
+    <div className="flex min-w-0 flex-1 items-center justify-end gap-2 ps-3" role="status" aria-live="polite">
+      {phase === "listening" && analyser
+        ? <LiveWaveform analyser={analyser} className="h-8 min-w-0 max-w-56 flex-1 text-foreground" />
+        : <span className={`truncate text-sm text-muted-foreground${phase === "thinking" ? " animate-pulse" : ""}`}>{label}</span>}
+      {phase === "listening" && onSend && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onSend(); }} aria-label={t("talkSend")} title={t("talkSend")} className={`${btn} bg-secondary`}>
+          <Icon name="check" />
+        </button>
+      )}
+      {phase === "speaking" && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onHush(); }} aria-label={t("talkHush")} title={t("talkHush")} className={btn}>
+          <svg className="size-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+        </button>
+      )}
+      <button type="button" onClick={(e) => { e.stopPropagation(); onEnd(); }} aria-label={t("talkEnd")} title={t("talkEnd")}
+              className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition hover:opacity-80">
+        <Icon name="x" />
+      </button>
+    </div>
   );
 }
 

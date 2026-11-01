@@ -210,14 +210,21 @@ class OpenAIProvider:
             kwargs["extra_headers"] = {"x-session-id": str(session)[:256]}
 
         text_buf, thought, field, calls, stop, usage, host = [], [], None, {}, "end_turn", None, None
+        # DeepSeek's own tool-call markup (`<｜DSML｜invoke …>`) now and then reaches the text when a host fails to
+        # parse it (Crusoe, 2026-10-29). Its ｜ is no character of prose: from it on, the text is cut, never shown.
+        markup = "deepseek" in str(self.model).lower()
         async for chunk in await self._client.chat.completions.create(**kwargs):
             if chunk.usage: usage = chunk.usage
             if isinstance(p := getattr(chunk, "provider", None), str): host = p   # the host a router chose
             if not chunk.choices: continue
             d = chunk.choices[0].delta
-            if d.content:
-                text_buf.append(d.content)
-                yield events.text(d.content)
+            if d.content and markup is not None:
+                piece = d.content
+                if markup and "｜" in piece:
+                    piece, markup = piece.split("｜", 1)[0].rstrip("</ "), None
+                if piece:
+                    text_buf.append(piece)
+                    yield events.text(piece)
             if (f := next((f for f in _REASONING if getattr(d, f, None)), None)):
                 field = field or f
                 thought.append(getattr(d, f))
@@ -242,7 +249,8 @@ class OpenAIProvider:
                     chunk.choices[0].finish_reason, "end_turn")
 
         content = [{"type": "thinking", "thinking": "".join(thought), "field": field}] if thought else []
-        if text_buf: content.append({"type": "text", "text": "".join(text_buf)})
+        if markup is None: text_buf = ["".join(text_buf).rstrip().removesuffix("</").removesuffix("<").rstrip()]
+        if text_buf and text_buf[0]: content.append({"type": "text", "text": "".join(text_buf)})
         for _, tc in sorted(calls.items()):
             try: inp = json.loads(tc["args"]) if tc["args"] else {}
             except json.JSONDecodeError: inp = {}

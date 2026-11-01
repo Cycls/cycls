@@ -226,13 +226,18 @@ server's `run` log row — `status`, `reason`, `error_id`, `ms` — and that is 
 ### Voice, settings, misc
 
 `mic_started` / `mic_stopped` / `mic_cancelled` / `mic_transcribed` /
-`mic_transcription_failed` / `mic_permission_denied` · `settings_opened` ·
+`mic_transcription_failed` / `mic_permission_denied` · `talk_started` / `talk_ended` · `live_started` / `live_ended` / `live_failed` · `settings_opened` ·
 `theme_changed` · `language_changed` · `explore_opened` /
 `explore_agent_clicked` · `source_opened` · `user_signed_out`
 
 `mic_permission_denied` is any mic that couldn't start; `reason` says which — `NotAllowedError`
 (refused), `NotFoundError` (no mic), `NotSupportedError` (no format it can record). The recording
 format is whichever the browser has: mp4 on Safari and Chrome, webm on Firefox.
+`talk_started` / `talk_ended` bracket a voice conversation (Web.speech); its turns are `message_sent` with
+`origin='voice'`, and each listen is a `mic_started`.
+`live_*` bracket a live conversation (Web.realtime); each request it hands the agent is a `message_sent` with
+`origin='voice'`. `live_failed.reason` is `mic`, `no_connection` (the channel never opened in 15 s: the network kept WebRTC
+out), `connection_failed`, OpenAI's own error code (`insufficient_quota`…), or `HTTP 502` (the call didn't open).
 
 ---
 

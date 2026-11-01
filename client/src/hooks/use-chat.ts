@@ -68,6 +68,8 @@ export type SendExtra = {
   approvals?: string[]; declined?: string[]; connectors?: string[]; selection?: DesignSelection;
   folder?: string;   // the folder open in Files: where the agent saves a design named without one
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
+  spoken?: boolean;   // said in a voice conversation: its reply is read aloud
+  spokenIn?: string;  // the language it was said in, when the voice knows it
 };
 // What was sent: what retry sends again, and what Stop gives back to the composer.
 export type Sent = { text: string; attachments?: Attachment[]; origin?: string; extra?: SendExtra };
@@ -102,6 +104,8 @@ export interface AppConfig {
   pass_metadata?: { en: PassMetadata; ar: PassMetadata };
   auth?: boolean;
   voice?: boolean;
+  talk?: boolean;   // the voice conversation button (Web.speech, with the mic)
+  live?: boolean;   // the live conversation in its place (Web.realtime)
   pk?: string;
   one_tap?: boolean;
   analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
@@ -399,6 +403,7 @@ export function useChat(baseUrl: string = "") {
                                  ...(extra?.declined?.length ? { declined: extra.declined } : {}),
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
                                  ...(extra?.selection ? { selection: extra.selection } : {}),
+                                 ...(extra?.spoken ? { spoken: true, ...(extra.spokenIn ? { spoken_in: extra.spokenIn } : {}) } : {}),
                                  ...(extra?.folder ? { folder: extra.folder } : {}),
                                  ...replay }),
           signal: controller.signal,

@@ -139,7 +139,7 @@ def test_a_user_bubble_is_what_was_typed(tmp_path):
     """After a reload the bubble showed what the harness appends to a turn — an attached
     file's whole text, the @-mention line — and regenerate re-sent it as if typed."""
     import asyncio, json
-    from cycls._agent.harness.main import _ingest, _with_mention, _with_selection
+    from cycls._agent.harness.main import _ingest, _with_mention, _with_selection, SPOKEN
     (tmp_path / "attachments").mkdir()
     (tmp_path / "attachments" / "n.txt").write_text("THE FILE")
     sel = {"path": "designs/a.fig", "nodes": [{"name": "cta", "type": "TEXT"}]}
@@ -152,9 +152,12 @@ def test_a_user_bubble_is_what_was_typed(tmp_path):
         {"role": "user", "content": _with_selection(_with_mention("make it red", "[Using: Figma]"), sel),
          "selection": sel},
         {"role": "user", "content": _with_selection("", sel), "selection": sel},
+        {"role": "user", "content": _with_mention(_with_mention("what's on today", "[Using: Outlook]"), SPOKEN)},
+        {"role": "user", "content": _with_mention([{"type": "text", "text": "hi"}], SPOKEN)},
+        {"role": "user", "content": _with_mention("I don't know", "[Spoken in English: the reply is read aloud. Answer in English.]")},
     ]
     assert "THE FILE" in json.dumps(raw), "the model still reads the file"
-    assert [m["content"] for m in to_ui_messages(raw)] == ["summarize", "list my files", "make it red", ""]
+    assert [m["content"] for m in to_ui_messages(raw)] == ["summarize", "list my files", "make it red", "", "what's on today", "hi", "I don't know"]
 
 
 def test_consecutive_assistant_messages_merge_into_one_turn():

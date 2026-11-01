@@ -280,3 +280,24 @@ def test_gcs_create_sends_the_precondition_and_maps_412(monkeypatch):
     seen["code"] = 412
     with pytest.raises(db.Conflict):
         _run(store.write("chat/c/000000", b"{}", create=True))
+
+
+def test_a_requests_storage_calls_are_counted_by_kind(tmp_path):
+    """db.io: inside a request that opened it, every store call is counted and timed by kind, so a slow turn's log
+    line says how much of it was storage; outside one, nothing is kept."""
+    import asyncio
+    from cycls._app.db import DB, io, workspace
+    from cycls._agent.web.server import _io_summary
+    db = DB(workspace("u-a", tmp_path, base=f"file://{tmp_path}"))
+
+    async def turn():
+        io.set(stats := {"_t0": 0})
+        await db.put("chat/c1/0", {"x": 1})
+        await db.get("chat/c1/0")
+        await db.get(".settings/tools")
+        return stats
+    stats = asyncio.run(turn())
+    assert {k: v[0] for k, v in stats.items() if not k.startswith("_")} == {"write chat": 1, "read chat": 1, "read .settings": 1}
+    summary = _io_summary(stats)
+    assert summary["db"] == 3 and set(summary["db_top"]) == {"write chat", "read chat", "read .settings"}
+    asyncio.run(db.get("chat/c1/0"))   # no request: counted nowhere, and no error

@@ -110,3 +110,20 @@ def test_guidance_and_the_write_classifier_ride_the_copy():
     fn = lambda tool, args: False
     s = m.MCP("https://x/mcp").guidance("Use call execute-sql directly.").writes(fn)
     assert (s._guidance, s._writes) == ("Use call execute-sql directly.", fn)
+
+
+def test_a_server_that_wont_list_for_nobody_is_not_asked_every_turn():
+    """Most connector servers refuse an anonymous listing. The refusal is remembered like a catalog, so a turn no
+    longer waits on it; a listing with the person's token that fails is tried again."""
+    m._discovered.clear()
+    s = m.MCP("https://x/mcp")
+    refused = AsyncMock(side_effect=RuntimeError("401"))
+    with patch.object(m, "_list", refused):
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                asyncio.run(s.tools())
+        assert refused.await_count == 1
+        for _ in range(2):
+            with pytest.raises(RuntimeError):
+                asyncio.run(s.tools(token="t1"))
+        assert refused.await_count == 3

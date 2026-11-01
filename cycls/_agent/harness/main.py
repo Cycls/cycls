@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cycls._app.db import Conflict
+from cycls._app.db import Conflict, io as db_io
 from .. import connectors, spill, state
 from ..state import Session
 from . import events
@@ -137,6 +137,21 @@ def _with_mention(content, line):
 
 
 SELECTED = "[Selected in "
+# A turn said in a voice conversation: its reply is read aloud, sentence by sentence (Web.speech).
+SPOKEN = "[Spoken: the reply is read aloud. Answer in a few short spoken sentences, with no tables, lists, code, links or emoji.]"
+
+
+def _spoken(language, said):
+    """The line a spoken turn carries, naming the language it was said in: the voice's word for it, else Arabic for
+    Arabic letters and English for plain Latin ones. Told only to match the last message, DeepSeek with its thinking
+    off answered English in Arabic 9 times in 9 after an Arabic start; named, 14 in 15 came back right (2026-10-29)."""
+    text = said if isinstance(said, str) else " ".join(b.get("text", "") for b in said or () if isinstance(b, dict))
+    language = language or ("Arabic" if re.search(r"[؀-ۿ]", text) else
+                            "English" if text.isascii() and re.search(r"[A-Za-z]", text) else "")
+    if not language:
+        return SPOKEN
+    return (f"[Spoken in {language}: the reply is read aloud. Answer in {language}, in a few short spoken sentences, "
+            "with no tables, lists, code, links or emoji.]")
 
 
 def _with_selection(content, sel):
@@ -336,6 +351,12 @@ async def _settled(task, wait):
     return task.result()
 
 
+def _mark(name):
+    """When this request reached `name`, in ms from its start, for the run's log line (db.io)."""
+    if (io := db_io.get()) is not None and "_t0" in io:
+        io.setdefault("_marks", {}).setdefault(name, int((time.monotonic() - io["_t0"]) * 1000))
+
+
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
                bash_timeout=600, bash_network=True, client=None,
@@ -351,7 +372,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
+    _mark("loop")
     session = await Session.open(context)
+    _mark("chat_read")
     # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
     modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
@@ -366,9 +389,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
+        if getattr(context, "spoken", False):
+            content = _with_mention(content, _spoken(getattr(context, "spoken_in", ""), incoming.get("content")))
         await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
     messages = session.messages
+    _mark("turn_saved")
     # A new chat is named from the person's words while the reply is made, so naming never holds the reply up;
     # a greeting alone waits for more to name it by.
     naming = None
@@ -432,14 +458,23 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     client_side = [s for s in mcp_servers or [] if not s._server_side]
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
-    hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if (any(s._connector for s in client_side) or api_connectors) else set()
+    if any(s._connector for s in client_side) or api_connectors:
+        blocked, off = await asyncio.gather(connectors.blocked(workspace), connectors.off(workspace))
+        hidden = blocked | off
+    else:
+        hidden = set()
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
-    for server in client_side:
-        if server._connector and server._connector.name in hidden:
-            continue
-        try:
-            schemas, fns, names = await connectors.tools_for(server, workspace)
-        except Exception as e:
+
+    # Every server is looked up at once: one after another, a person's 13 connectors cost a storage round trip
+    # each on every turn, over a second before the model was even asked (2026-10-28).
+    async def _look(server):
+        try: return await connectors.tools_for(server, workspace), None
+        except Exception as e: return None, e
+    shown = [s for s in client_side if not (s._connector and s._connector.name in hidden)]
+    for server, (got, e) in zip(shown, await asyncio.gather(*map(_look, shown))):
+        if e is None:
+            schemas, fns, names = got
+        else:
             said, label = _server_said(e), server._name or server._url
             yield _user_warn(user, session.chat_id,
                              f"{label}'s tools are off this turn — {said}" if said
@@ -491,8 +526,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                        "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
     # CONN-4: a connector with a REST base and no MCP server contributes one tool — otherwise a
     # stored key is unreachable, since everything above only walks servers.
-    for o in api_connectors or ():
-        if not o.api or o.servers or o.name in hidden or not await o.bearer(workspace):
+    keyed = [o for o in api_connectors or () if o.api and not o.servers and o.name not in hidden]
+    for o, bearer in zip(keyed, await asyncio.gather(*(o.bearer(workspace) for o in keyed))):
+        if not bearer:
             continue
         schema, fn, label, writes = connectors.api_tool(o)
         chosen = (await connectors.permissions(workspace, o.name)).get(schema["name"])   # its one tool's Ask / Always allow / Never
@@ -505,6 +541,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         owners[schema["name"]] = o
         register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))
 
+    _mark("connectors")
     if any(t.get("name") == "build_app" for t in tools_list):
         if cat := await asyncio.to_thread(app_catalog, workspace.root):
             system_text += "\n\n" + cat
@@ -606,6 +643,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 raise
 
             turn_ms = int((time.monotonic() - turn_t0) * 1000)
+            if (io := db_io.get()) is not None and "_before_ms" not in io and "_t0" in io:   # the first call: how long the run took to reach it
+                io["_before_ms"] = int((turn_t0 - io["_t0"]) * 1000)
             tokens_since_compact = turn.input + turn.cached + turn.cache_create
             turn_cost = _cost(price, turn.input, turn.output, turn.cached, turn.cache_create)
             now = datetime.now(timezone.utc).isoformat()

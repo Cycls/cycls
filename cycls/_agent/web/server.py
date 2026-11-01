@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
 from cycls._app.auth import User, validator
-from cycls._app.db import Workspace, workspace
+from cycls._app.db import Workspace, workspace, io as db_io
 from cycls._agent.logs import log
 from cycls._agent import state
 from cycls._agent.web import voice
@@ -32,6 +32,10 @@ class Config(BaseModel):
     suggestions: bool = False
     voice: bool = False                # the mic shows: set from `transcription` as the server starts
     transcription: Optional[Any] = None  # Web.voice: {model, base_url, api_key, headers}, or False; server-side
+    talk: bool = False                 # the voice conversation button shows: the mic and `speech` both set
+    speech: Optional[Any] = None       # Web.speech: {model, voice, base_url, api_key, headers}; server-side
+    live: bool = False                 # the live conversation button shows: Web.realtime set and its key there
+    realtime: Optional[Any] = None     # Web.realtime: {model, voice, instructions, api_key}; server-side
     pk: Optional[str] = None
     one_tap: bool = False             # Google One Tap on the signed-out page
     affiliate: Optional[str] = None   # affiliate/referral provider key (e.g. Rewardful)
@@ -59,7 +63,7 @@ class Config(BaseModel):
         (internal mount path), the raw examples mapping (the FE reads the
         resolved cards from /examples) and the voice model and its key stay
         server-side."""
-        data = self.model_dump(exclude={"cms", "volume", "examples", "transcription"})
+        data = self.model_dump(exclude={"cms", "volume", "examples", "transcription", "speech", "realtime"})
         # the .fig editor, a static app on its own origin; unset → .fig shows the download card
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
@@ -122,6 +126,7 @@ class Run:
         self.task = self.inner = None
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
+        self.io = None   # the request's storage calls (db.io)
         self.started_at = datetime.now(timezone.utc).isoformat()
 
     def row(self, status):
@@ -210,6 +215,16 @@ async def _beat(run):
     return False
 
 
+def _io_summary(io):
+    """The run's storage calls for its log line: how many, how long in all, and the five slowest kinds."""
+    if not io: return {}
+    kinds = sorted(((k, n, ms) for k, (n, ms) in ((k, v) for k, v in io.items() if not k.startswith("_"))),
+                   key=lambda r: -r[2])
+    return {"db": sum(n for _, n, _ in kinds), "db_ms": sum(ms for _, _, ms in kinds),
+            "db_top": {k: f"{n}×{ms}ms" for k, n, ms in kinds[:5]},
+            "before_ms": io.get("_before_ms"), "pre_ms": io.get("_pre_ms"), "marks": io.get("_marks")}
+
+
 async def _record(run, status):
     if run.workspace is None: return
     try: await state.put_run(run.workspace, run.chat_id, run.row(status))
@@ -221,7 +236,7 @@ async def _finish(run, status, on_run):
     hook is the deployment's — push, email, a webhook, nothing."""
     await _record(run, status)
     log("run", user=run.user, chat_id=run.chat_id, status=status, reason=run.reason,
-        error_id=run.error_id, ms=int((time.monotonic() - run.started) * 1000))
+        error_id=run.error_id, ms=int((time.monotonic() - run.started) * 1000), **_io_summary(run.io))
     if on_run is None: return
     try:
         row = {**run.row(status), "chat_id": run.chat_id}
@@ -367,6 +382,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
         folder: str = ""           # the folder open in Files: where a design named without one is saved
         replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
+        spoken: bool = False       # said in a voice conversation: the reply is read aloud — the turn gets a "[Spoken: …]" line
+        spoken_in: str = ""        # the language it was said in, when the voice knows it ("English")
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -404,6 +421,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     @app.post("/chat")
     @app.post("/chat/completions")
     async def back(request: Request, user: Optional[User] = auth):
+        io = {"_t0": time.monotonic()}   # this request's storage calls (db.io), logged with its run
+        db_io.set(io)
         data = await request.json()
         messages = data.get("messages")
         given = request.query_params.get("id")
@@ -428,6 +447,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20],
                           declined=[t for t in (data.get("declined") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
+                          spoken=data.get("spoken") is True,
+                          spoken_in=s if isinstance(s := data.get("spoken_in"), str) and re.fullmatch(r"[A-Za-z][A-Za-z -]{1,29}", s) else "",
                           selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")))
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
@@ -439,6 +460,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         run = Run(detach=data.get("detach") is True and not api,
                   workspace=context.workspace if user is not None else None,
                   chat_id=chat_id, user=user)
+        run.io = io
+        io["_pre_ms"] = int((run.started - io["_t0"]) * 1000)   # from the request to its run
         busy = JSONResponse(status_code=409, headers={"Retry-After": "2"},
                             content={"error": "run_in_progress", "chat_id": chat_id,
                                      "detail": "This chat is still working on your last message."})
@@ -539,6 +562,38 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         except Exception as e:   # the service's own words would name it: they stay in the log
             log("warn", user=user, chat_id=None, message=f"transcription failed: {type(e).__name__}: {e}"[:500])
             raise HTTPException(status_code=502, detail="Couldn't transcribe the recording")
+
+    config.talk = bool(speech and config.speech)
+
+    @app.post("/speak")
+    async def speak(request: Request, user: Optional[User] = auth):
+        """One sentence of a reply, read aloud for the voice conversation: MP3 bytes."""
+        if not config.talk:
+            raise HTTPException(status_code=501, detail="Voice conversation isn't set up")
+        text = str((await request.json()).get("text") or "").strip()[:1000]   # a sentence, not a book
+        if not text:
+            raise HTTPException(status_code=400, detail="No text")
+        try:
+            return FastAPIResponse(await voice.speak(config.speech, text), media_type="audio/mpeg")
+        except Exception as e:
+            log("warn", user=user, chat_id=None, message=f"speech failed: {type(e).__name__}: {e}"[:500])
+            raise HTTPException(status_code=502, detail="Couldn't read the reply aloud")
+
+    config.live = bool(config.realtime and (config.realtime.get("api_key") or os.environ.get("OPENAI_API_KEY")))
+
+    @app.post("/realtime")
+    async def realtime(request: Request, user: Optional[User] = auth):
+        """The live conversation's call: the browser's WebRTC offer in, the answer out."""
+        if not config.live:
+            raise HTTPException(status_code=501, detail="Live conversation isn't set up")
+        sdp = (await request.body()).decode("utf-8", "replace")
+        if not sdp.startswith("v=") or len(sdp) > 20_000:
+            raise HTTPException(status_code=400, detail="Not a WebRTC offer")
+        try:
+            return FastAPIResponse(await voice.call(config.realtime, sdp, config.name), media_type="application/sdp")
+        except Exception as e:
+            log("warn", user=user, chat_id=None, message=f"live call failed: {type(e).__name__}: {e}"[:500])
+            raise HTTPException(status_code=502, detail="Couldn't start the live conversation")
 
     for install in (extra_routers or []):
         install(app, required_auth)

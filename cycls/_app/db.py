@@ -5,7 +5,7 @@ listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
 + body reads (no metadata channel locally). `meta=` on `db.put` is an
 object-storage-only perf hint — body is canonical on FS.
 """
-import asyncio, hashlib, json, os, re
+import asyncio, contextvars, hashlib, json, os, re, time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -283,6 +283,29 @@ async def object_read(bucket, name):
 
 
 
+# A request's storage calls by kind ("read chat", "write .settings"…), each a count and milliseconds. The chat
+# route opens one, and the run's log line carries it: how much of a slow turn was storage, and which.
+io = contextvars.ContextVar("db_io", default=None)
+
+
+class _Timed:
+    """A store whose calls are counted and timed into the request's `io`, when it has one."""
+    def __init__(self, store): self._s = store
+
+    def __getattr__(self, name):
+        fn = getattr(self._s, name)
+        if not asyncio.iscoroutinefunction(fn): return fn
+        async def timed(*a, **kw):
+            t0 = time.perf_counter()
+            try: return await fn(*a, **kw)
+            finally:
+                if (stats := io.get()) is not None:
+                    kind = f"{name} {str(a[0] if a else kw.get('prefix') or kw.get('glob') or '').split('/', 1)[0]}"
+                    n, ms = stats.get(kind, (0, 0))
+                    stats[kind] = (n + 1, ms + round((time.perf_counter() - t0) * 1000))
+        return timed
+
+
 def _store(url):
     if url.startswith("file://"): return _FileStore(url)
     if url.startswith("gs://"): return _GCSStore(url)
@@ -291,7 +314,7 @@ def _store(url):
 
 class DB:
     def __init__(self, workspace, base=None):
-        self._store = _store(f"{(base or workspace.base).rstrip('/')}/{workspace.path}")
+        self._store = _Timed(_store(f"{(base or workspace.base).rstrip('/')}/{workspace.path}"))
 
     async def get(self, key, default=None):
         data = await self._store.read(key)

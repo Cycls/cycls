@@ -33,6 +33,8 @@ import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
+import { useTalk } from "../hooks/use-talk";
+import { useLive } from "../hooks/use-live";
 import { useUrlParam } from "../hooks/use-url-param";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { usePaneWidth } from "../hooks/use-pane-width";
@@ -140,7 +142,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
 }) {
   const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
-  const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
+  const { name, pass_metadata: passMetadata, voice, talk: talkOn, live: liveOn, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
   const { error: toastError, info: toastInfo, undo: toastUndo } = useToast();
@@ -372,7 +374,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
-  const handleSubmitRef = useRef<(overrideText?: string, origin?: string) => void>(() => {});
+  const handleSubmitRef = useRef<(overrideText?: string, origin?: string, extra?: SendExtra) => void>(() => {});
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
   const [pricingWhy, setPricingWhy] = useState<string | undefined>();   // "limit" when the agent's limit opened it
   const openPricing = useCallback((payer: "user" | "organization", source: string, why?: string) => {
@@ -477,13 +479,20 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     return () => setUIHandler(null);
   }, [setUIHandler, activeOrg, openPricing, openFileInCanvas, openApp]);
 
+  const heardRef = useRef<(text: string) => boolean>(() => false);
   const onSpeechEnd = useCallback((text: string) => {
+    const spoken = heardRef.current(text);   // in a voice conversation, the reply will be read aloud
     if (text.trim()) {
-      handleSubmitRef.current(text, "voice");
+      handleSubmitRef.current(text, "voice", spoken ? { spoken } : undefined);
       textareaRef.current?.blur();
     }
   }, []);
   const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
+  const talk = useTalk({ messages, isStreaming, authHeaders,
+    mic: { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } });
+  heardRef.current = talk.heard;
+  const live = useLive({ messages, isStreaming, authHeaders,
+    send: useCallback((text: string, language?: string) => handleSubmitRef.current(text, "voice", { spoken: true, spokenIn: language }), []) });
 
   // Reset sidebar data when org changes
   useEffect(() => {
@@ -950,6 +959,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     attachments,
     onRemoveFile: removeFile,
     listening, transcribing, micAnalyser, startMic, stopMic, cancelMic, voice,
+    talk: liveOn ? live : voice && talkOn ? { ...talk, send: stopMic } : undefined,
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
     connectors: connectors?.filter((c) => c.connected),

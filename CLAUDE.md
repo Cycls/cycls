@@ -81,7 +81,7 @@ cycls/
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
     └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, what they share in shared.py), OG images, themes
-        └── voice.py        # the mic's speech-to-text, any OpenAI-shaped service, kept server-side (Web.voice); docs/notes/voice.md
+        └── voice.py        # the mic's speech-to-text (Web.voice) and the voice conversation's text-to-speech (Web.speech), any OpenAI-shaped service, kept server-side; docs/notes/voice.md
 ```
 
 ## Core Architecture
