@@ -76,7 +76,7 @@ class Agent(App):
             seo=web._seo, head=web._head, favicon=web._favicon, og=web._og_url,
             colors=web._colors, explore=web._explore,
             explore_enabled=bool(web._explore or (web._cms or {}).get("explore")),
-            examples=web._examples, examples_enabled=bool(web._examples),
+            examples=web._examples, examples_enabled=bool(web._examples or (web._cms or {}).get("examples")),
         )
         self.config._og_image = web._og_bytes
         self._iap = web._iap

@@ -121,14 +121,16 @@ class Web:
         return self._copy(_theme=name)
 
     def cms(self, *, brand: Optional[str] = None, explore: Optional[str] = None,
-            connectors: Optional[str] = None, token: Optional[str] = None):
-        """Pull branding, the explore menu and/or the connector directory copy from any CMS: plain GET
-        URLs returning the contract JSON (title/title_ar/description/description_ar/icon_svg;
-        {"agents": [...]} for explore; {"connectors": [...]} for connectors), optional bearer `token`.
-        What the code declares wins, piece by piece — `.brand()`, `.explore()`, and each field a
-        cycls.OAuth2/cycls.Key sets for itself."""
-        cms = {k: v for k, v in (("brand", brand), ("explore", explore),
-                                 ("connectors", connectors), ("token", token)) if v}
+            connectors: Optional[str] = None, examples: Optional[str] = None, token: Optional[str] = None):
+        """Pull branding, the explore menu, the connector directory copy and/or the example gallery from
+        any CMS: plain GET URLs returning the contract JSON (title/title_ar/description/description_ar/
+        icon_svg; {"agents": [...]} for explore; {"connectors": [...]} for connectors; {"pills": [{"label":
+        {"en", "ar"}, "cards": [{"share"} | {"video", "title"}]}]} for examples, what
+        cms.cycls.ai/site/examples/{agent} serves), optional bearer `token`. What the code declares wins,
+        piece by piece — `.brand()`, `.explore()`, `.examples()`, and each field a cycls.OAuth2/cycls.Key
+        sets for itself."""
+        cms = {k: v for k, v in (("brand", brand), ("explore", explore), ("connectors", connectors),
+                                 ("examples", examples), ("token", token)) if v}
         return self._copy(_cms=cms or None)
 
     def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None):

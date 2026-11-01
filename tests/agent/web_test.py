@@ -748,6 +748,39 @@ def test_examples_empty_without_config(tmp_path):
     assert client.get("/examples").json() == {"categories": []}
 
 
+def test_examples_come_from_the_cms(tmp_path, monkeypatch):
+    """`.cms(examples=…)`: the pills come from the CMS and resolve like the code's; a read that fails keeps
+    the last good copy, so a CMS down for a while still shows a gallery; pills declared in code win."""
+    from types import SimpleNamespace
+    import cycls
+    from cycls._agent.web import routers
+
+    assert cycls.Web().cms(examples="https://cms.test/x")._cms == {"examples": "https://cms.test/x"}
+    svc, user, client = _share_test_app(tmp_path)
+    pills = [{"label": {"en": "Tutorials", "ar": "دروس"}, "cards": [{"video": "https://cdn.test/v.mp4", "title": "Start"}]}]
+    reads = []
+
+    async def cms(url, token=None):
+        reads.append((url, token))
+        if len(reads) > 1:
+            raise RuntimeError("down")
+        return pills
+    monkeypatch.setattr(routers, "_cms_pills", cms)
+    monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)   # every request reads again
+    svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/examples/a", "token": "t"})
+
+    gallery = {"categories": [{"label": "Tutorials", "label_ar": "دروس",
+                               "items": [{"video": "https://cdn.test/v.mp4", "title": "Start"}]}]}
+    assert client.get("/examples").json() == gallery
+    assert client.get("/examples").json() == gallery   # the CMS is down: the last good copy stands
+    assert reads == [("https://cms.test/site/examples/a", "t")] * 2
+
+    svc.config = SimpleNamespace(examples=[{"label": "Code", "urls": [{"video": "https://cdn.test/c.mp4", "title": "C"}]}],
+                                 cms=svc.config.cms)
+    assert client.get("/examples").json()["categories"][0]["label"] == "Code"
+    assert len(reads) == 2   # the code's pills win, and the CMS isn't asked
+
+
 def test_examples_builder_normalizes_labels():
     """String keys are the label for both locales; a (en, ar) tuple key gives
     the pill an Arabic label, mirroring explore's title/title_ar."""

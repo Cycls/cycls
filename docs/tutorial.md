@@ -286,7 +286,7 @@ web = (
 | `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
 | `.theme(name)` | `"default"` or `"dev"` |
 | `.colors(primary=, secondary=, primary_dark=, secondary_dark=)` | Theme accent colors (any CSS color). `primary` drives highlights and active states, `secondary` chips and bubbles; the `_dark` variants override dark mode |
-| `.cms(brand=, explore=, token=)` | Pull branding and/or the explore menu from any CMS: plain GET URLs returning the contract JSON, optional bearer `token`. Static `.brand()`/`.explore()` win, piece by piece |
+| `.cms(brand=, explore=, connectors=, examples=, token=)` | Pull branding, the explore menu, the connector directory copy and/or the example gallery from any CMS: plain GET URLs returning the contract JSON (`cms.cycls.ai/site/examples/{agent}` for the gallery), optional bearer `token`. Static `.brand()`/`.explore()`/`.examples()` win, piece by piece |
 | `.explore(*agents)` | Static explore menu (the agents dropdown): `{"name", "url", "logo"?, ...}` entries. Overrides the CMS list; with neither, the menu is hidden |
 | `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand: the `<title>` tag, meta and og description |
 | `.head(html)` | Append raw HTML to `<head>` for site verification or custom meta. Repeatable |

@@ -1230,6 +1230,18 @@ async def _poll_tally(ws, deck, session, n, fresh=False):
     return tally
 
 
+EXAMPLES_TTL = 300   # seconds the gallery's resolved cards are served before the pills are read again
+
+
+async def _cms_pills(url, token=None):
+    """An agent's example gallery as the CMS serves it (`.cms(examples=…)`): its pills."""
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    r.raise_for_status()
+    return r.json().get("pills") or []
+
+
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     bearer_scheme = HTTPBearer(auto_error=False)
@@ -1400,7 +1412,23 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     # ---- Examples (curated public shares — the empty-screen gallery) ----
 
-    _examples_cache = {"at": 0.0, "data": None}
+    _examples_cache = {"at": 0.0, "data": None, "cms": None}
+
+    async def _example_groups():
+        """The gallery's pills: the code's (`.examples()`), else the CMS's (`.cms(examples=…)`), as last read
+        well, so a CMS down for a while still shows a gallery. None while there is none to show."""
+        cfg = getattr(cycls_app, "config", None)
+        if groups := getattr(cfg, "examples", None):
+            return groups
+        cms = getattr(cfg, "cms", None) or {}
+        if cms.get("examples"):
+            try:
+                _examples_cache["cms"] = [
+                    {"label": (p.get("label") or {}).get("en", ""), "label_ar": (p.get("label") or {}).get("ar") or None,
+                     "urls": p.get("cards") or []} for p in await _cms_pills(cms["examples"], cms.get("token"))]
+            except Exception as e:
+                log("warn", chat_id=None, message=f"examples: the CMS read failed: {type(e).__name__}: {e}")
+        return _examples_cache["cms"]
 
     async def _example_card(entry):
         """One configured entry → a gallery card, or None (bad URL, dead
@@ -1448,12 +1476,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     async def examples(response: Response):
         """Resolved example cards for the gallery. Public — this is what the
         signed-out empty screen renders. Cached like /explore: the cards only
-        move when the operator re-curates or the source chats change."""
+        move when the operator re-curates (in code or the CMS) or the source chats change."""
         response.headers["Cache-Control"] = "public, max-age=300"
-        groups = getattr(getattr(cycls_app, "config", None), "examples", None)
-        if not groups:
-            return {"categories": []}
-        if _examples_cache["data"] is None or time.time() - _examples_cache["at"] > 300:
+        if _examples_cache["data"] is None or time.time() - _examples_cache["at"] > EXAMPLES_TTL:
+            groups = await _example_groups()
+            if groups is None:   # none configured, or a CMS that hasn't answered yet: asked again next time
+                return _examples_cache["data"] or {"categories": []}
             cats = []
             for g in groups:
                 items = [c for u in g.get("urls", []) if (c := await _example_card(u))]
