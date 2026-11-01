@@ -99,6 +99,10 @@ export interface BridgeOptions {
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
 }
 
+// What an app hears when a call fails. Offline, just that: the error a sign-in token throws then is a vendor's,
+// its name in it, and an app may well show it.
+const said = (e: unknown) => (navigator.onLine ? String((e as Error)?.message ?? e) : "offline");
+
 export function attachBridge({
   frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData,
 }: BridgeOptions) {
@@ -128,7 +132,7 @@ export function attachBridge({
       try {
         reply({ ok: true, result: await appData(scope.split("/")[1], msg as Record<string, unknown>) });
       } catch (e) {
-        reply({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 300),
+        reply({ ok: false, error: said(e).slice(0, 300),
                 status: (e as { status?: number })?.status });
       }
       return;
@@ -140,7 +144,7 @@ export function attachBridge({
       try {
         post({ type: MSG.readResult, id: msg.id, ok: true, content: await readFile(msg.path) });
       } catch (err) {
-        fail((err as Error).message);
+        fail(said(err));
       }
       return;
     }
@@ -155,7 +159,7 @@ export function attachBridge({
         await writeFile(msg.path, msg.content);
         post({ type: MSG.writeResult, id: msg.id, ok: true });
       } catch (err) {
-        fail((err as Error).message);
+        fail(said(err));
       }
       return;
     }
@@ -172,7 +176,7 @@ export function attachBridge({
         if (!path) return fail("cancelled");
         post({ type: MSG.saveResult, id: msg.id, ok: true, path });
       } catch (err) {
-        fail((err as Error).message);
+        fail(said(err));
       }
       return;
     }
@@ -192,7 +196,7 @@ export function attachBridge({
         });
         post({ type: MSG.fetchResult, id: msg.id, ok: true, ...res });
       } catch (err) {
-        fail((err as Error).message);
+        fail(said(err));
       }
       return;
     }

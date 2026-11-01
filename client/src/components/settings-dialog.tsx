@@ -12,6 +12,7 @@ import { ALL, useAllPages } from "../hooks/use-all-pages";
 import { EmojiPicker } from "./emoji-picker";
 import type { MemberInfo } from "../hooks/use-workspaces";
 import { t, useLang, setLang, getLang } from "../lib/i18n";
+import { accountError } from "../lib/errors";
 import { cn, getThemeMode, setThemeMode, followUpsEnabled, setFollowUpsEnabled, askEnabled, setAskEnabled, webSearchEnabled, setWebSearchEnabled, autoApprove, setAutoApprove, type ThemeMode } from "../lib/utils";
 import { pushProvider, pushStatus, requestPush, answerResult } from "../lib/notifications";
 import { useDarkMode } from "../hooks/use-dark-mode";
@@ -35,8 +36,8 @@ const TAB_ICONS: Record<Tab, React.ReactNode> = {
 const supportMail = (subject: string) =>
   window.open(`mailto:support@cycls.com?subject=${encodeURIComponent(subject)}`, "_blank");
 
-const clerkMsg = (e: unknown) =>
-  (e as { errors?: { message?: string }[]; message?: string })?.errors?.[0]?.message || (e as Error)?.message || "Something went wrong";
+// An account change that failed, in our words: what the person can fix, else a reference (lib/errors).
+const clerkMsg = (e: unknown) => accountError(e, "settings");
 
 const dateLocale = () => (getLang() === "ar" ? "ar" : "en");
 const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(dateLocale(), { month: "short", day: "numeric", year: "numeric" });
@@ -1921,12 +1922,12 @@ function AddCardForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =>
     setSaving(true);
     try {
       const result = await submit();
-      if (result.error) { toast.error(result.error.error?.message || "Failed"); return; }
+      if (result.error) { toast.error(accountError(result.error, "payment")); return; }
       const payer = (organization ?? user) as unknown as { addPaymentMethod: (p: { gateway: string; paymentToken: string }) => Promise<unknown> };
       await payer.addPaymentMethod({ gateway: "stripe", paymentToken: result.data.paymentToken });
       onDone();
     } catch (e) {
-      toast.error((e as { errors?: { message?: string }[] })?.errors?.[0]?.message || "Failed to add payment method");
+      toast.error(accountError(e, "payment"));
     } finally {
       setSaving(false);
     }

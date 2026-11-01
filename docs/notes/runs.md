@@ -355,6 +355,19 @@ a live run record along with the rest of the meta.
   connection dropped while the agent was working" with a Continue button.
 - Do the same on page load with `?id=`, on `visibilitychange` back to visible, and
   on `online`.
+- **A lost connection is a banner, not an error** (`connection` in `use-chat.ts`,
+  `ConnectionState` over the message box; the shape is assistant-ui's Connection
+  State). It drops when the browser goes offline, a send never gets through (offline,
+  or fetch's own network `TypeError`), or the poll can't reach the run. What waits on
+  it is `held`: a send that never left goes again by itself when the connection is
+  back, as a `retry`, so a request that did arrive is run in place rather than twice;
+  a run is read back by the poll. Offline, a send never starts: a sign-in token would
+  first wait out its own retries, half a minute before Clerk's own error, which the
+  chat once printed word for word. The browser's `online` is the cue; online but out
+  of reach, it tries again at 2 s, doubling to 30 s. Back, it says so for two
+  seconds. Any other failure is `Something went wrong. Reference: <id>`, the error's
+  own text going to analytics under that id (`lib/errors.ts`), as the server's go to
+  its log.
 - **A detached run is visible as itself.** Once a run outlives its stream the UI
   has to say so, or a returning person cannot tell "still working" from "stopped
   and said nothing" — the complaint this note exists to fix. In the open chat, the

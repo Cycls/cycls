@@ -11,12 +11,13 @@ import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
-import { Icon, IconButton, type IconName } from "./icon";
+import { Icon, IconButton, Spinner, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
 import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
 import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
+import { GlowStar } from "./cycls-star";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
 import { ShareDialog, type ShareLink, type ShareLinks } from "./share-dialog";
@@ -24,7 +25,7 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig, SendExtra, Part } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig, SendExtra, Part, Connection } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
@@ -138,7 +139,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   config?: AppConfig | null;
   view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -582,8 +583,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setFollowUp(null);
     setAsk(null);
     // Sending mid-run queues instead: the agent's tool loops are long, and a
-    // thought the user has now shouldn't wait on them.
-    if (isStreaming) {
+    // thought the user has now shouldn't wait on them. So does one written while a message waits on the connection.
+    if (isStreaming || connection.held === "send") {
       const next = [...queuedRef.current,
                     { id: crypto.randomUUID(), text, attachments: sendAttachments, origin, extra }];
       queuedRef.current = next;
@@ -596,7 +597,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
     if (selection) void flushDesignEditor(selection.path, 1500).then(go);
     else go();
-  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, files?.path]);
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, files?.path]);
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -1231,7 +1232,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     />
                   );
                 })}
-                {runStatus === "interrupted" && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
+                {(runStatus === "interrupted" || messages[messages.length - 1]?.parts?.some((p) => p.type === "callout" && p.code === "cut_off"))
+                  && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
                 )}</ApprovalContext.Provider>
                 </ConnectorsContext.Provider>
@@ -1287,6 +1289,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   {runStatus === "running" && !attached && (
                     <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
                   )}
+                </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {connection.phase !== "online" && <ConnectionState connection={connection} onReconnect={onReconnect} />}
                 </AnimatePresence>
                 {followUpsOn && followUp && !isStreaming && !ask && !approval && (
                   <FollowUpChip
@@ -1792,6 +1797,44 @@ function RunIndicator({ step, startedAt, onStop }: {
         >
           {t("stopRun")}
         </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// The connection, over the message box, while it isn't simply there: lost (and what waits on it), coming back,
+// back. Lost is not an error: a message that never left goes again by itself, and a run kept going without us
+// wears the star a working step wears.
+function ConnectionState({ connection: { phase, held }, onReconnect }: { connection: Connection; onReconnect: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 px-1"
+    >
+      <div role="status" className="flex items-center gap-2.5 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
+        {phase === "dropped" && held === "run" && <GlowStar size={14} />}
+        {phase === "dropped" && held !== "run" && (
+          <svg className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+            <path d="m2 2 20 20M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07" />
+          </svg>
+        )}
+        {phase === "reconnecting" && <Spinner className="size-3.5 shrink-0 text-muted-foreground" />}
+        {phase === "resumed" && <Icon name="check" className="size-3.5 shrink-0 text-emerald-500" strokeWidth={2} />}
+        <span className="min-w-0 flex-1 py-1 text-sm text-muted-foreground" dir="auto">
+          {t(phase === "reconnecting" ? "connReconnecting" : phase === "resumed" ? "connBack"
+            : held === "send" ? "connPending" : held === "run" ? "connRun" : "connLost")}
+        </span>
+        {phase === "dropped" && (
+          <button
+            onClick={onReconnect}
+            className="shrink-0 rounded-full px-2.5 py-1 text-xs text-muted-foreground/80 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          >
+            {t("reconnect")}
+          </button>
+        )}
       </div>
     </motion.div>
   );

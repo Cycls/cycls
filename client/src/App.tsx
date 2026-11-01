@@ -20,6 +20,7 @@ import { arCheckout } from "./lib/clerk-ar";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
+import { accountError } from "./lib/errors";
 import { IconButton } from "./components/icon";
 import { Star } from "./components/cycls-star";
 import { Chat, type AccountInfo, type FilesPanelProps } from "./components/chat";
@@ -314,6 +315,7 @@ function SharedViewAuthed({ agent, oneTap }: { agent?: string; oneTap?: boolean 
   // sign-in surface as the app — email/password lands the session in place and
   // the share loads without a navigation; OAuth returns to this exact link.
   const [signingIn, setSigningIn] = useState(false);
+  useSessionElsewhere();
   if (!isLoaded) return null;
   if (signingIn && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
   // One Tap, as on the home page, brings a visitor back to this share signed in.
@@ -326,6 +328,32 @@ function SharedViewAuthed({ agent, oneTap }: { agent?: string; oneTap?: boolean 
                   onSignIn={() => setSigningIn(true)} />
     </>
   );
+}
+
+// Clerk tells other tabs about a sign-out, never a sign-in: a page that loaded signed out stays so after the person
+// signs in elsewhere (another tab, another cycls.ai agent, One Tap), and signing in here is refused, `session_exists`.
+// Back in view, a signed-out page asks Clerk for that session and moves to it.
+function useSessionElsewhere() {
+  const clerk = useClerk();
+  useEffect(() => {
+    let last = 0;
+    const look = async () => {
+      if (document.visibilityState !== "visible" || clerk.session || Date.now() - last < 5000) return;
+      last = Date.now();
+      try {
+        const session = (await clerk.client?.reload())?.lastActiveSessionId;
+        if (session) await clerk.setActive({ session });
+      } catch { /* offline, or signed out after all */ }
+    };
+    document.addEventListener("visibilitychange", look);
+    window.addEventListener("focus", look);
+    window.addEventListener("pageshow", look);   // Back, restoring a page the browser kept
+    return () => {
+      document.removeEventListener("visibilitychange", look);
+      window.removeEventListener("focus", look);
+      window.removeEventListener("pageshow", look);
+    };
+  }, [clerk]);
 }
 
 function SSOCallback() {
@@ -404,40 +432,55 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
         redirectUrlComplete,
       });
     } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || "Sign in failed");
+      if (await signedInAlready(err)) return;
+      setError(accountError(err, "oauth"));
       setIsLoading(false);
     }
   };
 
-  const runAuth = async (e: React.FormEvent, failMsg: string, op: () => Promise<void>) => {
+  // Signed in already, elsewhere in this browser: Clerk refuses a second sign-in. Its own sign-in moves to the
+  // session that is there instead of saying so; this one does too, and reloads the page if it can't.
+  const signedInAlready = async (err: unknown) => {
+    const e = (err as { errors?: { code?: string; meta?: { sessionId?: string } }[] })?.errors?.[0];
+    if (e?.code !== "session_exists" && e?.code !== "identifier_already_signed_in") return false;
+    const session = e.meta?.sessionId ?? client?.lastActiveSessionId;
+    try {
+      if (session) { await setActive!({ session }); return true; }
+    } catch { /* the reload below */ }
+    window.location.reload();
+    return true;
+  };
+
+  // `where` names the step for the reference a failure shows (lib/errors); the person reads our words.
+  const runAuth = async (e: React.FormEvent, where: string, op: () => Promise<void>) => {
     e.preventDefault();
     try {
       setIsLoading("form");
       setError("");
       await op();
     } catch (err: unknown) {
-      const clerkErr = err as { errors?: { message: string }[] };
-      setError(clerkErr.errors?.[0]?.message || failMsg);
+      if (!(await signedInAlready(err))) setError(accountError(err, where));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSignIn = (e: React.FormEvent) => runAuth(e, "Sign in failed", async () => {
+  const handleSignIn = (e: React.FormEvent) => runAuth(e, "sign_in", async () => {
     track("sign_in_attempted", { method: "password", step: "form" });
     const result = await signIn!.create({ identifier: email, password });
     if (result.status === "complete") await setActive!({ session: result.createdSessionId });
     else if (result.status === "needs_first_factor") setStep("verify");
+    else throw new Error(`sign-in ${result.status}`);   // a step this page has no screen for
   });
 
-  const handleSignInVerify = (e: React.FormEvent) => runAuth(e, "Verification failed", async () => {
+  const handleSignInVerify = (e: React.FormEvent) => runAuth(e, "sign_in_code", async () => {
     track("sign_in_attempted", { method: "email_code", step: "verify" });
     const result = await signIn!.attemptFirstFactor({ strategy: "email_code", code });
     if (result.status === "complete") await setActive!({ session: result.createdSessionId });
+    else throw new Error(`sign-in ${result.status}`);
   });
 
-  const handleSignUp = (e: React.FormEvent) => runAuth(e, "Sign up failed", async () => {
+  const handleSignUp = (e: React.FormEvent) => runAuth(e, "sign_up", async () => {
     track("sign_up_attempted", { method: "password", step: "form" });
     const result = await signUp!.create({ emailAddress: email, password });
     if (result.status === "complete") {
@@ -449,23 +492,24 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     }
   });
 
-  const handleSignUpVerify = (e: React.FormEvent) => runAuth(e, "Verification failed", async () => {
+  const handleSignUpVerify = (e: React.FormEvent) => runAuth(e, "sign_up_code", async () => {
     track("sign_up_attempted", { method: "email_code", step: "verify" });
     const result = await signUp!.attemptEmailAddressVerification({ code });
     if (result.status === "complete") {
       markSignup("email_code", result.createdUserId);
       await setSignUpActive!({ session: result.createdSessionId });
-    }
+    } else throw new Error(`sign-up ${result.status}`);
   });
 
-  const handleForgotPassword = (e: React.FormEvent) => runAuth(e, "Reset failed", async () => {
+  const handleForgotPassword = (e: React.FormEvent) => runAuth(e, "reset", async () => {
     await signIn!.create({ strategy: "reset_password_email_code", identifier: email });
     setStep("verify");
   });
 
-  const handleResetVerify = (e: React.FormEvent) => runAuth(e, "Reset failed", async () => {
+  const handleResetVerify = (e: React.FormEvent) => runAuth(e, "reset_code", async () => {
     const result = await signIn!.attemptFirstFactor({ strategy: "reset_password_email_code", code, password: newPassword });
     if (result.status === "complete") await setActive!({ session: result.createdSessionId });
+    else throw new Error(`sign-in ${result.status}`);
   });
 
   const inputClass = "w-full rounded-xl border border-border bg-background/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
@@ -764,6 +808,7 @@ function PublicGate({ config }: { config: AppConfig | null }) {
     const params = new URLSearchParams(window.location.search);
     return params.has("fork") || params.has("q") || params.has("plans");
   });
+  useSessionElsewhere();
   if (signingIn) return <CustomSignIn />;
   return (
     <>

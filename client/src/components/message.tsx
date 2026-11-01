@@ -17,6 +17,7 @@ import { SourcesPart } from "./parts/sources-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
+import { calloutText } from "../lib/errors";
 import { urlKey } from "./parts/sources-part";
 import { useMemo } from "react";
 import { t } from "../lib/i18n";
@@ -40,10 +41,11 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
     case "table":
       return <TablePart key={index} headers={part.headers} rows={part.rows} />;
     case "callout":
+      if (part.code === "cut_off") return null;   // the chat's "Stopped before it finished" line says it, with Continue
       return (
         <CalloutPart
           key={index}
-          callout={part.callout || ""}
+          callout={calloutText(part)}
           style={part.style}
           title={part.title}
           onRetry={part.style === "error" ? onRetry : undefined}
