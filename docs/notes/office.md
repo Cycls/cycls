@@ -83,6 +83,18 @@ Bash, zip or XML edits on an .xlsx, nor a render or convert to look again (`shee
 - `create` → a blank workbook (first sheet named by `target`, `rtl` for Arabic) and then `ops`; opens in the canvas.
   Without `rtl`, an Arabic sheet name or Arabic values make it right to left (DeepSeek dropped the flag on super-dev).
 - Every call logs `sheets_call` with its argument names and op names.
+- Rows a query, a tool or a script produced are not typed (`office/fill.py`): `set_values` with `from` names a
+  .csv, .tsv or .json file in the workspace (`{columns, rows}`, a list of rows, a list of objects, or an object
+  holding one such list), its column names first unless `header` is false. A CSV's plain numbers become numbers (a
+  code with a leading zero, or more digits than Excel keeps, stays text), a column of ISO dates becomes Excel day
+  numbers plus a date format op, pandas' unnamed index column is dropped, and text starting with = gets a space so
+  data never runs as a formula. At most 100,000 cells per fill. The reply names each column's letter, so the next
+  formulas need no read. Before: the namaa Excel turn (2026-10-31) typed 1,288 cells in one call, 110 s; filled from
+  the file, 92 × 14 cells and a formula column take about 3 s on the service. Typed values past 200 cells still run,
+  with a reminder in the reply.
+- `set_formulas` on a range larger than its formulas fills it like Excel's fill handle (F2:F93 with `=C2/D2`):
+  relative references move with each copy, `$` ones stay, string literals, function names (LOG10) and sheet names
+  are left alone, and one moved off the sheet is `#REF!`. The service still gets every formula spelled out.
 
 The `_ui` event `sheets_command {path, mutations, version, intent}` carries the engine's mutations. An open editor
 replays them; it is read-only under a banner while the turn runs (the tab is marked live, as Design does); one that
