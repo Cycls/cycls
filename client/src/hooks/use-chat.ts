@@ -58,6 +58,8 @@ export interface Part {
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
   picture?: string;  // a tool that makes a picture, from `.on(picture=…)`: its shape ("16:9")
+  plain?: boolean;   // a tool with a `.on(title=…)`: its step is a sentence in plain words, never name(input)
+  i18n?: Record<string, { tool_name?: string; step?: string }>;   // those words in each UI language
   result?: string;   // a connector call's outcome, bounded — the block's Response
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
@@ -469,6 +471,10 @@ export function useChat(baseUrl: string = "") {
               // The loop's keep-alive while a tool runs: not a part. Taken as one, it ended the
               // live tool row after 15 s, so a long call (a render) looked finished while it ran.
               if (type === "ping") continue;
+              // A custom tool's own result (a dict with no `type`) is the agent body's to see, not the
+              // chat's: it renders nothing, and kept as a part it split a run of steps while it streamed
+              // but not after a reload.
+              if (!type) continue;
 
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
@@ -521,8 +527,8 @@ export function useChat(baseUrl: string = "") {
                 (currentPart as any)[key] = ((currentPart[key] as string) || "") + (item[key] as string);
               } else {
                 if (type === "usage") uiHandlerRef.current?.({ ...item, action: "usage" } as unknown as UIAction);
-                // New part
-                currentPart = { ...item };
+                // New part, stamped when it appeared: the chat times a stretch of work by it
+                currentPart = { at: Date.now(), ...item };
                 if (item.headers) currentPart.rows = [];
                 parts.push(currentPart);
               }

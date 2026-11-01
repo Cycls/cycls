@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 const translations = {
   en: {
     thinking: "Thinking",
+    step: "step",
     steps: "steps",
     usedConnectors: "Used {names}",
     request: "Request",
@@ -699,6 +700,7 @@ const translations = {
   },
   ar: {
     thinking: "أفكر",
+    step: "خطوة",
     steps: "خطوات",
     usedConnectors: "استخدم {names}",
     request: "الطلب",
@@ -1434,6 +1436,12 @@ const SERVER_STEPS: Record<string, keyof typeof translations.en> = {
   "Summarizing earlier messages to keep this chat going...": "compacting",
 };
 export const stepText = (s: string) => (SERVER_STEPS[s] ? t(SERVER_STEPS[s]) : s);
+
+// A step's tool name and line in the UI's language, where its tool gave them (`.on(title=…)`).
+export function localStep<P extends { tool_name?: string; step?: string; i18n?: Record<string, { tool_name?: string; step?: string }> }>(p: P): P {
+  const words = p.i18n?.[getLang()];
+  return words ? { ...p, tool_name: words.tool_name || p.tool_name, step: words.step || p.step } : p;
+}
 
 const _ARABIC = /[\u0600-\u06FF]/;
 

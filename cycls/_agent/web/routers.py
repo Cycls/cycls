@@ -44,6 +44,17 @@ def _search_rows(body):
     return [r for r in rows if isinstance(r, dict) and r.get("url")]
 
 
+def _call_window(usage):
+    """When a model call began and ended, in epoch ms, as `at` stamps for the parts it wrote: its thinking and text
+    from the start, its tool calls at the end. The chat times a stretch of work by them. None for a call saved
+    without timing."""
+    try:
+        end = int(datetime.fromisoformat(usage["at"]).timestamp() * 1000)
+        return {"at": end - int(usage.get("ms") or 0)}, {"at": end}
+    except (TypeError, KeyError, ValueError):
+        return {}, {}
+
+
 def to_ui_messages(raw):
     """Stored API messages → FE shape `{role, content: str, parts?, attachments?}`.
     Drops harness scaffolding — messages tagged `internal` (compaction summary,
@@ -129,16 +140,17 @@ def to_ui_messages(raw):
         elif role == "assistant":
             blocks = c if isinstance(c, list) else [{"type": "text", "text": c}] if isinstance(c, str) else []
             parts, texts = [], []
+            began, ended = _call_window(msg.get("usage"))
             for b in blocks:
                 if not isinstance(b, dict):
                     continue
                 t = b.get("type")
                 if t == "text":
-                    parts.append({"type": "text", "text": b.get("text", "")}); texts.append(b.get("text", ""))
+                    parts.append({"type": "text", "text": b.get("text", ""), **began}); texts.append(b.get("text", ""))
                 elif t == "thinking":
-                    parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
+                    parts.append({"type": "thinking", "thinking": b.get("thinking", ""), **began})
                 elif t == "tool_use":
-                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))}
+                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input")), **ended}
                     if b.get("id") in errored:
                         part["ok"] = False
                     if detailed(b.get("name", "")):
@@ -166,6 +178,11 @@ def to_ui_messages(raw):
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
                 out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    for m in out:   # what a tool showed (a chart, a file) appeared when its results came back: as the next call began
+        after = None
+        for p in reversed(m.get("parts") or []):
+            if "at" in p: after = p["at"]
+            elif after is not None and p.get("type") in ("chart", "step", "sources", "image"): p["at"] = after
     waiting = []   # a card still waiting when the person typed something else was skipped
     for m in out:
         if m["role"] == "assistant":

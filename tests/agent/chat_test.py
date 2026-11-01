@@ -1,4 +1,6 @@
 """Tests for to_ui_messages — stored API messages → FE shape converter."""
+from datetime import datetime, timezone
+
 from cycls._agent.web.routers import to_ui_messages
 
 
@@ -637,3 +639,26 @@ def test_a_batch_with_no_card_projects_unchanged():
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "A", "content": "ok"}]},
     ])
     assert not [p for p in ui[-1]["parts"] if p["type"] == "card"]
+
+
+def test_a_reload_times_each_part_by_the_model_call_that_wrote_it():
+    """The chat times a stretch of work from `at` stamps, live and after a reload alike: a call's thinking and text
+    from when it began, its tool calls from when it ended, and what a tool showed (a chart) from when the next call
+    began, which is when its results came back. A call saved without timing stamps nothing."""
+    raw = [
+        {"role": "user", "content": "how did 4030 do?"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "look it up"},
+                                          {"type": "tool_use", "id": "t1", "name": "x_chart", "input": {}}],
+         "usage": {"at": "2026-11-01T08:00:10+00:00", "ms": 4000}},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "drawn"}],
+         "ui": [{"type": "chart", "id": "t1", "series": []}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "now say it"}, {"type": "text", "text": "Up 4%."}],
+         "usage": {"at": "2026-11-01T08:00:30+00:00", "ms": 6000}},
+        {"role": "assistant", "content": [{"type": "text", "text": "Untimed."}]},
+    ]
+    parts = to_ui_messages(raw)[1]["parts"]
+    at = {p.get("thinking") or p.get("text") or p["type"]: p.get("at") for p in parts}
+    t0 = int(datetime(2026, 11, 1, 8, tzinfo=timezone.utc).timestamp() * 1000)
+    assert at["look it up"] == t0 + 6_000 and at["step"] == t0 + 10_000
+    assert at["chart"] == at["now say it"] == at["Up 4%."] == t0 + 24_000
+    assert at["Untimed."] is None
