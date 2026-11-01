@@ -63,6 +63,14 @@ One Node process:
   the docx-preview stays): its own channel (`cycls-docs`), wording, glyph and Word download. A document with
   tracked changes opens view only. Not yet: comments in the editor, the selection offered to the composer, and
   the agent's edits replayed live — an open document takes them in when the canvas fetches the file again.
+- A shared page (a chat share's canvas, or a file share) opens a workbook or a Word document in the same editor,
+  view only, where the owner's organisation has it: `shareOffice` in `shared-view.tsx` is an `OfficeEditorApi` with
+  `readonly: true` over `GET /share/{user}/{token}/office/<product>[/open]?path=`, which answer as the owner's routes do
+  (`office_views()`), over the owner's workspace, for a file the share covers (`_covered`, the same check as the
+  share's file route). No save, version or comment route is shared: the editor loads read-only, saves are never sent,
+  nothing polls the owner's file, and a Word open writes nothing of the owner's (no comment mirror). The header names
+  only the file, and Open ⌄ keeps PDF and Print (`?as=pdf` over the share). Before (2026-11-01): a shared workbook
+  showed as SheetJS values, without formats, formulas or merges. Each version is read by the service once (the cache).
 
 ## The agent's `sheets` tool (`cycls/_agent/office/sheets.py`)
 

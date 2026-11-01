@@ -463,7 +463,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   // bytes — a document view, not a flat PDF — unless it opens in Cycls Docs (asked per file).
   if (isDocx(fileKind(file))) {
     if (!content) return null;
-    return officeEditor?.docs && !shared
+    return officeEditor?.docs && (!shared || officeEditor.readonly)
       ? <DocsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<DocxView url={content} />} />
       : <DocxView url={content} />;
   }
@@ -530,7 +530,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   }
   if (isSpreadsheet(fileKind(file))) {
     if (!content) return null;
-    return officeEditor && !shared
+    return officeEditor && (!shared || officeEditor.readonly)
       ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<SpreadsheetView url={content} name={file.name} />} />
       : <SpreadsheetView url={content} name={file.name} />;
   }

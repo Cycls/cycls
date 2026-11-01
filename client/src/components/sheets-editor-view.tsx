@@ -207,7 +207,8 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   const changes = product === "docs" ? opened?.changes ?? [] : [];
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewFailed, setReviewFailed] = useState(false);
-  const editable = !!api && !heldReadonly;
+  const viewOnly = !!given?.readonly;   // a shared page
+  const editable = !!api && !viewOnly && !heldReadonly;
   const doc = useRef("");
   const version = useRef("");       // what the next save names as its base
   const forceNext = useRef(false);  // "Keep mine": the next save writes over the newer file
@@ -224,7 +225,7 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
   // Comments: the workspace's record for this file (the same store as a design's), polled; none on a view that
   // cannot comment (a share). A workbook's are only there; a Word document's are in the file as well (for Word) and
   // the record mirrors them (cycls/_agent/office/docs_comments.py) — pictures, the agent's badge, others' at once.
-  const comments = useComments(api ? path : undefined);
+  const comments = useComments(api && !viewOnly ? path : undefined);
   const commentsHost = useContext(CommentsContext);
   const docsMe = product === "docs" && commentsHost?.me
     ? { name: commentsHost.me.name, ...(commentsHost.me.image ? { image: commentsHost.me.image } : {}) }
@@ -486,7 +487,7 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
 
   // One save at a time; the editor sends the next once this one is answered.
   const save = async (id: string, snapshot: unknown, ops: unknown[], trail?: string[]) => {
-    if (!calls) return;
+    if (!calls || viewOnly) return;   // a shared page never writes
     const forDoc = doc.current;
     const run = (async () => {
       setStatus("saving");
@@ -782,9 +783,13 @@ export function SheetsEditorView({ url, path, name, api: given, onDownload, fall
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
           <Glyph className="size-4 shrink-0" />
           <div className="flex min-w-0 items-center gap-1 text-muted-foreground" dir="auto">
-            <span className="shrink-0">{t("sheetsWorkspace")}</span>
-            {crumbs.map((c, i) => <span key={i} className="shrink-0">/ {c}</span>)}
-            <span className="shrink-0">/</span>
+            {!viewOnly && (   /* a shared page has no workspace to name */
+              <>
+                <span className="shrink-0">{t("sheetsWorkspace")}</span>
+                {crumbs.map((c, i) => <span key={i} className="shrink-0">/ {c}</span>)}
+                <span className="shrink-0">/</span>
+              </>
+            )}
             <span className="truncate font-medium text-foreground" title={name}>{name}</span>
           </div>
           {startItems && <span className="hidden sm:inline">{startItems}</span>}

@@ -23,7 +23,7 @@ from cycls._agent.connectors import approval_key
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
-from cycls._agent.web.office_routes import office_router
+from cycls._agent.web.office_routes import office_router, office_views
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -1384,16 +1384,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return {"type": "file", "path": path[5:],
                 "url": f"/share/{user}/{token}/file/{path[5:]}{suffix}", **common}
 
-    @r.get("/share/{user}/{token}/file/{file_path:path}")
-    async def shared_attachment(
-        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
-        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-    ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
+    async def _covered(user, token, file_path, bearer, ws_q):
+        """The owner's workspace, when the share covers file_path: the share's file (file share), or part of its
+        chat's shareable surface — an attachment, or a canvas artifact the conversation produced (the shared page
+        shows the chat WITH its output)."""
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws_q)
         path = row["path"]
-        # Authorize: file_path must be the share's file (file share), or part of
-        # its chat's shareable surface — an attachment, or a canvas artifact the
-        # conversation produced (the shared page shows the chat WITH its output).
         if path.startswith("file/"):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
@@ -1404,6 +1400,37 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
+        return ws_owner
+
+    # A shared workbook or Word document opens in Cycls Sheets / Docs, view only: whether it may (the owner's
+    # organisation has the editor) and what the editor opens, the owner's routes' answers for a file the share
+    # covers. The editor is never sent a save route; the read is cached by version, so viewers cost one read each.
+    @r.get("/share/{user}/{token}/office/{product}")
+    async def shared_office(
+        user: str, token: str, product: str, path: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        view = office_views().get(product)
+        if view is None:
+            raise HTTPException(404, "No such editor")
+        return await view["check"](await _covered(user, token, path, bearer, ws), path)
+
+    @r.get("/share/{user}/{token}/office/{product}/open")
+    async def shared_office_open(
+        user: str, token: str, product: str, path: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        view = office_views().get(product)
+        if view is None:
+            raise HTTPException(404, "No such editor")
+        return await view["open"](await _covered(user, token, path, bearer, ws), path, mirror=False)
+
+    @r.get("/share/{user}/{token}/file/{file_path:path}")
+    async def shared_attachment(
+        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        ws_owner = await _covered(user, token, file_path, bearer, ws)
         # ?as=slides / ?as=pdf preview an Office file (read-only — shares aren't
         # editable). Same convert+cache path as get_file, over the owner's
         # workspace. Presentations get the slide viewer; everything else, PDF.

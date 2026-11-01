@@ -584,6 +584,53 @@ def test_shared_office_file_previews_as_pdf(tmp_path, monkeypatch):
     assert raw.status_code == 200 and raw.content == b"raw-pptx"
 
 
+def test_a_shared_workbook_and_document_open_in_the_editors_to_view(tmp_path, monkeypatch):
+    """A shared page showed a workbook as plain values (SheetJS): no formats, formulas or merges. It opens in Cycls
+    Sheets (a .docx in Cycls Docs) as the owner's editor reads it, view only: only for files the share covers,
+    only where the owner's organisation has the editor, and nothing of the owner's is written."""
+    from cycls._app.db import workspace
+    from cycls._agent.office import client as office_client, docs_comments
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    ws.root.mkdir(parents=True, exist_ok=True)
+    (ws.root / "pe.xlsx").write_bytes(b"PK\x03\x04 workbook")
+    (ws.root / "memo.docx").write_bytes(b"PK\x03\x04 document")
+    (ws.root / "other.xlsx").write_bytes(b"PK\x03\x04 not shared")
+
+    async def read_xlsx(data, name=None):
+        return {"workbook": {"id": "book", "name": name}, "notices": [], "activeSheet": "s1"}
+
+    async def read_docx(data, name=None):
+        return {"document": {"id": "doc"}, "notices": []}
+
+    async def no_mirror(*a, **k):
+        raise AssertionError("a viewer wrote the owner's comment record")
+
+    monkeypatch.setattr(office_client, "read_xlsx", read_xlsx)
+    monkeypatch.setattr(office_client, "read_docx", read_docx)
+    monkeypatch.setattr(docs_comments, "mirror_file", no_mirror)
+
+    book = client.post("/share", json={"path": "file/pe.xlsx"}).json()["token"]
+    base = f"/share/user_test/{book}/office"
+    assert client.get(f"{base}/sheets", params={"path": "pe.xlsx"}).json() == {"editor": False, "reason": "off"}
+    monkeypatch.setenv("SHEETS_ORGS", "*")
+    monkeypatch.setenv("DOCS_ORGS", "*")
+    assert client.get(f"{base}/sheets", params={"path": "pe.xlsx"}).json() == \
+        {"editor": True, "url": "https://office.test/sheets/", "name": "pe.xlsx"}
+    opened = client.get(f"{base}/sheets/open", params={"path": "pe.xlsx"})
+    assert opened.status_code == 200 and opened.json()["snapshot"]["name"] == "pe" and opened.headers["x-version"]
+    assert client.get(f"{base}/sheets/open", params={"path": "other.xlsx"}).status_code == 403   # not this share's
+    assert client.get(f"{base}/slides", params={"path": "pe.xlsx"}).status_code == 404
+    assert client.put(f"{base}/sheets/save", params={"path": "pe.xlsx"}, content=b"{}").status_code in (404, 405)
+    assert client.get(f"{base}/sheets/version", params={"path": "pe.xlsx"}).status_code in (404, 405)
+
+    memo = client.post("/share", json={"path": "file/memo.docx"}).json()["token"]
+    doc = client.get(f"/share/user_test/{memo}/office/docs/open", params={"path": "memo.docx"})
+    assert doc.status_code == 200 and doc.json()["snapshot"] == {"id": "doc"}
+
+
 def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
     """The shared page of a .fig said "Preview isn't available": a visitor has no editor.
     Over the share transport it gets the design's slide manifest (?as=slides) and its

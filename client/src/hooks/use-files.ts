@@ -79,6 +79,8 @@ export type DocsTrackedChange = {
   inserted?: string; deleted?: string; start?: number; end?: number; other?: boolean;
 };
 export type OfficeEditorApi = {
+  // A shared page: the editor only shows the file (no save, comments, or version checks; `shareOffice`).
+  readonly?: boolean;
   sheets: (path: string) => Promise<OfficeOpen>;
   sheetsOpen: (path: string) => Promise<SheetsOpened>;
   // The file's version now (an open editor checks it once the file may have changed some other way).
