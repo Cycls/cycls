@@ -602,6 +602,53 @@ def test_shared_office_file_previews_as_pdf(tmp_path, monkeypatch):
     assert raw.status_code == 200 and raw.content == b"raw-pptx"
 
 
+def test_a_shared_workbook_and_document_open_in_the_editors_to_view(tmp_path, monkeypatch):
+    """A shared page showed a workbook as plain values (SheetJS): no formats, formulas or merges. It opens in Cycls
+    Sheets (a .docx in Cycls Docs) as the owner's editor reads it, view only: only for files the share covers,
+    only where the owner's organisation has the editor, and nothing of the owner's is written."""
+    from cycls._app.db import workspace
+    from cycls._agent.office import client as office_client, docs_comments
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    ws.root.mkdir(parents=True, exist_ok=True)
+    (ws.root / "pe.xlsx").write_bytes(b"PK\x03\x04 workbook")
+    (ws.root / "memo.docx").write_bytes(b"PK\x03\x04 document")
+    (ws.root / "other.xlsx").write_bytes(b"PK\x03\x04 not shared")
+
+    async def read_xlsx(data, name=None):
+        return {"workbook": {"id": "book", "name": name}, "notices": [], "activeSheet": "s1"}
+
+    async def read_docx(data, name=None):
+        return {"document": {"id": "doc"}, "notices": []}
+
+    async def no_mirror(*a, **k):
+        raise AssertionError("a viewer wrote the owner's comment record")
+
+    monkeypatch.setattr(office_client, "read_xlsx", read_xlsx)
+    monkeypatch.setattr(office_client, "read_docx", read_docx)
+    monkeypatch.setattr(docs_comments, "mirror_file", no_mirror)
+
+    book = client.post("/share", json={"path": "file/pe.xlsx"}).json()["token"]
+    base = f"/share/user_test/{book}/office"
+    assert client.get(f"{base}/sheets", params={"path": "pe.xlsx"}).json() == {"editor": False, "reason": "off"}
+    monkeypatch.setenv("SHEETS_ORGS", "*")
+    monkeypatch.setenv("DOCS_ORGS", "*")
+    assert client.get(f"{base}/sheets", params={"path": "pe.xlsx"}).json() == \
+        {"editor": True, "url": "https://office.test/sheets/", "name": "pe.xlsx"}
+    opened = client.get(f"{base}/sheets/open", params={"path": "pe.xlsx"})
+    assert opened.status_code == 200 and opened.json()["snapshot"]["name"] == "pe" and opened.headers["x-version"]
+    assert client.get(f"{base}/sheets/open", params={"path": "other.xlsx"}).status_code == 403   # not this share's
+    assert client.get(f"{base}/slides", params={"path": "pe.xlsx"}).status_code == 404
+    assert client.put(f"{base}/sheets/save", params={"path": "pe.xlsx"}, content=b"{}").status_code in (404, 405)
+    assert client.get(f"{base}/sheets/version", params={"path": "pe.xlsx"}).status_code in (404, 405)
+
+    memo = client.post("/share", json={"path": "file/memo.docx"}).json()["token"]
+    doc = client.get(f"/share/user_test/{memo}/office/docs/open", params={"path": "memo.docx"})
+    assert doc.status_code == 200 and doc.json()["snapshot"] == {"id": "doc"}
+
+
 def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
     """The shared page of a .fig said "Preview isn't available": a visitor has no editor.
     Over the share transport it gets the design's slide manifest (?as=slides) and its
@@ -3335,3 +3382,49 @@ def test_the_design_routes_are_a_router_of_their_own(tmp_path):
     client = _ws_routers_client(tmp_path)
     assert client.get("/brand").json() == {"brand": None}
     assert client.get("/versions/designs/none.fig").json() == {"versions": []}
+
+
+def test_a_shared_composition_is_a_download_never_played(tmp_path):
+    """A file share of a Video composition serves its bytes as a download, whatever `as` says:
+    never as a page on this origin, never through the video service for someone else."""
+    from cycls._app.db import workspace
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    (ws.root / "videos").mkdir(parents=True, exist_ok=True)
+    (ws.root / "videos" / "reel.video.html").write_text("<html><script>steal()</script></html>")
+    token = client.post("/share", json={"path": "file/videos/reel.video.html"}).json()["token"]
+    for q in ("", "?as=player"):
+        r = client.get(f"/share/user_test/{token}/file/videos/reel.video.html{q}")
+        assert r.status_code == 200 and r.content == b"<html><script>steal()</script></html>"
+        assert r.headers["content-type"] == "application/octet-stream"
+        assert "attachment" in r.headers["content-disposition"]
+
+
+def test_files_serve_a_composition_as_the_player(tmp_path, monkeypatch):
+    """GET /files/<x>.video.html?as=player answers 200 with the page or why there is none; the
+    plain route still serves the source, and the listing names the kind."""
+    from types import SimpleNamespace
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls._app.auth import User
+    from cycls._app.db import workspace
+    from cycls._agent.web.routers import install_routers
+
+    user = User(id="user_test")
+    stub = SimpleNamespace(prod=False, _auth_provider=None, config=SimpleNamespace(workspaces=None, max_upload=512))
+    fapp = FastAPI()
+    install_routers(stub, fapp, Depends(lambda: user), tmp_path, f"file://{tmp_path}")
+    client = TestClient(fapp)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    (ws.root / "videos").mkdir(parents=True, exist_ok=True)
+    (ws.root / "videos" / "reel.video.html").write_text("<html><head></head><body>x</body></html>")
+    monkeypatch.delenv("VIDEO_URL", raising=False)
+    r = client.get("/files/videos/reel.video.html?as=player")
+    assert r.status_code == 200 and r.json()["html"] is None and "not configured" in r.json()["reason"]
+    assert r.json()["render"] == {"path": "videos/reel.mp4", "exists": False}
+    raw = client.get("/files/videos/reel.video.html")
+    assert raw.status_code == 200 and b"<body>x</body>" in raw.content    # the source itself
+    listing = client.get("/files", params={"path": "videos"}).json()
+    rows = listing if isinstance(listing, list) else listing.get("files") or listing.get("entries") or []
+    assert any(e.get("name") == "reel.video.html" and e.get("kind") == "composition" for e in rows), listing

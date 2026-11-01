@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit } from "../src/components/app-bridge";
+import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit, utf8Bytes } from "../src/components/app-bridge";
 
 const APP = "apps/burnup/index.html";
 const scope = appScope(APP)!;
@@ -323,6 +323,15 @@ describe("the write limit counts bytes, not characters", () => {
     const arabic = "ا".repeat(Math.ceil(MAX_WRITE_BYTES * 0.6));   // 1 unit, 2 bytes each
     expect(arabic.length).toBeLessThan(MAX_WRITE_BYTES);
     expect(overWriteLimit(arabic)).toBe(true);
+  });
+
+  it("counts UTF-8 as the browser writes it, lone surrogates included", () => {
+    const enc = new TextEncoder();
+    const high = String.fromCharCode(0xd800);
+    const low = String.fromCharCode(0xdc00);
+    for (const s of ["abc", "مرحبا", "€uro", "😀 ok", `a${high}b`, low, `${high}${low}`]) {
+      expect(utf8Bytes(s)).toBe(enc.encode(s).length);
+    }
   });
 });
 

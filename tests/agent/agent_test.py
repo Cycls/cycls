@@ -7,12 +7,14 @@ import asyncio, json, os
 import sys
 import types
 from pathlib import Path
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from cycls._agent.harness import providers as _providers
-from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES,
+from cycls._agent.harness.main import (_run, MAX_RETRIES, MAX_CONTINUATIONS, MAX_PAUSES, MAX_DROPPED, _dropped, _stream_with_retry,
+                                      STREAK_WARN, STREAK_STOP,
                                       _is_retryable, _ingest, DEFAULT_WINDOW, DEFAULT_MAX_TOKENS)
 
 
@@ -128,11 +130,21 @@ def _stream(responses, summary="<summary>Summary here</summary>", calls=None):
     return stream
 
 
+@contextlib.contextmanager
 def _mock_anthropic(client):
-    """Insert a fake anthropic module into sys.modules that returns *client*."""
+    """A fake anthropic module that returns *client*, in place of that one entry of sys.modules. patch.dict would
+    restore all of sys.modules, dropping what the run imported first (pydantic's lazy root_model, through mcp)."""
     mod = types.ModuleType("anthropic")
     mod.AsyncAnthropic = lambda: client
-    return patch.dict(sys.modules, {"anthropic": mod})
+    real = sys.modules.get("anthropic")
+    sys.modules["anthropic"] = mod
+    try:
+        yield
+    finally:
+        if real is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = real
 
 
 def _history_tool_ids(history):
@@ -854,6 +866,26 @@ def test_ingest_unreadable_attachment_names_the_file(tmp_path):
         assert "propose a way to extract" in result[0]["text"]
 
 
+def test_ingest_video_clip_points_at_footage_only_when_video_is_offered(tmp_path):
+    """An attached clip, with Video offered, is sent to `footage` — not to "propose a way to
+    extract" it, which once had the model install a recogniser in its sandbox."""
+    ws = tmp_path / "workspace"
+    (ws / "uploads").mkdir(parents=True)
+    # bytes no text codec reads (not UTF-8, nor Windows' cp1252), as in any real clip
+    (ws / "uploads" / "Talk.MOV").write_bytes(b"\x00\x00\x00\x18ftypqt  \x81\x8d\x8f\x90\x9d\xff" + b"\x00" * 64)
+
+    offered = asyncio.run(_ingest([{"type": "file", "file": "uploads/Talk.MOV"}], str(ws), video=True))
+    assert len(offered) == 1
+    assert '"uploads/Talk.MOV"' in offered[0]["text"] and "`footage`" in offered[0]["text"]
+    assert "propose a way" not in offered[0]["text"]
+
+    plain = asyncio.run(_ingest([{"type": "file", "file": "uploads/Talk.MOV"}], str(ws)))
+    assert "propose a way to extract" in plain[0]["text"] and "footage" not in plain[0]["text"]
+
+    missing = asyncio.run(_ingest([{"type": "file", "file": "uploads/gone.mp4"}], str(ws), video=True))
+    assert "footage" not in missing[0]["text"]
+
+
 def test_ingest_empty_file_ref_passes_through(tmp_path):
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
@@ -1083,6 +1115,60 @@ def test_pause_turn_resume_is_bounded(agent_env):
 
     assert calls["n"] == MAX_PAUSES + 1
     assert any(isinstance(i, dict) and i.get("code") == "cut_off" for i in items)   # Continue picks it up
+
+
+def _failing_rounds(ctx, command, out="Error: old_str not found in videos/a.video.html", good=lambda i: False):
+    """A model that keeps calling bash, round after round (up to 60): `command(i)` is the call,
+    `good(i)` whether it works. Returns (rounds the model was given, the turn's events, tool results)."""
+    calls = {"n": 0}
+    def stream(**kw):
+        calls["n"] += 1
+        i = calls["n"]
+        if i > 60: return FakeStream(_make_response([_text_block("gave up")]))
+        return FakeStream(_make_response([_tool_use_block(f"t{i}", inp={"command": command(i)})], stop_reason="tool_use"))
+    async def bash(*a, **k):
+        return "ok" if good(calls["n"]) else out
+    mock_client = MagicMock()
+    mock_client.messages.stream = stream
+    with _mock_anthropic(mock_client), patch("cycls._agent.tools._exec_bash", new=bash):
+        items = asyncio.run(_drain(_run(context=ctx)))
+    results = [b["content"] for m in _read_history(ctx) if m["role"] == "user" and isinstance(m["content"], list)
+               for b in m["content"] if b.get("type") == "tool_result"]
+    return calls["n"], items, results
+
+
+def test_the_same_failing_call_is_told_then_stops_the_turn(agent_env):
+    """A suite turn sent the same failing `edit` 394 times: a failing call sent again as it is gets the same
+    answer, so it is the same answer again's (_REPEATED) — told the 3rd and 5th time, the turn stopped at
+    the 8th — and carries no second note about failures in a row."""
+    from cycls._agent.harness.main import _REPEATED
+    ws, ctx = agent_env
+    out = "Error: old_str not found in videos/a.video.html"
+    rounds, items, results = _failing_rounds(ctx, lambda i: "sed -i s/a/b/ a.html", out=out)
+    stop = max(_REPEATED)
+    assert rounds == stop
+    assert results[0] == results[1] == out
+    assert results[2].endswith(_REPEATED[3].format(n=3)) and results[4].endswith(_REPEATED[5].format(n=5))
+    assert results[-1].endswith(_REPEATED[stop].format(n=stop))
+    assert any(isinstance(i, dict) and "kept giving the same result" in str(i.get("callout", "")) for i in items)
+
+
+def test_failures_in_a_row_stop_the_turn_even_when_each_call_differs(agent_env):
+    ws, ctx = agent_env
+    rounds, items, results = _failing_rounds(ctx, lambda i: f"sed -i s/{i}/b/ a.html")
+    assert rounds == STREAK_STOP
+    assert "in a row have failed" not in results[STREAK_WARN - 2]
+    assert f"{STREAK_WARN} tool calls in a row have failed" in results[STREAK_WARN - 1]
+    assert "The turn was stopped here" in results[-1]
+
+
+def test_a_call_that_works_resets_the_failures_in_a_row(agent_env):
+    """Every fourth call works: a long, productive turn is not cut off."""
+    ws, ctx = agent_env
+    rounds, items, results = _failing_rounds(ctx, lambda i: f"sed -i s/{i}/b/ a.html", good=lambda i: i % 4 == 0)
+    assert rounds == 61                                   # ran until the model itself stopped
+    assert not any("in a row have failed" in r or "stopped here" in r for r in results)
+    assert not any(isinstance(i, dict) and "kept failing" in str(i.get("callout", "")) for i in items)
 
 
 def _seeded_env(agent_env):
@@ -1515,6 +1601,81 @@ def test_auto_retry_on_overloaded(agent_env):
     assert notices[0]["id"] == notices[1]["id"] and notices[0]["id"].startswith("retry-")
 
 
+def test_a_dropped_connection_is_told_apart_from_a_refusal():
+    class APIConnectionError(Exception): pass
+    class RemoteProtocolError(Exception): pass
+    class ReadTimeout(Exception): pass
+    try:
+        try:
+            raise RemoteProtocolError("peer closed connection without sending complete message body")
+        except RemoteProtocolError as inner:
+            raise APIConnectionError("Connection error.") from inner
+    except APIConnectionError as e:
+        wrapped = e
+    assert _dropped(wrapped)
+    assert _dropped(Exception("Decode transfer failed for request rank=0 ... KVTransferError timed out after 300.0s"))
+    assert _dropped(ReadTimeout())
+    assert not _dropped(Exception("invalid api key"))
+    assert not _dropped(Exception("Error code: 400 - Could not decode image"))
+
+
+class _Flaky:
+    """A provider whose stream goes as `plan` says, call after call: (events to yield, error to raise or None)."""
+    def __init__(self, plan):
+        self.plan, self.calls = list(plan), 0
+
+    async def stream(self, **kw):
+        evs, err = self.plan[min(self.calls, len(self.plan) - 1)]
+        self.calls += 1
+        for ev in evs:
+            yield ev
+        if err:
+            raise err
+
+
+def _through_retry(provider):
+    async def go():
+        return [ev async for ev in _stream_with_retry(provider)]
+    with patch("asyncio.sleep", new_callable=lambda: AsyncMock(return_value=None)):
+        return asyncio.run(go())
+
+
+def test_a_connection_dropped_before_the_answer_is_tried_again():
+    """Production super's "Connection error." turns: nothing had reached the person, so it tries again."""
+    class APIConnectionError(Exception): pass
+    done = Turn(content=[{"type": "text", "text": "hi"}], stop_reason="end_turn")
+    p = _Flaky([([], APIConnectionError("Connection error.")), (["hi", done], None)])
+    out = _through_retry(p)
+    assert p.calls == 2 and out[-1] is done and "hi" in out
+    assert any(isinstance(e, dict) and e.get("step") == "The service is busy, trying again..." for e in out)
+
+
+def test_a_connection_dropped_mid_answer_is_not_tried_again():
+    """Text had reached the person: another attempt would show it twice, so the turn fails as before."""
+    class APIConnectionError(Exception): pass
+    p = _Flaky([(["Hel"], APIConnectionError("Connection error.")), (["Hello"], None)])
+    with pytest.raises(APIConnectionError):
+        _through_retry(p)
+    assert p.calls == 1
+
+
+def test_an_attempt_that_hung_before_dropping_is_not_tried_again():
+    """SGLang's decode hand-off gives up after 300 s: a person who waited that long is not made to wait again."""
+    class APIConnectionError(Exception): pass
+    p = _Flaky([([], APIConnectionError("Connection error.")), (["hi"], None)])
+    with patch("cycls._agent.harness.main.DROPPED_WITHIN", -1), pytest.raises(APIConnectionError):
+        _through_retry(p)
+    assert p.calls == 1
+
+
+def test_a_connection_that_keeps_dropping_gives_up_after_max_dropped():
+    class APIConnectionError(Exception): pass
+    p = _Flaky([([], APIConnectionError("Connection error."))])
+    with pytest.raises(APIConnectionError):
+        _through_retry(p)
+    assert p.calls == MAX_DROPPED + 1
+
+
 def test_auto_retry_exhausted_shows_error(agent_env):
     """After MAX_RETRIES, the error should surface to the user."""
     ws, ctx = agent_env
@@ -1842,6 +2003,34 @@ def test_mcp_tools_reach_the_model_and_dispatch(agent_env):
     assert result["content"] == "3 orders"
 
 
+def test_mcp_servers_are_asked_at_once_and_keep_their_order(agent_env):
+    """Discovery runs for every server together — one after another, each handshake added up before the
+    first model call. Here each server waits for the other to have started, which one after another could
+    never do; a server that fails is still said, and the tools still come in the servers' order."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    started = {"a": asyncio.Event(), "b": asyncio.Event()}
+
+    async def listing(url, headers):
+        if "down" in url:
+            raise ConnectionError("unreachable")
+        me, other = ("a", "b") if "a.example" in url else ("b", "a")
+        started[me].set()
+        await asyncio.wait_for(started[other].wait(), 2)
+        return [types.SimpleNamespace(name=f"t{me}", description="d", input_schema={"type": "object"})]
+
+    client, calls = _capturing_client([_make_response([_text_block("done")])])
+    servers = [m.MCP("https://a.example/mcp").name("a"), m.MCP("https://down.example/mcp").name("down"),
+               m.MCP("https://b.example/mcp").name("b")]
+    with _mock_anthropic(client), patch.object(m, "_list", listing):
+        items = asyncio.run(_drain(_run(context=ctx, mcp_servers=servers)))
+    names = [t["name"] for t in calls[0]["tools"]]
+    assert "a_ta" in names and "b_tb" in names and names.index("a_ta") < names.index("b_tb")
+    warned = [str(i) for i in items if isinstance(i, dict) and "Couldn't reach" in str(i)]
+    assert len(warned) == 1 and "down" in warned[0]
+
+
 def test_connector_calls_are_attributable_in_the_log(agent_env):
     """A call through a connector logs which grant it acted with, its scope, and
     the tool_use id that joins the line to the transcript."""
@@ -2050,6 +2239,26 @@ def test_a_connector_result_reaches_the_model_but_never_the_chat(agent_env):
     history = _read_history(ctx)
     results = [b["content"] for m in history if m["role"] == "user" for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
     assert "RAW CONNECTOR RESULT" in results                               # the model still gets it
+
+
+def test_a_titled_custom_tool_says_what_it_did_in_plain_words_in_each_language():
+    """`.on(title=…)`: the step is the label as a sentence, never `name(input)`, and each UI language's words
+    ride under `i18n`, both before the input has streamed in and once it has."""
+    from cycls import LLM
+    from cycls._agent.tools import register_labels, tool_head, tool_step
+    llm = LLM().on("tasi_sql", AsyncMock(), title={"en": "checked market data", "ar": "راجعت بيانات السوق"},
+                   label=lambda i: {"en": f"Checking prices for {i.get('symbol', '')}", "ar": f"أراجع أسعار {i.get('symbol', '')}"})
+    register_labels(llm._labels, titles=llm._titles)
+    assert tool_head("tasi_sql") == {"tool_name": "checked market data", "plain": True,
+                                     "i18n": {"en": {"tool_name": "checked market data"}, "ar": {"tool_name": "راجعت بيانات السوق"}}}
+    step = tool_step("tasi_sql", {"symbol": "2222", "sql": "SELECT 1"})
+    assert step["step"] == "Checking prices for 2222" and step["plain"]
+    assert step["i18n"]["ar"] == {"tool_name": "راجعت بيانات السوق", "step": "أراجع أسعار 2222"}
+
+    register_labels({"macro": lambda i: "Brent oil price"}, titles={"macro": "checked economic data"})   # one string
+    assert tool_step("macro", {}) == {"tool_name": "checked economic data", "plain": True, "step": "Brent oil price"}
+    register_labels({"broken": lambda i: 1 / 0}, titles={"broken": "did a thing"})
+    assert tool_step("broken", {})["step"] == ""                                     # a label that throws says nothing
 
 
 def test_a_custom_tool_can_carry_an_icon_and_its_own_request_and_response(agent_env):
@@ -2293,3 +2502,51 @@ def test_the_guide_asked_for_when_everything_is_loaded_says_so(agent_env, monkey
     with _mock_anthropic(client):
         asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
     assert "already" in _results(ctx)[0] and not made
+
+
+def test_design_skills_reach_the_model_whole_and_are_never_cleared(agent_env, monkeypatch):
+    """Design's own skills are instructions, as the `skill` tool's are: two of them run past the
+    size a tool result is spilled to a file at, and still come back whole — and compaction keeps them."""
+    from cycls._agent.harness.compact import clear
+    from cycls._agent.design import skill
+    from cycls._agent.spill import SPILL_AT
+    _design_env(monkeypatch, mode=None)
+    ws, ctx = agent_env
+    _say(ctx, "make me a poster")
+    want = ["design-direction", "graphic-design"]
+    assert sum(len(skill.SKILLS[n][1]) for n in want) > SPILL_AT
+    client, calls = _capturing_client([
+        _make_response([_tool_use_block("t1", name="design", inp={"action": "skill", "skill": want})], stop_reason="tool_use"),
+        _make_response([_text_block("Ready.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    said = _results(ctx)[0]
+    assert all(skill.SKILLS[n][1] in said for n in want) and not said.startswith("Saved ")
+    history = _read_history(ctx)
+    kept = [b.get("content") for m in clear(history) if isinstance(m.get("content"), list) for b in m["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_result"]
+    assert kept == [said]
+    render = [{"role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "design", "input": {"action": "render"}}]},
+              {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "Design saved"}]}]
+    assert clear(render)[1]["content"][0]["content"] == "[Old tool result cleared]"     # a design made is history, as before
+
+
+def test_a_render_says_which_skill_to_load_until_the_chat_has_loaded_one(agent_env, monkeypatch):
+    _design_env(monkeypatch, mode=None)
+    _fake_design_render(monkeypatch)
+    ws, ctx = agent_env
+    _say(ctx, "make me a poster")
+    spec = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Launch", "x": 80, "y": 80}]}
+    render = lambda i: _tool_use_block(f"r{i}", name="design", inp={"action": "render", "name": f"p{i}", "spec": spec})
+    client, _ = _capturing_client([
+        _make_response([render(1)], stop_reason="tool_use"),                                  # no skill yet: said
+        _make_response([_tool_use_block("s", name="design", inp={"action": "skill", "skill": ["graphic-design"]}),
+                        render(2)], stop_reason="tool_use"),                                  # loaded beside it: not
+        _make_response([render(3)], stop_reason="tool_use"),                                  # loaded before: not
+        _make_response([_text_block("Done.")])])
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, allowed_tools=["Design"])))
+    said = [r for r in _results(ctx) if "Design saved" in r]
+    assert len(said) == 3
+    assert '"skill": ["design-direction", "graphic-design"]' in said[0]
+    assert "No design skill" not in said[1] and "No design skill" not in said[2]

@@ -16,7 +16,7 @@ plan is in the file's git history.)
 |---|---|---|
 | The design | `designs/<name>.fig` in the workspace | The one document. The agent writes it through the design service; a person edits it in the editor; both save to this file. |
 | The Cycls side | `client/src/components/design-editor-view.tsx` (this repo) | Fetches the `.fig`, posts it into the editor, writes the editor's saves back, relays the agent's live edits, shows who else is here. |
-| The editor | `cycls-design/editor/` — a patched OpenPencil, built by `editor/build.sh` (`editor/Dockerfile`) and served by the design service on its own origin (`DESIGN_EDITOR_URL`, opened with `?embed=cycls`) | Edits one design. Everything that would touch a disk or open a second document is routed to Cycls instead. |
+| The editor | `cycls-design/editor/` — a patched open-source editor, built by `editor/build.sh` (`editor/Dockerfile`) and served by the design service on its own origin (`DESIGN_EDITOR_URL`, opened with `?embed=cycls`) | Edits one design. Everything that would touch a disk or open a second document is routed to Cycls instead. |
 | The bridge | `cycls-design/editor/patches/cycls-bridge.ts` + `host.ts` | The editor's half of the conversation below. Its header comment is the protocol's source of truth. |
 | The relay | `cycls-design/live/` (`cycls-design-live`) | Carries a shared document between the editors of people who have one design open. It never reads the design. |
 
@@ -99,7 +99,7 @@ posted, and it gets none of the workspace messages.
 | The server | `cycls/_agent/web/routers.py` (`/files`), `cycls/_agent/web/design_routes.py` (`/versions`, `/deck`, `/design/*`, `/brand`), `cycls/_agent/design/` (`store.py` versions and bases, `live.py` rooms and passes, `refresh.py` exports beside a design, `deck.py` slide changes) |
 | The editor's patches | `cycls-design/editor/patches/` — `cycls-bridge.ts`, `host.ts`, `collab/`, `stubs/`, `edits.json` (exact edits to upstream files), `upstream.sha256` (the upstream files they rely on, pinned) |
 | The relay | `cycls-design/live/server.ts`, `live/ticket.ts`, `deploy_live.py` |
-| Why OpenPencil needs each patch | `cycls-design/docs/quirks.md` |
+| Why the editor needs each patch | `cycls-design/docs/quirks.md` |
 | Tests of the seam | `cycls-design/editor/tests/` (Playwright: a real editor in a stand-in Cycls page; `test_workspace.py` alone, `test_live.py` together), `cycls-design/tests/live.test.ts` (the relay) |
 
 ## Building and shipping it
@@ -107,9 +107,6 @@ posted, and it gets none of the workspace messages.
 The editor is built inside a Linux container (`docker build -f editor/Dockerfile
 --output type=local,dest=editor-dist editor`, from the service repo); the service
 deploy copies `editor-dist/` into its image, so the editor ships with the service.
-The build pins OpenPencil to one commit and fails if an upstream file the patches
+The build pins the upstream editor to one commit and fails if an upstream file the patches
 replace or edit has changed. The Cycls side ships in this package: `cd client && npm
 run build` writes the web client into `cycls/_agent/web/themes/default`.
-
-`docs/notes/design-editor-patch/` is a snapshot of the patch files from 5 October 2026,
-kept from before they had a repo of their own. It is not what is built.

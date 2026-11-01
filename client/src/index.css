@@ -44,6 +44,14 @@ body {
   margin: 0;
 }
 
+/* A sideways two-finger swipe on a Mac trackpad turns into the browser's Back once nothing under it scrolls further:
+   a sheet at column A, a document's edge (the design editor never let one through, it pans on every wheel). The app
+   never leaves its page that way, and the swipe stops here even when it starts in an editor's frame. Chrome, Edge
+   and Firefox hold to this; Safari ignores it (WebKit bug 240183), so there the editor itself has to take the swipe. */
+html, body {
+  overscroll-behavior-x: none;
+}
+
 /* Prose */
 .prose {
   line-height: 1.7;

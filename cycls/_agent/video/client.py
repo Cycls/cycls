@@ -1,0 +1,379 @@
+"""Video for Cycls agents: a thin client to the cycls-video service.
+
+The service (its own repo, cycls-video, on Modal) checks a composition, shows its frames, builds its
+live preview and renders it to MP4 on a GPU. This module only talks to it; the files live in the
+calling agent's workspace.
+
+Configured by the env an agent sets:
+  VIDEO_URL      the service's door, https://<workspace>--cycls-video-web.modal.run
+  VIDEO_SECRET   the key every request carries (X-Video-Key)
+  VIDEO_ORGS     who may use it: organisation ids (or a person's id for a personal account),
+                 comma separated. Empty means nobody, "*" everybody. An agent that admits anyone
+                 who signs in must not switch Video on for all of them by setting a URL.
+
+Unset VIDEO_URL and the tool is simply not offered.
+
+Renders outlive a request: Modal cuts a web request at 150 s with a redirect, so a job is
+submitted, then collected by long-polling, and the MP4 is streamed to disk. A redirect is never
+followed: the only host this client talks to is the one in VIDEO_URL.
+"""
+import asyncio
+import hashlib
+import json
+import os
+import time
+import uuid
+from pathlib import Path
+
+import httpx
+
+PROTO = 4          # 2: sound (audio files with word timings, voice-overs, the sound map); 3: footage;
+                   # 4: the editor (at() given to the page, offsets within the scene, tracks)
+_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
+# A clip goes to the door in pieces of this size (the door takes up to 40 MiB). Small enough that a
+# slow link finishes one well inside its timeout and a call that runs out of time has lost little.
+_PIECE = 8 * 1024 * 1024
+_WAIT = 25                  # seconds the door holds a poll open; it never holds one longer than 30
+# A deploy of the service swaps its containers under requests in flight: a dropped connection or a
+# front-end 502/503 is tried again, twice. Only for calls that change nothing when made twice
+# (reads, and job submissions, which carry an idempotency key).
+_RETRY_WAITS = (1, 3)
+_GONE = (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+
+
+class Unavailable(RuntimeError):
+    """The service is not configured, unreachable, paused, or refused the key."""
+
+
+class OverAllowance(Unavailable):
+    """Today's GPU allowance is used up (the organisation's or the person's). The door says so only
+    after lint passed: a preview still works, frames and renders wait until midnight UTC."""
+
+
+class Refused(RuntimeError):
+    """The door refused a job before any GPU work: the composition has errors to fix first."""
+
+    def __init__(self, message, findings, sound=None):
+        super().__init__(message)
+        self.findings = findings
+        self.sound = sound
+
+
+def configured():
+    return bool(os.environ.get("VIDEO_URL"))
+
+
+def _allowed():
+    return {s.strip() for s in os.environ.get("VIDEO_ORGS", "").replace(";", ",").split(",") if s.strip()}
+
+
+def _org(workspace):
+    subject = str(getattr(workspace, "subject", "") or "")
+    return subject.partition(":")[0] or "local"
+
+
+def offered(workspace):
+    """Is Video on for this workspace's organisation? The URL alone does not switch it on."""
+    if not configured():
+        return False
+    allowed = _allowed()
+    if "*" in allowed:
+        return True
+    subject = str(getattr(workspace, "subject", "") or "")
+    org, _, user = subject.partition(":")
+    return bool(allowed & {org, user, getattr(workspace, "ws", None)} - {"", None})
+
+
+def _hash(kind, value):
+    return hashlib.sha256(f"{kind}:{value}".encode()).hexdigest()[:32]
+
+
+def _headers(workspace=None):
+    h = {"X-Video-Proto": str(PROTO)}
+    if secret := os.environ.get("VIDEO_SECRET"):
+        h["X-Video-Key"] = secret
+    if workspace is not None:
+        h["X-Video-Tenant"] = _hash("tenant", _org(workspace))
+        h["X-Video-User"] = _hash("user", getattr(workspace, "subject", "") or "local")
+    return h
+
+
+def _url(path):
+    url = os.environ.get("VIDEO_URL")
+    if not url:
+        raise Unavailable("video is not configured (VIDEO_URL)")
+    return url.rstrip("/") + path
+
+
+async def _request(method, path, *, workspace=None, retry=False, timeout=_TIMEOUT, headers=None, **kw):
+    headers = {**_headers(workspace), **(headers or {})}
+    gone = None
+    waits = (0, *_RETRY_WAITS) if retry else (0,)
+    for wait in waits:
+        if wait:
+            await asyncio.sleep(wait)
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                resp = await client.request(method, _url(path), headers=headers, **kw)
+        except _GONE as e:
+            gone = e
+            continue
+        except httpx.HTTPError as e:
+            raise Unavailable(f"the video service is unreachable: {type(e).__name__}") from e
+        # The platform's own failures, not the door's (which carry {"error"}): a request that met a
+        # container as it stopped came back as a bare 500 after half a minute (2026-10-10).
+        if resp.status_code in (500, 502, 503, 504) and not _ours(resp):
+            gone = RuntimeError(f"video service {resp.status_code} (no answer from the service itself)")
+            continue
+        break
+    else:
+        raise Unavailable(f"the video service is unreachable after {len(waits)} tries: {gone}") from gone
+    if 300 <= resp.status_code < 400:
+        raise Unavailable(f"the video service answered a redirect ({resp.status_code}); it is not followed")
+    if resp.status_code == 401:
+        raise Unavailable("the video service refused the key (VIDEO_SECRET)")
+    if resp.status_code == 503 and _ours(resp):
+        raise Unavailable(_body(resp).get("error") or "the video service is paused")
+    return resp
+
+
+def _ours(resp):
+    return isinstance(_body(resp), dict) and "error" in _body(resp)
+
+
+def _body(resp):
+    try:
+        return resp.json()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _error(resp):
+    data = _body(resp)
+    detail = data.get("error") if isinstance(data, dict) else None
+    return RuntimeError(detail or f"video service {resp.status_code}: {resp.text[:200]}")
+
+
+async def get_contract(etag=None):
+    """The signed contract with the formats, fonts and limits; None when unchanged (304)."""
+    headers = {"If-None-Match": etag} if etag else {}
+    resp = await _request("GET", "/v1/contract", retry=True, headers=headers, timeout=httpx.Timeout(30.0, connect=10.0))
+    if resp.status_code == 304:
+        return None
+    if resp.status_code != 200:
+        raise _error(resp)
+    return {**resp.json(), "etag": resp.headers.get("etag")}
+
+
+async def fill_template(workspace, template, variables):
+    """A template filled with the model's variables → the composition's HTML, or Refused saying what
+    to change."""
+    resp = await _request("POST", "/v1/templates/fill", workspace=workspace, retry=True,
+                          json={"template": template, "vars": variables}, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        raise Refused((_body(resp) or {}).get("error") or "the variables do not fit the template", [])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()["html"]
+
+
+async def warm(workspace=None):
+    """Ask for a renderer to start. Never raises: warming is a hint."""
+    try:
+        resp = await _request("POST", "/v1/warm", workspace=workspace, timeout=httpx.Timeout(20.0, connect=10.0))
+        return resp.json() if resp.status_code == 200 else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _parts(meta, files):
+    parts = [("meta", (None, json.dumps(meta)))]
+    for name, data in (files or {}).items():
+        parts.append((name, (name, data, "application/octet-stream")))
+    return parts
+
+
+def _footage_meta(footage):
+    """`footage` is {workspace path: {"sha", "words"?}} (media.collect_footage): what the door is told."""
+    if not footage:
+        return {}
+    said = {path: f["words"] for path, f in footage.items() if f.get("words")}
+    return {"footage": {path: f["sha"] for path, f in footage.items()}, **({"footage_words": said} if said else {})}
+
+
+async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None,
+                  fonts=None):
+    """Prepare and lint on CPU; with `preview`, the page the canvas plays. `fonts`: the brand fonts
+    the composition names ({hashed file: {family, weight, style, arabic}}, video/fonts.py)."""
+    meta = {"html": html, "images": images or {}, "preview": preview, "audio": audio or {}, "words": words or {},
+            **_footage_meta(footage), **({"fonts": fonts} if fonts else {})}
+    resp = await _request("POST", "/v1/compile", workspace=workspace, retry=True, files=_parts(meta, files),
+                          timeout=httpx.Timeout(120.0, connect=15.0))
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
+                 footage=None, fonts=None):
+    """Start a review, look or render. → {token, eta_s, times, sound}. A repeated `key` returns the same job."""
+    meta = {"kind": kind, "html": html, "images": images or {}, "params": params or {}, "audio": audio or {},
+            "words": words or {}, **_footage_meta(footage), **({"fonts": fonts} if fonts else {})}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, files),
+                          headers=headers, timeout=httpx.Timeout(120.0, connect=15.0))
+    if resp.status_code == 422:
+        data = _body(resp) or {}
+        raise Refused(data.get("error") or "the composition has errors", data.get("findings") or [], data.get("sound"))
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def voice(workspace, text, *, language=None, voice_id=None, key=None):
+    """Start a voice-over: the script read aloud on the organisation's GPU. → {token, eta_s}.
+    Refused (with the reason) when the script is empty or too long, or the voice unknown."""
+    meta = {"kind": "voice", "voice": {"text": text, "language": language, "voice": voice_id or "default"}}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+                          headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        raise Refused((_body(resp) or {}).get("error") or "the script was refused", [])
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def dub(workspace, slots, *, language, voice_id=None, key=None):
+    """Start a dub: each sentence said in `language` in its slot on the video's clock (the service's
+    voice.dub), one voice job. → {token, eta_s, slots}. Refused (with the reason) for bad slots."""
+    meta = {"kind": "voice", "voice": {"slots": slots, "language": language, "voice": voice_id or "default"}}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+                          headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        why = (_body(resp) or {}).get("error") or "the dub was refused"
+        if why.startswith("There is no script"):      # a service from before dubbing
+            why = "this video service cannot dub yet"
+        raise Refused(why, [])
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def clip_state(workspace, sha, *, sheet=False):
+    """Does the door hold this clip (named by the sha256 of its bytes)? → {"state": none | partial |
+    uploaded | ready, "at": bytes it has, "info": its facts when ready, "sheet": its frames when asked for}."""
+    resp = await _request("GET", f"/v1/assets/{sha}", workspace=workspace, retry=True, params={"sheet": 1} if sheet else None)
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+def _read_piece(path, at, size):
+    with open(path, "rb") as f:
+        f.seek(at)
+        return f.read(size)
+
+
+async def send_clip(workspace, path, sha, *, at=0, budget=240):
+    """Send a clip to the door in pieces, in order, from byte `at`; a piece the door says does not
+    follow on is resumed from where the door is. Stops when `budget` seconds have passed.
+    → (bytes the door has, whether that is all of it)."""
+    size = Path(path).stat().st_size
+    deadline, gaps = time.monotonic() + budget, 0
+    while at < size:
+        if time.monotonic() > deadline:
+            return at, False
+        data = await asyncio.to_thread(_read_piece, path, at, _PIECE)
+        last = at + len(data) >= size
+        resp = await _request("PUT", f"/v1/assets/{sha}", workspace=workspace, retry=True, content=data,
+                              params={"offset": at, "last": int(last)}, headers={"Content-Type": "application/octet-stream"},
+                              timeout=httpx.Timeout(300.0, connect=15.0))
+        if resp.status_code == 409 and gaps < 5:
+            at, gaps = int((_body(resp) or {}).get("at") or 0), gaps + 1
+            continue
+        if resp.status_code in (413, 422):
+            raise Refused((_body(resp) or {}).get("error") or "the clip was refused", [])
+        if resp.status_code != 200:
+            raise _error(resp)
+        body = resp.json()
+        if body.get("state") in ("uploaded", "ready"):
+            return size, True
+        at = int(body.get("at") or at + len(data))
+    return at, True
+
+
+async def ingest(workspace, sha, *, language=None, key=None):
+    """Have a clip the door holds made ready (read on the organisation's GPU). → {token, eta_s}, or
+    {ready: True, info} when it already is."""
+    meta = {"kind": "ingest", "asset": sha, "language": language}
+    headers = {"Idempotency-Key": key} if key else {}
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+                          headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code == 422:
+        raise Refused((_body(resp) or {}).get("error") or "the clip was refused", [])
+    if resp.status_code == 429 and _ours(resp):
+        raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def forget_clip(workspace, sha):
+    """Have the door drop its copy of a clip. Never raises: the door drops it by itself in time."""
+    try:
+        await _request("DELETE", f"/v1/assets/{sha}", workspace=workspace, retry=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def poll(workspace, token, wait=_WAIT):
+    resp = await _request("GET", f"/v1/jobs/{token}", workspace=workspace, retry=True, params={"wait": wait},
+                          timeout=httpx.Timeout(wait + 30.0, connect=15.0))
+    if resp.status_code in (404, 410):
+        data = _body(resp) or {}
+        return {"state": data.get("state") or "gone", "error": data.get("error") or "no such job"}
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def wait(workspace, token, budget):
+    """Poll until the job ends or `budget` seconds pass. → the result, or the last pending state."""
+    deadline = time.monotonic() + budget
+    while True:
+        left = deadline - time.monotonic()
+        r = await poll(workspace, token, wait=max(1, min(_WAIT, int(left))))
+        if r.get("state") != "pending" or time.monotonic() >= deadline - 1:
+            return r
+
+
+async def fetch(workspace, token, dest, scratch, what="video"):
+    """Stream a finished render (or, with what="audio", a voice-over) to `dest`, by way of a temp
+    file in `scratch` that never outlives the call. → bytes written."""
+    scratch = Path(scratch)
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = scratch / f"video-{uuid.uuid4().hex}.part"
+    try:
+        size = 0
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0), follow_redirects=False) as client:
+            async with client.stream("GET", _url(f"/v1/jobs/{token}/{what}"), headers=_headers(workspace)) as resp:
+                if resp.status_code != 200:
+                    await resp.aread()
+                    raise _error(resp)
+                with open(tmp, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1 << 20):
+                        f.write(chunk)
+                        size += len(chunk)
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        os.replace(tmp, dest)
+        return size
+    finally:
+        tmp.unlink(missing_ok=True)

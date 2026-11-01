@@ -37,6 +37,7 @@ import { ALL, complete, useAllPages } from "./hooks/use-all-pages";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics";
 import { initAffiliate } from "./lib/affiliate";
+import { setPeople } from "./lib/people";
 
 function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null,
                          author?: Record<string, string | undefined>): FilesPanelProps {
@@ -57,6 +58,8 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     exportDesign: f.exportDesign,
     brand: f.brand,
     fetchVersioned: f.fetchVersioned,
+    videoEditor: f.videoEditor,
+    officeEditor: f.officeEditor,
     designLive: f.designLive,
     listVersions: f.listVersions,
     versionBlob: f.versionBlob,
@@ -198,6 +201,18 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
   } : {};
   const handleShare = async (audience: string = "public") => await chat.share(audience, authorFields);
 
+  // The organisation's members by account id: the workspace menu's member list, and the names a
+  // design's history gives a teammate's change (the sign-in token carries none).
+  const orgMembers = (memberships?.data || [])
+    .map((m) => ({
+      id: m.publicUserData?.userId || "",
+      name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
+        || m.publicUserData?.identifier || m.publicUserData?.userId || "",
+      email: m.publicUserData?.identifier,
+    }))
+    .filter((m) => m.id);
+  setPeople(orgMembers);
+
   const account: AccountInfo = {
     user: {
       id: user?.id,
@@ -227,14 +242,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       items: ws.workspaces,
       canCreate: config?.workspaces === "member" || membership?.role === "org:admin",
       isOrgAdmin: membership?.role === "org:admin",
-      orgMembers: (memberships?.data || [])
-        .map((m) => ({
-          id: m.publicUserData?.userId || "",
-          name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
-            || m.publicUserData?.identifier || m.publicUserData?.userId || "",
-          email: m.publicUserData?.identifier,
-        }))
-        .filter((m) => m.id),
+      orgMembers,
       orgMembersComplete: complete(memberships),
       onSwitch: workspace.switch,
       onCreate: ws.create,

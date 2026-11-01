@@ -63,6 +63,21 @@ class Config(BaseModel):
         # the .fig editor, a static app on its own origin; unset → .fig shows the download card
         if url := os.environ.get("DESIGN_EDITOR_URL"):
             data["design_editor_url"] = url
+        # The video editor runs on the video service (VIDEO_EDITOR_URL); whether an organisation has
+        # Video at all is answered per workspace by POST /video/editor.
+        if os.environ.get("VIDEO_EDITOR_URL") and os.environ.get("VIDEO_URL"):
+            data["video_editor"] = True
+        # Cycls Sheets, on the cycls-office service; whether an organisation has it is answered per
+        # workspace by GET /office/sheets.
+        from cycls._agent.office import client as _office
+        if _office.configured() and _office.editor_url():
+            data["sheets_editor"] = True
+        # The microphone hears first on the cycls-transcribe service: the browser warms a listener as
+        # it starts recording (POST /transcribe/warm), so a cold GPU starts while the person speaks.
+        # (ElevenLabs, the other engine, has nothing to warm.)
+        from cycls._agent.transcribe import engine as _transcribe_engine
+        if _transcribe_engine() == "cycls":
+            data["voice_warm"] = True
         return data
 
     @property
@@ -313,11 +328,12 @@ def _clean_folder(raw):
 
 
 def _clean_selection(raw):
-    """A design selection {path: a workspace .fig, frame, nodes: [{name, type, text?}], page?}, capped; else None."""
+    """A selection in an open design, video, workbook or Word document {path: a .fig, .video.html, .xlsx or .docx
+    in the workspace, frame, nodes: [{name, type, text?}], page? (a workbook's sheet), time?}, capped; else None."""
     if not isinstance(raw, dict):
         return None
     path = raw.get("path")
-    if (not isinstance(path, str) or not path.lower().endswith(".fig") or len(path) > 300
+    if (not isinstance(path, str) or not path.lower().endswith((".fig", ".video.html", ".xlsx", ".docx")) or len(path) > 300
             or path.startswith("/") or "\\" in path or ".." in path.split("/")):
         return None
     nodes = []
@@ -333,6 +349,9 @@ def _clean_selection(raw):
     sel = {"path": path, "frame": frame[:120] if isinstance(frame, str) and frame else None, "nodes": nodes}
     if isinstance(page, str) and page.strip():
         sel["page"] = page.strip()[:80]
+    t = raw.get("time")
+    if path.lower().endswith(".video.html") and isinstance(t, (int, float)) and not isinstance(t, bool) and 0 <= t < 36000:
+        sel["time"] = round(float(t), 1)
     return sel
 
 
@@ -526,19 +545,70 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         asyncio.create_task(_refresh())
         return config.public()
 
+    # The mic: our transcription engines first when they are set (ElevenLabs and/or the cycls-transcribe
+    # service: the first, then the other), then the Web.voice service behind them (unset, OpenAI's
+    # gpt-4o-transcribe whenever OPENAI_API_KEY is there). Web.voice(False) is no mic at all.
+    from cycls._agent import transcribe as service
     speech = voice.resolve(config.transcription)
-    config.voice = bool(speech)
+
+    def engines():
+        return config.transcription is not False and service.configured()
+    config.voice = bool(speech) or engines()
+
+    @app.post("/transcribe/warm")
+    async def transcribe_warm(user: Optional[User] = auth):
+        """The microphone started recording: a listener starts while the person speaks. A hint only."""
+        if engines() and service.engine() == "cycls":
+            asyncio.create_task(service.warm(subject=service.subject_of(user)))
+        return {"ok": True}
 
     @app.post("/transcribe")
     async def transcribe(request: Request, user: Optional[User] = auth):
-        if not speech:
+        ours = engines()
+        if not speech and not ours:
             raise HTTPException(status_code=501, detail="Voice input isn't set up")
         form = await request.form()
         file = form.get("file")
         if not file:
             raise HTTPException(status_code=400, detail="No audio file")
+        audio_bytes = await file.read()
+        if ours:
+            if len(audio_bytes) > service.client.SHORT_BYTES:
+                raise HTTPException(status_code=413, detail="The recording is too long for the microphone")
+            # The engine reads the format off the name: Firefox records webm, Safari and Chrome m4a.
+            ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+            name = f"voice.{ext}" if ext in voice.FORMATS else "voice.m4a"
+            hint = form.get("language")
+            language = hint if hint in ("ar", "en") else "auto"
+            from cycls._agent.transcribe import usage
+            subject = service.subject_of(user)
+            try:
+                reason = await usage.refusal(subject, volume, config.storage)
+            except Exception:  # noqa: BLE001 - an unreadable count never blocks the mic
+                reason = None
+            if reason:
+                raise HTTPException(status_code=429, detail=reason)
+            try:
+                # With another engine behind it, a listener that is slow to start is not waited for long.
+                behind = bool(service.fallback() or speech)
+                t0 = time.monotonic()
+                heard = await service.hear_short(audio_bytes, filename=name, language=language,
+                                                 subject=subject, timeout=45.0 if behind else 130.0)
+                await usage.charge(subject, volume, config.storage, seconds=heard.get("duration") or 0,
+                                   engine=heard.get("engine_used") or "cycls", via="mic",
+                                   ms=round((time.monotonic() - t0) * 1000), user=user)
+                return {"text": heard.get("text") or "", "language": heard.get("language"),
+                        "engine": heard.get("engine_used") or "cycls"}
+            except service.OverAllowance as e:
+                raise HTTPException(status_code=429, detail=str(e))
+            except service.Refused as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except (service.Unavailable, RuntimeError) as e:
+                if not speech:
+                    raise HTTPException(status_code=503, detail=f"Transcription is unavailable: {e}")
+                log("warn", user=getattr(user, "id", None), message=f"transcribe fell back to Web.voice: {str(e)[:200]}")
         try:
-            return {"text": await voice.transcribe(speech, await file.read(), file.filename, file.content_type)}
+            return {"text": await voice.transcribe(speech, audio_bytes, file.filename, file.content_type)}
         except Exception as e:   # the service's own words would name it: they stay in the log
             log("warn", user=user, chat_id=None, message=f"transcription failed: {type(e).__name__}: {e}"[:500])
             raise HTTPException(status_code=502, detail="Couldn't transcribe the recording")

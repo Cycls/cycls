@@ -1,6 +1,6 @@
 """The model's specs, decks, documents, slides and edit ops made ready for the design service.
 Every `_prepare_*` returns what to send, or an error the model can act on."""
-import json, pathlib, re
+import json, pathlib, re, zlib
 from ..paths import _resolve_path
 from .brand import _HEX, _contrast, _first_color, _load_brand, _norm_hex, _readable_on
 from .images import _BRAND_LOGOS, _DESIGN_IMAGES_MAX, _DESIGN_SVG_MAX, _image_slot, _place_image
@@ -125,6 +125,9 @@ def _prepare_spec(spec, brand, root=None):
                 if brand and brand["accent"] and n.get("fill") is None and not n.get("stroke"):
                     n["fill"], filled = brand["accent"], filled + 1
             elif n.get("type") == "image":
+                if n.pop("_frame", None) and top and W < _NO_FRAME:   # a library texture given no box
+                    n["x"], n["y"] = n.get("x") or 0, n.get("y") or 0
+                    n["w"], n["h"] = W - n["x"], H - n["y"]
                 try:
                     image_bytes += _place_image(n, root)
                 except ValueError as e:
@@ -132,6 +135,28 @@ def _prepare_spec(spec, brand, root=None):
                 if image_bytes > _DESIGN_IMAGES_MAX:
                     return (f"Error: the design's images total over {_DESIGN_IMAGES_MAX >> 20} MB — "
                             f"use smaller copies (longest side ~2000px).")
+            elif n.get("type") == "pattern":
+                # One SVG tile, which the service repeats over the node's box — the whole
+                # frame when it gives none — in one ink, faint unless it says otherwise.
+                if n.get("src") and not n.get("svg"):
+                    path = _resolve_path(str(n.pop("src")), root)
+                    if not path.is_file() or path.suffix.lower() != ".svg":
+                        return f"Error: a pattern's `src` must be an .svg tile in the workspace ({json.dumps(n)[:80]})."
+                    if path.stat().st_size > _DESIGN_SVG_MAX:
+                        return f"Error: {path.name} is over {_DESIGN_SVG_MAX >> 10} KB — use a simpler tile."
+                    n["svg"] = path.read_text(encoding="utf-8", errors="replace")
+                if not (isinstance(n.get("svg"), str) and "<svg" in n["svg"]):
+                    return ("Error: a pattern node needs `asset` (a pattern of the media library, e.g. \"asset\": \"moroccan\"), "
+                            "`src` (an .svg tile in the workspace) or `svg` (the tile's markup).")
+                if not (n.get("w") and n.get("h")):
+                    if not top or W >= _NO_FRAME:
+                        return "Error: this pattern needs `w` and `h` — the box it fills."
+                    n["x"], n["y"] = n.get("x") or 0, n.get("y") or 0
+                    n["w"], n["h"] = n.get("w") or W - n["x"], n.get("h") or H - n["y"]
+                if bg and n.get("color") is None:
+                    n["color"] = _readable_on(bg)
+                if n.get("opacity") is None:
+                    n["opacity"] = _PATTERN_OPACITY
             elif n.get("type") in ("icon", "svg", "qr", "list", "chart", "table"):
                 kind = n["type"]
                 if kind == "icon" and not (isinstance(n.get("name"), str) and ":" in n["name"]):
@@ -166,10 +191,20 @@ def _prepare_spec(spec, brand, root=None):
                         return f"Error: a stack's children are nodes, not {c!r}."
                     if err := prepare(c, False):
                         return err
+                # a child placed by hand: the stack lays it out after the one before — a label meant
+                # for the shape before it (a button) lands beside it (horizontal) or under it
+                placed = [str(c.get("id") or c.get("text") or c.get("type"))[:30] for c in kids
+                          if isinstance(c, dict) and (c.get("x") is not None or c.get("y") is not None)]
+                if placed and not any("are laid out one after another" in s for s in shapes):
+                    shapes.append(f"In stack {json.dumps(str(n.get('id') or 'stack'))}, {', '.join(placed)} "
+                                  f"{'has' if len(placed) == 1 else 'have'} its own x / y, which a stack doesn't read: its "
+                                  f"children are laid out one after another ({'side by side' if n.get('direction') == 'horizontal' else 'one under the next'}). "
+                                  f"To put a label ON a shape (a button, a badge), place both outside any stack in the same box — "
+                                  f"the shape, then the text with the same x, y, w, h and \"align\": \"center\", \"valign\": \"center\".")
             else:
                 return (f"Error: a node has type {n.get('type')!r} ({json.dumps(n)[:80]}) — "
                         f"every node needs a `type`: text, rect, ellipse, line, image, stack, list, "
-                        f"table, chart, icon, svg or qr.")
+                        f"table, chart, icon, svg, pattern or qr.")
             # outside the frame = laid out for another size; the renderer would pile it on the edge
             if top and n["type"] not in ("rect", "ellipse", "line") and ((n.get("x") or 0) >= W or (n.get("y") or 0) >= H):
                 what = repr(n.get("text"))[:40] if n["type"] == "text" else f"a{'n' if n['type'] == 'image' else ''} {n['type']}"
@@ -222,6 +257,82 @@ def _prepare_pages(spec, brand, root):
 
 
 _DECK_THEMES = ("minimal-light", "minimal-dark", "bold-gradient", "editorial", "corporate", "tech-dark", "warm", "mono")
+_DECK_KEYS = {"theme", "look", "size", "dir", "footer", "logo", "transition", "slides"}   # what layouts.js reads of a deck
+# How a deck's slides or a document's pages are composed (cycls-design looks.js) — apart from the
+# theme, its colours and faces. Without one, the look the piece calls for (`_look_for`).
+_LOOKS = ("classic", "editorial", "swiss", "bold", "soft", "minimal")
+_THEME_LOOKS = {"editorial": "editorial", "tech-dark": "swiss", "warm": "soft", "mono": "minimal", "bold-gradient": "bold"}
+# What a piece says it is — its kind, eyebrow, title — and the look that kind is drawn in.
+_PIECE_LOOKS = (
+    ("bold", "a proposal or a pitch", r"proposal|\boffer\b|quotation|tender|\bbid\b|pitch|investor|fundrais|\bseed\b|series [a-d]\b"
+             r"|launch|\bsales\b|عرض|مقترح|إطلاق|مستثمر"),
+    ("editorial", "a report or a newsletter", r"report|review|research|\bstudy\b|white ?paper|insight|survey|annual|findings"
+                  r"|newsletter|bulletin|digest|magazine|تقرير|دراسة|بحث|نشرة"),
+    ("swiss", "a guide, a CV or an invoice", r"guide|manual|handbook|how[- ]to|playbook|instructions|procedure|policy|technical"
+              r"|architecture|engineering|roadmap|\bcv\b|r[ée]sum[ée]|curriculum|invoice|receipt|دليل|سيرة|فاتورة"),
+    ("soft", "a brochure or a training", r"brochure|profile|catalog|\bmenu\b|training|workshop|onboarding|\bcourse\b|lesson"
+             r"|welcome|orientation|كتيب|تدريب|ورشة"),
+    ("minimal", "a letter", r"\bletter\b|\bmemo\b|invitation|خطاب|رسالة|دعوة"),
+)
+
+
+def _theme_base(theme):
+    base = theme if isinstance(theme, str) else theme.get("base") if isinstance(theme, dict) else None
+    return str(base or "").strip().lower().replace(" ", "-").replace("_", "-")
+
+
+def _look_for(spec, what="deck"):
+    """The look a deck or a document gets when it names none → (look, why). A theme named for a look
+    gives it; else what the piece says it is (its kind, eyebrow, title: a proposal → bold, a report →
+    editorial, a guide or a CV → swiss, a brochure → soft, a letter → minimal); else a theme of one's own
+    on a look's base gives that; else its shape (columns or chapter pages → editorial, no cover →
+    swiss); else one chosen by its title. Never classic: that was every deck and every document, alike."""
+    theme = spec.get("theme")
+    if isinstance(theme, str) and _theme_base(theme) in _THEME_LOOKS:
+        return _THEME_LOOKS[_theme_base(theme)], "its theme's"
+    if what == "deck":
+        slides = spec.get("slides") if isinstance(spec.get("slides"), list) else []
+        first = next((s for s in slides if isinstance(s, dict)), {})
+        footer = spec.get("footer") if isinstance(spec.get("footer"), dict) else {}
+        said = [first.get("eyebrow"), first.get("title"), first.get("subtitle"), footer.get("text")]
+    else:
+        cover = spec.get("cover") if isinstance(spec.get("cover"), dict) else {}
+        said = [spec.get("kind"), spec.get("eyebrow"), cover.get("eyebrow"), spec.get("title"), spec.get("subtitle")]
+    for text in (t for t in said if isinstance(t, str) and t.strip()):
+        found = [(m.start(), look, why) for look, why, pattern in _PIECE_LOOKS for m in [re.search(pattern, text, re.I)] if m]
+        if found:
+            _, look, why = min(found)
+            return look, f"for {why}"
+    if _theme_base(theme) in _THEME_LOOKS:
+        return _THEME_LOOKS[_theme_base(theme)], "its theme's base"
+    if what == "document":
+        if str(spec.get("columns") or "1") in ("2", "3") or str(spec.get("openers") or "").lower() == "page":
+            return "editorial", "for its columns and chapter pages"
+        cover = spec.get("cover")
+        if cover is False or (isinstance(cover, str) and cover.strip().lower() == "none") \
+                or (isinstance(cover, dict) and str(cover.get("style") or "").strip().lower() == "none"):
+            return "swiss", "for a document with no cover"
+    choices = ("editorial", "swiss", "bold", "soft") if what == "deck" else ("editorial", "swiss", "bold")
+    title = next((t for t in said if isinstance(t, str) and t.strip()), "")
+    return choices[zlib.crc32(title.encode("utf-8")) % len(choices)], "chosen for it"
+
+
+def _settle_look(spec, what, notes, default=True):
+    """`spec`'s look checked and written plainly — or, with none and `default`, the one it calls for,
+    written in (so a later change keeps it) and said. → an error, or None."""
+    look = spec.get("look")
+    if look is None:
+        if default:
+            look, why = _look_for(spec, what)
+            spec["look"] = look
+            notes.append(f"The {what}'s look: {look}, {why} — `look` composes it another way "
+                         f"({', '.join(x for x in _LOOKS if x != look)}).")
+        return None
+    key = str(look).strip().lower() if isinstance(look, str) else ""
+    if key not in _LOOKS:
+        return f"Error: unknown look {json.dumps(look, ensure_ascii=False)} — a {what}'s look is one of: {', '.join(_LOOKS)}."
+    spec["look"] = key
+    return None
 
 
 def _brand_theme(brand):
@@ -261,6 +372,25 @@ def _prepare_deck(spec, brand, root):
     except ValueError as e:
         return None, f"Error: {e}.", []
     notes, total = [], 0
+    moved = [k for k in sorted(_DECK_KEYS - {"slides"}) if spec.get(k) is not None and deck.get(k) is None]
+    for k in moved:                                         # written beside the deck, not in it
+        deck[k] = spec.pop(k)
+    if moved:
+        notes.append(f"{', '.join(f'`{k}`' for k in moved)} came beside `deck` and {'was' if len(moved) == 1 else 'were'} "
+                     f"read as the deck's own — {'it goes' if len(moved) == 1 else 'they go'} inside it: "
+                     f"{{\"deck\": {{\"theme\": …, \"slides\": […]}}}}.")
+    unread = [k for k in deck if k not in _DECK_KEYS]
+    if unread:
+        notes.append(f"A deck doesn't read {', '.join(f'`{k}`' for k in unread)} — it reads "
+                     f"{', '.join(sorted(_DECK_KEYS))}; colours and fonts go in `theme`.")
+    theme = deck.get("theme")
+    if isinstance(theme, dict):
+        own = [k for k in theme if k not in ("base", "name", "logo")]
+        notes.append(f"The deck's theme: {theme.get('base') or 'minimal-light'}"
+                     f"{' with your ' + ', '.join(own) if own else ''}.")
+    elif theme is None and not brand:
+        notes.append("The deck has no `theme`, so it is minimal-light, the default — a theme of its own goes in the "
+                     "deck: {\"deck\": {\"theme\": \"editorial\" or {\"base\": …, \"accent\": …, \"heading\": …}, \"slides\": […]}}.")
 
     def slot(value):
         nonlocal total
@@ -283,6 +413,8 @@ def _prepare_deck(spec, brand, root):
         fonts = " / ".join(dict.fromkeys(f for f in (brand.get("latin"), brand.get("heading"), brand.get("body")) if f))
         notes.append(f"The deck uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
                      f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
+    if err := _settle_look(deck, "deck", notes):
+        return None, err, []
     try:
         if deck.get("logo"):
             deck["logo"] = slot(deck["logo"])
@@ -309,6 +441,10 @@ def _prepare_deck(spec, brand, root):
 
 
 _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [1754, 2480]}   # px at 150 dpi
+# a document's own keys (document.js), read as its own when written beside it
+_DOCUMENT_KEYS = ("title", "subtitle", "author", "date", "organization", "logo", "size", "landscape", "theme", "dir", "cover",
+                  "columns", "openers", "toc", "numbered", "numbering", "figures", "header", "footer", "sections", "max_pages",
+                  "kind", "meta", "contact", "back", "footnotes", "lang", "look")
 
 
 _SHEET_ROWS = 2000      # max rows read from a spreadsheet
@@ -416,6 +552,9 @@ def _prepare_document(spec, brand, root):
     the brand kit as theme when there is one, hand-built nodes prepared → (spec, error, notes)."""
     spec = json.loads(json.dumps(spec))
     doc = spec["document"]
+    moved = [k for k in _DOCUMENT_KEYS if spec.get(k) is not None and doc.get(k) is None]
+    for k in moved:                                         # written beside the document, not in it
+        doc[k] = spec.pop(k)
     sections = doc.get("sections")
     if not isinstance(sections, list) or not sections:
         return None, ("Error: a document needs `sections` — a list of {title, blocks: […]} "
@@ -423,6 +562,10 @@ def _prepare_document(spec, brand, root):
     if not str(doc.get("title") or "").strip():
         return None, "Error: a document needs a `title`.", []
     notes, total = [], 0
+    if moved:
+        notes.append(f"{', '.join(f'`{k}`' for k in moved)} came beside `document` and {'was' if len(moved) == 1 else 'were'} "
+                     f"read as the document's own — {'it goes' if len(moved) == 1 else 'they go'} inside it: "
+                     f"{{\"document\": {{\"title\": …, \"sections\": […]}}}}.")
 
     def slot(value):
         nonlocal total
@@ -469,6 +612,10 @@ def _prepare_document(spec, brand, root):
         fonts = " / ".join(dict.fromkeys(f for f in (brand.get("latin"), brand.get("heading"), brand.get("body")) if f))
         notes.append(f"The document uses the workspace brand kit as its theme (primary {brand['primary']}, accent "
                      f"{brand['accent']}{', fonts ' + fonts if fonts else ''}{', logo ' + logo if logo else ''}).")
+    # (Its look is settled before the source is kept — _render_document: a document rendered before
+    # there were looks keeps the one it had through its section changes.)
+    if err := _settle_look(doc, "document", notes, default=False):
+        return None, err, []
     size = doc.get("size") or "a4"
     paper = list(_PAPER.get(str(size).lower().replace("-landscape", "").replace(" landscape", ""), _PAPER["a4"])) \
         if isinstance(size, str) else size
@@ -490,6 +637,9 @@ def _prepare_document(spec, brand, root):
         return None, f"Error: {e}.", []
     return spec, None, notes
 
+
+_NO_FRAME = 100000              # the side of the stand-in frame a node added by an edit is prepared in
+_PATTERN_OPACITY = 0.12         # a pattern is finish behind the text, unless it says otherwise
 
 _OP_NUMERIC = ("x", "y", "dx", "dy", "w", "h", "size", "radius", "opacity", "letterSpacing",
                "lineHeight", "strokeWeight", "frame")
@@ -519,7 +669,7 @@ def _prepare_ops(ops, root):
         elif op["op"] == "add":
             if not isinstance(op.get("node"), dict):
                 return None, f"Error: op {k}: `add` needs a `node` (a spec node, e.g. a text or a stack)."
-            spec, err, _ = _prepare_spec({"size": [100000, 100000], "nodes": [op["node"]]}, None, root)
+            spec, err, _ = _prepare_spec({"size": [_NO_FRAME, _NO_FRAME], "nodes": [op["node"]]}, None, root)
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["node"] = spec["nodes"][0]

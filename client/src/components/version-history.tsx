@@ -4,6 +4,7 @@ import { track } from "../lib/analytics";
 import { t, timeAgo as ago } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
+import { personName } from "../lib/people";
 import { flushDesignEditor, reloadDesignEditors, type DesignHost } from "./design-editor-view";
 
 // A design's earlier versions (cycls/_agent/versions.py). A restore is itself kept as a version, so it can be undone.
@@ -14,6 +15,13 @@ function whatReplacedIt(v: DesignVersion): string {
   if (v.reason === "restore") return t("versionBeforeRestore");
   if (v.reason === "keep") return t("versionBeforeKeep");
   return t("versionSaved");
+}
+
+// Who made the change: the agent, you, or — in a team workspace — the teammate the server names.
+function byWhom(v: DesignVersion): string {
+  if (v.by === "agent") return t("versionByAgent");
+  if (v.who && v.mine === false) return v.who.name || personName(v.who.id) || t("versionByTeammate");
+  return t("versionByYou");
 }
 
 export function VersionHistory({ path, host, onClose }: { path: string; host: DesignHost; onClose: () => void }) {
@@ -99,7 +107,7 @@ export function VersionHistory({ path, host, onClose }: { path: string; host: De
           {rows?.map((v) => (
             <div key={v.id} className="rounded-lg px-3 py-2 hover:bg-secondary/60" data-testid="design-version">
               <div className="text-xs font-medium text-foreground" dir="auto">{whatReplacedIt(v)}</div>
-              <div className="text-[11px] text-muted-foreground">{ago(v.at)} · {v.by === "agent" ? t("versionByAgent") : t("versionByYou")}</div>
+              <div className="text-[11px] text-muted-foreground" dir="auto">{ago(v.at)} · {byWhom(v)}</div>
               {shown === v.id && (
                 pictures[v.id] === "failed"
                   ? <div className="mt-1.5 text-[11px] text-muted-foreground">{t("versionPreviewFailed")}</div>

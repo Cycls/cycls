@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { track } from "../lib/analytics";
 import { useToast } from "../lib/toast";
 import { t } from "../lib/i18n";
+import { reasonOf } from "./use-api";
 
 // Safari and Chrome record mp4; Firefox can't, and records webm (or ogg).
 const TYPES = ["audio/mp4", "audio/webm;codecs=opus", "audio/ogg;codecs=opus"];
@@ -10,9 +11,13 @@ const extension = (type: string) => (type.includes("webm") ? "webm" : type.inclu
 export function useSpeechRecognition({
   onEnd,
   authHeaders,
+  warm = false,
 }: {
   onEnd: (text: string) => void;
   authHeaders?: () => Promise<Record<string, string>>;
+  // The server transcribes on its own GPUs (config.voice_warm): start one as recording starts, so a
+  // cold listener is ready by the time the person stops speaking.
+  warm?: boolean;
 }) {
   const { error: toastError } = useToast();
   const [listening, setListening] = useState(false);
@@ -113,11 +118,14 @@ export function useSpeechRecognition({
               transcribe_ms: Date.now() - t0,
               text_length: text.length,
               empty: !text,
+              engine: typeof data.engine === "string" ? data.engine : "openai",   // elevenlabs | cycls | openai
             });
             onEnd(text);
           } else {
             track("mic_transcription_failed", { status: res.status });
-            toastError(t("micFailed"));   // in the reader's language; the server names nothing behind it
+            // In the reader's language; the server names nothing behind it. A day's allowance used up
+            // (429) is the server's own sentence: it says when the mic is back.
+            toastError(res.status === 429 ? await reasonOf(res) : t("micFailed"));
             onEnd("");
           }
         } catch {
@@ -134,13 +142,18 @@ export function useSpeechRecognition({
       recorder.start();
       setListening(true);
       track("mic_started");
+      if (warm) {   // a hint: a failed warm-up changes nothing
+        Promise.resolve(authHeadersRef.current ? authHeadersRef.current() : {})
+          .then((headers) => fetch("/transcribe/warm", { method: "POST", headers }))
+          .catch(() => {});
+      }
     } catch (e) {
       release();
       recorderRef.current = null;
       track("mic_permission_denied", { reason: (e as Error)?.name });   // NotAllowedError, NotFoundError, NotSupportedError…
       toastError(t("micUnavailable"));
     }
-  }, [onEnd, release, toastError]);
+  }, [onEnd, release, toastError, warm]);
 
   useEffect(() => {
     return () => {

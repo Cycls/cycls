@@ -28,8 +28,10 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra, Part, Connection } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
-import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
+import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
+import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText, langOf } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -39,6 +41,7 @@ import { useUrlParam } from "../hooks/use-url-param";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { useEscapeFallback } from "../hooks/use-escape";
+import { useHeldSend, uploading } from "../hooks/use-held-send";
 import { SUGGESTIONS } from "./suggestions-data";
 import { ExamplesGallery } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
@@ -100,6 +103,8 @@ export interface FilesPanelProps {
   exportDesign?: (path: string, format: "pdf" | "png", page?: string) => Promise<string>;   // a PDF / PNG beside the design
   brand?: () => Promise<BrandKit | null>;                        // for the design editor
   fetchVersioned?: FetchVersioned;                               // a design with its version (its saves' base)
+  videoEditor?: VideoEditorApi;                                  // the video editor's routes (sessions, renders)
+  officeEditor?: OfficeEditorApi;                                // Cycls Sheets: may a file open in the editor
   designLive?: (path: string) => Promise<DesignLive | null>;     // a design's live room + this person's pass (null: it opens alone)
   listVersions?: (path: string) => Promise<DesignVersion[]>;
   versionBlob?: (path: string, id: string) => Promise<Blob>;
@@ -301,6 +306,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     window.addEventListener("cycls:design-selection", onSelection);
     return () => window.removeEventListener("cycls:design-selection", onSelection);
   }, [activeDesign]);
+  // "Ask Cycls" in the video editor: the selection is attached to the message, and the composer is
+  // the next thing typed into.
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const sel = (e as CustomEvent).detail as DesignSelection;
+      if (!sel?.nodes?.length) return;
+      setAttachedSel(sel);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener("cycls:ask-selection", onAsk);
+    return () => window.removeEventListener("cycls:ask-selection", onAsk);
+  }, []);
   const [rightExpanded, setRightExpanded] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 1024px)");
 
@@ -339,10 +356,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setCanvasTabs((tabs) => tabs.filter((f) => f.path !== path));
     setCanvasActive((a) => (a === path ? null : a));
   }, []);
-  // Hiding or closing the canvas unmounts its design editors: flush them first.
-  const hideCanvas = useCallback(() => { void flushAllDesignEditors(1500).then(() => setCanvasHidden(true)); }, []);
+  // Hiding or closing the canvas unmounts its design and video editors: flush them first.
+  const hideCanvas = useCallback(() => { void Promise.all([flushAllDesignEditors(1500), flushAllVideoEditors(1500)]).then(() => setCanvasHidden(true)); }, []);
   const closeAllCanvas = useCallback(() => {
-    void flushAllDesignEditors(1500).then(() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); });
+    void Promise.all([flushAllDesignEditors(1500), flushAllVideoEditors(1500)]).then(() => { setCanvasTabs([]); setCanvasActive(null); setRightExpanded(false); });
   }, []);
   const { apps, loading: appsLoading, refresh: refreshApps } = useApps();
   // The UI handler resolves an app by path without re-subscribing on every load.
@@ -375,7 +392,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
-  const handleSubmitRef = useRef<(overrideText?: string, origin?: string) => void>(() => {});
+  const handleSubmitRef = useRef<(overrideText?: string, origin?: string, extra?: SendExtra) => void>(() => {});
+  // Send pressed while a file uploads: held, shown, and sent by itself when the uploads finish.
+  const { held: heldSend, request: holdSend, cancel: cancelHeld } = useHeldSend({
+    input, attachments, send: (origin, extra) => handleSubmitRef.current(undefined, origin, extra),
+  });
   const [pricingFor, setPricingFor] = useState<"user" | "organization" | null>(null);
   const [pricingWhy, setPricingWhy] = useState<string | undefined>();   // "limit" when the agent's limit opened it
   const openPricing = useCallback((payer: "user" | "organization", source: string, why?: string) => {
@@ -434,6 +455,28 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
         window.dispatchEvent(new CustomEvent("cycls:design-command", { detail: designCommandDetail(ev) }));
         track("ui_action", { action: "design_command" });
+      } else if (ev.action === "sheets_command" && typeof ev.path === "string") {
+        // A `sheets` edit, already in the file: an open Sheets editor replays it (read-only until the
+        // turn ends); a preview of the file fetches it again.
+        const live = ev.path;
+        setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
+        window.dispatchEvent(new CustomEvent("cycls:sheets-command", { detail: sheetsCommandDetail(ev) }));
+        window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        track("ui_action", { action: "sheets_command" });
+      } else if (ev.action === "docs_command" && typeof ev.path === "string") {
+        // A `docs` edit, already in the file: an open Docs editor takes it in at once (read-only until the turn
+        // ends), the paragraphs it changed marked; a preview of the file fetches it again.
+        const live = ev.path;
+        setCanvasTabs((tabs) => (tabs.some((f) => f.path === live && !f.live) ? tabs.map((f) => (f.path === live ? { ...f, live: true } : f)) : tabs));
+        window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: docsCommandDetail(ev) }));
+        window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        track("ui_action", { action: "docs_command" });
+      } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
+        // The agent changed a file that may be open (a Video edit): its view fetches it again now.
+        window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
+        // An editor open on that video takes the new file in, after what is unsaved there went out.
+        reloadVideoEditors(ev.path, typeof ev.version === "string" ? ev.version : undefined);
+        track("ui_action", { action: "refresh_canvas" });
       } else if (ev.action === "suggest" && typeof ev.text === "string") {
         if (followUpsEnabled()) {
           setFollowUp(ev.text);
@@ -486,7 +529,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       textareaRef.current?.blur();
     }
   }, []);
-  const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders });
+  const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders, warm: !!config?.voice_warm });
 
   // Reset sidebar data when org changes
   useEffect(() => {
@@ -537,8 +580,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, [uploadFile, config?.max_upload, toastError]);
 
   const removeFile = useCallback((index: number) => {
+    cancelHeld();   // the message changed: a held send waits for a fresh press
     setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  }, [cancelHeld]);
 
   const openFilePicker = useCallback(() => {
     fileInputRef.current?.click();
@@ -573,7 +617,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const givenBackRef = useRef(0);
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
-    if (!text || attachments.some((a) => a.status === "uploading") || Date.now() - givenBackRef.current < 600) return;
+    if (!text || Date.now() - givenBackRef.current < 600) return;
+    // A file still uploading holds the send (useHeldSend), in the composer where it can be
+    // seen and edited; it comes back through here when the uploads finish.
+    if (uploading(attachments)) {
+      if (overrideText !== undefined) setInput(text);
+      holdSend(text, origin, extra);
+      return;
+    }
     const sendAttachments = attachments.length > 0 ? [...attachments] : undefined;
     const mentioned = pillsRef.current.filter((p) => text.includes(`@${connectorLabel(p)}`)).map((p) => p.name);
     if (mentioned.length) { extra = { ...extra, connectors: mentioned }; setPills([]); }
@@ -597,9 +648,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     heldRef.current = false;
     // Save the selected design first, so the agent reads what the person sees.
     const go = () => { onSend(text, sendAttachments, origin, extra); setTimeout(() => scrollToBottom(), 0); };
-    if (selection) void flushDesignEditor(selection.path, 1500).then(go);
+    // Unsaved edits in an open Sheets editor too.
+    const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
+    if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, files?.path]);
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -719,6 +772,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       e.preventDefault();
       handleSubmit();
     }
+    // Escape takes a held send back (and so doesn't also close the side pane).
+    if (e.key === "Escape" && heldSend) {
+      e.preventDefault();
+      cancelHeld();
+    }
     // Shell-style accept: ArrowUp in an empty composer pulls the suggested
     // follow-up in for editing; Enter then sends it.
     if (e.key === "ArrowUp" && !input && followUp) {
@@ -821,7 +879,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, [files, trashed]);
   // Detach editors before a delete (a late save would bring the file back); flush before a rename.
   const deleteFromFiles = useCallback(async (path: string) => {
-    const reattach = detachDesignEditorsUnder(path);
+    const reattachDesigns = detachDesignEditorsUnder(path), reattachVideos = detachVideoEditorsUnder(path);
+    const reattach = () => { reattachDesigns(); reattachVideos(); };
     try {
       const r = await deleteWithUndo(path);
       setCanvasTabs((tabs) => tabs.filter((f) => !isUnder(f.path, path)));
@@ -833,7 +892,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     }
   }, [deleteWithUndo]);
   const renameFromFiles = useCallback(async (from: string, to: string) => {
-    await flushDesignEditorsUnder(from, 3000);
+    await Promise.all([flushDesignEditorsUnder(from, 3000), flushVideoEditorsUnder(from, 3000)]);
     await files!.onRename(from, to);
     const moved = (p: string) => (isUnder(p, from) ? to + p.slice(from.length) : p);
     setCanvasTabs((tabs) => tabs.map((f) => (isUnder(f.path, from)
@@ -936,7 +995,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   );
   const [railIcons, setRailIcons] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  useEffect(() => { if (!isStreaming) setReloadKey((k) => k + 1); }, [isStreaming]);
+  useEffect(() => {
+    if (isStreaming) return;
+    setReloadKey((k) => k + 1);
+    void refreshVideoEditors();              // an open video editor, if a file tool changed its video
+  }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
   const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
@@ -968,6 +1031,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
     onRemoveFile: removeFile,
+    held: heldSend,
+    onCancelHeld: cancelHeld,
     listening, transcribing, micAnalyser, startMic, stopMic, cancelMic, voice,
     onFilesAdded: handleFilesAdded,
     onMentionSearch: account || searchFiles ? searchMentions : undefined,
@@ -1419,6 +1484,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           reloadKey={reloadKey}
           designEditorUrl={config?.design_editor_url}
           designHost={designHost}
+          videoEditor={config?.video_editor ? files?.videoEditor : undefined}
+          officeEditor={config?.sheets_editor ? files?.officeEditor : undefined}
           onNewDesign={(preset) => void createDesign(preset, "canvas")}
         />
         </CommentsContext.Provider>

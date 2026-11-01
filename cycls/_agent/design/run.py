@@ -2,7 +2,8 @@
 file and comment actions in actions.py."""
 import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
-from .tool import DESIGN_FOLDER, DESIGN_LOADED, _GUIDE_LOADED, _GUIDE_NOT_RUN
+from . import skill
+from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
@@ -14,12 +15,46 @@ from .actions import (_DOCUMENT_ACTIONS, _FILE_ACTIONS, _SLIDE_ACTIONS, _comment
     _exec_design_file, _exec_document, _exec_slides, _render_document, _sections_text, _to_the_room)
 
 
+def _skill_for(spec):
+    """The skill for what a spec makes: a document, a deck (of layouts, or of slide-sized frames), else a graphic."""
+    if not isinstance(spec, dict):
+        return "graphic-design"
+    if isinstance(spec.get("document"), dict):
+        return "document-design"
+    frames = spec.get("frames")
+    wide = lambda f: isinstance(f, dict) and f.get("size") in ("slide", "wide", [1920, 1080], [1280, 720])
+    if isinstance(spec.get("deck"), dict) or (isinstance(frames, list) and frames and all(map(wide, frames))):
+        return "deck-design"
+    return "graphic-design"
+
+
+def _nudged(out, line):
+    """`out` — a string, or {_model: str | blocks} — with `line` added to what the model reads."""
+    if isinstance(out, str):
+        return f"{out}\n\n{line}"
+    m = out.get("_model")
+    if isinstance(m, str):
+        return {**out, "_model": f"{m}\n\n{line}"}
+    if isinstance(m, list):
+        at = max((i for i, b in enumerate(m) if b.get("type") == "text"), default=None)
+        blocks = [*m, {"type": "text", "text": line}] if at is None else \
+            [*m[:at], {**m[at], "text": f"{m[at]['text']}\n\n{line}"}, *m[at + 1:]]
+        return {**out, "_model": blocks}
+    return out
+
+
 async def _exec_design(inp, workspace):
-    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens); the workspace's
-    own fonts (brand/fonts) reach the service first, and the call that first gives them says their family."""
+    """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). The workspace's
+    own fonts (brand/fonts) reach the service first, and the call that first gives them says their family; a
+    render in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
     from cycls._agent import design
     said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))
     out = await _design_call(inp, workspace)
+    if str(inp.get("action") or "render").lower() == "render" and not DESIGN_SKILLED.get():
+        spec = inp.get("spec") if isinstance(inp.get("spec"), dict) else inp
+        want = json.dumps(["design-direction", _skill_for(spec)])
+        out = _nudged(out, f"No design skill is loaded in this chat: {{\"action\": \"skill\", \"skill\": {want}}} holds the "
+                           f"looks, the layouts and how to change this design in few calls — load it before the next change.")
     if said and isinstance(out, str):
         return f"{said}\n\n{out}"
     if said and isinstance(out, dict) and "_model" in out:
@@ -56,6 +91,9 @@ async def _design_call(inp, workspace):
     from cycls._agent import design
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
+    if asked == "skill":                                    # text only: it runs on the short form too, and loads the whole
+        text = skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name"))
+        return text if DESIGN_LOADED.get() or text.startswith("Error") else f"{text}\n\n{_GUIDE_LOADED}"
     if not DESIGN_LOADED.get():
         return _GUIDE_LOADED if asked == "guide" else _GUIDE_NOT_RUN
     if asked == "guide":
@@ -95,7 +133,7 @@ async def _design_call(inp, workspace):
     action = (inp.get("action") or "render").lower()
     # a design written beside `spec` rather than under it
     if action == "render" and inp.get("spec") is None:
-        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill") if inp.get(k) is not None}
+        beside = {k: inp[k] for k in ("document", "deck", "pages", "frames", "nodes", "size", "fill", "theme", "look") if inp.get(k) is not None}
         if any(k in beside for k in ("document", "deck", "pages", "frames", "nodes")):
             inp["spec"] = beside
     fmt = (inp.get("format") or "png").lower()
@@ -124,6 +162,9 @@ async def _design_call(inp, workspace):
         return await _exec_design_file(action, inp, workspace, name)
     if action == "comments":
         return await _exec_comments(inp, workspace, name)
+    if action == "assets":                                  # what the media library holds
+        from cycls._agent.design import assets
+        return await assets.listing(inp, subject)
     if action in ("edit", "inspect"):
         rel = f"{name}.fig"
         fig_path = pathlib.Path(workspace.root) / rel
@@ -165,8 +206,8 @@ async def _design_call(inp, workspace):
                     "(Design inspect lists the node names) — or a raw `script`.")
         credits = []
         if ops:
-            from cycls._agent.design import stock
-            credits, err = await stock.resolve(ops, workspace.root)   # {"stock": "…"} → a saved photo
+            from cycls._agent.design import assets
+            credits, err = await assets.named(ops, workspace.root, subject)   # {"stock": "…"}, {"asset": "…"} → a saved picture
             if err:
                 return err
             ops, err = await asyncio.to_thread(_prepare_ops, ops, workspace.root)
@@ -264,9 +305,9 @@ async def _design_call(inp, workspace):
             if isinstance(inp["spec"].get("document"), dict):
                 return await _render_document(inp, workspace, name)
             root = workspace.root   # reads the brand kit + any image files: off the loop
-            # {"stock": …} photos are saved first, so the spec sees ordinary files
-            from cycls._agent.design import stock
-            credits, err = await stock.resolve(inp["spec"], root)
+            # {"stock": …}, {"asset": …} pictures are saved first, so the spec sees ordinary files
+            from cycls._agent.design import assets
+            credits, err = await assets.named(inp["spec"], root, subject)
             if err:
                 return err
             spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))

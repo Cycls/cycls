@@ -171,6 +171,10 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |
 | `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `change` / `restore` / `keep`) — do people undo the agent? |
 | `design_version_previewed` | "Preview" on a row of Version history: that version's picture, shown before restoring | `reason` (as above) — previews ÷ restores is how often people look before going back |
+| `video_editor_opened` | Edit on a video: a video editor session opened | — do people change videos by hand, not only by asking? |
+| `video_edited` | a change from the video editor written into the workspace | `kind` (`composition` / `words`) — timing, text and music, or a caption word? |
+| `video_save_conflict` | a video save refused because the file changed elsewhere (an agent edit, another tab), then the choice made | `choice` (`shown` / `latest` / `mine`) — how often do the person and the agent collide? |
+| `video_rendered_from_editor` | Render in the video editor finished, the MP4 beside the video | `quality` — do people render their own edits? |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
 | `design_comment_added` | a comment pinned on a design — a click on a slide in comment mode, then its words posted | — do people review designs here? |
 | `design_comment_replied` | a reply posted under a comment | — replies ÷ comments is how much of a conversation a pin becomes |
@@ -193,7 +197,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 
 | event | fires when | key props / question |
 |---|---|---|
-| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), `confirm` (+ `tool`), `design_command` (live design edit relayed to the open editor), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
+| `ui_action` | every minor agent `ui` event: `action` = `suggest`, `ask` (+ `questions`), `connect` (+ `connector`), `confirm` (+ `tool`), `design_command` (live design edit relayed to the open editor), `docs_command` (a Word edit opened in the open Docs editor, its paragraphs marked), `refresh_canvas` (an open file fetched again after the agent changed it — a Video edit), or anything unhandled (`handled: false`) | the denominator for the chips: `followup_accepted` ÷ `ui_action{suggest}`, `ask_answered` ÷ `ui_action{ask}`. Milestone actions fire their named event instead (`open_canvas` → `artifact_completed`, `open_plan_modal` → `paywall_shown`) |
 | `ask_answered` / `ask_dismissed` | clarifying-question card resolved | answered ÷ shown decides the feature's fate |
 | `confirm_approved` / `confirm_dismissed` / `connector_permissions_changed` | the confirm card was approved or waved off (+ `tool`, `remember`); a tool's mode changed on a connector's page or from the card's *Don't ask again* (`scope` = `tool`, `group` or `card`, `to`) | approved ÷ `ui_action{confirm}` says whether *ask* is a safety net or a nag |
 | `client_crashed` | a render error was caught by the boundary; the crash screen showed `Reference: <error_id>`, never the error | should be zero; each one is a bug, `error_message` its text |
@@ -236,6 +240,8 @@ server's `run` log row — `status`, `reason`, `error_id`, `ms` — and that is 
 `mic_permission_denied` is any mic that couldn't start; `reason` says which — `NotAllowedError`
 (refused), `NotFoundError` (no mic), `NotSupportedError` (no format it can record). The recording
 format is whichever the browser has: mp4 on Safari and Chrome, webm on Firefox.
+`mic_transcribed.engine` says who wrote the words: `elevenlabs`, `cycls` (the cycls-transcribe
+service), or `openai` (no engine set, or both down).
 
 ---
 
@@ -608,6 +614,9 @@ FROM events
 WHERE event = 'mic_transcribed'
   AND timestamp > now() - INTERVAL 14 DAY
 ```
+
+Add `GROUP BY properties.engine` to compare the service with OpenAI, and to see how often the
+service fell back (`engine = 'openai'` on an agent that sets `TRANSCRIBE_URL`).
 
 **Mic failure breakdown** — stack `mic_permission_denied`, `mic_cancelled`,
 `mic_transcription_failed`: friction at OS permission, UI intent, or

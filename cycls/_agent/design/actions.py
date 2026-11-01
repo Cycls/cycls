@@ -4,7 +4,7 @@ import asyncio, base64, json, pathlib
 from .. import trash
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
-from .prepare import _num, _prepare_document, _prepare_slide
+from .prepare import _num, _prepare_document, _prepare_slide, _settle_look
 from .report import _fixed_line, _layout_check, _page_changes
 from .files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _free_design, _opened, _render_again, _rendered_copy,
     _replacing, _stem_of, _write_beside)
@@ -106,7 +106,7 @@ async def _exec_document(action, inp, workspace, name):
     except ValueError as e:
         return f"Error: {e}."
     return await _render_document({"spec": {"document": {**doc, "sections": sections}}, "replace": True,
-                                   "intent": inp.get("intent") or intent, "discard_edits": inp.get("discard_edits")}, workspace, name)
+                                   "intent": inp.get("intent") or intent, "discard_edits": inp.get("discard_edits")}, workspace, name, kept=True)
 
 
 async def _to_the_room(root, rel, ui):
@@ -212,10 +212,10 @@ async def _exec_slides(action, inp, workspace, name):
             return f"Error: design unavailable — {e}"
         except Exception as e:
             return f"Error: couldn't read {fig_rel} — {e}"
-    credits = []   # {"stock": "…"} photos → saved workspace files
+    credits = []   # {"stock": "…"}, {"asset": "…"} pictures → saved workspace files
     for slide in many or ([inp["slide"]] if isinstance(inp.get("slide"), dict) else []):
-        from cycls._agent.design import stock
-        got, err = await stock.resolve(slide, root)
+        from cycls._agent.design import assets
+        got, err = await assets.named(slide, root, subject)
         if err:
             return err
         credits += got
@@ -473,21 +473,33 @@ def _seen_pages(root, fig_rel):
     return [h for h in hashes if isinstance(h, str)] if isinstance(hashes, list) else []
 
 
-async def _render_document(inp, workspace, name):
+async def _render_document(inp, workspace, name, kept=False):
     """Render a document to `<name>.fig`, its source kept in it, pages back for QA. `replace` re-renders
-    under the same name, keeping the earlier .fig as a version."""
+    under the same name, keeping the earlier .fig as a version. `kept`: the kept source changed by a
+    section action — its look stays what it was (none: classic)."""
     from cycls._agent import design
-    from cycls._agent.design import refresh, stock
+    from cycls._agent.design import assets, refresh
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
     replacing = _replacing(root, name, inp)
     # hand edits since the last render aren't in the source: held until discard_edits
     edited = await _edits_since_render(workspace, f"{name}.fig") if replacing else None
     if edited is not None and inp.get("discard_edits") is not True:
         return _edits_hold(name, edited)
-    credits, err = await stock.resolve(inp["spec"], workspace.root)
+    credits, err = await assets.named(inp["spec"], workspace.root, subject)
     if err:
         return err
-    source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos resolved
+    looked = []
+    if not kept:
+        # a new document without a look takes its theme's, written into the source it keeps (on a copy:
+        # the call's own input stays as it came)
+        spec_in = dict(inp["spec"])
+        doc_in = spec_in["document"] = dict(spec_in["document"])
+        if doc_in.get("look") is None and spec_in.get("look") is not None:
+            doc_in["look"] = spec_in.pop("look")
+        if err := _settle_look(doc_in, "document", looked):
+            return err
+        inp = {**inp, "spec": spec_in}
+    source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos and assets resolved
     spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
     if err:
         return err
@@ -500,7 +512,7 @@ async def _render_document(inp, workspace, name):
         return f"Error: design unavailable — {e}"
     except Exception as e:
         return f"Error: the document didn't render — {e}"
-    notes = [*notes, *(f"{c}." for c in credits), *r.notes]
+    notes = [*looked, *notes, *(f"{c}." for c in credits), *r.notes]
     if edited is not None:
         notes.append("The pages changed after the last render were laid out again from the source; they are kept in History.")
     requested = name

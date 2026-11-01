@@ -716,7 +716,7 @@ def test_unknown_node_type_is_an_error(tmp_path, monkeypatch):
     calls = _fake_render(monkeypatch)
     for node in ({"type": "circle", "w": 10}, {"x": 0, "y": 0, "w": 10, "h": 10}):
         out = asyncio.run(_exec_design({"action": "render", "spec": {"nodes": [node]}}, _ws(tmp_path)))
-        assert out.startswith("Error") and "text, rect, ellipse, line, image, stack, list, table, chart, icon, svg or qr" in out
+        assert out.startswith("Error") and "text, rect, ellipse, line, image, stack, list, table, chart, icon, svg, pattern or qr" in out
     assert calls == {}                                                      # never rendered a silently-missing node
 
 
@@ -1384,7 +1384,7 @@ def test_a_deck_of_layouts_resolves_its_images(tmp_path, monkeypatch):
         {"layout": "team", "title": "Team", "people": [{"name": "Sara", "photo": "attachments/sara.png"}, {"name": "Omar"}]},
         {"layout": "custom", "nodes": [{"text": "hand-built", "x": 100, "y": 100}]}]}}
     spec, err, notes = _prepare_spec(deck, None, tmp_path)
-    assert err is None and notes == []
+    assert err is None and notes == ["The deck's look: editorial, its theme's — `look` composes it another way (classic, swiss, bold, soft, minimal)."]
     d = spec["deck"]
     assert d["size"] == [1920, 1080] and d["theme"] == "editorial"                  # the size a deck defaults to
     assert d["slides"][0]["image"]["src"] == "attachments/farm.png" and d["slides"][0]["image"]["focus"] == [0.3, 0.5]
@@ -1417,7 +1417,7 @@ def test_a_brand_kit_is_the_decks_default_theme(tmp_path):
     assert "brand kit as its theme" in notes[0]
     # An explicit theme is the model's choice — the brand kit doesn't override it.
     spec, _, notes = _prepare_spec({"deck": {"theme": "mono", "slides": [{"layout": "title", "title": "x"}]}}, _load_brand(tmp_path), tmp_path)
-    assert spec["deck"]["theme"] == "mono" and notes == []
+    assert spec["deck"]["theme"] == "mono" and [n for n in notes if "brand" in n] == []
 
 
 def test_a_kit_with_a_latin_face_sets_latin_text_in_it_and_arabic_in_its_own(tmp_path):
@@ -1691,6 +1691,220 @@ def test_an_edit_replaces_an_image_with_a_stock_photo(tmp_path, monkeypatch):
     assert "Photo by Ana on Pexels" in _text(out)
 
 
+# ---- the media library: {"asset": "…"} is fetched from the service, saved, and placed as what it is ----
+
+_TILE = b'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="5" cy="5" r="3"/></svg>'
+_LIBRARY = [
+    {"id": "texture/a/paper-006", "kind": "texture", "title": "Paper 006", "format": "jpg", "width": 1024, "height": 1024,
+     "transparent": False, "colours": ["#c9a77c"], "tags": ["paper", "beige"], "licence": "CC0-1.0", "credit": None},
+    {"id": "emoji-3d/fluent/rocket", "kind": "emoji-3d", "title": "Rocket", "format": "png", "width": 256, "height": 256,
+     "transparent": True, "colours": ["#e23d55"], "tags": ["launch", "space"], "licence": "MIT", "credit": None},
+    {"id": "illustration/openpeeps/peep-2", "kind": "illustration", "title": "Peep 2", "format": "svg", "width": 240,
+     "height": 324, "transparent": None, "colours": ["#000000"], "tags": ["person", "hand-drawn"], "licence": "CC0-1.0", "credit": None},
+    {"id": "pattern/hero/moroccan", "kind": "pattern", "title": "Moroccan", "format": "svg", "width": 80, "height": 88,
+     "transparent": None, "colours": [], "tags": ["pattern", "repeatable"], "licence": "CC-BY-4.0",
+     "credit": "Pattern by Steve Schoger, heropatterns.com (CC BY 4.0)", "tileable": True}]
+
+
+def _fake_library(monkeypatch, rows=_LIBRARY, missing=None):
+    """The design service's media library faked (the two client calls); records them."""
+    calls = {"asset": [], "list": []}
+    data = {"jpg": _jpeg(1024, 1024), "png": _png(256, 256), "svg": _TILE}
+
+    def matching(name, kind):
+        words = name.lower().split()
+        hits = [r for r in rows if name.lower() == r["id"]
+                or all(w in f"{r['title']} {r['kind']} {' '.join(r['tags'])}".lower() for w in words)]
+        return [r for r in hits if not kind or r["kind"].startswith(kind)]
+
+    async def asset(name, kind=None, pick=0, user_id=None):
+        calls["asset"].append((name, kind, pick, user_id))
+        if missing:
+            raise RuntimeError(missing)
+        hits = matching(name, kind)
+        if not hits:
+            raise RuntimeError(f'no asset matches "{name}" — the library holds texture (1), emoji-3d (1), illustration (1), pattern (1)')
+        row = hits[min(pick, len(hits) - 1)]
+        return dict(row), data[row["format"]]
+
+    async def assets(query="", kind=None, limit=None, user_id=None):
+        calls["list"].append((query, kind))
+        if missing:
+            raise RuntimeError(missing)
+        hits = matching(query, kind) if query else [r for r in rows if not kind or r["kind"].startswith(kind)]
+        return {"assets": [dict(r) for r in hits], "total": len(hits),
+                "kinds": {"texture": 1, "emoji-3d": 1, "illustration": 1, "pattern": 1}}
+    monkeypatch.setattr("cycls._agent.design.client.asset", asset)
+    monkeypatch.setattr("cycls._agent.design.client.assets", assets)
+    return calls
+
+
+def _render_nodes(tmp_path, monkeypatch, nodes, fill="#0f172a", name="a"):
+    render = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": name, "spec": {"size": [1080, 1080], "fill": fill, "nodes": nodes}},
+                                   _ws(tmp_path)))
+    return out, render
+
+
+def test_an_asset_named_by_words_is_fetched_saved_and_said(tmp_path, monkeypatch):
+    calls = _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper texture", "x": 0, "y": 0, "w": 1080, "h": 1080}])
+    saved = tmp_path / "attachments" / "assets" / "texture-a-paper-006.jpg"
+    assert saved.read_bytes() == _jpeg(1024, 1024)
+    assert calls["asset"] == [("paper texture", None, 0, "org_1:user_1")]
+    node = render["spec"]["nodes"][0]
+    assert node["type"] == "image" and node["image"] and "asset" not in node and "fit" not in node     # a texture covers its box
+    assert '"paper texture" → the library\'s texture/a/paper-006 (Paper 006, texture).' in _text(out)
+
+
+def test_an_asset_named_by_its_id_is_fetched_once_and_needs_no_telling(tmp_path, monkeypatch):
+    calls = _fake_library(monkeypatch)
+    node = lambda: [{"type": "image", "asset": "texture/a/paper-006", "x": 0, "y": 0, "w": 1080, "h": 1080}]
+    out, _ = _render_nodes(tmp_path, monkeypatch, node(), name="a")
+    _render_nodes(tmp_path, monkeypatch, node(), name="b")
+    assert len(calls["asset"]) == 1 and "the library's" not in _text(out)
+
+
+def test_a_cut_out_asset_is_shown_whole_and_said_soft_when_drawn_too_large(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"asset": "rocket", "x": 100, "y": 100, "w": 200, "h": 300}])
+    node = render["spec"]["nodes"][0]
+    assert node["type"] == "image" and (node["w"], node["h"]) == (200, 200)      # contain: the box takes the picture's shape
+    assert "look soft" not in _text(out)
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "rocket", "x": 0, "y": 0, "w": 640, "h": 640}], name="b")
+    assert "emoji-3d/fluent/rocket is 256×256 px and is drawn about 2.5× that — it will look soft" in _text(out)
+
+
+def test_an_illustration_is_an_svg_node_whatever_it_was_written_as(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    _, render = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "peep", "x": 40, "y": 40, "w": 300, "fit": "contain"}])
+    node = render["spec"]["nodes"][0]
+    assert node["type"] == "svg" and node["svg"].startswith("<svg") and "src" not in node and "fit" not in node
+    assert (tmp_path / "attachments" / "assets" / "illustration-openpeeps-peep-2.svg").is_file()
+
+
+def test_a_pattern_fills_the_frame_faintly_in_an_ink_that_reads_and_is_credited(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"type": "pattern", "asset": "moroccan"},
+                                                        {"type": "image", "asset": "pattern/hero/moroccan", "x": 0, "y": 540, "w": 1080, "h": 540,
+                                                         "color": "#f59e0b", "opacity": 0.4, "scale": 2}])
+    whole, band = render["spec"]["nodes"]
+    assert whole == {"type": "pattern", "svg": _TILE.decode(), "x": 0, "y": 0, "w": 1080, "h": 1080, "color": "#ffffff", "opacity": 0.12}
+    assert band["type"] == "pattern" and (band["color"], band["opacity"], band["scale"], band["h"]) == ("#f59e0b", 0.4, 2, 540)
+    text = _text(out)
+    assert text.count("credit it: Pattern by Steve Schoger, heropatterns.com (CC BY 4.0).") == 1       # said once for both
+    assert '"moroccan" → the library\'s pattern/hero/moroccan (Moroccan, pattern) — credit it' in text
+
+
+def test_a_texture_given_no_box_fills_the_frame_and_an_object_still_needs_one(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, render = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper texture"},
+                                                        {"type": "image", "asset": "paper texture", "y": 540, "opacity": 0.3}])
+    whole, lower = render["spec"]["nodes"]
+    assert (whole["x"], whole["y"], whole["w"], whole["h"]) == (0, 0, 1080, 1080) and "_frame" not in whole
+    assert (lower["y"], lower["w"], lower["h"]) == (540, 1080, 540) and "_frame" not in lower
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "rocket", "x": 40, "y": 40}], name="b")
+    assert out.startswith("Error: image 'attachments/assets/emoji-3d-fluent-rocket.png' needs `w` and/or `h`")
+
+
+def test_a_pattern_takes_a_tile_from_the_workspace_too(tmp_path, monkeypatch):
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "tile.svg").write_bytes(_TILE)
+    _, render = _render_nodes(tmp_path, monkeypatch, [{"type": "pattern", "src": "brand/tile.svg", "x": 0, "y": 0, "w": 400, "h": 300}],
+                              fill="#ffffff")
+    node = render["spec"]["nodes"][0]
+    assert node["svg"] == _TILE.decode() and node["color"] == "#111111" and (node["w"], node["h"]) == (400, 300)
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "pattern"}], name="b")
+    assert out.startswith("Error: a pattern node needs `asset`")
+
+
+def test_a_layouts_picture_takes_an_asset_but_not_a_pattern(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    render = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    deck = lambda asset: {"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {"slides": [
+        {"layout": "title", "title": "Brewly", "image": {"asset": asset}}, {"layout": "closing", "title": "Thanks"}]}}}
+    asyncio.run(_exec_design(deck("paper"), _ws(tmp_path)))
+    slot = render["spec"]["deck"]["slides"][0]["image"]
+    assert slot["src"] == "attachments/assets/texture-a-paper-006.jpg" and slot["image"]
+    out = asyncio.run(_exec_design(deck("moroccan"), _ws(tmp_path)))
+    assert out.startswith("Error: pattern/hero/moroccan (Moroccan) is a pattern — it fills a box as a node")
+
+
+def test_a_documents_picture_stays_the_block_it_was(tmp_path, monkeypatch):
+    # A document's block is not a spec node: an illustration there is still its `image`,
+    # not an svg node — only what sits in `nodes` is read as what its asset is.
+    _fake_library(monkeypatch)
+    from cycls._agent.design import assets
+    spec = {"document": {"title": "T", "cover": {"image": {"asset": "paper"}}, "sections": [{"title": "S", "blocks": [
+        {"type": "image", "asset": "peep", "caption": "A reader"},
+        {"image": {"asset": "rocket", "kind": "emoji"}},
+        {"type": "nodes", "nodes": [{"type": "image", "asset": "peep", "x": 0, "y": 0, "w": 200}]}]}]}}
+    notes, err = asyncio.run(assets.resolve(spec, str(tmp_path)))
+    blocks = spec["document"]["sections"][0]["blocks"]
+    assert err is None and len(notes) == 3
+    assert blocks[0] == {"type": "image", "src": "attachments/assets/illustration-openpeeps-peep-2.svg", "caption": "A reader"}
+    assert blocks[1] == {"image": {"src": "attachments/assets/emoji-3d-fluent-rocket.png"}}
+    assert blocks[2]["nodes"][0]["type"] == "svg"                                   # a node, in a block of nodes
+    assert spec["document"]["cover"]["image"] == {"src": "attachments/assets/texture-a-paper-006.jpg"}
+
+
+def test_an_edit_takes_an_asset(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    calls, _ = _fake_apply(monkeypatch)
+    _design(tmp_path)
+    edit = lambda ops: asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": ops}, _ws(tmp_path)))
+    edit([{"op": "replace_image", "node": "hero", "asset": "paper"},
+          {"op": "add", "node": {"type": "pattern", "asset": "moroccan", "x": 0, "y": 0, "w": 1080, "h": 400}}])
+    swap, add = calls["ops"]
+    assert "asset" not in swap and swap["image"] and add["node"]["type"] == "pattern" and add["node"]["svg"]
+    assert edit([{"op": "replace_image", "node": "hero", "asset": "moroccan"}]).startswith(
+        "Error: pattern/hero/moroccan (Moroccan) is a pattern — replace_image takes a picture")
+    assert "this pattern needs `w` and `h`" in edit([{"op": "add", "node": {"type": "pattern", "asset": "moroccan"}}])
+
+
+def test_an_asset_goes_where_a_picture_goes_and_what_is_not_there_is_said(tmp_path, monkeypatch):
+    _fake_library(monkeypatch)
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "rect", "asset": "paper", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out.startswith("Error: `asset` goes on an image, svg or pattern node, not a rect")
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "zebra", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out.startswith('Error: no asset matches "zebra" — the library holds texture (1)')
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper", "kind": "emoji", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out.startswith('Error: no asset matches "paper"')                      # `kind` narrows the words
+
+
+def test_a_service_from_before_the_library_says_there_is_none(tmp_path, monkeypatch):
+    _fake_library(monkeypatch, missing="not found")
+    out, _ = _render_nodes(tmp_path, monkeypatch, [{"type": "image", "asset": "paper", "x": 0, "y": 0, "w": 10, "h": 10}])
+    assert out == "Error: this design service has no media library"
+    assert asyncio.run(_exec_design({"action": "assets", "query": "paper"}, _ws(tmp_path))) == "Error: this design service has no media library."
+
+
+def test_assets_lists_what_the_library_holds_and_makes_nothing(tmp_path, monkeypatch):
+    calls = _fake_library(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "assets", "query": "rocket", "kind": "Emoji"}, _ws(tmp_path)))
+    assert calls["list"] == [("rocket", "emoji")] and not calls["asset"]
+    assert out.startswith('The media library — 1 for "rocket" of kind emoji:\n  emoji-3d/fluent/rocket — Rocket · emoji-3d · PNG 256×256 · transparent · #e23d55 · launch, space')
+    assert "Nothing was made by this call." in out and not (tmp_path / "designs").exists()
+    everything = asyncio.run(_exec_design({"action": "assets"}, _ws(tmp_path)))
+    assert everything.startswith("The media library — 4 assets:") and "pattern/hero/moroccan — Moroccan · pattern · SVG 80×88" in everything
+    nothing = asyncio.run(_exec_design({"action": "assets", "query": "zebra"}, _ws(tmp_path)))
+    assert nothing.startswith('The media library has nothing for "zebra" — it holds texture (1), emoji-3d (1)')
+
+
+def test_the_library_calls_reach_the_service(monkeypatch):
+    monkeypatch.setenv("DESIGN_URL", "https://d.cycls.ai")
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "assets": [{"id": "texture/a/paper-006"}], "total": 3, "kinds": {"texture": 3}}))
+    assert asyncio.run(client.assets("paper", kind="texture", limit=5)) == {
+        "assets": [{"id": "texture/a/paper-006"}], "total": 3, "kinds": {"texture": 3}}
+    assert _FakeClient.last["url"] == "https://d.cycls.ai/assets" and _FakeClient.last["json"] == {"q": "paper", "kind": "texture", "limit": 5}
+    _mock(monkeypatch, _FakeResp(200, {"ok": True, "asset": {"id": "texture/a/paper-006"}, "data_base64": base64.b64encode(b"JPG").decode()}))
+    assert asyncio.run(client.asset("paper", pick=1)) == ({"id": "texture/a/paper-006"}, b"JPG")
+    assert _FakeClient.last["json"] == {"id": "paper", "pick": 1}
+    _mock(monkeypatch, _FakeResp(404, {"ok": False, "error": 'no asset matches "zebra" — the library holds texture (3)'}))
+    with pytest.raises(RuntimeError, match="no asset matches"):
+        asyncio.run(client.asset("zebra"))
+
+
 # ---- documents: content that flows over paper pages, saved as a PDF ----
 
 _DOC = {"title": "State of Coffee", "author": "Brewly", "theme": "editorial", "sections": [
@@ -1713,7 +1927,7 @@ def test_a_document_is_one_file_its_source_kept_in_it(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["coffee-report.fig"]   # no PDF beside it: it downloads as one
     assert calls["fmt"] == "png" and calls["scale"] == 1                      # its picture is only looked at
     # The source is kept in the file as it was written — paths, not the images' bytes.
-    assert calls["keep"] == {"kind": "document", "document": _DOC}
+    assert calls["keep"] == {"kind": "document", "document": {**_DOC, "look": "editorial"}}   # its look settled
     assert calls["keep"]["document"]["sections"][0]["blocks"][2]["image"] == "attachments/beans.png"
     assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "coffee-report.fig", "name": "coffee-report.fig"}
     m = out["_model"]
@@ -1906,6 +2120,31 @@ def _saved_document(tmp_path, monkeypatch, name="report"):
 def _source(tmp_path, name="report"):
     """The source the document's file keeps (what its last render kept in it)."""
     return _KEPT[(tmp_path / f"{name}.fig").read_bytes()]["document"]
+
+
+def test_a_new_document_keeps_its_themes_look_and_one_from_before_looks_keeps_none(tmp_path, monkeypatch):
+    """A new document takes its theme's look, written into the source it keeps, so its section
+    changes keep it too; a document rendered before there were looks (a source with none) stays
+    classic through its section changes instead of changing shape."""
+    ws = _ws(tmp_path)
+    calls = _doc_render(monkeypatch)
+    doc = {"title": "T", "theme": "mono", "sections": [{"title": "A", "blocks": ["x"]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "r", "spec": {"document": doc}}, ws))
+    assert calls["spec"]["document"]["look"] == "minimal" and _source(tmp_path, "r")["look"] == "minimal"
+    assert "look" not in doc                                                      # the call's own input is left as it came
+    assert "The document's look: minimal, its theme's" in out["_model"][-1]["text"]
+    asyncio.run(_exec_design({"action": "update_section", "name": "r", "number": 1, "section": {"blocks": ["y"]}}, ws))
+    assert calls["spec"]["document"]["look"] == "minimal"
+    asyncio.run(_exec_design({"action": "update_document", "name": "r", "document": {"look": "swiss"}}, ws))
+    assert calls["spec"]["document"]["look"] == "swiss" and _source(tmp_path, "r")["look"] == "swiss"
+    # from before looks: none in the source its file keeps, none sent
+    del _source(tmp_path, "r")["look"]
+    asyncio.run(_exec_design({"action": "update_section", "name": "r", "number": 1, "section": {"blocks": ["z"]}}, ws))
+    assert "look" not in calls["spec"]["document"]
+    # one it doesn't know is refused before anything is drawn
+    calls.clear()
+    out = asyncio.run(_exec_design({"action": "render", "name": "q", "spec": {"document": {**doc, "look": "grunge"}}}, ws))
+    assert out.startswith("Error: unknown look \"grunge\"") and not calls.get("renders")
 
 
 def test_a_documents_sections_are_added_rewritten_moved_and_removed_in_place(tmp_path, monkeypatch):
@@ -2817,3 +3056,237 @@ def test_the_design_tool_lives_in_its_package_and_is_still_reached_through_tools
     # …and what a tool was given as a path is in a module of its own, which both use.
     assert tools._resolve_path is paths._resolve_path and tools._safe_filename is paths._safe_filename
     assert paths._resolve_path.__module__ == "cycls._agent.paths"
+
+
+# ---- the tool's own skills: how to choose a look and lay out each kind of work, loaded by `skill` ----
+
+def test_skills_load_in_one_call_and_say_nothing_was_made(tmp_path):
+    from cycls._agent.design import skill
+    out = asyncio.run(_exec_design({"action": "skill", "skill": ["design-direction", "graphic-design"]}, _ws(tmp_path)))
+    assert out.index('<design-skill name="design-direction">') < out.index('<design-skill name="graphic-design">')
+    assert skill.SKILLS["graphic-design"][1] in out and "Nothing was made" in out
+    # names in one string, repeated, any case — and `name` when that's where they came
+    one = asyncio.run(_exec_design({"action": "skill", "skill": "Deck-Design, deck-design"}, _ws(tmp_path)))
+    assert one.count("<design-skill ") == 1 and skill.SKILLS["deck-design"][1] in one
+    assert "<design-skill name=\"document-design\">" in asyncio.run(_exec_design({"action": "skill", "name": "document-design"}, _ws(tmp_path)))
+    assert not list(tmp_path.iterdir())                                       # nothing written
+
+
+def test_an_unknown_skill_is_one_error_naming_them_all(tmp_path):
+    out = asyncio.run(_exec_design({"action": "skill", "skill": ["graphic-design", "poster-magic"]}, _ws(tmp_path)))
+    assert out.startswith("Error: no skill named 'poster-magic'")
+    assert all(n in out for n in ("design-direction", "graphic-design", "deck-design", "document-design"))
+    assert asyncio.run(_exec_design({"action": "skill"}, _ws(tmp_path))).startswith("Error: `skill` names the skills")
+
+
+def test_the_tool_says_what_its_skills_are_whole_and_short(monkeypatch):
+    from cycls._agent.design import skill, tool
+    whole, short = tool._DESIGN_TOOL, tool._DESIGN_TOOL_SHORT
+    assert list(skill.SKILLS)[:4] == ["design-direction", "graphic-design", "deck-design", "document-design"]
+    for name, (description, _) in skill.SKILLS.items():
+        assert f"· {name} — {description}" in whole["description"]
+        assert name in short["description"] and name in whole["input_schema"]["properties"]["skill"]["description"]
+    assert "skill" in whole["input_schema"]["properties"]["action"]["enum"]
+    assert short["input_schema"]["properties"]["skill"]["type"] == ["string", "array"]
+
+
+def test_a_skill_loaded_on_the_short_form_loads_the_instructions_too(tmp_path):
+    from cycls._agent.design.tool import DESIGN_LOADED
+    token = DESIGN_LOADED.set(False)
+    try:
+        out = asyncio.run(_exec_design({"action": "skill", "skill": "graphic-design"}, _ws(tmp_path)))
+        bad = asyncio.run(_exec_design({"action": "skill", "skill": "nope"}, _ws(tmp_path)))
+    finally:
+        DESIGN_LOADED.reset(token)
+    assert '<design-skill name="graphic-design">' in out and "instructions are loaded" in out
+    assert bad.startswith("Error: no skill named")
+
+
+def test_the_skill_files_are_read_as_the_harness_reads_a_skill_and_fit_its_limits():
+    import pathlib
+    from cycls._agent.design import skill
+    from cycls._agent.tools.skills import MAX_DESCRIPTION, MAX_SKILL_BYTES, parse_frontmatter
+    files = sorted(pathlib.Path(skill.__file__).with_name("skills").glob("*.md"))
+    assert len(files) == len(skill.SKILLS) >= 4
+    for f in files:
+        raw = f.read_bytes()
+        meta, body = parse_frontmatter(raw.decode("utf-8").replace("\r\n", "\n"))
+        assert skill.SKILLS[meta["name"]] == (meta["description"], body.strip()), f.name
+        assert meta["name"] == f.stem and len(meta["description"]) <= MAX_DESCRIPTION and len(raw) <= MAX_SKILL_BYTES
+
+
+def _skill_examples():
+    import pathlib, re
+    from cycls._agent.design import skill
+    for f in sorted(pathlib.Path(skill.__file__).with_name("skills").glob("*.md")):
+        for i, block in enumerate(re.findall(r"```json\n(.*?)\n```", f.read_text("utf-8"), re.S)):
+            yield pytest.param(block, id=f"{f.stem}-{i + 1}")
+
+
+@pytest.mark.parametrize("block", list(_skill_examples()))
+def test_every_example_in_the_skills_is_a_design_the_tool_takes(tmp_path, monkeypatch, block):
+    """What a skill shows is copied: each example must go through the tool as written."""
+    from cycls._agent.design.prepare import _prepare_document
+    spec = json.loads(block)
+    if "document" in spec:
+        _, err, _ = _prepare_document(spec, None, tmp_path)
+        assert err is None, err
+        return
+
+    async def asset(name, kind=None, pick=0, user_id=None):            # any name finds a picture of the kind it says
+        pattern, texture = "moroccan" in name or "pattern" in name, "texture" in name
+        row = {"id": f"x/{name}", "kind": "pattern" if pattern else "texture" if texture else "icon-3d", "title": name,
+               "format": "svg" if pattern else "jpg" if texture else "png", "width": 400, "height": 400,
+               "transparent": not (pattern or texture), "colours": [], "tags": [], "licence": "CC0-1.0", "credit": None}
+        return row, _TILE if pattern else _jpeg(400, 400) if texture else _png(400, 400)
+    monkeypatch.setattr("cycls._agent.design.client.asset", asset)
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "example", "spec": spec}, _ws(tmp_path)))
+    assert calls.get("renders") == 1, _text(out) if isinstance(out, dict) else out
+
+
+# ---- what a render says back: the deck's theme, keys written beside their place, a stack's
+# children placed by hand, and — in a chat that hasn't loaded them — the skills to load ----
+
+_SLIDES = [{"layout": "title", "title": "Qahwa House"}]
+_OWN = {"base": "editorial", "bg": "#f6f1e7", "accent": "#b4532a", "heading": "Fraunces Bold"}
+
+
+def test_a_deck_says_the_theme_it_is_laid_out_with(tmp_path):
+    spec, err, notes = _prepare_spec({"deck": {"theme": _OWN, "slides": _SLIDES}}, None, tmp_path)
+    assert err is None and spec["deck"]["theme"] == _OWN
+    assert any("editorial" in n and "accent" in n and "heading" in n for n in notes), notes
+    # none given and no brand kit: the default — said, so a theme that never arrived is seen at once
+    _, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}}, None, tmp_path)
+    assert any("no `theme`" in n and "minimal-light" in n for n in notes), notes
+    # a named theme needs no word (only its look, which it chose)
+    assert _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2] == [
+        "The deck's look: minimal, its theme's — `look` composes it another way (classic, editorial, swiss, bold, soft)."]
+    assert _prepare_spec({"deck": {"theme": "mono", "look": "bold", "slides": _SLIDES}}, None, tmp_path)[2] == []
+
+
+# ---- a deck's or a document's look: how its slides or pages are composed, apart from its theme ----
+
+def test_a_deck_takes_its_themes_look_unless_it_names_one(tmp_path):
+    """Without a look every deck came out one shape whatever its colours. The look is written
+    into the deck (so its settings — and a slide added later — keep it); one it doesn't know is
+    refused, with the looks."""
+    look = lambda deck, brand=None: _prepare_spec({"deck": {**deck, "slides": _SLIDES}}, brand, tmp_path)[0]["deck"]["look"]
+    assert look({"theme": "editorial"}) == "editorial" and look({"theme": "tech-dark"}) == "swiss"
+    assert look({"theme": "bold-gradient"}) == "bold" and look({"theme": {"base": "warm", "accent": "#123456"}}) == "soft"
+    assert look({"theme": "editorial", "look": " Swiss "}) == "swiss"                  # the model's own, written plainly
+    _, err, _ = _prepare_spec({"deck": {"look": "brutalist", "slides": _SLIDES}}, None, tmp_path)
+    assert err == "Error: unknown look \"brutalist\" — a deck's look is one of: classic, editorial, swiss, bold, soft, minimal."
+    # written beside the deck, it is the deck's
+    spec, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}, "look": "minimal"}, None, tmp_path)
+    assert spec["deck"]["look"] == "minimal" and "look" not in spec
+
+
+def test_with_no_look_and_a_theme_that_names_none_a_piece_gets_the_look_it_calls_for(tmp_path):
+    """On production (2026-10-17) a proposal written on a custom theme over minimal-light, with no
+    look, fell back to classic — the shape every document had. Now what the piece says it is
+    decides, then a custom theme's base, then its shape; classic only when it is asked for."""
+    from cycls._agent.design.prepare import _look_for, _settle_look
+    doc = lambda **d: _look_for({"title": "x", **d}, "document")
+    proposal = {"theme": {"base": "minimal-light", "accent": "#2e7d5b"}, "title": "A Healthier Team Builds Better Software",
+                "subtitle": "Corporate Employee Wellness Programme — Proposal for a Riyadh Software Company", "cover": False}
+    assert _look_for(proposal, "document") == ("bold", "for a proposal or a pitch")
+    assert doc(kind="CV", cover=False)[0] == "swiss" and doc(kind="Letter", cover=False)[0] == "minimal"
+    assert doc(cover={"eyebrow": "MARKET REVIEW"})[0] == "editorial" and doc(title="تقرير السوق السنوي")[0] == "editorial"
+    assert doc(kind="Company brochure")[0] == "soft" and doc(kind="User guide")[0] == "swiss"
+    # its kind outranks a theme of one's own on a look's base (a skill's example theme is on "editorial")…
+    assert doc(theme={"base": "editorial", "accent": "#123456"}, kind="Proposal")[0] == "bold"
+    # …but not a theme named for a look, nor the look it asks for
+    assert doc(theme="editorial", kind="Proposal") == ("editorial", "its theme's")
+    # nothing said: its shape, else one chosen by its title — the same one each time, never classic
+    assert doc(cover=False) == ("swiss", "for a document with no cover") and doc(columns=2)[0] == "editorial"
+    assert doc(theme={"base": "warm"}) == ("soft", "its theme's base")
+    titles = ["Qahwa House", "Q3 board update", "Nabta", "Brewly", "Oasis", "Atlas", "Dunes", "North star"]
+    picked = [_look_for({"slides": [{"layout": "title", "title": t}]}, "deck")[0] for t in titles]
+    assert picked == [_look_for({"slides": [{"layout": "title", "title": t}]}, "deck")[0] for t in titles]
+    assert "classic" not in picked and len(set(picked)) > 1
+    assert _look_for({"slides": [{"layout": "title", "eyebrow": "Investor update", "title": "Nabta"}]}, "deck")[0] == "bold"
+    assert _look_for({"slides": [{"layout": "title", "title": "Welcome to the team", "subtitle": "Onboarding week"}]}, "deck")[0] == "soft"
+    # the brand kit's theme names none: the piece decides
+    brand = {"primary": "#0c2340", "accent": "#c9a227", "heading": None, "body": None}
+    spec, _, notes = _prepare_spec({"deck": {"slides": [{"layout": "title", "title": "Annual report 2026"}]}}, brand, tmp_path)
+    assert spec["deck"]["look"] == "editorial" and any(n.startswith("The deck's look: editorial, for a report") for n in notes)
+    notes = []
+    assert _settle_look(dict(proposal), "document", notes) is None
+    assert notes == ["The document's look: bold, for a proposal or a pitch — `look` composes it another way "
+                     "(classic, editorial, swiss, soft, minimal)."]
+
+
+def test_a_decks_look_is_kept_for_its_later_slides(tmp_path, monkeypatch):
+    from cycls._agent.design.deck import settings_of
+    first = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": {"deck": {
+        "theme": "warm", "slides": [{"layout": "title", "title": "Brewly"}, {"layout": "closing", "title": "Thanks"}]}}}, _ws(tmp_path)))
+    assert first["keep"]["kind"] == "deck" and first["keep"]["deck"]["look"] == "soft"     # kept in the .fig
+    assert settings_of({"theme": "mono", "look": "swiss", "slides": []}) == {"theme": "mono", "look": "swiss"}
+    # a look written beside `spec` is read with the design written there
+    calls = _fake_render(monkeypatch, image=b"PPTX", previews=[b"J1", b"J2"])
+    asyncio.run(_exec_design({"action": "render", "name": "beside", "format": "pptx", "look": "bold",
+                              "deck": {"slides": [{"layout": "title", "title": "x"}, {"layout": "closing", "title": "y"}]}}, _ws(tmp_path)))
+    assert calls["spec"]["deck"]["look"] == "bold"
+
+
+def test_a_theme_written_beside_the_deck_is_read_as_its_own(tmp_path, monkeypatch):
+    spec, err, notes = _prepare_spec({"deck": {"slides": _SLIDES}, "theme": _OWN}, None, tmp_path)
+    assert err is None and spec["deck"]["theme"] == _OWN and "theme" not in spec
+    assert any("beside `deck`" in n for n in notes), notes
+    # …and at the tool's own level, beside a deck written there too
+    calls = _fake_render(monkeypatch)
+    asyncio.run(_exec_design({"action": "render", "name": "d", "deck": {"slides": _SLIDES}, "theme": _OWN}, _ws(tmp_path)))
+    assert calls["spec"]["deck"]["theme"]["accent"] == "#b4532a"
+
+
+def test_keys_a_deck_does_not_read_are_said(tmp_path):
+    _, err, notes = _prepare_spec({"deck": {"theme": "mono", "palette": ["#000000"], "slides": _SLIDES}}, None, tmp_path)
+    assert err is None and any("`palette`" in n for n in notes), notes
+
+
+def test_a_documents_keys_written_beside_it_are_read_as_its_own(tmp_path):
+    from cycls._agent.design.prepare import _prepare_document
+    sections = [{"title": "Summary", "blocks": ["Fine."]}]
+    out, err, notes = _prepare_document({"document": {"sections": sections}, "title": "Weekly report", "theme": "corporate"},
+                                        None, tmp_path)
+    assert err is None and out["document"]["title"] == "Weekly report" and out["document"]["theme"] == "corporate"
+    assert any("beside `document`" in n for n in notes), notes
+    out, _, _ = _prepare_document({"document": {"title": "Mine", "sections": sections}, "title": "Other"}, None, tmp_path)
+    assert out["document"]["title"] == "Mine"                                  # set in both places: the document's own
+
+
+def test_a_stack_childs_own_place_is_said_with_how_to_put_a_label_on_a_shape(tmp_path):
+    spec = {"size": [1080, 1350], "nodes": [{"type": "stack", "id": "cta", "direction": "horizontal", "x": 96, "y": 1100, "children": [
+        {"type": "rect", "id": "pill", "w": 620, "h": 84, "radius": 42, "fill": "#b4532a"},
+        {"type": "text", "id": "label", "text": "1 November", "w": 620, "y": 24, "size": 32}]}]}
+    _, err, notes = _prepare_spec(spec, None, tmp_path)
+    assert err is None
+    said = [n for n in notes if "label" in n and "valign" in n]
+    assert len(said) == 1 and "side by side" in said[0], notes
+
+
+def test_a_render_in_a_chat_without_the_skills_says_which_to_load(tmp_path, monkeypatch):
+    from cycls._agent.design.tool import DESIGN_SKILLED
+    _fake_render(monkeypatch)
+    post = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Hi", "x": 100, "y": 100}]}
+    token = DESIGN_SKILLED.set(False)
+    try:
+        out = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": post}, _ws(tmp_path)))
+        deck = asyncio.run(_exec_design({"action": "render", "name": "d", "format": "pptx", "spec": {"deck": {"slides": _SLIDES}}}, _ws(tmp_path)))
+        listing = asyncio.run(_exec_design({"action": "skill", "skill": "deck-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_SKILLED.reset(token)
+    assert '"skill": ["design-direction", "graphic-design"]' in _text(out)
+    assert '"skill": ["design-direction", "deck-design"]' in _text(deck)
+    assert "No design skill" not in listing
+    assert "No design skill" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
+
+
+def test_the_skill_a_render_needs_follows_what_it_makes():
+    from cycls._agent.design.run import _skill_for
+    assert _skill_for({"document": {}}) == "document-design"
+    assert _skill_for({"deck": {}}) == "deck-design" and _skill_for({"frames": [{"size": "slide"}, {"size": "slide"}]}) == "deck-design"
+    assert _skill_for({"frames": [{"size": "post-portrait"}] * 3}) == "graphic-design"       # a carousel
+    assert _skill_for({"size": "square", "nodes": []}) == "graphic-design" and _skill_for({"pages": []}) == "graphic-design"

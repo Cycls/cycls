@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from cycls._app.db import Workspace
 from cycls._agent.design import comments
 from cycls._agent.design import refresh as design_refresh
-from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path
+from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person
 
 
 # renders of one page (`&page=`, else the first), cached by the .fig's path + mtime + size
@@ -414,10 +414,11 @@ def design_router(ws_dep, user_dep, changed):
                 # a version never changes
                 return Response(picture, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
             return Response(data, media_type="application/octet-stream", headers=_NO_CACHE)
-        return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel)}
+        me = (person(None, ws) or {}).get("id")
+        return {"versions": await asyncio.to_thread(versions.listing, ws.root, rel, me)}
 
     @r.post("/versions/{path:path}")
-    async def restore_version(path: str, request: Request, ws: Workspace = ws_dep):
+    async def restore_version(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         """`?restore=<id>`: the design becomes that version again (what it was is kept) → {ok, version}."""
         from cycls._agent import versions
         from cycls._agent.design.store import write_fig
@@ -425,7 +426,7 @@ def design_router(ws_dep, user_dep, changed):
         data = await asyncio.to_thread(versions.read, ws.root, rel, request.query_params.get("restore") or "")
         if data is None:
             raise HTTPException(404, "No such version")
-        version = await write_fig(ws.root, rel, data, by="user", reason="restore")
+        version = await write_fig(ws.root, rel, data, by="user", reason="restore", who=person(user, ws))
         changed(ws.root)
         design_refresh.schedule(ws.root, rel, ws.subject)
         # its live room reloads
@@ -436,11 +437,11 @@ def design_router(ws_dep, user_dep, changed):
     # ---- Comments on a design (cycls/_agent/design/comments.py) ----
 
     def _commented(ws, path):
-        """The `.fig` a comments request is about."""
+        """The `.fig`, workbook or Word document a comments request is about."""
         root = Path(ws.root).resolve()
         src = _safe_path(root, path)
-        if not _design_doc(src.name) or not src.is_file():
-            raise HTTPException(404, "No such design")
+        if not comments.commentable(src.name) or not src.is_file():
+            raise HTTPException(404, "No such design, workbook or document")
         return src.relative_to(root).as_posix()
 
     def _commenter(ws, user, body):
@@ -463,8 +464,9 @@ def design_router(ws_dep, user_dep, changed):
 
     @r.post("/comments/{path:path}")
     async def comment(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
-        """A new thread {text, frame (from 0), x, y (slide pixels), page?, frame_name?, name?}, or with `?id=`
-        a change {op: reply|resolve|reopen|edit|delete|move, …} → {thread (null once deleted), version}."""
+        """A new thread {text, frame (from 0), x, y (slide pixels), page?, frame_name?, name?} — on a workbook
+        {text, sheet, cell, sheet_name?, name?} — or with `?id=` a change {op: reply|resolve|reopen|edit|delete|
+        move, …} → {thread (null once deleted), version}."""
         rel = await asyncio.to_thread(_commented, ws, path)
         try:
             body = await request.json()

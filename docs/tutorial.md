@@ -389,7 +389,9 @@ The model calls one `design` tool:
 - **`render {spec}`** — a single design `{size, fill, nodes:[…]}`: text (any Google
   Font, rich runs, fit-to-box), shapes, gradients and glows, photos from the workspace
   (cover / contain, crop, focus) or stock photos found by a query (`"stock": "coffee
-  beans"`, with `PEXELS_API_KEY`), stacks that lay text out from its measured size,
+  beans"`, with `PEXELS_API_KEY`), pictures of the service's media library named by a
+  few words (`"asset": "paper texture"` — textures, patterns, 3D emoji and icons,
+  illustrations; `{action: "assets"}` lists them), stacks that lay text out from its measured size,
   icons, SVG logos, QR codes, arrows, lists, charts and tables. `size` takes presets
   (`square`, `story`, `slide`, `a4-poster`, …). Formats: png (default), jpg, webp, svg,
   pptx, pdf.
@@ -453,6 +455,75 @@ Unset `DESIGN_URL` and the tool simply isn't offered — no crash, like the offi
 fallback. The render service is a small Bun app in its own repo
 (`cycls-design`). Details: [docs/notes/design.md](notes/design.md).
 
+
+### Video (reels, explainers, animated decks)
+
+Let an agent **make short videos that move** — reels and stories, explainers, announcements,
+animated stats, a deck turned into a video — and show them on the canvas, with no video engine in
+the image. The agent writes a video as one HTML composition (the HyperFrames format, animated with
+the Web Animations API); a shared service on Modal GPUs checks it, shows the model its frames and
+renders the MP4. A video can have a voice-over (Arabic or English), music from a bundled library and
+captions on the spoken words, and it can be cut from the person's own clips or stock footage, which
+the service reads first (shots, a sheet of frames, what is said and when).
+
+```python
+llm = cycls.LLM().model(...).max_tokens(64_000).allowed_tools(["Editor", "Canvas", "Video"])
+```
+```
+VIDEO_URL=https://<workspace>--cycls-video-web.modal.run   # the deployed service
+VIDEO_SECRET=<the service key>
+VIDEO_ORGS=org_123,org_456                                 # who may use it; "*" for everyone
+```
+
+The model calls one `video` tool: `guide` first (its instructions load into the tool, and a GPU
+starts warming), then `write {name, html}`, `edit {name, changes}`, `look {name, at}`,
+`render {name}` and `restore {name}`; for sound `voice {name, text}` and `music {query}`; for
+footage `footage {path}` or `footage {stock}`. A save comes back with lint errors to fix, or with the
+browser check and one sheet of frames labelled with their times; the composition plays live on
+the canvas in a sandboxed player and refreshes as the agent edits it; `render` writes
+`videos/<name>.mp4` and opens it. See `docs/notes/video.md`.
+
+With `VIDEO_EDITOR_URL` set too (the service's editor), a video on the canvas has **Edit**: the
+person retimes and trims scenes and clips, moves and restyles titles, fixes a caption word, swaps or
+lowers the music, renders — or selects something and asks the agent about it. Their saves are
+versions of the file, like a design's; the agent reads the file again before it edits after them.
+
+### Transcribe (voice notes, calls, meetings)
+
+Let an agent **write down what is said in a recording** — a voice note, a phone call, a meeting, a
+lecture, or the sound of a video — strong on Arabic, Gulf dialects included, and on English. Two
+engines, either or both: **ElevenLabs Scribe** (an API: the fewest errors on Gulf dialect in our tests,
+speaker labels, $0.22 per audio hour) and the shared **cycls-transcribe** service on Modal GPUs (Cohere
+Transcribe Arabic + Whisper + our own aligner: the best on standard Arabic, the audio stays ours, cheapest
+at high volume). Nothing runs in the agent's image.
+
+```python
+llm = cycls.LLM().model(...).allowed_tools(["Editor", "Transcribe"])
+```
+```
+ELEVENLABS_API_KEY=sk_...                                            # ElevenLabs Scribe
+TRANSCRIBE_URL=https://<workspace>--cycls-transcribe-web.modal.run   # the cycls-transcribe service
+TRANSCRIBE_SECRET=<the service key>
+TRANSCRIBE_ENGINE=elevenlabs        # which hears first; the other, when set up, is the fallback
+```
+
+The model calls one `transcribe` tool with a recording's path (mp3, wav, m4a, ogg, opus, webm, flac,
+aac, mp4, mov; up to 512 MB and 3 hours) and an optional `language` (`ar`, `en` or `auto`). The
+reply is the transcript with a `[mm:ss]` mark at each paragraph (and `Speaker 1`, `Speaker 2`… when the
+engine tells voices apart), and it is saved beside the recording as `<name>.transcript.md` and
+`<name>.words.json` (every word timed; the same shape as a Video footage transcript, so neither tool
+hears a clip twice). A recording attached in chat points the model at the tool; asking again for the
+same bytes costs nothing. When the first engine is down, the other is tried. Two more inputs: `names`
+(people, companies, places likely said: ElevenLabs listens for them, so they come out spelled right) and
+`speakers` (`{"1": "Khalfan", "2": "Sara"}`: renames the voices in the saved transcript without hearing it
+again). Every engine counts against a daily allowance per organisation and per person, in hours of audio
+(`TRANSCRIBE_DAILY_HOURS_ORG`, default 24; `TRANSCRIBE_DAILY_HOURS_USER`, default 6; 0 = no limit), and
+each transcription is logged (`level: "transcribe"`). See `docs/notes/transcribe.md`.
+
+The same engines back the **microphone** once either is set: `POST /transcribe` answers from the first,
+then the other; OpenAI's `gpt-4o-mini-transcribe` only when neither is set, or both are down and
+`OPENAI_API_KEY` is set. When the service hears first, the browser warms a GPU as recording starts.
+
 ### Apple IAP entitlements
 
 For agents that sell subscriptions through Apple In-App Purchase, `.iap(...)`
@@ -501,7 +572,7 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser` and `Design` are offered only when their service is configured (see below) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `Video`, `Transcribe`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design`, `Video` and `Transcribe` are offered only when their service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens; sets when compaction kicks in (default 1M; set it for smaller models) |
@@ -942,7 +1013,8 @@ Every agent exposes these HTTP endpoints:
 POST /                     # Cycls streaming protocol (SSE); /chat is an alias
 POST /chat/completions     # OpenAI-compatible format
 GET  /config               # App config (title, plan, auth flag, ...)
-POST /transcribe           # Voice input → text
+POST /transcribe           # Voice input → text (the cycls-transcribe service, or OpenAI)
+POST /transcribe/warm      # The mic started recording: warm a listener (a hint)
 GET  /og.png               # Social-preview image
 
 # Authenticated:
@@ -976,6 +1048,10 @@ Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is
 | `CYCLS_BASE_URL` | Cycls API base URL (defaults to `https://api.cycls.ai`) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (auto-picked by adapter) |
 | `OPENAI_API_KEY` | OpenAI API key (auto-picked by adapter) |
+| `TRANSCRIBE_URL` / `TRANSCRIBE_SECRET` | The cycls-transcribe service: the `Transcribe` tool and the microphone |
+| `ELEVENLABS_API_KEY` | ElevenLabs Scribe, the other transcription engine |
+| `TRANSCRIBE_ENGINE` | `elevenlabs` or `cycls`: which engine hears first (default: the service when `TRANSCRIBE_URL` is set) |
+| `TRANSCRIBE_DAILY_HOURS_ORG` / `TRANSCRIBE_DAILY_HOURS_USER` | Transcription allowance a day, in hours of audio (24 / 6; 0 = no limit) |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk publishable key (optional override) |
 
 ---

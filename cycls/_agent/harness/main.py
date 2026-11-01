@@ -20,7 +20,12 @@ from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
-from ..design.tool import DESIGN_FOLDER, DESIGN_LOADED, design_called, design_tool, design_wanted
+from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded,
+                           design_tool, design_wanted)
+from ..tools import ondemand
+from ..video.client import offered as video_offered
+from ..office.client import offered as office_offered
+from ..transcribe.client import configured as transcribe_configured
 from ..tools import skills as skills_mod
 
 
@@ -32,9 +37,25 @@ MAX_DELAY_MS = 32_000
 # 500 included: model servers surface transient capacity failures (CUDA OOM
 # on a saturated GPU) as plain 500s that clear within seconds.
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504, 529}
+# The connection to the model failing — refused, cut, timed out — rather than the model refusing the
+# request: transport errors by class name along the cause chain (the vendor SDKs wrap httpx's), and
+# SGLang's prefill/decode hand-off timing out. Production `super` lost ~30 turns in five days to
+# these (2026-10-13..18), each a failed turn — after the vendor client's own two quick retries. Tried
+# again a few times, 2/4/8 s apart, only while nothing of the answer has reached the person (no text
+# shown twice) and only when the attempt failed fast: one that hung (SGLang's decode hand-off gives up
+# after 300 s) is not made to wait again.
+MAX_DROPPED = 3
+DROPPED_WITHIN = 60   # seconds an attempt may take and still be tried again
+_DROPPED_TYPES = {"APIConnectionError", "APITimeoutError", "ConnectError", "ConnectTimeout", "ReadTimeout",
+                  "ReadError", "WriteError", "RemoteProtocolError", "PoolTimeout", "ServerDisconnectedError"}
+_DROPPED_SAID = ("connection error", "peer closed connection", "incomplete chunked read",
+                 "server disconnected", "decode transfer failed", "kvtransfererror")
 _FAILED = ("Error:", "Build failed:")   # how a tool says it failed — it returns, it does not raise
 MAX_CONTINUATIONS = 4         # auto-continue rounds after a max_tokens cut
 MAX_PAUSES = 8                # pause_turn resends before giving up
+# Failed calls in a row, whatever they are, are told at 10 and stop the turn at 25 (one suite turn sent the
+# same failing `edit` 394 times). The same call answered the same way again is _REPEATED's, below.
+STREAK_WARN, STREAK_STOP = 10, 25
 CANCEL_DRAIN = 2              # seconds a cancelled tool batch gets to unwind
 _CONTINUE = ("Your previous message was cut off at the output-token limit. "
              "Continue exactly from where you stopped. Do not repeat anything.")
@@ -143,11 +164,26 @@ def _with_selection(content, sel):
     """The person's design selection as a text block for the model (the chat shows a chip)."""
     def node(n):
         return f'{n["name"]} ({n["type"]})' + (f' "{n["text"]}"' if n.get("text") else "")
-    where = (sel["path"] + (f' page {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
+    # A design of several pages says which one they are on; a workbook, its sheet; a video, where its
+    # playhead was ("at 4.2 s").
+    part = "sheet" if sel["path"].lower().endswith(".xlsx") else "page"
+    where = (sel["path"] + (f' {part} {json.dumps(sel["page"], ensure_ascii=False)}' if sel.get("page") else "")
+             + (f' at {sel["time"]:g} s' if sel.get("time") is not None else "")
              + (f' › {sel["frame"]}' if sel.get("frame") else ""))
     line = f"{SELECTED}{where}: " + ", ".join(node(n) for n in sel["nodes"]) + "]"
     blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
     return [*blocks, {"type": "text", "text": line}]
+
+
+def _streak_note(streak):
+    """What a failed call's result adds when calls keep failing in a row (STREAK_*)."""
+    if streak >= STREAK_STOP:
+        return ("[The turn was stopped here: tool calls kept failing. Do not send them again as they are — "
+                "work out why they fail first, or tell the person what is in the way.]")
+    if streak >= STREAK_WARN:
+        return (f"[{streak} tool calls in a row have failed. Stop and rethink the approach, "
+                "or tell the person what is in the way.]")
+    return ""
 
 
 def _shape(block, out, ok, handlers, mcp_names):
@@ -178,16 +214,35 @@ def _shape(block, out, ok, handlers, mcp_names):
 
 
 _SOURCE = {"title": 300, "url": 2000, "snippet": 600, "label": 120, "quote": 2000, "status": 60, "note": 300}
+_CHART = {"title": 200, "subtitle": 300, "source": 300, "as_of": 40, "currency": 12}
+_CHART_POINTS = 5_000   # per series: about 20 years of daily closes, or weeks of hourly bars
+
+
+def _chart(ev):
+    """A chart part as the transcript keeps it: its series bounded to their latest points, so a reload draws it again."""
+    series = [{**{k: s[k] for k in ("name", "kind", "pane", "color") if k in s}, "data": s["data"][-_CHART_POINTS:]}
+              for s in (ev.get("series") or ())[:8] if isinstance(s, dict) and isinstance(s.get("data"), list)]
+    if not series:
+        return None
+    out = {k: v[:n] for k, n in _CHART.items() if isinstance(v := ev.get(k), str)}
+    if isinstance(ev.get("precision"), int):
+        out["precision"] = ev["precision"]
+    if isinstance(ev.get("live"), dict) and isinstance(ev["live"].get("url"), str):
+        out["live"] = {k: ev["live"][k] for k in ("url", "every") if k in ev["live"]}
+    markers = [m for m in (ev.get("markers") or ())[:200] if isinstance(m, dict)]
+    return {"type": "chart", "id": ev.get("id"), **out, "series": series, "markers": markers}
 
 
 def _kept(ev):
     """What of a tool's chat events the transcript keeps, since `ui` events never reach it: its sources, bounded,
-    and the card of a file it opened. Without this a reload shows neither."""
+    its charts, and the card of a file it opened. Without this a reload shows none of them."""
     if not isinstance(ev, dict): return None
     if ev.get("type") == "sources":
         rows = [{k: v[:n] for k, n in _SOURCE.items() if isinstance(v := r.get(k), str) and v}
                 for r in ev.get("sources") or () if isinstance(r, dict) and isinstance(r.get("url"), str)]
         return {"type": "sources", "id": ev.get("id"), "sources": rows[:20]} if rows else None
+    if ev.get("type") == "chart":
+        return _chart(ev)
     if ev.get("type") == "step" and str(ev.get("id", "")).endswith(":file"):
         return ev
 
@@ -211,7 +266,7 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
             if failed: out = f"Error: {_cause(out)}"
             content, evs, _ = _shape(block, out, not failed, handlers, mcp_names)
             kept += [k for e in evs if (k := _kept(e))]
-        if isinstance(content, str) and block["name"] not in ("read", "skill"):
+        if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
             content = spill.spill(content, workspace.root, session.chat_id,
                                   f"{block['name']}-{block['id'][-6:]}")
         results.append({"type": "tool_result", "tool_use_id": block["id"],
@@ -220,18 +275,41 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
     await asyncio.shield(session.checkpoint())
 
 
-async def _ingest(content, workspace, vision=True, chat_id=None):
+CLIP_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm")   # what the Video tool's `footage` reads
+# What the Transcribe tool hears beyond those (cycls/_agent/transcribe/tool.py's AUDIO_TYPES).
+AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".amr", ".caf", ".aif",
+                  ".aiff", ".3gp")
+
+
+async def _ingest(content, workspace, vision=True, video=False, transcribe=False, chat_id=None):
     """Resolve attachment refs in an incoming user message to inline blocks,
     framed with the filename so the model knows what the user attached.
     Reuses `_exec_read` as the single source of truth for path → content.
     With `vision=False`, media that resolves to base64 blocks (images, PDFs)
-    stays out of history — the model gets a note naming the file instead."""
+    stays out of history — the model gets a note naming the file instead.
+    With `video=True` (the Video tool is offered), an attached video clip is
+    pointed at its `footage` action rather than at extracting it by hand; with
+    `transcribe=True`, an attached recording at the Transcribe tool."""
     if not isinstance(content, list): return content
     out = []
     for block in content:
         if block.get("type") in ("image", "file"):
             fname = block.get("image") or block.get("file")
             if fname:
+                low = fname.lower()
+                there = (low.endswith(CLIP_SUFFIXES) or low.endswith(AUDIO_SUFFIXES)) and (Path(workspace) / fname).is_file()
+                if transcribe and there and (low.endswith(AUDIO_SUFFIXES) or not video):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}", a recording saved in the workspace. To know what is said '
+                        "in it, call the Transcribe tool with this path first; it writes the transcript beside it.]"})
+                    continue
+                if video and there and low.endswith(CLIP_SUFFIXES):
+                    out.append({"type": "text", "text":
+                        f'[The user attached "{fname}", a video clip saved in the workspace. To see and hear '
+                        "what is in it, or to cut it into a video, call the Video tool's `footage` action "
+                        "with this path first." + (" If only what is said in it is wanted (a transcript, a "
+                        "summary), the Transcribe tool writes it down." if transcribe else "") + "]"})
+                    continue
                 result = await _exec_read({"path": fname}, workspace, chat_id=chat_id)
                 if isinstance(result, str) and result.startswith("Error:"):
                     out.append({"type": "text", "text":
@@ -269,21 +347,42 @@ def _retry_delay(attempt, error=None):
     return (base + random.random() * 0.25 * base) / 1000
 
 
+def _dropped(e):
+    """The connection to the model failed (MAX_DROPPED) — not a refusal of the request."""
+    for _ in range(6):
+        if e is None:
+            return False
+        if type(e).__name__ in _DROPPED_TYPES or any(s in str(e).lower() for s in _DROPPED_SAID):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
 async def _stream_with_retry(provider, **kw):
     """`provider.stream` with exponential backoff on overload / rate-limit.
     A stream that fails after some deltas re-emits them on retry — accepted;
-    stored history isn't touched until the turn completes. Attempts share one step id."""
-    attempt, notice = 0, f"retry-{uuid.uuid4().hex[:8]}"
+    stored history isn't touched until the turn completes. A dropped connection
+    is tried again only while nothing of the attempt was shown. Attempts share one step id."""
+    attempt, dropped, notice = 0, 0, f"retry-{uuid.uuid4().hex[:8]}"
     while True:
+        shown, began = False, time.monotonic()
         try:
             async for ev in provider.stream(**kw):
+                shown = shown or not isinstance(ev, Turn)
                 yield ev
             return
         except Exception as e:
-            attempt += 1
-            if not (_is_retryable(e) and attempt <= MAX_RETRIES): raise
-            delay = _retry_delay(attempt, e)
-            yield events.step("The service is busy, trying again...", id=notice)
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+                attempt += 1
+                delay = _retry_delay(attempt, e)
+                yield events.step("The service is busy, trying again...", id=notice)
+            elif _dropped(e) and not shown and dropped < MAX_DROPPED and time.monotonic() - began < DROPPED_WITHIN:
+                dropped += 1
+                delay = _retry_delay(dropped + 2)
+                log("warn", message=f"model connection dropped, trying again ({dropped}/{MAX_DROPPED}): {_cause(e)}")
+                yield events.step("The service is busy, trying again...", id=notice)   # the person's words; the log has the cause
+            else:
+                raise
             await asyncio.sleep(delay)
 
 
@@ -356,10 +455,22 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
         allowed_tools = [t for t in allowed_tools if t not in off]
+    # The video service's URL alone does not switch Video on: an agent that admits anyone who signs
+    # in offers it only to the organisations on VIDEO_ORGS (cycls/_agent/video/client.py).
+    if "Video" in allowed_tools and not video_offered(workspace):
+        allowed_tools = [t for t in allowed_tools if t != "Video"]
+    # Likewise Sheets: on for the organisations on SHEETS_ORGS (cycls/_agent/office/client.py).
+    if "Sheets" in allowed_tools and not office_offered(workspace, "sheets"):
+        allowed_tools = [t for t in allowed_tools if t != "Sheets"]
+    # And Docs, for the organisations on DOCS_ORGS.
+    if "Docs" in allowed_tools and not office_offered(workspace, "docs"):
+        allowed_tools = [t for t in allowed_tools if t != "Docs"]
     ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
     if not session.replay:   # a replay runs the saved turn again, as it was
         incoming = context.messages.raw[-1]
-        content = await _ingest(incoming.get("content", ""), workspace.root, vision, session.chat_id)
+        content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
+                                transcribe="Transcribe" in allowed_tools and transcribe_configured(),
+                                chat_id=session.chat_id)
         if mentions:
             titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                       for s in mcp_servers or [] if s._connector}
@@ -405,6 +516,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         log("warn", user=user, chat_id=session.chat_id,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    # With Docs / Sheets on, bash keeps off the files they look after (office/guard.py).
+    if office := frozenset(t["name"] for t in tools_list if t.get("name") in ("docs", "sheets")):
+        ctx = replace(ctx, office=office)
     # Design's text is nearly half of every request: on demand, a short form until the chat designs
     design_loaded = True
     if os.environ.get("DESIGN_INSTRUCTIONS") == "on-demand" and not design_wanted(messages):
@@ -413,6 +527,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 tools_list[i], design_loaded = design_tool(False), False
     DESIGN_LOADED.set(design_loaded)
     DESIGN_FOLDER.set(getattr(context, "folder", "") or "")
+    # Video is short in every request until the chat uses it; its contract joins it then (ondemand).
+    demand = await ondemand.start(tools_list, messages)
     if skill_catalog is not None and not any(t.get("name") == "skill" for t in tools_list):   # even with none yet: it is how the first is made
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
@@ -434,18 +550,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
     hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if (any(s._connector for s in client_side) or api_connectors) else set()
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
-    for server in client_side:
-        if server._connector and server._connector.name in hidden:
-            continue
-        try:
-            schemas, fns, names = await connectors.tools_for(server, workspace)
-        except Exception as e:
-            said, label = _server_said(e), server._name or server._url
+    # Every server is asked at once — one after another, each grant read and handshake added up before the
+    # first model call; the results are taken in the order the servers were given.
+    asked = [s for s in client_side if not (s._connector and s._connector.name in hidden)]
+    found = await asyncio.gather(*(connectors.tools_for(s, workspace) for s in asked), return_exceptions=True)
+    for server, got in zip(asked, found):
+        if isinstance(got, Exception):
+            said, label = _server_said(got), server._name or server._url
             yield _user_warn(user, session.chat_id,
                              f"{label}'s tools are off this turn — {said}" if said
                              else f"Couldn't reach {label} — its tools are off this turn.",
-                             f"mcp discovery failed for {server._url}: {_cause(e)}")
+                             f"mcp discovery failed for {server._url}: {_cause(got)}")
             continue
+        if isinstance(got, BaseException):   # cancelled: the turn is going away
+            raise got
+        schemas, fns, names = got
         if not (server._connector and schemas):
             _mount(server, schemas, fns, names)
             continue
@@ -524,6 +643,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     continuations = 0
     pauses = 0
     overflowed = False
+    streak = 0   # failed calls in a row this run
 
     def request():
         """Everything a call sends besides its messages. The summary sends it too, so its prefix is cached."""
@@ -534,6 +654,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     tools_list[i] = design_tool(True)
             design_loaded = True
             DESIGN_LOADED.set(True)
+        ondemand.advance(demand, tools_list, messages)
         return dict(system=system_text, tools=tools_list, mcp_servers=mcp_servers, thinking=thinking, extra_body=extra_body,
                     session=session.chat_id)
 
@@ -595,6 +716,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     if isinstance(ev, Turn): turn = ev
                     else:
                         if isinstance(ev, str): partial_text += ev
+                        elif isinstance(ev, dict) and ev.get("type") == "step" and ev.get("tool_name"):
+                            ondemand.begun(demand, ev["tool_name"], ctx)   # Video warms its GPU here
                         yield ev
             except (GeneratorExit, asyncio.CancelledError):
                 if partial_text:
@@ -676,6 +799,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 _discover(_owner_of(b.get("name") or ""))
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
+            DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
             for step, _ in pairs: yield step
@@ -696,7 +820,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                               handlers, mcp_names, workspace)
                 raise
 
-            results, terminal, waiting, cards, kept = [], False, False, [], []
+            results, terminal, waiting, cards, kept, stuck = [], False, False, [], [], False
             for block, (out, ms) in zip(blocks, timed):
                 # `ok` routes the result; `good` is the outcome, and a returned error is one
                 ok = not isinstance(out, BaseException)
@@ -717,16 +841,20 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 if waits:
                     waiting = True   # the person has to answer before anything else can happen
                     cards += [e for e in evs if isinstance(e, dict) and e.get("type") == "ui"]
-                if isinstance(content, str) and block["name"] not in ("read", "skill"):
+                if isinstance(content, str) and block["name"] != "read" and not skills_mod.loads_skill(block):
                     content = spill.spill(content, workspace.root, session.chat_id, f"{block['name']}-{block['id'][-6:]}")
+                streak = 0 if good else streak + 1
                 note = _REPEATED.get(n, "").format(n=n)
-                results.append({"type": "tool_result", "tool_use_id": block["id"],
-                                "content": _with_mention(content, note) if note else content})
                 if note:
                     log("repeat", user=user, chat_id=session.chat_id, model=bare_model, tool=block["name"], times=n)
                     if n == max(_REPEATED):
                         terminal = True
                         yield events.callout("Stopped: the same step kept giving the same result.", "warning")
+                elif not good:   # one note a result: the repeat's, else the failures in a row
+                    note = _streak_note(streak)
+                    stuck = stuck or streak >= STREAK_STOP
+                results.append({"type": "tool_result", "tool_use_id": block["id"],
+                                "content": _with_mention(content, note) if note else content})
                 if block["name"] in mcp_names or detailed(block["name"]):   # the step shows the outcome, bounded; a card (a ui dict) is its own outcome
                     yield {"type": "step", "id": block["id"], "ok": good,
                            **({} if isinstance(out, dict) and out.get("type") == "ui" else {"result": excerpt(content)})}
@@ -740,6 +868,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {}),
                              **({"ui": kept} if kept else {})})
             await session.checkpoint()
+            if stuck and not terminal:   # a repeat's stop has said so already
+                log("warn", user=user, chat_id=session.chat_id, model=bare_model,
+                    message=f"turn stopped: tool calls kept failing ({streak} in a row)")
+                yield events.callout("Stopped: the same step kept failing. Reply to go on, or say what to try instead.", "warning")
+                break
             if waiting:
                 terminal = True
             if terminal:

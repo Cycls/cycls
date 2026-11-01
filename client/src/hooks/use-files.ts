@@ -39,13 +39,72 @@ export function encPath(path: string): string {
 // brand/brand.yaml, as the design editor takes it.
 export type BrandKit = { colors?: Record<string, string>; fonts?: { heading?: string | null; body?: string | null } };
 // A design's earlier version (cycls/_agent/versions.py).
-export type DesignVersion = { id: string; at: string; by: string; reason: string; intent?: string; size: number };
+// `who`: the person whose write replaced it (a team workspace's history says whose change); `mine`: was that the viewer.
+export type DesignVersion = { id: string; at: string; by: string; reason: string; intent?: string; size: number;
+  who?: { id: string; name?: string }; mine?: boolean };
 // `base`: the version a design's save started from.
 export type WriteOpts = { silent?: boolean; base?: string; force?: boolean };
 export type WriteFile = (path: string, data: BlobPart, opts?: boolean | WriteOpts) => Promise<{ version?: string } | void>;
 // A design's live room and one person's pass for it (the server's /design/live).
 export type DesignLive = { room: string; url: string; ticket: string; epoch: string };
 export type FetchVersioned = (path: string) => Promise<{ url: string; version: string }>;
+// The video editor's server side (web/video_routes.py).
+export type VideoEditorSession = { url: string; sid: string; versions: Record<string, string>; notice?: string };
+export type VideoRenderState = { state: "idle" | "rendering" | "done" | "failed"; progress?: number; path?: string; message?: string };
+export type VideoEditorApi = {
+  open: (path: string) => Promise<VideoEditorSession>;
+  replace: (path: string, sid: string) => Promise<void>;
+  close: (sid: string) => Promise<void>;
+  render: (path: string, quality: "draft" | "standard" | "final") => Promise<VideoRenderState>;
+  renderState: (path: string) => Promise<VideoRenderState>;
+  readText: (path: string) => Promise<{ text: string; version: string }>;
+};
+
+// Cycls Sheets and Cycls Docs: may this workspace open the file in the editor, and where from.
+export type OfficeOpen = { editor: true; url: string; name: string } | { editor: false; reason: string };
+export type SheetsNotice = { kind: string; sheet?: string; message: string };
+// What the editor opens: the workbook as the service read it (cached by version).
+export type SheetsOpened = {
+  version: string;
+  modified?: string;
+  snapshot: Record<string, unknown>;
+  notices: SheetsNotice[];
+  activeSheet?: string;
+  readonly?: boolean;   // a Word document with tracked changes: view only
+  changes?: DocsTrackedChange[];   // its tracked changes, shown marked in the document (review)
+};
+// One tracked change in a Word document, as the review lists it; `other`: those with nothing to show in the text.
+export type DocsTrackedChange = {
+  ids: string[]; author: string; color: string; date?: string;
+  inserted?: string; deleted?: string; start?: number; end?: number; other?: boolean;
+};
+export type OfficeEditorApi = {
+  // A shared page: the editor only shows the file (no save, comments, or version checks; `shareOffice`).
+  readonly?: boolean;
+  sheets: (path: string) => Promise<OfficeOpen>;
+  sheetsOpen: (path: string) => Promise<SheetsOpened>;
+  // The file's version now (an open editor checks it once the file may have changed some other way).
+  sheetsVersion?: (path: string) => Promise<{ version: string; modified?: string }>;
+  pdf: (path: string) => Promise<string>;   // a blob URL of the file as PDF (the office-render service)
+  // The editor's workbook written back into the file (only what differs changes). A file changed since
+  // `base` answers {conflict: <its version>} instead.
+  sheetsSave: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]) => Promise<SheetsSaved>;
+  // Cycls Docs, the same four for a .docx (GET /office/docs…).
+  docs?: (path: string) => Promise<OfficeOpen>;
+  docsOpen?: (path: string) => Promise<SheetsOpened>;
+  docsVersion?: (path: string) => Promise<{ version: string; modified?: string }>;
+  docsSave?: (path: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]) => Promise<SheetsSaved>;
+  // A document's tracked changes accepted or rejected (some by their ids, or all); a file changed since `base`
+  // answers {conflict}.
+  docsChanges?: (path: string, base: string, action: "accept" | "reject", ids?: string[]) => Promise<SheetsSaved>;
+};
+export type SheetsSaved = { version: string; unchanged: boolean; modified?: string } | { conflict: string };
+
+async function gzipJson(value: unknown): Promise<Blob> {
+  const json = new Blob([JSON.stringify(value)], { type: "application/json" });
+  if (typeof CompressionStream === "undefined") return json;
+  return new Response(json.stream().pipeThrough(new CompressionStream("gzip"))).blob();
+}
 
 export function useFiles(baseUrl: string = "") {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -215,6 +274,86 @@ export function useFiles(baseUrl: string = "") {
     return { url: URL.createObjectURL(await res.blob()), version: res.headers.get("X-Version") ?? "" };
   }, [api]);
 
+  // The video editor's routes (web/video_routes.py): a session for a composition, the agent's edit
+  // handed to it, its close, and a render it asks for; and a composition's text with its version.
+  const videoEditor = useMemo<VideoEditorApi>(() => ({
+    open: async (filePath) =>
+      (await api(`/video/editor?path=${encodeURIComponent(filePath)}`, { method: "POST", silent: true })).json(),
+    replace: async (filePath, sid) => {
+      await api(`/video/editor?path=${encodeURIComponent(filePath)}&sid=${encodeURIComponent(sid)}`, { method: "PUT", silent: true });
+    },
+    close: async (sid) => {
+      await api(`/video/editor?sid=${encodeURIComponent(sid)}`, { method: "DELETE", silent: true }).catch(() => {});
+    },
+    render: async (filePath, quality) =>
+      (await api(`/video/render?path=${encodeURIComponent(filePath)}&quality=${quality}`, { method: "POST", silent: true })).json(),
+    renderState: async (filePath) =>
+      (await api(`/video/render?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
+    readText: async (filePath) => {
+      const res = await api(`/files/${encPath(filePath)}`, { silent: true });
+      return { text: await res.text(), version: res.headers.get("X-Version") ?? "" };
+    },
+  }), [api]);
+
+  const officeEditor = useMemo<OfficeEditorApi>(() => {
+    // The same four calls for each editor, under /office/<product>.
+    const check = (product: string) => async (filePath: string): Promise<OfficeOpen> =>
+      (await api(`/office/${product}?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
+    const open = (product: string) => async (filePath: string): Promise<SheetsOpened> => {
+      const res = await api(`/office/${product}/open?path=${encodeURIComponent(filePath)}`, { silent: true });
+      const body = (await res.json()) as SheetsOpened;
+      return { ...body, modified: res.headers.get("X-Modified") ?? body.modified };
+    };
+    const version = (product: string) => async (filePath: string): Promise<{ version: string; modified?: string }> =>
+      (await api(`/office/${product}/version?path=${encodeURIComponent(filePath)}`, { silent: true })).json();
+    const save = (product: string) => async (filePath: string, base: string, payload: { snapshot: unknown; ops: unknown[] }, force?: boolean, trail?: string[]): Promise<SheetsSaved> => {
+      const q = new URLSearchParams({ path: filePath });
+      if (base) q.set("base", base);
+      if (force) q.set("force", "true");
+      // The editor's trail since its last save, logged with it on the server (a header: no text in it, only names and offsets).
+      const headers: Record<string, string> = {};
+      if (trail?.length) {
+        let lines = trail;
+        let value = encodeURIComponent(JSON.stringify(lines));
+        while (value.length > 7000 && lines.length > 1) value = encodeURIComponent(JSON.stringify(lines = lines.slice(0, -1)));
+        if (value.length <= 7000) headers["X-Edit-Trail"] = value;
+      }
+      try {
+        const res = await api(`/office/${product}/save?${q}`, { method: "PUT", body: await gzipJson(payload), headers, silent: true });
+        track("file_saved", { path: filePath });
+        return (await res.json()) as { version: string; unchanged: boolean; modified?: string };
+      } catch (err) {
+        if ((err as { status?: number }).status === 412) {
+          const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
+          return { conflict: typeof now === "string" ? now : "" };
+        }
+        throw err;
+      }
+    };
+    return {
+      sheets: check("sheets"), sheetsOpen: open("sheets"), sheetsVersion: version("sheets"), sheetsSave: save("sheets"),
+      docs: check("docs"), docsOpen: open("docs"), docsVersion: version("docs"), docsSave: save("docs"),
+      docsChanges: async (filePath, base, action, ids) => {
+        try {
+          const res = await api(`/office/docs/changes?path=${encodeURIComponent(filePath)}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ base, action, ...(ids?.length ? { ids } : {}) }), silent: true,
+          });
+          track("ui_action", { action: `docs_${action}_changes`, some: !!ids?.length });
+          return (await res.json()) as { version: string; unchanged: boolean };
+        } catch (err) {
+          if ((err as { status?: number }).status === 412) {
+            const now = await (err as { response?: Response }).response?.json().then((j) => j?.version).catch(() => undefined);
+            return { conflict: typeof now === "string" ? now : "" };
+          }
+          throw err;
+        }
+      },
+      pdf: async (filePath) =>
+        URL.createObjectURL(await (await api(`/files/${encPath(filePath)}?as=pdf`)).blob()),
+    };
+  }, [api]);
+
   // null where a design opens alone, or on a server without the route.
   const designLive = useCallback(async (filePath: string) => {
     try {
@@ -334,7 +473,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, officeEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

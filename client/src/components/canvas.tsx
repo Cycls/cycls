@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
-import type { WriteFile } from "../hooks/use-files";
+import type { OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
 import { createPortal } from "react-dom";
@@ -11,11 +11,15 @@ import { DropdownMenu } from "./files";
 import { ShareDialog } from "./share-dialog";
 import { TextPart } from "./parts/text-part";
 import { HighlightedCode } from "./parts/code-part";
-import { isHtml, isMd, isPdf, embedsPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
+import { isHtml, isMd, isPdf, embedsPdf, isImage, isAudio, isVideo, isSpreadsheet, isDocx, isPresentation, isOffice, isDesignEditor, isComposition, is3d, codeLang, extTint, tintTile, tintLabel, tileExt, saveBlob, shownName, DESIGN_PRESETS } from "./canvas-utils";
 import { SpreadsheetView } from "./spreadsheet-view";
+import { DocsOrPreview, SheetsOrPreview } from "./sheets-editor-view";
+import { officeGlyphFor } from "./file-glyph";
+import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
+import { VideoEditorView, canEditVideo, flushVideoEditor, videoEditorOpen, watchVideoEditors } from "./video-editor-view";
 import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
@@ -36,6 +40,7 @@ import { t, getLang } from "../lib/i18n";
 export const fileKind = (file: { path: string; name: string }) => file.path || file.name;
 
 const MdEditor = lazy(() => import("./md-editor"));
+const CompositionView = lazy(() => import("./composition-view"));
 // A document's image paths are relative to its folder, as markdown means them; agents sometimes
 // write them from the workspace root, so that is the fallback. Silent: a miss beside it is normal.
 export const mediaResolver = (docPath: string, openFile: (path: string, silent?: boolean) => Promise<string>) => {
@@ -92,9 +97,12 @@ export function useFileContent(
     // Presentations fetch the slide manifest as text; .docx and spreadsheets
     // fetch their raw bytes (a blob URL) for the native renderer; other office
     // files fetch the server's PDF render.
-    // Editor-less designs fetch their slide manifest.
-    const load = designAsPictures && isDesignEditor(kind)
+    // Editor-less designs fetch their slide manifest; a Video composition the page the video
+    // service builds of it (always a JSON answer).
+    const load = (designAsPictures && isDesignEditor(kind))
       ? readFile(`${file.path}?as=slides`, true)
+      : isComposition(kind)
+      ? readFile(`${file.path}?as=player`, true)
       : isMd(kind) || isHtml(kind) || codeLang(kind) != null
       ? readFile(file.path, file.writable)
       : isPresentation(kind)
@@ -350,6 +358,36 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
   );
 }
 
+// A video on the canvas: the preview player, and Edit into the video editor (a full-page overlay)
+// where it is offered and there is room for it. Done brings the preview back, fetched again.
+function VideoComposition({ file, content, openFile, onDownload, onReload, videoEditor, writeFile }: {
+  file: CanvasFile;
+  content: string;
+  openFile?: (path: string, silent?: boolean) => Promise<string>;
+  onDownload?: () => void;
+  onReload?: () => void;
+  videoEditor?: VideoEditorApi;
+  writeFile?: WriteFile;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [aside, setAside] = useState(false);     // stepped aside for Ask Cycls, still open
+  const canEdit = !!videoEditor && !!writeFile && canEditVideo();
+  return (
+    <>
+      <Suspense fallback={<LoadingBar />}>
+        <CompositionView data={content} name={file.name} openFile={openFile} onDownload={onDownload}
+                         editOpen={editing && aside}
+                         onEdit={canEdit ? () => { setEditing(true); setAside(false); } : undefined} />
+      </Suspense>
+      {editing && videoEditor && writeFile && (
+        <VideoEditorView path={file.path} name={file.name} api={videoEditor} writeFile={writeFile}
+                         aside={aside} onAside={() => setAside(true)} onBack={() => setAside(false)}
+                         onClose={() => { setEditing(false); setAside(false); onReload?.(); }} />
+      )}
+    </>
+  );
+}
+
 // A markdown document, read. A link to another workspace file opens it in the canvas, read as markdown means it:
 // beside the document. Agents sometimes write paths from the workspace root, so a plain one missing beside it
 // opens from there, as its pictures do.
@@ -377,7 +415,7 @@ function MdDoc({ path, content, shared, readFile, resolveMedia, onOpenFile }: {
   );
 }
 
-export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, reloadFile, onDownload, onShare, onOpenFile }: {
+export function CanvasDoc({ file, content, error, shared = false, readFile, openFile, resolveMedia, writeFile, listFolders, fetchConnector, appData, designEditorUrl, designHost, videoEditor, officeEditor, reloadFile, onReload, onDownload, onShare, onOpenFile }: {
   file: CanvasFile;
   resolveMedia?: (path: string) => Promise<string>;
   content: string | null;
@@ -391,6 +429,9 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   designEditorUrl?: string;   // when set, .fig opens the embedded editor
   designHost?: DesignHost;
+  videoEditor?: VideoEditorApi;   // when set, a video has Edit (the video editor)
+  officeEditor?: OfficeEditorApi;   // when set, an .xlsx may open in Cycls Sheets and a .docx in Cycls Docs (asked per file)
+  onReload?: () => void;          // fetch the file again (a video's preview after its editor closes)
   reloadFile?: () => Promise<string>;   // fresh blob URL of this file (the .fig editor re-opens on it)
   onDownload?: () => void;
   onShare?: () => void;
@@ -402,17 +443,29 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     // A failed Office conversion / render (service down, unconvertible, parse
     // error) degrades to the download card rather than a dead error — same as an
     // unrenderable file.
-    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDesignEditor(fileKind(file)))
+    if (isOffice(fileKind(file)) || isDocx(fileKind(file)) || isPresentation(fileKind(file)) || isDesignEditor(fileKind(file)) || isComposition(fileKind(file)))
       return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Couldn't load this file.</div>;
+  }
+  // A Video composition → the sandboxed player (composition-view.tsx), never the page itself. On a
+  // shared page it is a download: the share route will not serve it to be played.
+  if (isComposition(fileKind(file))) {
+    if (shared) return <NoPreviewCard file={file} onDownload={onDownload} onShare={onShare} />;
+    return content ? (
+      <VideoComposition file={file} content={content} openFile={openFile} onDownload={onDownload} onReload={onReload}
+                        videoEditor={videoEditor} writeFile={writeFile} />
+    ) : null;
   }
   if (isHtml(fileKind(file))) {
     return <HtmlDoc file={file} content={content ?? ""} shared={shared} readFile={readFile} writeFile={writeFile} listFolders={listFolders} fetchConnector={fetchConnector} appData={appData} />;
   }
   // Word .docx renders natively as formatted HTML (docx-preview) from its raw
-  // bytes — a document view, not a flat PDF.
+  // bytes — a document view, not a flat PDF — unless it opens in Cycls Docs (asked per file).
   if (isDocx(fileKind(file))) {
-    return content ? <DocxView url={content} /> : null;
+    if (!content) return null;
+    return officeEditor?.docs && (!shared || officeEditor.readonly)
+      ? <DocsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<DocxView url={content} />} />
+      : <DocxView url={content} />;
   }
   // Presentations render as a slide viewer from the ?as=slides manifest (per-
   // slide images), not a flat PDF. `content` here is that JSON, fetched as text.
@@ -476,7 +529,10 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     );
   }
   if (isSpreadsheet(fileKind(file))) {
-    return content ? <SpreadsheetView url={content} name={file.name} /> : null;
+    if (!content) return null;
+    return officeEditor && (!shared || officeEditor.readonly)
+      ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<SpreadsheetView url={content} name={file.name} />} />
+      : <SpreadsheetView url={content} name={file.name} />;
   }
   if (is3d(fileKind(file))) {
     // model-viewer from CDN inside our own iframe shell — no npm dependency.
@@ -508,7 +564,7 @@ model-viewer{width:100vw;height:100vh;background:radial-gradient(ellipse at cent
 }
 
 // Open files as tabs, docked (desktop split pane) or as the overlay drawer.
-export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, onNewDesign }: {
+export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand, onCloseAll, onSelectTab, onCloseTab, onReorder, onHide, onAddFile, searchFiles, apps, onAddApp, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, railWidth = 0, reloadKey, working, designEditorUrl, designHost, videoEditor, officeEditor, onNewDesign }: {
   tabs: CanvasFile[];
   active: string | null;
   docked: boolean;
@@ -540,6 +596,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   railWidth?: number;   // pane docked to our right; the drag must account for it
   reloadKey?: number;  // bump to re-fetch the open document
   designEditorUrl?: string;   // embedded .fig editor base URL (config.design_editor_url)
+  videoEditor?: VideoEditorApi;   // the video editor (config.video_editor): Edit on a video
+  officeEditor?: OfficeEditorApi;   // Cycls Sheets (config.sheets_editor)
   designHost?: DesignHost;
   onNewDesign?: (preset: string) => void;   // "New design" in the + menu
 }) {
@@ -547,28 +605,53 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   // A design editor left behind stays mounted, hidden, until it has flushed. Noted
   // during render, not in an effect, so it never leaves the tree.
   const [draining, setDraining] = useState<CanvasFile[]>([]);
+  // A video whose editor is open stays mounted too, hidden, while another tab is shown (the agent
+  // opened the MP4 it rendered, or a page it wrote): the editor is a full-page overlay of its own,
+  // still open — stepped aside, its Back to the editor still there — until Done. A video tab closed
+  // meanwhile drains like a design.
+  const [held, setHeld] = useState<CanvasFile[]>([]);
   const [shown, setShown] = useState<CanvasFile | null>(file);
   if ((file?.path ?? null) !== (shown?.path ?? null)) {
     setShown(file);
     if (shown && file && designEditorUrl && isDesignEditor(fileKind(shown))) {
       setDraining((d) => [...d.filter((x) => x.path !== shown.path), shown]);
     }
+    if (shown && file && videoEditorOpen(shown.path)) {
+      if (tabs.some((x) => x.path === shown.path)) setHeld((h) => [...h.filter((x) => x.path !== shown.path), shown]);
+      else setDraining((d) => [...d.filter((x) => x.path !== shown.path), shown]);
+    }
   }
+  const closed = held.filter((f) => !tabs.some((x) => x.path === f.path));
+  if (closed.length) {
+    setHeld((h) => h.filter((f) => tabs.some((x) => x.path === f.path)));
+    setDraining((d) => [...d.filter((x) => !closed.some((c) => c.path === x.path)), ...closed]);
+  }
+  useEffect(() => watchVideoEditors(() => setHeld((h) => {
+    const open = h.filter((f) => videoEditorOpen(f.path));
+    return open.length === h.length ? h : open;
+  })), []);
   const flushing = useRef(new Set<string>());
   const seen = useRef<Record<string, number | undefined>>({});   // the reloadKey each tab last showed
   useEffect(() => {
     for (const f of draining) {
       if (flushing.current.has(f.path)) continue;
       flushing.current.add(f.path);
-      void flushDesignEditor(f.path, 5000).finally(() => {
+      void Promise.all([flushDesignEditor(f.path, 5000), flushVideoEditor(f.path, 5000)]).finally(() => {
         flushing.current.delete(f.path);
         setDraining((d) => d.filter((x) => x.path !== f.path));
       });
     }
   }, [draining]);
-  // The last tab unmounts the canvas, leaving nothing to drain: flush before closing.
+  // An editor full screen (a design, a workbook, a document) whose tab stops being the one shown — the agent
+  // opened another file — would leave a blank screen: full screen ends with it.
+  useEffect(() => {
+    const tab = typeof document !== "undefined" ? document.fullscreenElement?.closest("[data-canvas-tab]") : null;
+    if (tab && tab.getAttribute("data-canvas-tab") !== file?.path) void document.exitFullscreen?.().catch(() => {});
+  }, [file?.path]);
+  // The last tab unmounts the canvas, leaving nothing to drain: its design or video editor flushes first.
   const closeTab = (path: string) => {
-    if (tabs.length === 1 && designEditorUrl) void flushDesignEditor(path, 1500).then(() => onCloseTab(path));
+    if (tabs.length === 1 && (designEditorUrl || videoEditorOpen(path)))
+      void Promise.all([flushDesignEditor(path, 1500), flushVideoEditor(path, 1500)]).then(() => onCloseTab(path));
     else onCloseTab(path);
   };
   const { width, startResize, resizing } = usePaneWidth("cycls_canvas_width", 560, 380, 420, railWidth, undefined, 1, 0.25);
@@ -594,7 +677,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
               >
                 {f.icon || f.iconSrc || f.letter
                   ? <AppIcon app={f} className="size-3.5 rounded-[3px]" textClassName="text-[13px]" />
-                  : tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />}
+                  : officeGlyphFor(f.name, "size-3.5 shrink-0") ?? (tint && <span className="size-1.5 rounded-full" style={{ backgroundColor: tint }} />)}
                 <span className="min-w-0 flex-1 truncate">{f.name}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); closeTab(f.path); }}
@@ -632,13 +715,14 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
       </div>
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Every open tab stays mounted, hidden, so going back to one finds it as it was. In path order,
-            never tab order: a reorder must not move a frame in the DOM, which reloads it. */}
+            never tab order: a reorder must not move a frame in the DOM, which reloads it. A closed tab
+            whose design or video editor still has to save stays too (draining) until it has. */}
         {[...tabs, ...draining.filter((d) => !tabs.some((t) => t.path === d.path))].sort((a, b) => (a.path < b.path ? -1 : 1)).map((f) => {
           const on = f.path === file.path;
           // A hidden tab catches up on the agent's writes when it is shown, not at every turn's end.
           const reload = on ? (seen.current[f.path] = reloadKey) : (seen.current[f.path] ??= reloadKey);
           return (
-            <div key={f.path} inert={!on} aria-hidden={on ? undefined : true}
+            <div key={f.path} inert={!on} aria-hidden={on ? undefined : true} data-canvas-tab={f.path}
                  className={on ? "flex min-h-0 flex-1 flex-col" : "pointer-events-none invisible absolute inset-0 flex flex-col"}>
               {on && working?.includes(f.path) ? (
                 <CanvasWorking name={f.name} />
@@ -660,6 +744,8 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
                   reloadKey={reload}
                   designEditorUrl={designEditorUrl}
                   designHost={designHost}
+                  videoEditor={videoEditor}
+                  officeEditor={officeEditor}
                   onOpenFile={onAddFile}
                 />
               )}
@@ -905,7 +991,7 @@ function AddTab({ onAdd, searchFiles, apps = [], onAddApp, onNewDesign }: {
 }
 
 // Keyed by path from the parent: each open file keeps its own state.
-function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, onOpenFile }: {
+function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckOp, pollsFor, listFolders, fetchConnector, appData, org, onShareFile, shareLinks, reloadKey, designEditorUrl, designHost, videoEditor, officeEditor, onOpenFile }: {
   file: CanvasFile;
   onOpenFile?: (path: string) => void;   // a link in a document to another workspace file
   uploadFile?: (dir: string, file: File) => Promise<void>;
@@ -922,9 +1008,25 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   shareLinks?: ShareLinks;
   reloadKey?: number;
   designEditorUrl?: string;
+  videoEditor?: VideoEditorApi;
+  officeEditor?: OfficeEditorApi;
   designHost?: DesignHost;
 }) {
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, reloadKey ?? 0, !designEditorUrl);
+  const [bump, setBump] = useState(0);   // a document asked to refetch itself (a deck was edited)
+  // The header's two places a document view may fill (canvas-header-slot.ts).
+  const [slotStart, setSlotStart] = useState<HTMLElement | null>(null);
+  const [slotEnd, setSlotEnd] = useState<HTMLElement | null>(null);
+  const headerSlots = useMemo(() => ({ start: slotStart, end: slotEnd }), [slotStart, slotEnd]);
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl);
+  const onReload = useCallback(() => setBump((n) => n + 1), []);
+  // The agent changed this file mid-turn (a Video edit): fetch it again now, not when the turn ends.
+  useEffect(() => {
+    const onRefresh = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) setBump((n) => n + 1);
+    };
+    window.addEventListener("cycls:canvas-refresh", onRefresh);
+    return () => window.removeEventListener("cycls:canvas-refresh", onRefresh);
+  }, [file.path]);
   const resolveMedia = useMemo(() => mediaResolver(file.path, openFile), [file.path, openFile]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1072,11 +1174,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           ))}
           <span className="min-w-0 truncate font-medium text-foreground">{shownName(file.name)}</span>
           {kind && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline" data-testid="design-kind">· {kind.label}</span>}
+          <span ref={setSlotStart} className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground empty:hidden sm:flex" data-testid="canvas-header-start" />
         </div>
         {lang && lang !== "text" && (
           <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{lang}</span>
         )}
         <div className="flex-1" />
+        <div ref={setSlotEnd} className="flex shrink-0 items-center gap-2 empty:hidden" data-testid="canvas-header-end" />
         {editing ? (
           <>
             <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer px-2 py-1">
@@ -1114,7 +1218,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
               const items = [
                 ...(onShareFile ? [{ label: t("share"), onClick: () => setShareOpen(true) }] : []),
                 ...(isText && content != null ? [{ label: copied ? t("copied") : t("copy"), onClick: copy }] : []),
-                ...(isHtml(fileKind(file)) && content != null
+                // Not a composition: as a page in its own tab its script would run on this origin.
+                ...(isHtml(fileKind(file)) && !isComposition(fileKind(file)) && content != null
                   ? [{ label: t("openInTab"), onClick: openInTab }] : []),
                 ...(md ? [{ label: t("exportPdf"), onClick: () => window.print() }] : []),
                 ...(isDesignEditor(fileKind(file)) && designEditorUrl && designHost?.listVersions
@@ -1183,11 +1288,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
           <>
             {/* Hidden, not unmounted, under a preview once it has been opened: it keeps its state and saves. */}
             {editorOn && <div className={previewing ? "invisible absolute inset-0" : "h-full"} inert={previewing} aria-hidden={previewing || undefined}>
+              <CanvasHeaderSlot.Provider value={headerSlots}>
               <CanvasDoc file={file} content={content} error={error} readFile={readFile} openFile={openFile} resolveMedia={resolveMedia} writeFile={writeFile} listFolders={listFolders}
                          fetchConnector={fetchConnector}
                          appData={appData}
-                         designEditorUrl={designEditorUrl} designHost={designHost} reloadFile={reloadFile}
+                         designEditorUrl={designEditorUrl} designHost={designHost} videoEditor={videoEditor} officeEditor={officeEditor} reloadFile={reloadFile} onReload={onReload}
                          onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} onOpenFile={onOpenFile} />
+              </CanvasHeaderSlot.Provider>
             </div>}
             {previewing && (() => {
               const pictures = preview ? parseDeck(preview) : null;

@@ -80,17 +80,26 @@ export function writingNow(args?: string): string {
   return text.replace(/\s+/g, " ").trim().slice(-80);
 }
 
-function useElapsed(at: number | undefined, live: boolean | undefined): string | null {
+// A duration as the chat says it: 42s, 1m 05s.
+export const clock = (secs: number) =>
+  secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s`;
+
+// Now, every second while `live`.
+export function useNow(live: boolean | undefined): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!live || !at) return;
+    if (!live) return;
     const h = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(h);
-  }, [live, at]);
+  }, [live]);
+  return now;
+}
+
+function useElapsed(at: number | undefined, live: boolean | undefined): string | null {
+  const now = useNow(live && !!at);
   if (!live || !at) return null;
   const secs = Math.floor((now - at) / 1000);
-  if (secs < 5) return null;
-  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s`;
+  return secs < 5 ? null : clock(secs);
 }
 
 export const StepPart = memo(function StepPart({
@@ -100,6 +109,7 @@ export const StepPart = memo(function StepPart({
   ok,
   args,
   at,
+  plain,
 }: {
   step: string;
   toolName?: string;
@@ -107,14 +117,17 @@ export const StepPart = memo(function StepPart({
   ok?: boolean;
   args?: string;   // partial JSON input, previewed until the label arrives
   at?: number;     // when the step appeared
+  plain?: boolean; // its tool says what it does in plain words: a sentence, not name(input), and no input preview
 }) {
   const elapsed = useElapsed(at, isStreaming);
-  const writing = isStreaming && toolName && !step ? writingNow(args) : "";
+  const writing = isStreaming && toolName && !step && !plain ? writingNow(args) : "";
   return (
     <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
       <StepDot live={isStreaming} toolName={toolName} step={step} ok={ok} />
-      <span className="font-mono text-[13px] truncate" dir="auto">
-        {toolName ? (
+      <span className={cn("text-[13px] truncate", !plain && "font-mono")} dir="auto">
+        {plain ? (
+          step || toolName
+        ) : toolName ? (
           <>
             <span className="font-semibold text-foreground">{toolName}</span>
             {step && (

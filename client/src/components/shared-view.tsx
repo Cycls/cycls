@@ -3,9 +3,10 @@ import { MessageBubble } from "./message";
 import { CyclsLogo } from "./cycls-logo";
 import { Icon } from "./icon";
 import { useFileContent, CanvasDoc, type CanvasFile } from "./canvas";
-import { isHtml, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
+import { isHtml, isComposition, isRenderable, saveBlob, extTint, shownName } from "./canvas-utils";
 import { AppBanner } from "./app-banner";
 import type { Message } from "../hooks/use-chat";
+import { encPath, type OfficeEditorApi, type SheetsOpened } from "../hooks/use-files";
 import { useMediaQuery } from "../hooks/use-media-query";
 import { t, getLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
@@ -236,6 +237,40 @@ function SharedChat({ share, getToken, signedIn, agent, onSignIn }: { share: Cha
   );
 }
 
+// A request under this share (/share/{user}/{token}/…): the viewer's bearer when signed in (an org share needs it),
+// and the share's own ?ws= merged in with & when `rest` has a query already.
+function useShareFetch(getToken?: () => Promise<string | null>) {
+  const shareBase = window.location.pathname.replace("/shared/", "/share/");
+  const shareQuery = window.location.search;   // carries ?ws= for team-minted shares
+  return useCallback(async (rest: string) => {
+    const headers: Record<string, string> = {};
+    if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
+    const q = shareQuery && rest.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
+    const res = await fetch(`${shareBase}/${rest}${q}`, { headers });
+    if (!res.ok) throw new Error(t("fileLoadFailed"));
+    return res;
+  }, [getToken, shareBase, shareQuery]);
+}
+
+// Cycls Sheets and Cycls Docs on a shared page: the editor the owner sees, view only, over the share's token (the
+// server opens only files the share covers, where the owner's organisation has the editor; else the preview).
+export function shareOffice(get: (rest: string) => Promise<Response>): OfficeEditorApi {
+  const check = (product: string) => async (path: string) =>
+    (await get(`office/${product}?path=${encodeURIComponent(path)}`)).json();
+  const open = (product: string) => async (path: string): Promise<SheetsOpened> => {
+    const res = await get(`office/${product}/open?path=${encodeURIComponent(path)}`);
+    const body = (await res.json()) as SheetsOpened;
+    return { ...body, modified: res.headers.get("X-Modified") ?? body.modified };
+  };
+  const viewOnly = async (): Promise<never> => { throw new Error("view only"); };
+  return {
+    readonly: true,
+    sheets: check("sheets"), sheetsOpen: open("sheets"), sheetsSave: viewOnly,
+    docs: check("docs"), docsOpen: open("docs"), docsSave: viewOnly,
+    pdf: async (path) => URL.createObjectURL(await (await get(`file/${encPath(path)}?as=pdf`)).blob()),
+  };
+}
+
 // Read-only canvas card over the token-scoped /share/.../file/ transport —
 // the same viewer (and the same tab strip) the owner sees, minus the workspace.
 function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose }: {
@@ -249,20 +284,10 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
   const path = active;
   const name = path.split("/").pop() || path;
   const file = useMemo<CanvasFile>(() => ({ path, name }), [path, name]);
-  const renderable = isRenderable(name);
-  const shareBase = window.location.pathname.replace("/shared/", "/share/");
-  const shareQuery = window.location.search;   // carries ?ws= for team-minted shares
-
-  const authedFetch = useCallback(async (p: string) => {
-    const headers: Record<string, string> = {};
-    if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
-    // p may already carry a query (Office ?as=pdf); merge shareQuery's params in
-    // with & so we don't emit a broken double-'?' URL.
-    const q = shareQuery && p.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
-    const res = await fetch(`${shareBase}/file/${p}${q}`, { headers });
-    if (!res.ok) throw new Error(t("fileLoadFailed"));
-    return res;
-  }, [getToken, shareBase, shareQuery]);
+  const renderable = isRenderable(name) && !isComposition(name);   // a shared composition is a download
+  const get = useShareFetch(getToken);
+  const authedFetch = useCallback((p: string) => get(`file/${p}`), [get]);
+  const office = useMemo(() => shareOffice(get), [get]);
   const readFile = useCallback(async (p: string) => (await authedFetch(p)).text(), [authedFetch]);
   const openFile = useCallback(async (p: string) => URL.createObjectURL(await (await authedFetch(p)).blob()), [authedFetch]);
 
@@ -306,7 +331,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
             );
           })}
         </div>
-        {isHtml(name) && content != null && (
+        {isHtml(name) && !isComposition(name) && content != null && (
           <button
             onClick={openInTab}
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
@@ -339,7 +364,7 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
       </div>
       <div className="flex-1 overflow-hidden">
         {renderable ? (
-          <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} />
+          <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} officeEditor={office} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />
@@ -364,21 +389,12 @@ function SharedCanvas({ tabs, active, getToken, onSelectTab, onCloseTab, onClose
 function SharedFile({ share, getToken, signedIn, agent, onSignIn }: { share: FileShare; getToken?: () => Promise<string | null>; signedIn?: boolean; agent?: string; onSignIn?: () => void }) {
   const name = share.path.split("/").pop() || share.path;
   const file = useMemo<CanvasFile>(() => ({ path: share.path, name }), [share.path, name]);
-  const renderable = isRenderable(name);
+  const renderable = isRenderable(name) && !isComposition(name);   // a shared composition is a download
   // `?ws=` names the workspace that minted the share — without it the server
   // has to guess, and a share from a team workspace isn't found at all.
-  const shareBase = window.location.pathname.replace("/shared/", "/share/") ;  // /share/{user}/{token}
-  const shareQuery = window.location.search;
-
-  const authedFetch = useCallback(async (p: string) => {
-    const headers: Record<string, string> = {};
-    if (getToken) { const tk = await getToken(); if (tk) headers.Authorization = `Bearer ${tk}`; }
-    // p may already carry a query (Office ?as=pdf); merge shareQuery in with &.
-    const q = shareQuery && p.includes("?") ? shareQuery.replace(/^\?/, "&") : shareQuery;
-    const res = await fetch(`${shareBase}/file/${p}${q}`, { headers });
-    if (!res.ok) throw new Error(t("fileLoadFailed"));
-    return res;
-  }, [getToken, shareBase, shareQuery]);
+  const get = useShareFetch(getToken);
+  const authedFetch = useCallback((p: string) => get(`file/${p}`), [get]);
+  const office = useMemo(() => shareOffice(get), [get]);
 
   const readFile = useCallback(async (p: string) => (await authedFetch(p)).text(), [authedFetch]);
   const openFile = useCallback(async (p: string) => URL.createObjectURL(await (await authedFetch(p)).blob()), [authedFetch]);
@@ -399,7 +415,7 @@ function SharedFile({ share, getToken, signedIn, agent, onSignIn }: { share: Fil
   return (
     <div dir="ltr" className="flex h-dvh flex-col bg-background">
       <ShareBar name={shownName(name)} author={share} signedIn={signedIn} agent={agent} onSignIn={onSignIn}>
-        {isHtml(name) && content != null && (
+        {isHtml(name) && !isComposition(name) && content != null && (
           <button onClick={openInTab} className={action} title={t("openInTab")}>
             <Icon name="arrow-up-right" className="size-4" /><span className="hidden sm:inline">{t("openInTab")}</span>
           </button>
@@ -412,7 +428,7 @@ function SharedFile({ share, getToken, signedIn, agent, onSignIn }: { share: Fil
       </ShareBar>
       <div className="min-h-0 flex-1 overflow-hidden">
         {renderable ? (
-          <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} />
+          <CanvasDoc file={file} content={content} error={error} shared openFile={openFile} officeEditor={office} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <Icon name="folder" className="size-10 text-muted-foreground/40" strokeWidth={1.5} />

@@ -18,7 +18,7 @@ import sys
 
 from .. import events
 from ..events import Turn
-from ...tools import tool_step
+from ...tools import tool_head
 
 
 _unmapped_thinking_warned = set()
@@ -232,7 +232,7 @@ class OpenAIProvider:
                     slot["args"] += arg_chunk
                 if not slot["started"] and slot["id"] and slot["name"]:
                     slot["started"] = True
-                    yield events.step("", tool=tool_step(slot["name"], {})["tool_name"], id=slot["id"])
+                    yield {**events.step("", id=slot["id"]), **tool_head(slot["name"])}
                     if slot["args"]:
                         yield events.tool_args(slot["id"], slot["args"])
                 elif slot["started"] and arg_chunk:

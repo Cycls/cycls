@@ -45,7 +45,21 @@ export const MAX_WRITE_BYTES = 25_000_000;
 export function overWriteLimit(text: string): boolean {
   if (text.length > MAX_WRITE_BYTES) return true;
   if (text.length * 3 <= MAX_WRITE_BYTES) return false;
-  return new Blob([text]).size > MAX_WRITE_BYTES;
+  return utf8Bytes(text, MAX_WRITE_BYTES) > MAX_WRITE_BYTES;
+}
+
+/** The text's size in UTF-8, counted without encoding it (a copy of up to 75 MB otherwise); stops past `stop`. */
+export function utf8Bytes(text: string, stop = Infinity): number {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { n += 4; i++; }
+    else n += 3;   // the rest of the BMP, and a lone surrogate (written as U+FFFD)
+    if (n > stop) return n;
+  }
+  return n;
 }
 
 // A save leaves the app's folder, so the app proposes a name and nothing else.

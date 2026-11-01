@@ -308,7 +308,7 @@ def test_open_a_workspace_page_writes_it_into_a_blank_tab(tmp_path, monkeypatch)
     """The browser is on another machine: a page the agent wrote is sent to it, never named by a path."""
     fake, sess = _use_fake(monkeypatch)
     (tmp_path / "deck").mkdir()
-    (tmp_path / "deck" / "deck.html").write_text("<h1>من أنا</h1>")
+    (tmp_path / "deck" / "deck.html").write_text("<h1>من أنا</h1>", encoding="utf-8")
     for url in ("deck/deck.html", "/workspace/deck/deck.html", "file:///workspace/deck/deck.html"):
         fake.calls.clear()
         out = asyncio.run(_exec_browser({"action": "open", "url": url}, _ws(tmp_path)))

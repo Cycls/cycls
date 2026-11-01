@@ -3,15 +3,15 @@
 **Status: implemented.** A Cycls agent can **create social-media posts, slide decks
 and documents** (reports, CVs, newsletters — flowing pages, as a PDF) and show them
 on the canvas — with **no design engine in the agent image**.
-The heavy part ([OpenPencil](https://github.com/open-pencil/open-pencil), a
-headless vector engine on Skia/CanvasKit) runs **once, in a shared service**; the
+The heavy part (the design engine, a headless vector engine on
+Skia/CanvasKit) runs **once, in a shared service**; the
 SDK ships only a thin client (`cycls/_agent/design`) and the built-in `Design`
 tool. Same split as office-render and the browser tool: the heavy dependency lives
 in one service, not in every image.
 
 The agent and the human meet at one shared file — `<name>.fig`, wherever it belongs in
 the workspace. The agent **generates** it (and can **edit** it live), and the human
-**hand-edits** the same file in an OpenPencil editor embedded in the canvas — see
+**hand-edits** the same file in the editor embedded in the canvas — see
 [Editing](#editing--the-in-canvas-editor) below.
 
 **A design is one file** (since 21 October 2026). Nothing is written beside the `.fig`:
@@ -45,12 +45,12 @@ agent's live `edit` changed it under their cursor.
 
 ## Why this shape
 
-- **Generate programmatically, NOT from HTML.** OpenPencil's HTML `import` is a
+- **Generate programmatically, NOT from HTML.** The engine's HTML `import` is a
   structural converter, not a browser — in testing it dropped gradients and didn't
   lay out CSS (a 1080² post came back near-blank). The **Figma plugin API** path
   (explicit geometry + fills + fonts) renders faithfully headless. So the service
   compiles a declarative spec to plugin-API calls; it does not import HTML.
-- **The engine is heavy and Bun-native.** OpenPencil's CLI uses Bun globals and
+- **The engine is heavy and Bun-native.** Its CLI uses Bun globals and
   pulls `canvaskit-wasm` (~8 MB); baking that into every agent image would tax
   100% of turns for a <5% capability (the office-render argument). → a **service**.
 - **The SDK ships the client; the service is deployed once.** → the office-render
@@ -73,7 +73,7 @@ agent's live `edit` changed it under their cursor.
 ```
    agent container (tiny)                   shared cycls-design service
    ─────────────────────                    ───────────────────────────
-   Design tool + client (httpx)             Bun + OpenPencil (headless,
+   Design tool + client (httpx)             Bun + the engine (headless,
         │                                    CanvasKit-WASM, no display)
         │  POST /render {spec}  ───────────▶  compile spec → Figma plugin API
         │  POST /eval   {script}             → export png/jpg/webp/svg/pptx/pdf
@@ -122,7 +122,7 @@ as fill alpha (setting a text node's own opacity collapses its auto-width box).
 
 **Fonts: any Google Font.** A text `font` is a family plus a style —
 `"Playfair Display Bold"`, `"Montserrat Extra Bold Italic"` — or `{family, style}`,
-with optional `weight` (100–900) and `italic`. The renderer (OpenPencil core) takes
+with optional `weight` (100–900) and `italic`. The renderer (the engine's core) takes
 Inter and Noto Naskh Arabic from its bundle and everything else from Google Fonts /
 Fontsource at export; the editor in a browser loads the same families from
 Fontsource. The service's `fonts.ts` makes that dependable before every render:
@@ -131,7 +131,7 @@ Fontsource. The service's `fonts.ts` makes that dependable before every render:
   family and `"Black Ops One"` keeps its "Black". (The old builder split at the first
   space — `"Playfair Display Bold"` became family "Playfair" — which is why every
   multi-word family rendered blank and fonts were wrongly believed to be Inter-only.)
-- **Figma style names, with spaces.** OpenPencil's `fontName` setter maps only
+- **Figma style names, with spaces.** The engine's `fontName` setter maps only
   `"Semi Bold"` / `"Extra Bold"` / `"Extra Light"`; `"SemiBold"` silently became 400.
   Every resolved style is the spaced form, in the service and the builder.
 - **Open twins.** Arial / Helvetica → Arimo, Times → Tinos, Courier → Cousine,
@@ -226,6 +226,60 @@ an error asking for a smaller copy. A round avatar is a square image with
 `nodes`, with a gradient scrim and explicitly light text over it (the automatic
 text colour only knows the frame's fill).
 
+**The media library.** A third way to bring a picture: name one the design service
+keeps — `"asset": "paper texture"` (a few plain words) or `"asset":
+"texture/ambientcg/paper006"` (an id), wherever `src` or `stock` goes. The library is a
+read-only volume on the service (`cycls-media-assets`, its `v1/` set: textures,
+patterns, 3D emoji and icons, illustrations, museum ornament, each a row of
+`catalog.json` with its kind, tags, size, colours and licence), so every agent that
+has Design has it and nothing is configured here. `{"action": "assets", "query"?,
+"kind"?}` lists what it holds (ids, sizes, colours, tags) and makes nothing.
+`design/assets.py` resolves a named asset the way `stock.py` resolves a photo: one
+`POST /assets` to the service for the row and the bytes, saved to
+`attachments/assets/<id>.<ext>` and remembered in `attachments/assets/.index.json`,
+the path put in as `src` — everything after sees an ordinary workspace file, and a
+document's stored source keeps that path. What the asset IS decides the node: a
+texture, an emoji, an icon or a museum picture is an `image` (a cut-out one defaults
+to `fit: "contain"`), an illustration an `svg`, a pattern a `pattern` — a node written
+as another of the three is read as the one its asset is; `asset` on anything else, and
+a pattern in a layout's picture slot or a `replace_image`, are errors naming the fix.
+The ack says which asset words resolved to, the credit when the licence asks one
+(Hero Patterns, CC BY), and that a picture drawn past 1.6× its own pixels will look
+soft (the 3D emoji are 256 px).
+
+What it holds (3,779 files, 1.4 GB, since 2026-10-13): 1,412 textures at 2K (Poly
+Haven, ambientCG — a designer's cut of each: paper, cloth, leather, marble, plaster,
+concrete, wood, metal, and a short shelf of ground and stone), 87 patterns (Hero
+Patterns, the one source that asks a credit), 1,595 3D emoji (Microsoft Fluent — every
+emoji it draws, a person in the default skin tone), 480 3D icons (3dicons' 120 objects
+in four finishes: `rocket`, `rocket-clay`, `rocket-gradient`, `rocket-premium`), 125
+illustrations (Open Peeps, Open Doodles) and 80 museum pieces (The Met's Islamic art,
+each looked at; nothing of the Qur'an, and the few with writing tagged `inscription`).
+Words are matched by the
+service (`src/assets.ts` there): the most words found, then where — the kind, a title,
+a tag — then the fuller title, then the catalogue's own order, which puts the likeliest
+first. Two things follow for the model, and the tool says both: a material alone can
+name an emoji (`"wood"` is the log emoji; `"wood texture"` is the texture), and a
+finish is a word (`"rocket clay"`).
+
+Since 2026-10-14 a row's tags BEGIN with what a brief asks for — an occasion (ramadan,
+eid, adha, national day, founding day, wedding, graduation …), a subject (business,
+sale, education …), a mood (luxury, minimal, rustic …) and the colours read from its
+pixels — hand-picked in the library's working copy (`scripts/uses.py` there), because
+the `assets` listing shows the model only a row's first six tags (`_row_line`). A
+picture carries an occasion only when it is a sign of it; `inscription`, `alcohol` and
+`pork` mark what stays out of a Gulf brief. The tool says the words can be an occasion
+or a mood. A texture named with no `w`/`h` fills its frame (`_place` marks it,
+`_prepare_spec` sizes it, like a pattern); a cut-out object with no box is still an
+error, since drawn frame-wide it would be soft and huge.
+
+A **`pattern`** node — `{type: "pattern", asset | src | svg, color?, opacity?, scale?,
+x?, y?, w?, h?}` — is one SVG tile the service repeats over the node's box and hands
+on as an image (`prepare.ts`, drawn once with CanvasKit at up to 2 px a design px), so
+every export and the editor see a picture. With no box it covers the frame; with no
+`color` it takes white or near-black, whichever reads on the frame's fill; with no
+`opacity`, 0.12 — it is finish behind the text. Added by an edit it needs `w` and `h`.
+
 **Self-QA.** Every render comes back to the model as an image beside the ack,
 with a short rubric — headline dominant, ~8–10% margins, legible text, nothing
 overlapping or cut off, exact copy, on-brand — and the instruction to fix anything
@@ -247,7 +301,7 @@ not acted on.
 ```
 
 - `format: "pptx"` — one PowerPoint file, a slide per frame. Each slide's speaker
-  `notes` and `transition` are written in (OpenPencil's exporter writes neither; the
+  `notes` and `transition` are written in (the engine's exporter writes neither; the
   service post-processes the file). Text, rects, ellipses and lines stay native and
   editable; **charts and tables are PowerPoint's own** — the builder keeps each one's
   data on its frame, and the export swaps the drawn shapes for a native chart (its
@@ -302,6 +356,29 @@ settings (images back to paths, its `look` too) in the file so a later slide mat
 frame keeps its layout `source` (image bytes out), which `inspect` shows. A test
 renders a compact deck in every theme and fails on any layout-check finding.
 
+**Looks.** A theme is colours and faces only, so every deck — and every document — came out
+the same shape whatever its theme ("the same style every time", the user's word,
+2026-10-18). `look` (cycls-design `looks.js`) composes the slides or pages: `classic` (as
+before, held by the service's golden images), `editorial`, `swiss`, `bold`, `soft`,
+`minimal`; a slide's or a block's `style` draws its kind another way. The SDK
+(`_settle_look` in `prepare.py`) checks the look and, when there is none, writes in the one
+the piece calls for (`_look_for`) and says why in the reply: a theme named for a look gives it
+(`_THEME_LOOKS`: editorial, tech-dark → swiss, warm → soft, mono → minimal, bold-gradient →
+bold); else what the piece says it is — a document's `kind`, eyebrow, title, subtitle; a deck's
+title slide and footer — matched against `_PIECE_LOOKS` (a proposal or pitch → bold, a report
+or newsletter → editorial, a guide, CV or invoice → swiss, a brochure or training → soft, a
+letter → minimal; English and Arabic words); else a custom theme's base; else a document's
+shape (columns or chapter pages → editorial, no cover → swiss); else one picked by the
+title's CRC. Never classic unless asked: the first version fell back to classic for
+`minimal-light`, `corporate` and the brand kit, and a live proposal on 2026-10-17 came out in
+the old shape that way. A custom theme's base ranks below the piece because the skills'
+example themes sit on `editorial`. For a deck it lands
+in the deck document's `settings` (`settings_of`), so later slides match. For a document it
+is written into the kept source on a new render only (`_render_document`, not `kept`): a
+document rendered before there were looks has none in its source and stays classic through
+its section changes. The tool description and the `deck-design`, `document-design` and
+`design-direction` skills teach choosing one per piece.
+
 **Slide actions** change a deck's structure on the saved `.fig`, through the
 service's `/apply` like an `edit`: `add_slide {slide, at?}` (or several in one call,
 `{slides: [...], at?}`: one change, one `/apply` of several `slide_add` ops),
@@ -324,7 +401,7 @@ version, "Before a slide change: add a slide", not as an agent edit).
 ## Pages
 
 A design's **pages** are its variants — a post, a story and a banner of one campaign; a
-light and a dark version — in one `.fig`. They are OpenPencil's own pages (the editor's
+light and a dark version — in one `.fig`. They are the engine's own pages (the editor's
 Pages panel), and Cycls works on **one page at a time**, named by its name:
 
 - **Making them.** `render {spec: {pages: [{name, size, fill, nodes}, …]}}` makes one
@@ -381,7 +458,8 @@ the pages make themselves.
 - **The look.** Open, by the user's choice: a theme named in the spec (or one with its
   accent or fonts overridden) stands; with none, the workspace **brand kit** is the
   theme and `brand/logo.*` the logo (`_prepare_document`, as a deck); with no kit, the
-  tool description tells the agent to pick a theme that fits the subject.
+  tool description tells the agent to pick a theme that fits the subject. The page's
+  composition is the `look` (see "Looks" above), its theme's when none is given.
 - **`_prepare_document`.** Reads every image from the workspace wherever it sits — the
   cover's, the logo, an `image` block's (also inside `columns`), a `nodes` area's and a
   hand-built page's — into slots that carry the image's own size (`w`, `h`: the page
@@ -627,9 +705,9 @@ link that isn't a deck has no poll. A shared deck presents its poll slides as dr
 ## Editing — the in-canvas editor
 
 Generation is half of it. When `DESIGN_EDITOR_URL` is set, a `.fig` on the canvas
-opens the **OpenPencil editor embedded in an iframe** (`DesignEditorView`), so the
+opens the **editor embedded in an iframe** (`DesignEditorView`), so the
 human edits the exact design the agent rendered. The editor is a static app on its
-**own origin** (a patched OpenPencil build, loaded with `?embed=cycls`); the SDK
+**own origin** (a patched editor build, loaded with `?embed=cycls`); the SDK
 ships only the small React embed component and threads the `design_editor_url`
 config value to it. Two directions meet at the shared `<name>.fig`:
 
@@ -639,7 +717,7 @@ config value to it. Two directions meet at the shared `<name>.fig`:
   no service call. The agent picks up the human's edits on its next turn. One editor
   edits **one design** — see "One design, in the workspace" below.
 - **Agent edits** — the `edit` action first runs the script on the saved
-  `<name>.fig` through the service's `POST /apply` (the same OpenPencil
+  `<name>.fig` through the service's `POST /apply` (the same engine
   plugin API, headless). A script that throws — a node it looks up isn't there —
   is the model's error, verbatim, and nothing changes; a success is written back
   to the `.fig` (its preview made ready, `design/refresh`), whether or not an
@@ -739,7 +817,7 @@ Cycls tab opened, and everything it makes lands in the workspace.
   canvas expanded over the chat) the host posts `fit`, and the editor fits the design
   again unless the person has zoomed or panned since the last fit (an editor that
   lists the `fit` feature; before it the design stayed small in a corner). A fit is
-  to what the editor's own bars leave of the canvas: OpenPencil fits a page to the
+  to what the editor's own bars leave of the canvas: the editor fits a page to the
   whole canvas with a margin that shrinks as it zooms out, and its toolbar floats
   over the foot of it — in a docked pane (its narrow layout, with a drawer under the
   toolbar) a page as tall as paper ended beneath them (the bridge's `fitPage`). **Esc leaves
@@ -825,22 +903,20 @@ Cycls tab opened, and everything it makes lands in the workspace.
   source, desktop and the narrow (mobile) layout alike. Kept: the Code tab,
   Variables, Split view.
 
-The embedded editor is a **patched** OpenPencil build: replacements for its app
+The embedded editor is a **patched** open-source build: replacements for its app
 shell (`main.ts`, `App.vue`, `WorkspaceView.vue`, `pwa.ts`, `aliases.ts`), the
 bridge (`cycls-bridge.ts` + `host.ts`), stubs aliased over upstream modules (save,
 export, tabs, menus, AI), and exact edits (`edits.json`) — each must match, and the
-upstream files they rely on are pinned by hash, so a new OpenPencil version fails
+upstream files they rely on are pinned by hash, so a new upstream version fails
 the build until it is reviewed. The patches, the build and their tests live in the
 service repo (`cycls-design/editor/`); [the hand-off note](design-editor-handoff.md)
 is the short reference for what Cycls and the editor say to each other.
-(`design-editor-patch/` beside it is a snapshot of the patches from 5 October 2026,
-from before they had a repo of their own: not what is built.)
 
 ### Together — several people in one design
 
 Two or three people of a team workspace open the same design; each sees the others'
 cursors with their names, what they have selected, and their changes as they make
-them. Built on the editor's own co-editing (OpenPencil's: one shared document, a map
+them. Built on the editor's own co-editing (one shared document, a map
 a node, "awareness" for cursors and selections), which the Cycls build had switched
 off — carried by a relay Cycls runs instead of the peer-to-peer room upstream uses
 (public brokers and a public TURN server are not somewhere a team's design should
@@ -933,7 +1009,7 @@ on a spot of a slide, a thread under it — replies, resolve and reopen, the wor
 or removed by their author — and a list of every thread. The agent reads them, answers
 and resolves (`comments`), so "address the comments on the deck" is one request.
 
-- **Kept by Cycls, not in the `.fig`** (`cycls/_agent/design/comments.py`). OpenPencil
+- **Kept by Cycls, not in the `.fig`** (`cycls/_agent/design/comments.py`). The editor
   grew comments of its own a day before this was built (upstream #981: threads as plugin
   data on the document, so they travel in the file). Not taken: there a comment is a
   save of the design — a version kept, the image exported again, one more thing for the
@@ -1024,6 +1100,61 @@ who only have a share link, mentions and notifications, a pin dragged to another
 (the route takes `move`; the app has no handle for it yet). In the editor's split view
 the pins are drawn for its first pane, as the cursor names are.
 
+## Skills — how to design well, carried by the tool
+
+The tool's description says how a design is WRITTEN; it said one thing about how it should
+LOOK — a gradient, a big headline, one accent, a soft ellipse — so every design came out
+alike, and the calls that failed in production were mostly the same few slips (a guessed
+node name, `backdropBlur: true`, a re-render where an edit was meant, a document's section
+change held because the agent had edited its pages first). The tool now carries skills of
+its own, markdown files in `cycls/_agent/design/skills/`, so every agent that has Design has
+them and none needs its own copy:
+
+| skill | what it holds |
+|---|---|
+| `design-direction` | the four decisions before a render (the idea, a direction, its system, one signature move); ten directions with their palettes, fonts (Latin and Arabic — each name checked to render) and the media-library finish that suits them; colour and type rules; showing two or three directions as the pages of one design |
+| `graphic-design` | sizes and safe areas, a copy budget, ten compositions with coordinates, Arabic posts, carousels, a campaign in several sizes; working fast (one render with every part named, one edit with every fix, `export` for another format) and the shapes that cost a refused call |
+| `deck-design` | built-in themes and a theme of one's own (every key the service's `themes.js` takes), the looks and slide styles, rhythm and action titles, which layout for which content, slot budgets, custom slides on the deck's grid, charts, notes, Arabic decks; one render for the deck, slide actions after it |
+| `document-design` | the settings each kind takes (report, proposal, white paper, guide, newsletter, brochure, CV, letter, invoice) and the looks that suit it, block styles, which block for which content, screenshots, a page budget (~400–450 words an A4 page, measured); sections first, page `edit`s last — the hand-edit hold explained |
+
+`design {"action": "skill", "skill": ["design-direction", "graphic-design"]}` returns the
+skills asked for (`skill.load`); the description lists each with its one line (`skill.catalog`,
+from the file's frontmatter), first the look, then each kind. It runs on the short form too
+(`DESIGN_INSTRUCTIONS=on-demand`) and then says the whole instructions are loaded — any
+Design call makes the chat's next request carry them. Like the `skill` tool's, its result is
+instructions, not history (`tools.skills.loads_skill`): never spilled to a file (two skills
+run past `SPILL_AT`) and never stubbed by compaction.
+
+Every ```json example in a skill is a test (`design_test.py`): it goes through
+`_exec_design` as written, the media library and the service faked, so an example can't drift
+from what the tool takes. Written against the local service, each was rendered and looked at.
+Two service changes came with them (cycls-design `builder-lib.js` `faint`, `lint.ts`): text at
+under 35% strength is decoration — a watermark word, a numeral cut by the frame's edge — so the
+builder no longer pulls it inside the frame and the layout check no longer reports it. Not in
+the skills, because they don't work: a `stroke` on text outlines its box, not its letters; a
+`shadow` on a cut-out 3D picture is a dark square.
+
+**What the first live test changed (2026-10-14, four real briefs on super-dev).** The skills
+were loaded unprompted in three chats of four; the report's wasn't (it rendered four pages
+for two). The deck wrote its own theme as `deck-design` shows and both its renders came out
+in the default — never reproduced (the same theme renders right locally and on production);
+the button of the post took six calls: it was a pill and its label in a horizontal stack (side
+by side, the label's `y` unread), then the label moved onto the pill was drawn under it.
+So now:
+- a deck's reply names its theme (`The deck's theme: editorial with your bg, accent, …`), or
+  says it has none and is minimal-light; keys a deck doesn't read are said; a `theme` (or any
+  deck key) written beside `deck` — in the spec or at the tool's level — is read as the deck's,
+  and a document's keys beside `document` (a `title`, failed twice in production) likewise;
+- a stack child given its own x / y is said, with how to put a label on a shape;
+- a text with `h` takes `"valign": "center" | "bottom"` (cycls-design `builder.js`), and the
+  tool text says a button is a rect and a text in the same box, never a stack;
+- a node moved out of a stack is drawn on top (cycls-design `ops.js` `__unstack` clears the
+  position key it kept from inside the stack — quirks #23);
+- a render in a chat that hasn't loaded a design skill ends with which to load (`_skill_for`:
+  document-design, deck-design or graphic-design, with design-direction). The loop sets
+  `DESIGN_SKILLED` from the transcript just before its tools run, so a skill loaded in the
+  same turn counts; unset — a test, a caller with no chat — counts as loaded.
+
 ## Where the code is
 
 The Design tool was written into `cycls/_agent/tools/__init__.py` (it grew to two thirds
@@ -1033,13 +1164,14 @@ every name is still importable from where it used to be.
 | In `cycls/_agent/design/` | |
 |---|---|
 | `tool.py` | The tool as the model is given it — its definition, and the short form a chat carries until it designs. |
+| `skill.py` · `skills/` | The tool's own skills (markdown, one a file) and the `skill` action that loads them. |
 | `run.py` | The executor, `_exec_design`: render, script, edit, inspect, extract. Registered in `tools/` as the `design` tool. |
 | `actions.py` | Slide actions, a document's section actions, the file actions (export, rename, copy, delete, versions), and a document rendered. |
 | `prepare.py` | What the model wrote, made ready for the service: a spec and its pages, a deck of layouts, a document, a slide, an edit's ops. With `brand.py` (colours, the brand kit) and `images.py` (a workspace image placed; the bounds on what is sent and shown). |
 | `extract.py` | A PDF taken apart to be made again as a document. |
 | `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's file (its name as a path, a free one, the canvas opening it). |
 | `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
-| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` | Slide ops on a saved deck (its settings read from the file) · versions and the base a save names · a design's preview made ready after a save · rooms and passes · stock photos. |
+| `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` · `assets.py` | Slide ops on a saved deck (its settings read from the file) · versions and the base a save names · a design's preview made ready after a save · rooms and passes · stock photos · the media library (a named asset fetched and placed; the `assets` listing). |
 | `comments.py` | What people pinned on a design: the record, its changes, where a pin is now, and where the record goes when the design does. |
 
 `cycls/_agent/web/design_routes.py` holds a design as the app is served it (its slides
@@ -1056,16 +1188,16 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
 
 - **The `.fig` codec renumbers node ids on save.** The builder logs an in-memory
   `__FRAME__<id>` only as a "script ran" sentinel — the service resolves the real
-  export id from the *saved* fig via `openpencil find --type frame … --json`, then
+  export id from the *saved* fig via the engine CLI's `find --type frame … --json`, then
   exports `--node <id>` for raster/vector (a `pptx` export is whole-document, so it
   needs no id). Relying on the logged id exported the wrong node.
 - **Whole-document pptx = only the design.** The builder drops the scratch base
   doc's pages so a deck's `.pptx` contains exactly the design frames (N frames → N
   slides), not the loadable-base scratch page.
-- **OpenPencil 0.14.0 packaging fix.** Every `@open-pencil/*` package's `exports`
+- **Engine 0.14.0 packaging fix.** Every engine package's `exports`
   map declares a `bun` condition pointing at unpublished `./src/**/*.ts`; the
   service strips those on install so Bun falls back to the shipped `dist` builds.
-- **Nodes join their frame before they're positioned.** OpenPencil's `appendChild`
+- **Nodes join their frame before they're positioned.** The engine's `appendChild`
   keeps a node's page position, so a node placed first and appended after landed
   outside any frame not at the origin — every deck slide after the first rendered
   blank until the builder switched the order (golden `deck.2`).
@@ -1073,7 +1205,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   (a Figma-style `{value, unit}` object saved as NaN); a `figma-compat` prelude runs
   ahead of every script — service `eval` and the editor bridge alike — so an agent's
   Figma-style edit works too. Radial gradients take `center` + `radius`.
-- The service keeps a registry of every OpenPencil quirk, its guard and the test that
+- The service keeps a registry of every engine quirk, its guard and the test that
   pins it: `cycls-design/docs/quirks.md`. Goldens (Linux renders) cover each one.
 - **Stacks and the layout check.** The service measures text while the builder runs
   (one `job.ts` process per render), so a `stack` node lays its children out from
@@ -1083,7 +1215,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
   as one in the editor, a line typed longer pushes the rest down, `move`/`duplicate`
   take the stack's id, and a child moved on its own leaves it. A stack holding a
   frame — a list, icon, chart, table, QR or another stack — is laid out as separate
-  nodes, because after a load OpenPencil keeps a frame child where it was saved while
+  nodes, because after a load the engine keeps a frame child where it was saved while
   the text around it reflows (quirks #27); and every save drops the loaded file's copy
   of the auto-layout fields, which the .fig writer would otherwise write back over an
   edit (#28 — the service before a save, the editor bridge on `save`). Every render
@@ -1191,7 +1323,7 @@ A limit a test overrides is patched where it is read — `design.run._DESIGN_QA_
 | `DESIGN_LIVE_URL`   | the live relay, e.g. `https://cycls-design-live.cycls.ai` — with `DESIGN_LIVE_SECRET`, people of a team workspace work in one design together. Unset → every design opens alone. |
 | `DESIGN_LIVE_SECRET`| the relay's secret (its `LIVE_SECRET`): signs room passes and lets the agent speak into a room. |
 | `DESIGN_INSTRUCTIONS` | `on-demand`: a chat carries a short form of the Design tool until it designs (below). Unset: the whole definition with every request, as always. |
-| `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static OpenPencil build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
+| `DESIGN_EDITOR_URL` | the embedded editor's own origin (a static editor build). Injected into `/config` as `design_editor_url`. Unset → `.fig` files show the download card and there is no open editor for `edit` to drive; generation (`render` / `script`) is unaffected. |
 
 Unset `DESIGN_URL` and `design.configured()` is false: the `Design` tool is never
 offered and the feature is simply absent — **no regression**, exactly the
@@ -1202,7 +1334,7 @@ there is simply no open editor for the command to reach.)
 ## The service
 
 Lives in its own repo (`cycls-design`), deployed once — the SDK ships only the
-client. It's a Bun HTTP server wrapping the OpenPencil headless CLI:
+client. It's a Bun HTTP server wrapping the engine's headless CLI:
 
 - `GET  /health`
 - `POST /render { spec, format?, scale?, preview?, every? }` — the primary, safe path (declarative)
@@ -1212,6 +1344,7 @@ client. It's a Bun HTTP server wrapping the OpenPencil headless CLI:
   with `sheets`, every frame small on contact sheets
 - `POST /export { fig, format?, scale?, width?, every? }` — re-export an edited `.fig`
 - `POST /slides { fig, scale?, format? }` — every slide's image, size and metadata (the deck viewer)
+- `POST /assets { q?, kind?, limit? }` — what the media library holds, by words; `{ id, pick?, kind? }` — one asset's row and its bytes
 
 A render returns `{ ok, frameId, frames, format, image_base64, fig_base64, slides,
 lint, fixed?, notes? }` plus `preview_base64` / `previews_base64` (a @1x JPEG of the first /

@@ -33,6 +33,7 @@ class LLM:
         self._labels = {}
         self._icons = {}
         self._pictures = {}
+        self._titles = {}
         self._details = frozenset()
         self._mcp = []
         self._connectors = []
@@ -83,7 +84,7 @@ class LLM:
         that authenticate outside the bearer key (Modal proxy, Cloudflare
         Access, corporate gateways). None clears."""
         return self._copy(_headers=dict(mapping) if mapping else None)
-    def on(self, name, handler, *, label=None, icon=None, details=False, picture=None):
+    def on(self, name, handler, *, label=None, icon=None, details=False, picture=None, title=None):
         """Register an async handler for a custom tool by name. The handler's
         return value is both yielded to the stream (body sees it as a normal
         event) and packaged as the tool_result sent back to the model.
@@ -96,11 +97,16 @@ class LLM:
         the chat; the model still receives all of it.
         `picture` marks a tool that makes a picture: input → its shape ("16:9").
         The chat holds a frame of that shape while it runs, and shows the
-        picture the tool opens (`open_canvas`) in its place."""
+        picture the tool opens (`open_canvas`) in its place.
+        `title` is what the tool did, in plain words for people who don't read code ("checked live prices"): the
+        collapsed line of steps says it, and the step line is then the label alone, as a sentence, never
+        `name(input)`. It, and what `label` returns, can be one string or one per UI language
+        ({"en": …, "ar": …})."""
         return self._copy(_handlers={**self._handlers, name: handler},
                           _labels={**self._labels, name: label} if label else self._labels,
                           _icons={**self._icons, name: icon} if icon else self._icons,
                           _pictures={**self._pictures, name: picture} if picture else self._pictures,
+                          _titles={**getattr(self, "_titles", {}), name: title} if title else getattr(self, "_titles", {}),
                           _details=self._details | {name} if details else self._details)
 
     def instructions(self, path):
@@ -186,7 +192,7 @@ class LLM:
         from .main import _run
         from ..tools import register_labels
         register_labels(self._labels, icons=self._icons, details=self._details,   # also read by the refetch projection
-                        pictures=getattr(self, "_pictures", {}))
+                        pictures=getattr(self, "_pictures", {}), titles=getattr(self, "_titles", {}))
         loop = self._loop or _run
         # A switch in Settings turns a tool off for this person; it never
         # turns one on the operator didn't allow.

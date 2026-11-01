@@ -36,6 +36,24 @@ export interface Source {
   note?: string;
 }
 
+// A chart part's series and markers (parts/chart-part.tsx): candles are [time, open, high, low, close], the rest
+// [time, value]; time is "YYYY-MM-DD" for days, epoch seconds for intraday.
+export interface ChartSeries {
+  name?: string;
+  kind?: "candles" | "line" | "area" | "histogram";
+  pane?: number;
+  color?: string;
+  data: (string | number)[][];
+}
+export interface ChartMarker {
+  time: string | number;
+  text?: string;
+  position?: "aboveBar" | "belowBar" | "inBar";
+  shape?: "circle" | "square" | "arrowUp" | "arrowDown";
+  color?: string;
+  series?: number;
+}
+
 export interface Part {
   type: string;
   text?: string;
@@ -54,6 +72,8 @@ export interface Part {
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
   picture?: string;  // a tool that makes a picture, from `.on(picture=…)`: its shape ("16:9")
+  plain?: boolean;   // a tool with a `.on(title=…)`: its step is a sentence in plain words, never name(input)
+  i18n?: Record<string, { tool_name?: string; step?: string }>;   // those words in each UI language
   result?: string;   // a connector call's outcome, bounded — the block's Response
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
@@ -75,6 +95,14 @@ export interface Part {
   limit?: number;
   per?: string;
   resets?: string;
+  series?: ChartSeries[];   // a `chart` part: what it draws, its markers, the URL that moves its last point, its labels
+  markers?: ChartMarker[];
+  live?: { url: string; every?: number };
+  subtitle?: string;
+  source?: string;
+  as_of?: string;
+  currency?: string;
+  precision?: number;
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
@@ -132,6 +160,9 @@ export interface AppConfig {
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
   examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
+  video_editor?: boolean;      // the video editor is configured (VIDEO_EDITOR_URL); POST /video/editor says if it is offered
+  sheets_editor?: boolean;     // Cycls Sheets is configured (OFFICE_URL); GET /office/sheets says if it is offered
+  voice_warm?: boolean;        // the mic goes to the cycls-transcribe service: warm a listener as recording starts
   design_editor_url?: string;   // base URL of the embedded design editor for .fig files (env DESIGN_EDITOR_URL)
 }
 
@@ -458,6 +489,14 @@ export function useChat(baseUrl: string = "") {
               const type = item.type;
               if (type === "callout" && item.error_id) crashed = item.error_id;
 
+              // The loop's keep-alive while a tool runs: not a part. Taken as one, it ended the
+              // live tool row after 15 s, so a long call (a render) looked finished while it ran.
+              if (type === "ping") continue;
+              // A custom tool's own result (a dict with no `type`) is the agent body's to see, not the
+              // chat's: it renders nothing, and kept as a part it split a run of steps while it streamed
+              // but not after a reload.
+              if (!type) continue;
+
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
                 // The server knows whether this account had any chat before —
@@ -509,8 +548,8 @@ export function useChat(baseUrl: string = "") {
                 (currentPart as any)[key] = ((currentPart[key] as string) || "") + (item[key] as string);
               } else {
                 if (type === "usage") uiHandlerRef.current?.({ ...item, action: "usage" } as unknown as UIAction);
-                // New part
-                currentPart = { ...item };
+                // New part, stamped when it appeared: the chat times a stretch of work by it
+                currentPart = { at: Date.now(), ...item };
                 if (item.headers) currentPart.rows = [];
                 parts.push(currentPart);
               }

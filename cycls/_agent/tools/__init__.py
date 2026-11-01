@@ -3,7 +3,7 @@ API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
 import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import NamedTuple
@@ -34,6 +34,17 @@ from ..design.actions import (_BLOCK_KINDS, _DOCUMENT_ACTIONS, _FILE_ACTIONS, _S
     _edits_hold, _edits_since_render, _exec_design_file, _exec_document, _exec_slides, _render_document,
     _sections_text, _seen_pages, _to_the_room)
 from ..design.run import _design_step, _exec_design
+# The Video tool lives in cycls/_agent/video: the client to the cycls-video service, the tool as the
+# model is given it (short until a chat uses it; tools/ondemand.py swaps in the whole form), and
+# the executor.
+from ..video.tool import VIDEO_PROMPT, video_tool
+# The Transcribe tool lives in cycls/_agent/transcribe: the client to the cycls-transcribe service,
+# the tool's schema and its executor.
+from ..transcribe.tool import TRANSCRIBE_TOOL, transcribe_step
+from ..transcribe.run import exec_transcribe
+from ..video.run import _exec_video, _video_step
+from ..office.docs import DOCS_PROMPT, DOCS_TOOL, docs_step, exec_docs
+from ..office.sheets import SHEETS_PROMPT, SHEETS_TOOL, exec_sheets, sheets_step
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
@@ -423,6 +434,30 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             from cycls._agent import design as _design
             if _design.configured():
                 tools.append(_DESIGN_TOOL)
+        elif name == "Video":
+            # Offered short — the contract joins it on first use (tools/ondemand.py) — and only when
+            # the cycls-video service is configured (VIDEO_URL). Who may use it (VIDEO_ORGS) is
+            # decided per run, where the organisation is known (harness/main.py).
+            from cycls._agent import video as _video
+            if _video.configured():
+                tools.append(video_tool(False))
+        elif name == "Transcribe":
+            # like Design: offered only when the service is configured (TRANSCRIBE_URL); its daily
+            # allowance per organisation and person is the service's to keep
+            from cycls._agent import transcribe as _transcribe
+            if _transcribe.configured():
+                tools.append(TRANSCRIBE_TOOL)
+        elif name == "Sheets":
+            # like Video: offered when the office service is configured (OFFICE_URL); who may use it
+            # (SHEETS_ORGS) is decided per run, where the organisation is known (harness/main.py)
+            from cycls._agent.office import client as _office
+            if _office.configured():
+                tools.append(SHEETS_TOOL)
+        elif name == "Docs":
+            # the same for Cycls Docs: offered with the office service; who may use it is DOCS_ORGS
+            from cycls._agent.office import client as _office
+            if _office.configured():
+                tools.append(DOCS_TOOL)
         else:
             tools += _BUILTINS.get(name, [])
     tools += [_normalize_tool(t) for t in (custom or [])]
@@ -942,8 +977,22 @@ class Tool(NamedTuple):
 
 def _run_bash(inp, workspace, *, timeout, network, ctx=None, **_):
     t = inp.get("timeout")
-    return _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
-                      catalog=getattr(ctx, "skills", None))
+    run = _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
+                     catalog=getattr(ctx, "skills", None))
+    if not getattr(ctx, "office", None):
+        return run
+    # A Word / Excel file this command makes is the turn's own: later commands may open it (a skill's check).
+    from ..office import guard
+    before = guard.missing(str(inp.get("command") or ""), workspace.root)
+    if not before:
+        return run
+
+    async def tracked():
+        try:
+            return await run
+        finally:
+            ctx.built.update(guard.made(before))
+    return tracked()
 
 
 def _ask_step(inp):
@@ -1026,7 +1075,7 @@ async def _exec_browser(inp, workspace, chat_id=None):
                     return "Error: `open` needs a `url`."
                 if page:
                     await s.goto("about:blank")
-                    await s.evaluate(_WRITE_PAGE % json.dumps(page.read_text(errors="replace")))
+                    await s.evaluate(_WRITE_PAGE % json.dumps(page.read_text(encoding="utf-8", errors="replace")))
                 else:
                     await s.goto(url)
                 return await _browser_read(s)
@@ -1101,6 +1150,18 @@ _TOOLS = {
                        interrupted="The page is still open but may have moved; re-read it "
                                    "before acting on any element ref."),
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
+    "video":      Tool(lambda inp, ws, ctx=None, **_: _exec_video(inp, ws, ctx), _video_step, prompt=VIDEO_PROMPT,
+                       interrupted="The composition is saved as it was. A render that was started keeps running "
+                                   "on the service: call render again with the same name to collect it."),
+    "transcribe": Tool(lambda inp, ws, ctx=None, **_: exec_transcribe(inp, ws, ctx), transcribe_step,
+                       interrupted="A transcription that was started keeps running on the service: call "
+                                   "transcribe again with the same path to collect it."),
+    "sheets":     Tool(lambda inp, ws, ctx=None, **_: exec_sheets(inp, ws, ctx), sheets_step, prompt=SHEETS_PROMPT,
+                       interrupted="The file is as it was before this call, or has the whole edit: read it "
+                                   "before changing it again."),
+    "docs":       Tool(lambda inp, ws, ctx=None, **_: exec_docs(inp, ws, ctx), docs_step, prompt=DOCS_PROMPT,
+                       interrupted="The document is as it was before this call, or has the whole edit: read it "
+                                   "before changing it again."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
     "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None)),
@@ -1151,15 +1212,17 @@ def interrupted_note(name, reason):
             + (f" {row.interrupted}" if row and row.interrupted else ""))
 
 
-_custom_labels, _custom_names, _custom_owners, _custom_icons, _custom_pictures = {}, {}, {}, {}, {}
+_custom_labels, _custom_names, _custom_owners, _custom_icons, _custom_pictures, _custom_titles = {}, {}, {}, {}, {}, {}
 _detailed = {"build_app"}   # step row carries Request/Response, and can show a failure; MCP tools join at runtime
 
 
-def register_labels(labels, names=None, owners=None, icons=None, details=(), pictures=None):
+def register_labels(labels, names=None, owners=None, icons=None, details=(), pictures=None, titles=None):
     """UI step labels for custom tools: name → (input dict → str), an optional display name, the connector a tool
-    acts with, an icon url, whether the row opens into request and response, and the shape of a picture it makes.
-    Registered by LLM.run() and by MCP discovery so both live steps and the refetch projection render them."""
+    acts with, an icon url, whether the row opens into request and response, the shape of a picture it makes, and
+    what it did in plain words. Registered by LLM.run() and by MCP discovery so both live steps and the refetch
+    projection render them."""
     _custom_labels.update(labels or {})
+    _custom_titles.update(titles or {})
     _custom_names.update(names or {})
     _custom_owners.update(owners or {})
     _custom_icons.update(icons or {})
@@ -1188,11 +1251,41 @@ def excerpt(content, limit=3000):
     return s if len(s) <= limit else s[:limit] + "\n…"
 
 
+def _langs(v):
+    """Plain words given once or per UI language ({"en": …, "ar": …}): the English (else the first), and the map."""
+    if isinstance(v, dict):
+        return str(v.get("en") or next(iter(v.values()), "")), {k: str(x) for k, x in v.items() if x}
+    return str(v or ""), {}
+
+
+def tool_head(name):
+    """A step before its input has streamed in: the tool's name, or what it does in plain words when it has a title."""
+    if name not in _custom_titles:
+        return {"tool_name": tool_step(name, {})["tool_name"]}
+    title, titles = _langs(_custom_titles[name])
+    return {"tool_name": title, "plain": True, **({"i18n": {k: {"tool_name": v} for k, v in titles.items()}} if titles else {})}
+
+
+def _plain_step(name, inp):
+    """A titled tool's step: its label as a sentence, with each UI language's words under `i18n`."""
+    out = tool_head(name)
+    try:
+        step, steps = _langs(fn(inp)) if (fn := _custom_labels.get(name)) else ("", {})
+    except Exception:
+        step, steps = "", {}
+    i18n = out.pop("i18n", {})
+    for k, v in steps.items():
+        i18n.setdefault(k, {})["step"] = v
+    return {**out, "step": step[:200], **({"i18n": i18n} if i18n else {}), **_picture(name, inp)}
+
+
 def tool_step(name, input):
     inp = input or {}
     entry = _TOOLS.get(name)
     if entry:
         return entry.step(inp)
+    if name in _custom_titles:
+        return _plain_step(name, inp)
     shown = _custom_names.get(name, name)
     if fn := _custom_labels.get(name):
         try:
@@ -1285,6 +1378,8 @@ class ToolContext:
     auto: bool = True                    # the composer's switch: writes run on their own, destructive ones still ask
     modes: dict = None                   # the person's own allow/ask per builtin, read once a turn
     skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
+    office: frozenset = frozenset()      # "docs" / "sheets" when on this turn: bash keeps off their files (office/guard.py)
+    built: set = field(default_factory=set)   # Word / Excel files a bash command made this turn (they may be opened)
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)
@@ -1315,6 +1410,12 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
         seen.add(name)
     if entry and entry.run:
         step = {"type": "step", "id": bid, **entry.step(inp)}
+        # Before any approval card: a command opening a Word / Excel file that `docs` / `sheets` look after never runs.
+        if name == "bash" and getattr(ctx, "office", None):
+            from ..office import guard
+            if refused := guard.refusal(str(inp.get("command") or ""), workspace.root, ctx.office, ctx.built):
+                log("bash_refused", user=ctx.user, chat_id=ctx.chat_id, command=str(inp.get("command") or "")[:300])
+                return {**step, "ok": False}, asyncio.sleep(0, result=refused)
         if card := _gate(name, inp, ctx, step):
             return step, asyncio.sleep(0, result=card)
         return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)

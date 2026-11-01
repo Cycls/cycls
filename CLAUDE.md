@@ -61,16 +61,24 @@ cycls/
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
+    ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
+    │   └── editor.py       # the video editor's sessions on the service (Edit on the canvas → client video-editor-view.tsx) and the render it asks for
+    │   ├── client.py       # the door's API (contract, warm, compile, jobs, long-poll, the MP4 streamed to disk; a clip sent in pieces, ingest)
+    │   ├── contract.py     # the signed contract, verified (fallback.py: the built-in copy); tool.py — short and whole forms
+    │   └── run.py          # the executor (guide, write, edit, look, render, subtitles, dub, restore, voice, music, footage); files.py, media.py, report.py, stock.py (Pexels clips), subtitles.py (.srt/.vtt beside a render, and in each language translated by sentence), tidy.py (a talking clip's long pauses cut), sizes.py (one composition in several sizes: data-sizes, data-shape), dubbing.py (dub: the video said again in another language), brand.py + fonts.py (the brand kit and its font files in every video)
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
+    │   ├── skill.py        # the tool's own skills (skills/*.md: design-direction, graphic-design, deck-design, document-design), loaded by `skill`
     │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract
     │   ├── actions.py      # slide, section and file actions; a document rendered
     │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
     │   ├── extract.py      # a PDF taken apart to be made again; report.py — what the model is told; files.py — a design's files
-    │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py a design's preview made ready, live.py rooms, stock.py photos
+    │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py a design's preview made ready, live.py rooms, stock.py photos, assets.py the media library
     │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
+    ├── transcribe/         # cycls Transcribe tool + the mic, two engines: ElevenLabs Scribe (elevenlabs.py) and the cycls-transcribe service on Modal GPUs (client.py: Cohere Transcribe Arabic, Whisper); TRANSCRIBE_ENGINE picks the first; usage.py the daily allowance; docs/notes/transcribe.md
+    ├── office/             # Cycls Sheets / Cycls Docs: thin client to the cycls-office service (its own repo; Univer engine), org gating (SHEETS_ORGS/DOCS_ORGS), the agent's `sheets` tool (sheets.py: read / edit / create, live replay via sheets_command) and `docs` tool (docs.py); guard.py keeps bash off their files; docs/notes/office.md
     ├── paths.py            # a path a tool was given, kept inside the workspace
-    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design is imported from design/
+    ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design and Video are imported from their packages; ondemand.py swaps a tool's whole form in on first use
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
@@ -80,8 +88,8 @@ cycls/
     │   ├── events.py       # typed loop events + to_ui (FE projection)
     │   ├── compact.py      # compaction — tool-result clearing, then a summary; append-only marker, file ledger (docs/notes/compaction.md)
     │   └── prompts.py      # system + compaction prompts + workspace instructions (AGENT.md)
-    └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, what they share in shared.py), OG images, themes
-        └── voice.py        # the mic's speech-to-text, any OpenAI-shaped service, kept server-side (Web.voice); docs/notes/voice.md
+    └── web/                # FastAPI chat server, state routers (routers.py; a design's routes in design_routes.py, a composition's ?as=player in video_routes.py, what they share in shared.py), OG images, themes
+        └── voice.py        # the mic's speech-to-text, any OpenAI-shaped service, kept server-side (Web.voice) — behind the Transcribe engines when they are set; docs/notes/voice.md
 ```
 
 ## Core Architecture
@@ -151,8 +159,11 @@ tests/
 │   ├── chat_test.py             # to_ui_messages (FE projection) + _valid_prefix repair
 │   ├── harness_test.py          # build_tools, web search/fetch, cost math, _resolve_path, LLM builder
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
-│   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating
+│   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
+│   ├── video_test.py            # Video tool: client, signed contract, short/whole forms + the ondemand seam, executor, ?as=player
+│   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry
+│   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing

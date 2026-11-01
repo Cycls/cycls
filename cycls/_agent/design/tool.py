@@ -1,7 +1,13 @@
 """The Design tool's definition, and the short form a chat carries until it designs
 (`DESIGN_INSTRUCTIONS=on-demand`). The executor is run.py."""
 import contextvars, re
+from .skill import SKILLS, catalog
 
+_SKILLS_TEXT = (
+    "SKILLS — this tool carries its own: how to choose a look that isn't the same every time, and how to lay out "
+    "each kind of work well in few calls. Before the FIRST design of a kind in a chat, load what it needs in ONE "
+    "call — the look and the kind: {\"action\": \"skill\", \"skill\": [\"design-direction\", \"graphic-design\"]} "
+    "(nothing is made; the text stays with the chat):\n" + catalog() + "\n\n")
 
 # offered only when the design service is configured — else silently absent
 _DESIGN_TOOL = {
@@ -11,6 +17,7 @@ _DESIGN_TOOL = {
         "Create a visual design — a social-media post or a slide — and show it to "
         "the user on the canvas. You describe the design; the service renders it to "
         "an image and to an editable design file saved in the workspace.\n\n"
+        + _SKILLS_TEXT +
         "Two ways to call:\n"
         "- render {spec, name, format?} — the normal way. `spec` is a JSON design:\n"
         "    {\"size\": [W, H] | \"<preset>\", \"fill\": <paint>, \"nodes\": [ ... ]}\n"
@@ -30,7 +37,8 @@ _DESIGN_TOOL = {
         "\"font\"?:\"Playfair Display Bold\"|{\"family\":,\"style\":},\"weight\"?:100-900,\"italic\"?:bool,"
         "\"color\":<paint>,"
         "\"align\"?:\"left|center|right\",\"lineHeight\"?:px,\"letterSpacing\"?:px,\"opacity\"?:0-1,"
-        "\"h\"?:,\"fit\"?:\"shrink\"}  (with `h`, fit:\"shrink\" steps the size down until it fits the box)\n"
+        "\"h\"?:,\"fit\"?:\"shrink\",\"valign\"?:\"center|bottom\"}  (with `h`, fit:\"shrink\" steps the size down until it "
+        "fits the box, and valign sets the text in that box — a label on a shape)\n"
         "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
         "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
         "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h; "
@@ -43,6 +51,8 @@ _DESIGN_TOOL = {
         "    icon    {\"type\":\"icon\",\"name\":\"lucide:rocket\",\"x\":,\"y\":,\"size\":64,\"color\"?:}  any Iconify icon "
         "(sets: lucide, tabler, mdi, ph, heroicons, ri…)\n"
         "    svg     {\"type\":\"svg\",\"src\":\"brand/logo.svg\"|\"svg\":\"<svg…>\",\"x\":,\"y\":,\"w\":,\"h\"?:,\"color\"?:}  a logo or mark\n"
+        "    pattern {\"type\":\"pattern\",\"asset\":\"moroccan\",\"color\"?:,\"opacity\"?:0.12,\"scale\"?:1,\"x\"?:,\"y\"?:,\"w\"?:,\"h\"?:}  "
+        "one tile of the media library repeated over its box (no box: the whole frame) — FIRST in `nodes`, behind the text\n"
         "    qr      {\"type\":\"qr\",\"text\":\"https://…\",\"x\":,\"y\":,\"size\":240}\n"
         "    line    {\"type\":\"line\",\"from\":[x,y],\"to\":[x,y],\"color\":,\"width\"?:4,\"end\"?:\"arrow\",\"start\"?:\"arrow\"}  "
         "(a connector or pointer; the old x/y/w form is a divider)\n"
@@ -79,15 +89,32 @@ _DESIGN_TOOL = {
         "over the lower half (no hard edge across the photo) — and text with an explicit light "
         "`color` on top; the auto text colour only knows the frame's fill, not a photo. "
         "A round avatar = a square image with radius = w/2.\n"
+        "  Or NAME a picture of the MEDIA LIBRARY: \"asset\":\"paper texture\" in place of `src` — a few plain words, or "
+        "an id from {\"action\":\"assets\",\"query\":\"marble\"}, which lists what there is (`kind` narrows it). It "
+        "holds TEXTURES (over a thousand — paper, fabric, leather, marble, terrazzo, plaster, concrete, wood, metal, tiles, "
+        "sand…: a full-bleed image first in `nodes`, or over a colour at `opacity` 0.2–0.5 for grain); 3D EMOJI (nearly "
+        "every emoji, no country flags: rocket, trophy, gift, mosque, crescent, camel…) and 3D ICONS (120 objects, each also \"<name> clay\" — matt "
+        "white, sits with any brand colour — \"gradient\" and \"premium\", black and gold); these are cut-out PNGs only "
+        "256–400 px: ONE accent beside a headline, up to ~400 px, never a background; ILLUSTRATIONS (hand-drawn people and "
+        "scenes — an svg node); PATTERNS (a pattern node) and museum ORNAMENT (Islamic tiles, carpets, textiles, carved "
+        "panels — photos with their own background: `crop` them). A material alone can name an emoji (\"wood\" is a log): "
+        "say \"wood texture\". Words can also be what the design is FOR — an occasion (ramadan, eid, national day, founding "
+        "day, wedding, graduation), a subject (business, sale, education) or a mood (luxury, minimal, rustic) — and a row's "
+        "first tags say it; `inscription` (writing on it), `alcohol` and `pork` stay out of a brief for the Gulf. A texture "
+        "given no `w`/`h` fills the frame. It is saved to attachments/assets/; the result says which asset was taken "
+        "and, when its licence asks one, the credit to keep with the design. `pick`:1 takes the next match. These are finish, "
+        "not content: at most one texture or pattern and one or two objects in a design.\n"
         "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
         "— a drop shadow that lifts a card or button off the background.\n"
-        "  DESIGN — make it look intentional, not a wireframe: one clear idea, a strong "
+        "  DESIGN — the floor, not a style (`design-direction` has real ones) — make it look intentional, not a wireframe: one clear idea, a strong "
         "hierarchy (a big bold headline 72–120px, a small letter-spaced eyebrow ~24px "
         "with letterSpacing 4–6, a muted subtitle ~32px), a tight palette (a gradient "
         "or one background colour + white / near-white text + ONE accent), generous "
         "margins (~8–10% of the width), and a touch of depth (a shadow on the button or "
         "a card, or a big soft low-opacity ellipse bleeding off an edge for flair). "
-        "A pill button = a rect with radius = h/2 and centered text.\n"
+        "A pill button = a rect with radius = h/2, then a text with the SAME x, y, w, h and \"align\":\"center\", "
+        "\"valign\":\"center\" — two nodes in one box, never a stack (a stack sets its children one after another, "
+        "never on top of each other).\n"
         "  FONTS: any Google Font by its exact family name plus a style — \"Playfair Display "
         "Bold\", \"DM Sans Medium\", \"Montserrat Extra Bold Italic\", \"Bebas Neue\" — or "
         "{\"family\":\"Poppins\",\"style\":\"Semi Bold\"}; `weight` and `italic` work too; the "
@@ -119,7 +146,7 @@ _DESIGN_TOOL = {
         "- A presentation DECK: pass a deck of LAYOUTS — the normal way. You fill each slide's "
         "slots; the service lays them out, so every slide shares margins, title position, type "
         "scale, footer and page numbers, and nothing is placed by hand:\n"
-        "    {\"deck\": {\"theme\": \"editorial\", \"footer\"?: {\"text\": \"Brewly · Seed 2026\"}, \"slides\": [\n"
+        "    {\"deck\": {\"theme\": \"editorial\", \"look\"?: \"swiss\", \"footer\"?: {\"text\": \"Brewly · Seed 2026\"}, \"slides\": [\n"
         "      {\"layout\": \"title\", \"eyebrow\"?:, \"title\":, \"subtitle\"?:, \"meta\"?:, \"image\"?: \"attachments/hero.jpg\", \"notes\": \"…\"},\n"
         "      {\"layout\": \"bullets\", \"title\":, \"bullets\": [\"…\"], \"image\"?:, \"notes\": \"…\"}, … ]}}\n"
         "  Layouts and slots: title {eyebrow?, title, subtitle?, meta?, image? (full-bleed), align?:\"center\"} · "
@@ -137,7 +164,20 @@ _DESIGN_TOOL = {
         "slide also takes notes, transition, id. Images are workspace paths.\n"
         "  Themes: minimal-light, minimal-dark, bold-gradient, editorial, corporate, tech-dark, warm, mono, "
         "\"brand\" (the workspace brand kit — the default when one exists), or overrides on a base: "
-        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}. An Arabic slide is laid out "
+        "{\"base\":\"minimal-dark\",\"accent\":\"#f59e0b\",\"heading\":\"Sora Bold\"}.\n"
+        "  LOOK — the theme is colours and faces; \"look\" is how the slides are COMPOSED, and it is what keeps "
+        "one deck from being the same shape as the last: classic (titles at the head, a list, figures on cards) · "
+        "editorial (large titles under a running head, hairlines, numbered rows, figures set as type, a centred "
+        "quote) · swiss (each title in a column of its own beside the content, heavy rules, big numbers) · bold "
+        "(big type, the accent laid on as fields: accent tiles, section and quote slides in the accent, a split "
+        "title slide) · soft (centred titles, rounded cards, pills) · minimal (small titles, wide margins, "
+        "hairlines, title slides on the paper). None given: a theme named for one gives it (editorial, tech-dark → "
+        "swiss, warm → soft, mono → minimal, bold-gradient → bold), else what the piece says it is (a pitch → bold, "
+        "a report → editorial, a guide → swiss, a training → soft) — but choose it yourself: classic only when "
+        "asked for. A slide's \"style\" draws it another way "
+        "than its look — vary them for rhythm: bullets list|rows|numbers|cards|plain · stats "
+        "dividers|ruled|tiles|plain · two-column cards|ruled|contrast · quote mark|center|big|panel|card · "
+        "agenda list|rows|tiles · timeline line|ruled|steps · table band|rules|soft. An Arabic slide is laid out "
         "right-to-left and an English one left-to-right, automatically; a slide mixing both (an Arabic "
         "headline over English bullets) follows the deck's `dir` — set \"dir\":\"rtl\" on an "
         "Arabic-first bilingual deck (else the language with more words decides). Keep slide text short — titles shrink to fit their place, "
@@ -176,7 +216,7 @@ _DESIGN_TOOL = {
         "bare string; takes **bold**, *italic*, [links](https://…)) · \"h2\" · \"h3\" · \"bullets\" / "
         "\"numbered\": [..] · \"callout\": {title?, text, tone?} · \"quote\" + \"by\" · \"stats\": "
         "[{value, label}] · \"chart\": {kind, data} + \"title\", \"caption\" · \"table\": {columns, rows} + \"title\" "
-        "/ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"}) + \"caption\" — a photo is cropped "
+        "/ \"caption\" · \"image\": \"path\" (or {\"stock\": \"query\"} / {\"asset\": \"…\"}) + \"caption\" — a photo is cropped "
         "to a band, a diagram or screenshot shown whole (\"fit\": \"cover\"|\"contain\" to say) · "
         "\"columns\": [[blocks],[blocks]] · "
         "\"cards\": [{icon?, title, text}] · \"pairs\": [[label, value]] · \"note\" (a source) · "
@@ -191,11 +231,20 @@ _DESIGN_TOOL = {
         "limit?} (.csv, .tsv, .xlsx). A section opens a new page, or runs on under a few lines left over "
         "(\"break\": \"page\" forces one, \"none\" never). Write it as a real document: "
         "open each section with what it found, real numbers, a caption on every chart and table, short "
-        "paragraphs. The THEME (colours and faces) is yours to choose unless the user says: the workspace brand kit when "
-        "there is one (the default), else a theme that fits the subject — and its accent or fonts "
-        "overridden ({base, accent, heading, body}) when that fits better. The \"look\" composes the pages (the "
-        "margins, how a section opens, how a heading, callout or table is drawn): choose it for the kind of document — "
-        "left out, every document is \"classic\", its text set in beside a margin for asides. The cover sets the tone: "
+        "paragraphs. The LOOK is yours to choose unless the user says: a theme — the workspace brand kit when "
+        "there is one (the default), else one that fits the subject, its accent or fonts "
+        "overridden ({base, accent, heading, body}) when that fits better — and a \"look\", how the pages are "
+        "composed (none given: as a deck's — a proposal → bold, a report → editorial, a guide or CV → swiss, a letter "
+        "→ minimal, a brochure → soft): classic (the text set in beside a margin "
+        "for notes; callouts, stats and cards on the surface) · editorial (paragraphs set like a book's, indented "
+        "with no space between; sections open under a hairline; pull quotes; figures and cards under rules) · swiss "
+        "(headings hang in the margin beside their text, the section's number in the margin under a heavy rule, "
+        "nothing filled) · bold (the text the full width, sections open on a field of the accent, accent tiles, "
+        "filled callouts, dark cards) · soft (a centred column, centred openers, rounded panels with icons) · "
+        "minimal (wide margins, small-capital headings, outlined callouts, no running head). A callout, quote, "
+        "stats, cards or table block takes \"style\" to be drawn another way: callout box|rules|top|fill|soft|outline "
+        "· quote bar|pull|big|card|plain · stats cards|ruled|tiles|plain · cards fill|ruled|dark|soft|outline · "
+        "table band|rules|accent|zebra. The cover sets the tone (the look's when none is given): "
         "\"full\" (the theme's dark colour — or a photo, \"image\" — the title at the foot), \"split\" (the "
         "title on a dark panel beside a full-height photo), \"type\" (the whole page in the accent, the "
         "title large: no photo needed), \"band\", \"minimal\" (quiet: a letterhead, a legal paper); and "
@@ -312,13 +361,16 @@ _DESIGN_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
                                               "add_section", "update_section", "move_section", "delete_section", "update_document", "extract",
-                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments"],
-                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it."},
+                                              "export", "rename", "duplicate", "delete", "versions", "restore", "comments", "assets", "skill"],
+                   "description": "`render` a JSON spec (normal), run a raw `script` (escape hatch), `inspect` a rendered design (its frames and named nodes; a document's sections), `edit` it (checked, saved, replayed live in the editor), change a deck's slides: add_slide / update_slide / move_slide / duplicate_slide / delete_slide, change a document: add_section / update_section / move_section / delete_section / update_document, `extract` an existing PDF's text and pictures, `export` a saved design as another file, handle a design as a file: rename / duplicate / delete / versions / restore, or read and answer the `comments` people pinned on it; `assets` lists the media library's pictures (`query`, `kind`) and `skill` loads this tool's skills (`skill`) — nothing is made."},
+        "skill": {"type": ["string", "array"], "items": {"type": "string"}, "description": f"For `skill`: the skills to load, in one call — {', '.join(SKILLS)}."},
+        "query": {"type": "string", "description": "For `assets`: words to look for in the media library — a thing (paper, marble, rocket, people…), an occasion (ramadan, national day…) or a mood (luxury, minimal…); none lists all of a `kind`."},
+        "kind": {"type": "string", "description": "For `assets`: one kind only — texture, pattern, emoji-3d, icon-3d, illustration or art."},
         "new_name": {"type": "string", "description": "For `rename`: the design's new name. For `duplicate`: the copy's name (default <name>-copy)."},
         "version": {"type": ["string", "integer"], "description": "For `restore`: the version to go back to — its id from `versions`, or its place there (1 = the newest)."},
         "section": {"type": "object", "description": "For add_section / update_section: the section {title, blocks: […]}. update_section takes just the keys that change — {blocks} rewrites it, {title} renames it."},
         "sections": {"type": "array", "items": {"type": "object"}, "description": "For add_section: several sections added in one call, in order, each as `section` is; the document is laid out once. With `at`, the first lands there and the rest follow it."},
-        "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, cover, size, footnotes, numbering… (null removes one). Not its sections."},
+        "document": {"type": "object", "description": "For update_document: the document's own keys that change — title, subtitle, author, date, theme, look, cover, size, footnotes, numbering… (null removes one). Not its sections."},
         "path": {"type": "string", "description": "For `extract`: the PDF in the workspace, e.g. attachments/report.pdf."},
         "page": {"type": ["string", "integer"], "description": "For `inspect` / `edit` on a design with several pages: the page's name (default: the first page). For `extract`: the PDF's page to look at, a number from 1."},
         "area": {"type": "array", "items": {"type": "number"}, "description": "For `extract` with `page`: the part of that page to cut out and save as a picture — [left, top, width, height], each a part of the page from 0 to 1."},
@@ -336,8 +388,8 @@ _DESIGN_TOOL = {
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
-                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src}; add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
-        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, footer?, slides:[{layout, …slots, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src} (or `stock` / `asset` in place of `src`); add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
+        "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, look?, footer?, slides:[{layout, …slots, style?, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
         "intent": {"type": "string",
@@ -355,6 +407,22 @@ _DESIGN_TOOL = {
 # DESIGN_LOADED is which form the model saw; `_exec_design` reads it.
 
 DESIGN_LOADED = contextvars.ContextVar("design_loaded", default=True)
+# Has this chat loaded the tool's skills? Set by the loop before its tools run; a render without
+# them says which to load. Unset (a test, a caller with no chat) counts as loaded: nothing is said.
+DESIGN_SKILLED = contextvars.ContextVar("design_skilled", default=True)
+
+
+def design_skills_loaded(messages):
+    """Has this chat loaded any of the Design tool's skills?"""
+    for m in messages:
+        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"
+               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in m["content"]):
+            return True
+    return False
+
+
 # The folder the person has open in Files: where a design named without a folder is saved.
 DESIGN_FOLDER = contextvars.ContextVar("design_folder", default="")
 
@@ -367,7 +435,8 @@ _DESIGN_SHORT = (
     "This is the SHORT form of the tool — how a design is written is not in it. Before your first use of it "
     "in a chat, call it with {\"action\": \"guide\"}: its full instructions load into this description. Then "
     "make the call you meant. (A call made before that is not run — it loads the instructions and asks you "
-    "to call again.)"
+    "to call again.) Its skills — " + ", ".join(SKILLS) + " — load with {\"action\": \"skill\", \"skill\": "
+    "[…]}, which loads the full instructions too."
 )
 _GUIDE_LOADED = ("Design's instructions are loaded: this tool's description now holds them in full — how a "
                  "design is written, deck layouts and themes, documents, edits and the rest. Read them, then "
@@ -419,7 +488,8 @@ def _design_short():
     props["action"]["description"] = (
         "guide — load this tool's full instructions (first). Then: render, edit, inspect, extract, script, "
         "add_slide, update_slide, move_slide, duplicate_slide, delete_slide, add_section, update_section, "
-        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments.")
+        "move_section, delete_section, update_document, export, rename, duplicate, delete, versions, restore, comments, assets, "
+        "skill (loads this tool's skills, and its instructions with them).")
     return {**{k: v for k, v in _DESIGN_TOOL.items() if k not in ("description", "input_schema")},
             "description": _DESIGN_SHORT,
             "input_schema": {"type": "object", "properties": props, "required": ["action"]}}

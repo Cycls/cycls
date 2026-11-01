@@ -28,6 +28,7 @@
     "framer-motion": "^12.35.0",
     "katex": "^0.16.38",
     "lexical": "0.51.0",
+    "lightweight-charts": "^5.2.1",
     "liquid-gl": "3.0.0",
     "posthog-js": "^1.369.3",
     "react": "^19",

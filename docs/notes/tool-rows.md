@@ -71,6 +71,11 @@ never sees. A call made again after a change gets a new answer and starts its ow
 so checking work after editing it is never noted. Polling a job that answers "still running"
 each time is the one honest repeat it notes; it ends the run only at the 8th.
 
+Failed calls in a row, each one different, are counted apart (`STREAK_WARN`, `STREAK_STOP`): the
+10th failure running carries a note (rethink the approach, or say what is in the way), and the
+25th stops the turn with a `Stopped:` callout. A call that works resets the count, so a long
+working turn is never cut off. A result carries one note at most, the repeat's first.
+
 ## Return shapes a tool may use
 
 `run` can answer in four ways. The loop checks them in this order:

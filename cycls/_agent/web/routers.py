@@ -20,8 +20,10 @@ from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt, skills
 from cycls._agent.connectors import approval_key
-from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, resolve_path
+from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
+from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
+from cycls._agent.web.office_routes import office_router, office_views
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -40,6 +42,17 @@ def _search_rows(body):
     if not isinstance(rows, list):
         return []
     return [r for r in rows if isinstance(r, dict) and r.get("url")]
+
+
+def _call_window(usage):
+    """When a model call began and ended, in epoch ms, as `at` stamps for the parts it wrote: its thinking and text
+    from the start, its tool calls at the end. The chat times a stretch of work by them. None for a call saved
+    without timing."""
+    try:
+        end = int(datetime.fromisoformat(usage["at"]).timestamp() * 1000)
+        return {"at": end - int(usage.get("ms") or 0)}, {"at": end}
+    except (TypeError, KeyError, ValueError):
+        return {}, {}
 
 
 def to_ui_messages(raw):
@@ -127,16 +140,17 @@ def to_ui_messages(raw):
         elif role == "assistant":
             blocks = c if isinstance(c, list) else [{"type": "text", "text": c}] if isinstance(c, str) else []
             parts, texts = [], []
+            began, ended = _call_window(msg.get("usage"))
             for b in blocks:
                 if not isinstance(b, dict):
                     continue
                 t = b.get("type")
                 if t == "text":
-                    parts.append({"type": "text", "text": b.get("text", "")}); texts.append(b.get("text", ""))
+                    parts.append({"type": "text", "text": b.get("text", ""), **began}); texts.append(b.get("text", ""))
                 elif t == "thinking":
-                    parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
+                    parts.append({"type": "thinking", "thinking": b.get("thinking", ""), **began})
                 elif t == "tool_use":
-                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))}
+                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input")), **ended}
                     if b.get("id") in errored:
                         part["ok"] = False
                     if detailed(b.get("name", "")):
@@ -164,6 +178,11 @@ def to_ui_messages(raw):
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
                 out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    for m in out:   # what a tool showed (a chart, a file) appeared when its results came back: as the next call began
+        after = None
+        for p in reversed(m.get("parts") or []):
+            if "at" in p: after = p["at"]
+            elif after is not None and p.get("type") in ("chart", "step", "sources", "image"): p["at"] = after
     waiting = []   # a card still waiting when the person typed something else was skipped
     for m in out:
         if m["role"] == "assistant":
@@ -410,6 +429,8 @@ _PUBLIC = ("name", "path", "type", "size", "modified", "kind")
 
 
 def _kind(name):
+    if _composition(name):
+        return "composition"               # a Video composition: the player (?as=player), not a page
     return _KIND_BY_EXT.get(name.rpartition(".")[2].lower() if "." in name else "", "opaque")
 
 
@@ -765,6 +786,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if request.query_params.get("as") in _DESIGN_AS and _design_doc(file_path.name):
             return await _design_response(ws.root, file_path, request.query_params["as"], ws.subject,
                                           request.query_params.get("page"))
+        # A Video composition plays from the page the video service builds of it (video_routes.py).
+        if request.query_params.get("as") == "player" and _composition(file_path.name):
+            return JSONResponse(await _video_response(ws.root, file_path, ws.subject, getattr(ws, "ws", None)),
+                                headers=_NO_CACHE)
         # ?as=slides previews a presentation as a slide viewer — a JSON manifest
         # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
         # the deck slide-by-slide rather than as a flat PDF.
@@ -785,29 +810,32 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return FileResponse(pdf, media_type="application/pdf", headers=_NO_CACHE)
         if request.query_params.get("download") is not None:
             return FileResponse(file_path, filename=file_path.name, headers=_NO_CACHE)
-        if file_path.suffix.lower() == ".fig":
-            # X-Version of the very bytes served: what a save names as its `base` (design/store.py)
+        if _versioned(file_path.name):
+            # X-Version of the very bytes served (a design, a video or its words): what a save names as its
+            # `base`, read as the save checks it — from the bucket in production (design/store.py)
             from cycls._agent.design.store import load_fig
             data, version = await load_fig(file_path.parent, file_path.name)
             if data is None:
                 raise HTTPException(status_code=404, detail="File not found")
-            return Response(data, media_type="application/octet-stream",
-                            headers={**_NO_CACHE, "X-Version": version})
+            kind = ("application/octet-stream" if file_path.suffix.lower() == ".fig"
+                    else "text/html; charset=utf-8" if _composition(file_path.name) else "application/json")
+            return Response(data, media_type=kind, headers={**_NO_CACHE, "X-Version": version})
         return FileResponse(file_path, headers=_NO_CACHE)
 
     @r.put("/files/{path:path}")
-    async def put_file(path: str, request: Request, ws: Workspace = ws_dep):
+    async def put_file(path: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
         """Streams the raw body to a .part temp, then renames. No File(...)
         param — that reads the whole body before auth runs, so uploads longer
         than the JWT lifetime 401 at the end. Multipart kept for old clients.
-        `?dedupe=1` writes to the next free name (the reply's `path`). A `.fig` goes through
-        `write_fig`: `?base=<X-Version>` must be current, else 412; `?force=1` overrides."""
+        `?dedupe=1` writes to the next free name (the reply's `path`). A `.fig`, a `.video.html` (at most
+        400,000 bytes) and a `.words.json` go through `write_fig`: `?base=<X-Version>` must be current, else
+        412; `?force=1` overrides; what it replaces is kept as a version."""
         dedupe = request.query_params.get("dedupe") is not None
         if dedupe:
             _safe_path(ws.root, path)
             path = _free_rel(ws.root, unicodedata.normalize("NFC", path))
         file_path = _safe_path(ws.root, path)
-        design_file = file_path.suffix.lower() == ".fig" and not dedupe
+        design_file = _versioned(file_path.name) and not dedupe
         limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
         if int(request.headers.get("content-length") or 0) > max_bytes:
             raise HTTPException(413, limit_msg)
@@ -846,13 +874,18 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             from cycls._agent.design.store import Stale, write_fig
             data = await asyncio.to_thread(tmp.read_bytes)
             tmp.unlink(missing_ok=True)
+            video_file = _composition(file_path.name)
+            if video_file and len(data) > _VIDEO_HTML_LIMIT:
+                raise HTTPException(413, f"A video is at most {_VIDEO_HTML_LIMIT:,} bytes")
             force = request.query_params.get("force") is not None
             try:
                 reply["version"] = await write_fig(ws.root, rel, data, base=request.query_params.get("base") or None,
-                                                   by="user", reason="keep" if force else "save", force=force)
+                                                   by="user", reason="keep" if force else "save", force=force,
+                                                   who=person(user, ws))
             except Stale as e:
+                what = "video" if video_file else "file" if file_path.name.endswith(".words.json") else "design"
                 return JSONResponse(status_code=412, content={
-                    "detail": "This design changed since it was opened.", "version": e.current})
+                    "detail": f"This {what} changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
         design_refresh.schedule(ws.root, rel, ws.subject)   # a design's preview, made ready
         return reply
@@ -938,7 +971,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                 await asyncio.to_thread(versions.move, ws.root, Path(rel).as_posix(), Path(dst).as_posix())
             except OSError as e:   # never fail a rename that already happened
                 log("warn", message=f"history of {rel} did not follow it to {dst}: {type(e).__name__}: {e}")
-            if dest.suffix.lower() == ".fig" and Path(rel).suffix.lower() == ".fig":
+            if _commentable(dest.name) and _commentable(rel) and Path(rel).suffix.lower() == dest.suffix.lower():
                 await _comments(ws, "move", Path(rel).as_posix(), Path(dst).as_posix())   # …and what was said about it
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
@@ -964,13 +997,17 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if trash.owned_by_app(rel) and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
-        if meta["kind"] == "file" and rel.lower().endswith(".fig"):
-            await _comments(ws, "shelve", Path(rel).as_posix(), meta["id"])   # a new design of that name starts with none
+        if meta["kind"] == "file" and _commentable(rel):
+            await _comments(ws, "shelve", Path(rel).as_posix(), meta["id"])   # a new file of that name starts with none
         _catalog_drop(ws.root)
         return {"ok": True, "trash_id": meta["id"], "kind": meta["kind"]}
 
+    def _commentable(name):
+        from cycls._agent.design import comments
+        return comments.commentable(name)
+
     async def _comments(ws, what, *args):
-        """A design's comments follow it (comments.py: move, shelve, unshelve, drop); a failure only logs."""
+        """A design's or workbook's comments follow it (comments.py: move, shelve, unshelve, drop); a failure only logs."""
         from cycls._agent.design import comments
         try:
             await getattr(comments, what)(ws, *args)
@@ -1036,7 +1073,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             path = await asyncio.to_thread(trash.restore, ws.root, tid)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Not found")
-        if path.lower().endswith(".fig"):
+        if _commentable(path):
             await _comments(ws, "unshelve", tid, Path(path).as_posix())
         _catalog_drop(ws.root)
         return {"ok": True, "path": path}
@@ -1359,16 +1396,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return {"type": "file", "path": path[5:],
                 "url": f"/share/{user}/{token}/file/{path[5:]}{suffix}", **common}
 
-    @r.get("/share/{user}/{token}/file/{file_path:path}")
-    async def shared_attachment(
-        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
-        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-    ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
+    async def _covered(user, token, file_path, bearer, ws_q):
+        """The owner's workspace, when the share covers file_path: the share's file (file share), or part of its
+        chat's shareable surface — an attachment, or a canvas artifact the conversation produced (the shared page
+        shows the chat WITH its output)."""
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws_q)
         path = row["path"]
-        # Authorize: file_path must be the share's file (file share), or part of
-        # its chat's shareable surface — an attachment, or a canvas artifact the
-        # conversation produced (the shared page shows the chat WITH its output).
         if path.startswith("file/"):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
@@ -1379,6 +1412,37 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
+        return ws_owner
+
+    # A shared workbook or Word document opens in Cycls Sheets / Docs, view only: whether it may (the owner's
+    # organisation has the editor) and what the editor opens, the owner's routes' answers for a file the share
+    # covers. The editor is never sent a save route; the read is cached by version, so viewers cost one read each.
+    @r.get("/share/{user}/{token}/office/{product}")
+    async def shared_office(
+        user: str, token: str, product: str, path: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        view = office_views().get(product)
+        if view is None:
+            raise HTTPException(404, "No such editor")
+        return await view["check"](await _covered(user, token, path, bearer, ws), path)
+
+    @r.get("/share/{user}/{token}/office/{product}/open")
+    async def shared_office_open(
+        user: str, token: str, product: str, path: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        view = office_views().get(product)
+        if view is None:
+            raise HTTPException(404, "No such editor")
+        return await view["open"](await _covered(user, token, path, bearer, ws), path, mirror=False)
+
+    @r.get("/share/{user}/{token}/file/{file_path:path}")
+    async def shared_attachment(
+        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        ws_owner = await _covered(user, token, file_path, bearer, ws)
         # ?as=slides / ?as=pdf preview an Office file (read-only — shares aren't
         # editable). Same convert+cache path as get_file, over the owner's
         # workspace. Presentations get the slide viewer; everything else, PDF.
@@ -1393,6 +1457,16 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                 raise HTTPException(404, "File not found")
             return await _design_response(ws_owner.root, target, as_, ws_owner.subject,
                                           request.query_params.get("page"))
+        # A shared composition is a download: never run as a page on this origin, never sent
+        # through the video service for someone else. To share a video, share its MP4.
+        if _composition(file_path):
+            try:
+                target = resolve_path(ws_owner.root, file_path)
+            except ValueError:
+                raise HTTPException(403, "Path traversal denied")
+            if not target.is_file():
+                raise HTTPException(404, "File not found")
+            return FileResponse(target, filename=target.name, media_type="application/octet-stream", headers=_NO_CACHE)
         if as_ in ("slides", "pdf") and office.convertible(file_path):
             try:
                 target = resolve_path(ws_owner.root, file_path)
@@ -2310,6 +2384,8 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(skills_router(ws_dep, required_auth))
     app.include_router(files_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
+    app.include_router(video_router(ws_dep, _catalog_drop))
+    app.include_router(office_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     if mode:

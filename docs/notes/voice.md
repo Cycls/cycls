@@ -34,6 +34,11 @@ cycls.Web().voice(False)   # no mic
 `Config.transcription` carries the setting, and `voice.resolve` turns it into what the server runs as it starts.
 `Config.voice` (whether the mic shows) is set from that, never by hand.
 
+**With the Transcribe engines set up** (`TRANSCRIBE_URL` for the cycls-transcribe service, `ELEVENLABS_API_KEY`
+for ElevenLabs; docs/notes/transcribe.md), the mic hears through them first: the first engine, then the other,
+with the day's allowance counted and refused (429, its own sentence, which the browser shows). The `.voice()`
+service is the last resort behind them, when both are down. `Web().voice(False)` still means no mic at all.
+
 ## One shape: OpenAI's audio transcriptions API
 
 There is no API every service speaks natively. OpenAI's `/audio/transcriptions` comes closest, and it is the one

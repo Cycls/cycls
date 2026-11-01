@@ -397,6 +397,28 @@ describe("designs in the canvas", () => {
     }
   });
 
+  it("an editor full screen leaves it when another tab is shown, rather than a blank screen", async () => {
+    // The agent opens a file while the person works full screen: the editor's tab goes invisible under it.
+    let full: Element | null = null;
+    const exit = vi.fn(async () => { full = null; });
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => full });
+    Object.defineProperty(document, "exitFullscreen", { configurable: true, value: exit });
+    try {
+      const { container, rerender } = render(canvas("designs/a.fig"));
+      await flush();
+      await toEdit();
+      full = container.querySelector("iframe")!.parentElement;
+      rerender(canvas("designs/a.fig"));                                    // the same tab: stays
+      expect(exit).not.toHaveBeenCalled();
+      rerender(canvas("notes.md"));
+      await flush();
+      expect(exit).toHaveBeenCalledOnce();
+    } finally {
+      delete (document as unknown as Record<string, unknown>).fullscreenElement;
+      delete (document as unknown as Record<string, unknown>).exitFullscreen;
+    }
+  });
+
   it("offers New design in the + menu, with the server's sizes", async () => {
     const onNewDesign = vi.fn();
     render(canvas("notes.md", { onAddFile: () => {}, searchFiles: async () => [], onNewDesign }));
