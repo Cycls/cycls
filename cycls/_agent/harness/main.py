@@ -375,12 +375,12 @@ async def _stream_with_retry(provider, **kw):
             if _is_retryable(e) and attempt < MAX_RETRIES:
                 attempt += 1
                 delay = _retry_delay(attempt, e)
-                yield events.step("The service is busy, trying again...", id=notice)
+                yield events.step(f"The service is busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
             elif _dropped(e) and not shown and dropped < MAX_DROPPED and time.monotonic() - began < DROPPED_WITHIN:
                 dropped += 1
                 delay = _retry_delay(dropped + 2)
                 log("warn", message=f"model connection dropped, trying again ({dropped}/{MAX_DROPPED}): {_cause(e)}")
-                yield events.step("The service is busy, trying again...", id=notice)   # the person's words; the log has the cause
+                yield events.step(f"The service is busy, retrying in {delay:.1f}s... (attempt {dropped}/{MAX_DROPPED})", id=notice)   # the log has the cause
             else:
                 raise
             await asyncio.sleep(delay)

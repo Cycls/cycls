@@ -5,7 +5,7 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { accountError, calloutText, failure } from "../src/lib/errors";
 import { track } from "../src/lib/analytics";
-import { setLang } from "../src/lib/i18n";
+import { setLang, stepText } from "../src/lib/i18n";
 
 vi.mock("../src/lib/analytics", () => ({ track: vi.fn() }));
 
@@ -61,4 +61,11 @@ describe("a callout the server names by code reads in the reader's language", ()
     expect(calloutText({ style: "warning", callout: "This chat is already working on a reply." }))
       .toBe("This chat is already working on a reply.");
   });
+});
+
+test("the loop's retry line says when and which try, in the reader's language", () => {
+  const line = "The service is busy, retrying in 4.2s... (attempt 2/5)";
+  expect(stepText(line)).toBe("The service is busy, retrying in 4.2s… (attempt 2/5)");
+  setLang("ar");
+  expect(stepText(line)).toBe("الخدمة مشغولة، نعيد المحاولة بعد 4.2 ثانية… (المحاولة 2 من 5)");
 });

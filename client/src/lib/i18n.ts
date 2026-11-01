@@ -410,7 +410,7 @@ const translations = {
     reference: "Reference",
     failedRef: "Something went wrong. Reference: {ref}",
     serviceBusyRef: "The service is busy right now. Try again in a minute. Reference: {ref}",
-    serviceBusyRetrying: "The service is busy, trying again…",
+    serviceBusyRetrying: "The service is busy, retrying in {s}s… (attempt {a}/{n})",
     continuingReply: "Continuing the reply…",
     cantAnswer: "This request couldn't be answered. Try rewording it.",
     signedOut: "You were signed out. Sign in again to continue.",
@@ -1129,7 +1129,7 @@ const translations = {
     reference: "المرجع",
     failedRef: "حدث خطأ ما (المرجع: {ref})",
     serviceBusyRef: "الخدمة مشغولة الآن، حاول مجددًا بعد دقيقة (المرجع: {ref})",
-    serviceBusyRetrying: "الخدمة مشغولة، جارٍ المحاولة مجددًا…",
+    serviceBusyRetrying: "الخدمة مشغولة، نعيد المحاولة بعد {s} ثانية… (المحاولة {a} من {n})",
     continuingReply: "جارٍ إكمال الرد…",
     cantAnswer: "تعذّرت الإجابة عن هذا الطلب، جرّب صياغته بطريقة أخرى",
     signedOut: "انتهت جلستك، سجّل الدخول مجددًا للمتابعة",
@@ -1478,10 +1478,15 @@ export function timeAgo(iso: string): string {
 // The server's own step lines, in the UI's language.
 const SERVER_STEPS: Record<string, keyof typeof translations.en> = {
   "Summarizing earlier messages to keep this chat going...": "compacting",
-  "The service is busy, trying again...": "serviceBusyRetrying",
   "Continuing the reply...": "continuingReply",
 };
-export const stepText = (s: string) => (SERVER_STEPS[s] ? t(SERVER_STEPS[s]) : s);
+// The loop's retry line carries its wait and its count, so it is read by its shape rather than looked up.
+const RETRYING = /^The service is busy, retrying in ([\d.]+)s\.\.\. \(attempt (\d+)\/(\d+)\)$/;
+export const stepText = (s: string) => {
+  const r = RETRYING.exec(s);
+  if (r) return t("serviceBusyRetrying").replace("{s}", r[1]).replace("{a}", r[2]).replace("{n}", r[3]);
+  return SERVER_STEPS[s] ? t(SERVER_STEPS[s]) : s;
+};
 
 // A step's tool name and line in the UI's language, where its tool gave them (`.on(title=…)`).
 export function localStep<P extends { tool_name?: string; step?: string; i18n?: Record<string, { tool_name?: string; step?: string }> }>(p: P): P {

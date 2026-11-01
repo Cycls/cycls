@@ -3,7 +3,7 @@
 Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
 """
-import asyncio, json, os
+import asyncio, json, os, re
 import sys
 import types
 from pathlib import Path
@@ -1597,7 +1597,8 @@ def test_auto_retry_on_overloaded(agent_env):
     assert call_count == 3
     # The attempts are one line in plain words: they share a step id.
     notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "busy" in i.get("step", "")]
-    assert [n["step"] for n in notices] == ["The service is busy, trying again..."] * 2
+    assert [re.sub(r"in [\d.]+s", "in Xs", n["step"]) for n in notices] == [
+        f"The service is busy, retrying in Xs... (attempt {n}/{MAX_RETRIES})" for n in (1, 2)]
     assert notices[0]["id"] == notices[1]["id"] and notices[0]["id"].startswith("retry-")
 
 
@@ -1647,7 +1648,8 @@ def test_a_connection_dropped_before_the_answer_is_tried_again():
     p = _Flaky([([], APIConnectionError("Connection error.")), (["hi", done], None)])
     out = _through_retry(p)
     assert p.calls == 2 and out[-1] is done and "hi" in out
-    assert any(isinstance(e, dict) and e.get("step") == "The service is busy, trying again..." for e in out)
+    assert any(isinstance(e, dict) and re.fullmatch(rf"The service is busy, retrying in [\d.]+s\.\.\. \(attempt 1/{MAX_DROPPED}\)", e.get("step", ""))
+               for e in out)
 
 
 def test_a_connection_dropped_mid_answer_is_not_tried_again():
