@@ -1,6 +1,6 @@
 import type { PollApi } from "../lib/polls";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
@@ -62,6 +62,7 @@ type PanelTab = "files" | "shares" | "chats" | "apps" | "trash";
 export interface AccountInfo {
   user: UserInfo;
   plan?: PlanInfo;
+  freePlan?: boolean;   // the top bar's Subscribe: billing on for this agent, the payer on a free plan
   org?: { id: string; name: string } | null;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
@@ -141,7 +142,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
   const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
-  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
+  const { user, plan, freePlan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
@@ -1039,6 +1040,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           <div className="flex items-center gap-1">
             {/* Desktop only; on a phone it stays a row inside the user menu */}
             {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
+            {user && freePlan && <SubscribeButton onClick={() => openPricing(activeOrg ? "organization" : "user", "header")} />}
             {messages.length > 0 && (
               <>
                 <button
@@ -1829,6 +1831,26 @@ function RunIndicator({ step, startedAt, onStop }: {
         </button>
       </div>
     </motion.div>
+  );
+}
+
+// The top bar's way to the plans, for a payer on a free plan: from the first screen it says this is a paid service.
+// Outlined, the one touch of colour its star in the brand's blue and orange.
+function SubscribeButton({ onClick }: { onClick: () => void }) {
+  const id = useId().replace(/\W/g, "");   // a url(#…) reference doesn't take useId's colons
+  return (
+    <button type="button" onClick={onClick} dir="auto"
+            className="me-1 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border ps-2.5 pe-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary">
+      <svg viewBox="0 0 24 24" className="size-3 shrink-0" aria-hidden>
+        <defs>
+          <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0.2" stopColor="#3171F6" /><stop offset="0.8" stopColor="#EF8733" />
+          </linearGradient>
+        </defs>
+        <path fill={`url(#${id})`} d="M12 0l1.11 3.78c.98 3.43 3.68 6.12 7.11 7.12L24 11.98l-3.78 1.09c-3.43 1-6.13 3.69-7.11 7.12L12 24l-1.11-3.78c-.98-3.43-3.68-6.12-7.11-7.11L0 12.02l3.78-1.09c3.43-1 6.13-3.69 7.11-7.12L12 0z" />
+      </svg>
+      {t("subscribeShort")}
+    </button>
   );
 }
 

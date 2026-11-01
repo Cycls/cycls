@@ -20,6 +20,7 @@ import { arCheckout } from "./lib/clerk-ar";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
 import { markSignup, detectSignup, startSignup } from "./lib/signup";
+import { onFreePlan } from "./lib/commerce";
 import { accountError } from "./lib/errors";
 import { IconButton } from "./components/icon";
 import { Star } from "./components/cycls-star";
@@ -212,6 +213,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       amount: subItem.amount,
       planPeriod: subItem.planPeriod,
     } : undefined,
+    freePlan: !!config?.plans && onFreePlan(subscription),   // an agent that sells plans, a payer on its free one
     org: organization ? { id: organization.id, name: organization.name } : null,
     activeOrg: organization ? { id: organization.id, name: organization.name, imageUrl: organization.imageUrl } : undefined,
     orgs: (userMemberships?.data || []).map((m) => ({ id: m.organization.id, name: m.organization.name, imageUrl: m.organization.imageUrl })),

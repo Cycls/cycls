@@ -212,7 +212,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 |---|---|---|
 | `paywall_shown` | the **agent** forces the plan modal; a limit opens it once a period on each device, as the reply that used the last of it ends or at the refusal after it, and after that the line and the note carry it | `reason` (`limit` / `plan_required`) — friction, not curiosity |
 | `limit_reached` | free-tier cap specifically | |
-| `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall); `source` `usage` is the limit's line or note, `why` `limit` when the limit opened it; closed by `not_now`, `dismiss`, `backdrop` or `select` | `source`, `why`, `method` |
+| `plan_modal_opened` / `plan_modal_closed` | any plans view (superset of paywall); `source` `usage` is the limit's line or note, `header` the top bar's Subscribe (a free plan, on an agent that sells plans), `why` `limit` when the limit opened it; closed by `not_now`, `dismiss`, `backdrop` or `select` | `source`, `why`, `method` |
 | `checkout_start` | checkout clicked | `plan_name`, `plan_id`, `billing_period`, `value` (what the chosen period charges, Clerk's minor units ÷ 100 — annual is the annual total), `currency` (from Clerk), `payer_type`, `is_free`, `previous_plan` when switching plans, `why` (`limit` or `menu`: what opened the window) |
 | `purchase` | Clerk confirms a **paid** checkout — a free plan is not revenue and never purchases | same, + `transaction_id` |
 | `plan_manage_clicked` | manage-subscription | |
