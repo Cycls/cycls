@@ -63,8 +63,9 @@ const panel = (stops: string[] | null) => {
 };
 
 
-// Apps sits under Skills, and only on an agent that declares a catalog (`cycls.Web().apps(...)`).
-const RAIL = ["connectors", "skills", "apps"] as const;
+// Apps sits under Skills, and only on an agent that declares a catalog (`cycls.Web().apps(...)`);
+// Games under Apps, once that catalog holds a bundle with section "games".
+const RAIL = ["connectors", "skills", "apps", "games"] as const;
 export type Tab = (typeof RAIL)[number];
 const H4 = "mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground";
 const CARD = "rounded-xl border border-border bg-background/40 px-4";
@@ -94,7 +95,12 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
   apps?: { onOpen: (entry: string, name: string) => void; onChanged?: () => void; view?: "browse" | "theme" };
 }) {
   const isAr = useLang() === "ar";
-  const rail = RAIL.filter((k) => k !== "apps" || !!apps);
+  const [games, setGames] = useState(false);
+  useEffect(() => {
+    if (apps) api("/apps/catalog", { silent: true }).then((r) => r.json())
+      .then((d) => setGames((d.apps ?? []).some((a: { section?: string }) => a.section === "games"))).catch(() => {});
+  }, [!!apps]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const rail = RAIL.filter((k) => (k !== "apps" || !!apps) && (k !== "games" || games));
   const [tab, setTab] = useState(initialTab);
   const [cat, setCat] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -234,8 +240,8 @@ export function ConnectorsDialog({ api, items, reload, initial, initialTab = "co
           </aside>
 
           <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6">
-            {tab === "apps" && apps ? <AppsCatalog api={api} initialView={apps.view} onChanged={apps.onChanged}
-                onOpen={(entry, name) => { apps.onOpen(entry, name); onClose(); }} />
+            {(tab === "apps" || tab === "games") && apps ? <AppsCatalog key={tab} api={api} initialView={apps.view} onChanged={apps.onChanged}
+                section={tab === "games" ? "games" : ""} onOpen={(entry, name) => { apps.onOpen(entry, name); onClose(); }} />
             : tab === "skills" ? <SkillsPanel api={api} onAsk={(text) => { onAsk(text); onClose(); }} /> : detail ? (
               <Detail c={detail} api={api} onBack={() => setOpen(null)} onConnect={connect} onSaveKey={saveKey} onDisconnect={disconnect} onAllow={allow} onUse={use} onPrompt={usePrompt} />
             ) : (

@@ -125,6 +125,14 @@ def test_an_app_is_seen_before_it_is_installed(tmp_path, shelf):
     assert not (_personal(vol, "user_1") / "apps" / "tasks" / "preview.webp").exists()
 
 
+def test_a_game_says_so_in_its_section(tmp_path, shelf):
+    """app.json's section reaches the listing, where the client puts "games" under Games instead of Apps."""
+    _bundle(shelf, "kart", name="Kart", section="games")
+    client, _ = _client(tmp_path, shelf)
+    rows = _rows(client)
+    assert rows["kart"]["section"] == "games" and "section" not in rows["tasks"]
+
+
 def test_install_never_overwrites_a_users_own_app(tmp_path, shelf):
     client, vol = _client(tmp_path, shelf)
     mine = _personal(vol, "user_1") / "apps" / "tasks"

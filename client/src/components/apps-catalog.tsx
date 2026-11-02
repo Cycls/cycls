@@ -17,7 +17,7 @@ import {
 type Api = ChatApi["api"];
 export type CatalogApp = {
   slug: string; name: string; name_ar?: string; icon?: string;
-  description?: string; description_ar?: string; category?: string; category_ar?: string;
+  description?: string; description_ar?: string; category?: string; category_ar?: string; section?: string;
   version: string; bytes: number; thumb?: boolean; state: "available" | "installed" | "update" | "conflict"; installed_name?: string;
 };
 
@@ -89,13 +89,23 @@ function AppPreview({ api, a, admin, busy, onInstall, onClose }: {
   );
 }
 
-export function AppsCatalog({ api, onOpen, onChanged, initialView = "browse" }: {
+export function AppsCatalog({ api, onOpen, onChanged, initialView = "browse", section = "" }: {
   api: Api;
   onOpen: (entry: string, name: string) => void;   // apps/<slug>/index.html, in the canvas
   onChanged?: () => void;                          // the Apps tab and the + menu re-list
   initialView?: "browse" | "theme";
+  section?: "" | "games";                          // "games": the bundles whose app.json says section "games"
 }) {
   const [view, setView] = useState(initialView);
+  if (section) return (
+    <>
+      <div className="mb-5 hidden sm:block">
+        <h2 className="font-display text-lg font-semibold text-foreground">{t(section)}</h2>
+        <p className="text-sm text-muted-foreground">{t("gamesSub")}</p>
+      </div>
+      <Browse api={api} onOpen={onOpen} onChanged={onChanged} section={section} />
+    </>
+  );
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center gap-3">
@@ -118,7 +128,7 @@ export function AppsCatalog({ api, onOpen, onChanged, initialView = "browse" }: 
   );
 }
 
-function Browse({ api, onOpen, onChanged }: { api: Api; onOpen: (entry: string, name: string) => void; onChanged?: () => void }) {
+function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (entry: string, name: string) => void; onChanged?: () => void; section?: string }) {
   const [data, setData] = useState<{ apps: CatalogApp[]; admin: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -140,7 +150,7 @@ function Browse({ api, onOpen, onChanged }: { api: Api; onOpen: (entry: string, 
   };
 
   const q = query.trim().toLowerCase();
-  const all = data?.apps ?? [];
+  const all = (data?.apps ?? []).filter((a) => (a.section ?? "") === section);
   const cats = useMemo(() => [...new Set(all.map(category).filter(Boolean))].sort(), [all]);   // eslint-disable-line react-hooks/exhaustive-deps
   const matches = all.filter((a) =>
     (!q || [a.name, a.name_ar, a.description, a.description_ar, a.slug].some((f) => f?.toLowerCase().includes(q)))
