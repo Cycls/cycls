@@ -49,6 +49,7 @@ class Config(BaseModel):
     examples: Optional[list] = None   # [{label, label_ar, urls}] — resolved at GET /examples
     examples_enabled: bool = False    # FE shows the example gallery on the empty screen
     colors: Optional[dict] = None     # {primary, secondary, primary_dark, secondary_dark}
+    apps_catalog: bool = False        # Web.apps(): the FE shows the Apps section (catalog + theme)
     _og_image: Optional[bytes] = PrivateAttr(default=None)  # custom og card, served at /og.png
 
     def set_prod(self, prod: bool):

@@ -38,14 +38,54 @@ const SHIM = `<script>(function(){
     });
   }
 
+  // The workspace's app theme: shadcn tokens for light and dark, worn by any app that reads them
+  // (docs/notes/apps.md, "The theme"). One <style> the host's values replace in place. The selectors
+  // out-rank an app's own :root / .dark, so where the app's CSS lands in the document does not matter.
+  // An app that wants its own look says <meta name="cycls-theme" content="off">.
+  var TOKEN = /^--[a-z0-9-]{1,40}$/, VALUE = /^[^;{}<>]{1,120}$/, BS = String.fromCharCode(92);
+  function rules(sel, set){
+    var out = [];
+    for (var k in set) if (TOKEN.test(k) && typeof set[k] === 'string' && VALUE.test(set[k]) && set[k].indexOf(BS) < 0) out.push(k + ':' + set[k]);
+    return out.length ? sel + '{' + out.join(';') + '}' : '';
+  }
+  function wear(tokens){
+    try {
+      var off = document.querySelector('meta[name="cycls-theme"]');
+      if (off && off.getAttribute('content') === 'off') return;
+      var el = document.getElementById('cycls-theme');
+      if (!tokens || typeof tokens !== 'object') { if (el) el.remove(); return; }
+      if (!el) { el = document.createElement('style'); el.id = 'cycls-theme'; (document.head || document.documentElement).appendChild(el); }
+      el.textContent = rules(':root:root', tokens.light || {})
+        + rules(':root:root.dark,:root:root[data-theme="dark"]', tokens.dark || {});
+      document.documentElement.setAttribute('data-cycls-theme', '');
+    } catch (e) {}
+  }
+
+  // Commands the host pushes — a theme change today; the same channel and names as the extensions
+  // branch's cycls:command / onCommand. Held until the app registers a handler, so one sent while it
+  // boots isn't lost.
+  var commandHandlers = [], commandBacklog = [];
+  function command(c){
+    if (!c || typeof c !== 'object') return;
+    if (c.type === 'theme') {
+      if (ctx) { if (c.theme) ctx.theme = c.theme; ctx.tokens = c.tokens || null; }
+      wear(c.tokens);
+    }
+    if (!commandHandlers.length) { if (commandBacklog.length < 50) commandBacklog.push(c); return; }
+    commandHandlers.slice().forEach(function(fn){ try { fn(c); } catch (e) { report(e && e.message || e); } });
+  }
+
   function receive(m){
     m = m || {};
     if (m.type === 'cycls:init' && !ctx) {
-      ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite };
+      ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite,
+              tokens: m.tokens || null };
       api.ctx = ctx;
+      if (m.tokens) wear(m.tokens);
       resolveReady(ctx);
       return;
     }
+    if (m.type === 'cycls:command') { command(m.command); return; }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
         && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
         && m.type !== 'cycls:data:result') return;
@@ -234,6 +274,14 @@ const SHIM = `<script>(function(){
       remove: function(user, key){ return data({ op: 'delete', key: String(key), who: String(user) }); }
     },
     keys: async function(){ return Object.keys(await load()); },
+    // What the host pushes: {type: "theme", theme, tokens} when the workspace's app theme or the
+    // host's light/dark changes (the shim has already applied the tokens). Returns an unsubscribe.
+    onCommand: function(fn){
+      if (typeof fn !== 'function') throw new Error('cycls.onCommand needs a function');
+      commandHandlers.push(fn);
+      commandBacklog.splice(0).forEach(function(c){ try { fn(c); } catch (e) { report(e && e.message || e); } });
+      return function(){ commandHandlers = commandHandlers.filter(function(h){ return h !== fn; }); };
+    },
     flush: flush,
     resize: function(h){ parent.postMessage({ type: 'cycls:resize', height: h }, '*'); }
   };

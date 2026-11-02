@@ -1,0 +1,240 @@
+/* shadcn/ui theme (new-york, Tailwind v4 CSS variables) for every default app.
+ *   src/app.css:   @import "tailwindcss";
+ *                  @import "./kit/theme.css";
+ * The variable NAMES are shadcn's, so shadcn components and shadcnblocks blocks work
+ * unchanged; the VALUES are ours, measured (node scripts/check.mjs prints the table):
+ * every text/background pair used for text is ≥ 4.5:1 in both themes.
+ * Extras beyond shadcn: --success/--warning/--info (+ -soft backgrounds), --destructive-soft,
+ * --primary-soft, --border-strong. Dark mode: `.dark` (shadcn's convention) or
+ * [data-theme=dark] on <html> — the kit sets both. */
+
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --radius: 0.625rem;
+  --background: #f6f7f9;
+  --foreground: #14181f;
+  --card: #ffffff;
+  --card-foreground: #14181f;
+  --popover: #ffffff;
+  --popover-foreground: #14181f;
+  --primary: #0b6b5d;
+  --primary-foreground: #ffffff;
+  --secondary: #eceff3;
+  --secondary-foreground: #1b2230;
+  --muted: #eef0f3;
+  --muted-foreground: #4f5866;
+  --accent: #e8ecf0;
+  --accent-foreground: #14181f;
+  --destructive: #b42318;
+  --border: #d5dae1;
+  --input: #c9cfd8;
+  --ring: #0b6b5d;
+  --chart-1: #0b6b5d;
+  --chart-2: #c2410c;
+  --chart-3: #1d4ed8;
+  --chart-4: #a16207;
+  --chart-5: #7e22ce;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #14181f;
+  --sidebar-primary: #0b6b5d;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef0f3;
+  --sidebar-accent-foreground: #14181f;
+  --sidebar-border: #d5dae1;
+  --sidebar-ring: #0b6b5d;
+  /* kit extras */
+  --primary-soft: #e0f2ee;
+  --success: #17663a;
+  --success-soft: #dff3e6;
+  --warning: #8a4b00;
+  --warning-soft: #fcefd6;
+  --info: #1d4ed8;
+  --info-soft: #e1eafd;
+  --destructive-soft: #fde4e1;
+  --border-strong: #8a94a3;
+}
+
+.dark,
+[data-theme="dark"] {
+  --background: #0d1117;
+  --foreground: #e8edf2;
+  --card: #161b22;
+  --card-foreground: #e8edf2;
+  --popover: #1b2129;
+  --popover-foreground: #e8edf2;
+  --primary: #3cc4ae;
+  --primary-foreground: #04201b;
+  --secondary: #222a35;
+  --secondary-foreground: #e8edf2;
+  --muted: #1f2630;
+  --muted-foreground: #a3adb9;
+  --accent: #26303c;
+  --accent-foreground: #e8edf2;
+  --destructive: #ff6b5f;
+  --border: #2f3843;
+  --input: #3a4552;
+  --ring: #3cc4ae;
+  --chart-1: #3cc4ae;
+  --chart-2: #fb923c;
+  --chart-3: #7fb0ff;
+  --chart-4: #f0b45a;
+  --chart-5: #c084fc;
+  --sidebar: #161b22;
+  --sidebar-foreground: #e8edf2;
+  --sidebar-primary: #3cc4ae;
+  --sidebar-primary-foreground: #04201b;
+  --sidebar-accent: #1f2630;
+  --sidebar-accent-foreground: #e8edf2;
+  --sidebar-border: #2f3843;
+  --sidebar-ring: #3cc4ae;
+  --primary-soft: #11332e;
+  --success: #5fd38d;
+  --success-soft: #12301f;
+  --warning: #f0b45a;
+  --warning-soft: #352710;
+  --info: #7fb0ff;
+  --info-soft: #14254a;
+  --destructive-soft: #3b1715;
+  --border-strong: #66717e;
+}
+
+/* Wearing the workspace's app theme (the host's shim sets data-cycls-theme on <html>): the kit's own
+ * extras follow its primary instead of staying teal. The status colors keep their measured values. */
+:root[data-cycls-theme] {
+  --primary-soft: color-mix(in oklab, var(--primary) 14%, var(--card));
+  --border-strong: color-mix(in oklab, var(--foreground) 45%, var(--background));
+}
+
+/* Before the kit sets a theme (first paint; standalone while ready times out) follow the OS. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]):not(.dark) {
+    --background: #0d1117;
+    --foreground: #e8edf2;
+    --card: #161b22;
+    --muted-foreground: #a3adb9;
+    --border: #2f3843;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-primary-soft: var(--primary-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-border-strong: var(--border-strong);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: "Segoe UI", "SF Arabic", "Noto Naskh Arabic", "Noto Sans Arabic", Tahoma, system-ui, sans-serif;
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html {
+    color-scheme: light;
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dark, [data-theme="dark"] { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--background);
+    color: var(--foreground);
+    /* no overflow-x: hidden — it would clip a too-wide layout instead of exposing it */
+  }
+  /* The host frame is bg-white: an app must paint its own background everywhere. */
+  #root { min-height: 100dvh; }
+  :lang(ar) { line-height: 1.65; }
+  input::placeholder, textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
+  /* Numbers and Latin runs inside Arabic text keep their own order. */
+  .num { font-variant-numeric: tabular-nums; unicode-bidi: isolate; }
+  /* .num keeps the paragraph's direction, which is right for "1,250.00 ر.س" or "7 أيام"
+     but reverses a formula: in Arabic `<span class="num">1080×1920</span>` shows
+     "1920×1080". Formulas, codes and ranges read left to right: dimensions, ratios
+     (9:16), T+2, ×1.00, signed deltas (+13.31%), 10:00–15:00, ISO keys, file names.
+     `.ltr` (or `.num-ltr` with tabular digits) = direction ltr + isolate; the same as
+     <bdi dir="ltr">. Measured in tests/bidi.visual.mjs. */
+  .ltr, .num-ltr { direction: ltr; unicode-bidi: isolate; }
+  .num-ltr { font-variant-numeric: tabular-nums; }
+  /* Text of unknown language (user or agent data): each paragraph takes the direction of
+     its first strong letter, as dir="auto" does, without moving its alignment. */
+  .text-auto { unicode-bidi: plaintext; }
+
+  /* A chart or a scrolling table never sizes its parent. recharts' ResponsiveContainer
+     gives its SVG a fixed width from an earlier (wider) layout; in a grid/flex item that
+     width becomes the item's min-content and the page locks wider than the phone. With
+     inline-size containment the item's intrinsic width ignores them. */
+  [data-slot="chart"], [data-slot="table-container"] { contain: inline-size; }
+  /* Cards are THE grid item of a dashboard: let them shrink below their content's
+     min-content (a recharts card measured 391 px in a 336 px track without this). */
+  [data-slot="card"] { min-width: 0; }
+
+  /* Touch targets ≥ 40 px on phones without editing shadcn's sizes (h-9 = 36 px):
+     shadcn v4 marks its controls with data-slot. */
+  @media (pointer: coarse), (max-width: 639.98px) {
+    [data-slot="button"], [data-slot="select-trigger"], [data-slot="input"], [data-slot="input-group-control"], [data-slot="native-select"],
+    [data-slot="tabs-trigger"], [data-slot="dropdown-menu-item"], [data-slot="select-item"], [data-slot="command-item"],
+    button[data-slot$="-trigger"] {   /* <Button asChild> inside a radix Trigger takes the trigger's data-slot */
+      min-height: 2.5rem;
+    }
+    [data-slot="button"][data-size^="icon"] { min-width: 2.5rem; }
+    [data-slot="tabs-list"] { min-height: 2.75rem; }
+  }
+
+  /* Reduced motion. NOT the common `transition-duration: 0.01ms !important` on *: the
+     default transition-property is `all`, so that gives EVERY element a transition (stale
+     getComputedStyle values, transitionend everywhere). 0s means no transition; animations
+     keep a tiny duration so radix/vaul still get their animationend. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: 0s !important; transition-delay: 0s !important; scroll-behavior: auto !important;
+    }
+  }
+}
