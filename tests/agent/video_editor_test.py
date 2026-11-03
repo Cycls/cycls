@@ -150,6 +150,24 @@ def test_a_session_carries_what_the_video_names_and_the_versions_it_may_write(mo
     assert w["media"] == "videos/voice/intro.m4a" and w["json"]["text"] == "Hello." and w["shared"] is True
 
 
+def test_a_session_carries_every_brand_font_so_the_preview_draws_them_and_the_list_offers_them(monkeypatch, tmp_path):
+    from tests.agent.video_test import _ttf
+
+    client, root = _client(tmp_path)
+    _video(root)
+    (root / "brand" / "fonts").mkdir(parents=True)
+    (root / "brand" / "fonts" / "BrandSans-Bold.ttf").write_bytes(_ttf("Brand Sans", 700))
+    (root / "brand" / "fonts" / "Unused.ttf").write_bytes(_ttf("Other Face", 400))
+    _on(monkeypatch)
+    fake = FakeEditor(monkeypatch)
+    assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
+    meta = json.loads(_meta(fake.calls[0]))
+    assert sorted(f["family"] for f in meta["fonts"].values()) == ["Brand Sans", "Other Face"]   # named or not
+    body = fake.calls[0].read().decode("latin-1")
+    for name, f in meta["fonts"].items():
+        assert name.endswith(".ttf") and f'name="{name}"' in body                                # each file sent
+
+
 def test_an_older_video_is_upgraded_and_the_upgrade_kept_as_a_version(monkeypatch, tmp_path):
     client, root = _client(tmp_path)
     _video(root)

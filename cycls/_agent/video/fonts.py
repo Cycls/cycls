@@ -146,13 +146,14 @@ def families(root):
     return out
 
 
-def for_html(root, html):
+def for_html(root, html, every=False):
     """The brand fonts a composition names, ready to send: ({hashed file: {family, weight, style,
-    arabic}}, {hashed file: bytes}); ({}, {}) when it names none."""
+    arabic}}, {hashed file: bytes}); ({}, {}) when it names none. With `every`, all of the brand kit's
+    fonts (the editor offers them to choose from, named or not)."""
     low = (html or "").lower()
     meta, files = {}, {}
     for f in workspace(root):
-        if f["family"].lower() not in low:
+        if not every and f["family"].lower() not in low:
             continue
         try:
             data = (Path(root) / f["path"]).read_bytes()

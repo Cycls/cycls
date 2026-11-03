@@ -539,8 +539,32 @@ The editor's Render writes `videos/<name>.mp4` beside the new video; the clip th
 never replaced.
 
 In the editor the person trims, cuts parts out, splits, sets the volume, fixes a word of what is
-said, and renders. Captions, a title, music or another size are not buttons there (upstream's
-add-media and add-text panels were taken out of the Cycls editor); they are Ask Cycls.
+said, adds captions, a text or library music from the header (below), and renders. Another size is
+Ask Cycls.
+
+### The header's buttons, and the brand fonts (2026-11-03)
+
+**Captions**, **Text** and **Music** sit in the editor's header beside Render (cycls-video `0d42f9c`,
+`editor/patches/cycls/CyclsAdd.tsx`, `node/editor-add.mjs`). Each puts one known piece into the
+video as ordinary composition markup — what the contract has the agent write — so the agent, the
+checks and the render read it like any other:
+
+- Captions: a `class="cap"` box over every piece someone speaks in, styled inline (by phrase or word
+  by word; bottom, middle or top); pressed again it restyles that box; Remove takes it out. Greyed
+  when nothing is said. A translation's box is left alone.
+- Text: a `<div id="text">` at the playhead for 3 s, centred, with a fade in and out in the page's
+  script; double-click to type, then moved, restyled and retimed like anything else.
+- Music: a library track over the whole video, ducked under every piece with speech; picked again it
+  swaps; Remove music.
+
+The editor's server also keeps `data-captions` and `data-duck` in line after every edit: a split
+half joins the lists its piece was in, a removed piece leaves them. (Before, removing a captioned
+piece left a list naming nothing, and that video's preview and render failed — agent-made videos
+too.)
+
+**Brand fonts:** `editor.open` now sends every font of the workspace's brand kit with the session
+(`fonts.for_html(…, every=True)`), so the editor's preview draws a video's brand font as its render
+does, and the editor's font list offers the brand fonts beside the catalogue's.
 
 ## The contract
 

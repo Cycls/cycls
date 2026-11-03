@@ -117,14 +117,19 @@ def _parts(meta, sent):
 
 
 def _gather(html, root, rel):
+    from . import fonts as kit_fonts
+
     images, image_files, problems = media.collect(html, root)
     audio, audio_files, _words, more = media.collect_audio(html, root)
     footage, clips = media.collect_footage(html, root)
     problems += more + clips
     words = _words_files(html, root, audio, footage, rel)
+    # The brand kit's fonts, every one: the preview draws a video's brand font as its render does, and
+    # the editor's font list offers them beside the catalogue's.
+    fonts, font_files = kit_fonts.for_html(root, html, every=True)
     meta = {"images": images, "audio": audio, "footage": {p: f["sha"] for p, f in footage.items()},
-            "words": words}
-    return meta, {**image_files, **audio_files}, problems
+            "words": words, **({"fonts": fonts} if fonts else {})}
+    return meta, {**image_files, **audio_files, **font_files}, problems
 
 
 async def open(workspace, root, rel, host_origin):
