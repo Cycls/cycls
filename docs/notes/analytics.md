@@ -168,6 +168,7 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |
 | `design_version_restored` | a design restored from Version history | `reason` (what replaced the restored version: `save` / `agent` / `change` / `restore` / `keep`) — do people undo the agent? |
 | `design_version_previewed` | "Preview" on a row of Version history: that version's picture, shown before restoring | `reason` (as above) — previews ÷ restores is how often people look before going back |
+| `video_clip_edit` | Edit on a video file (an MP4 the person sent): its own video made and opened in the editor | — do people bring their own clips to edit by hand? |
 | `video_editor_opened` | Edit on a video: a video editor session opened | — do people change videos by hand, not only by asking? |
 | `video_edited` | a change from the video editor written into the workspace | `kind` (`composition` / `words`) — timing, text and music, or a caption word? |
 | `video_save_conflict` | a video save refused because the file changed elsewhere (an agent edit, another tab), then the choice made | `choice` (`shown` / `latest` / `mine`) — how often do the person and the agent collide? |

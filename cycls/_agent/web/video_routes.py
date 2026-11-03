@@ -163,8 +163,13 @@ def video_router(ws_dep, changed):
         DELETE /video/editor?sid=         the session closes
         POST   /video/render?path=&quality=   the MP4 beside the composition, started → its state
         GET    /video/render?path=        {state: idle | rendering | done | failed, progress?, path?, message?}
+        GET    /video/clip?path=          may this clip (an MP4 the person has) open in the editor → {editor, video}
+        POST   /video/clip?path=          its video, made (video/clip.py): one JSON line a step, as it goes —
+                                          {state: sending, sent, size} · {state: reading, eta_s} · then
+                                          {state: ready, path, made, notice?} or {state: failed, message}
     """
     from fastapi import APIRouter, HTTPException, Request
+    from fastapi.responses import StreamingResponse
 
     from cycls._agent.web.shared import _safe_path
     from cycls._app.db import Workspace
@@ -227,5 +232,63 @@ def video_router(ws_dep, changed):
     async def render_state(path: str, ws: Workspace = ws_dep):
         from cycls._agent.video import editor
         return editor.render_state(ws.root, _rel(ws, path))
+
+    def _clip_rel(ws, path):
+        from cycls._agent.video import media
+        if not path or path.rsplit(".", 1)[-1].lower() not in media.FOOTAGE_TYPES:
+            raise HTTPException(400, "path: a video file (MP4, MOV, WebM)")
+        file_path = _safe_path(ws.root, path)
+        if not file_path.is_file():
+            raise HTTPException(404, "There is no such video.")
+        return file_path.relative_to(Path(ws.root).resolve()).as_posix()
+
+    @r.get("/video/clip")
+    async def clip_offered(path: str, ws: Workspace = ws_dep):
+        from cycls._agent.video import clip, editor
+        rel = _clip_rel(ws, path)
+        if not editor.offered(ws):
+            return {"editor": False, "video": None}
+        return {"editor": True, "video": clip.composition_of(ws.root, rel) or clip.video_for(ws.root, rel)}
+
+    @r.post("/video/clip")
+    async def clip_open(path: str, ws: Workspace = ws_dep):
+        from cycls._agent import video
+        from cycls._agent.video import clip, editor, media
+        rel = _clip_rel(ws, path)
+        if not editor.offered(ws):
+            raise HTTPException(503, "Video is not available here.")
+        size = (Path(ws.root) / rel).stat().st_size
+        if size > media.MAX_FOOTAGE_BYTES:
+            raise HTTPException(413, f"This video is {size / 1048576:.0f} MB; the editor takes one up to "
+                                     f"{media.MAX_FOOTAGE_BYTES // 1048576} MB.")
+        steps = asyncio.Queue()
+
+        async def work():
+            try:
+                done = await clip.open_clip(ws, ws.root, rel, progress=steps.put, by="user")
+                changed(ws.root)
+                await steps.put(done)
+            except clip.NotReady as e:
+                await steps.put({"state": "failed", "message": str(e)[:1].upper() + str(e)[1:300]})
+            except video.Unavailable as e:
+                await steps.put({"state": "failed", "message": f"The video service is unavailable: {e}"[:300]})
+            except Exception as e:  # noqa: BLE001 - the canvas says why
+                await steps.put({"state": "failed", "message": f"The video could not be made ready: {e}"[:300]})
+            finally:
+                await steps.put(None)
+
+        async def lines():
+            # The work belongs to this request: the person closing the canvas ends it, and Edit again goes
+            # on from where it stopped (the upload resumes at the service's count; the read is one job a clip).
+            task = asyncio.create_task(work())
+            try:
+                while (step := await steps.get()) is not None:
+                    yield json.dumps(step, ensure_ascii=False) + "\n"
+            finally:
+                if not task.done():
+                    task.cancel()
+
+        return StreamingResponse(lines(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     return r

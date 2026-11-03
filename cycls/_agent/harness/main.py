@@ -288,7 +288,8 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
                     out.append({"type": "text", "text":
                         f'[The user attached "{fname}", a video clip saved in the workspace. To see and hear '
                         "what is in it, or to cut it into a video, call the Video tool's `footage` action "
-                        "with this path first." + (" If only what is said in it is wanted (a transcript, a "
+                        "with this path first. If they want to edit it themselves, by hand, its `editor` action "
+                        "with this path opens it in the video editor." + (" If only what is said in it is wanted (a transcript, a "
                         "summary), the Transcribe tool writes it down." if transcribe else "") + "]"})
                     continue
                 result = await _exec_read({"path": fname}, workspace, chat_id=chat_id)

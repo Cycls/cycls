@@ -878,14 +878,94 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
     return _result("\n".join(h for h in head if h) + "\n\n" + text, blocks, note, _shown(drel, dub_name, clean))
 
 
-async def _footage(workspace, root, chat, inp, again=True):
+def _clip_file(root, path):
+    """A clip the model named → (the file, its workspace path), or the error to answer with."""
+    try:
+        full = _resolve_path(path.strip(), root)
+    except ValueError as e:
+        return _err(str(e))
+    if not full.is_file():
+        return _err(f"{path} is not a file in the workspace.")
+    rel = full.relative_to(Path(root).resolve()).as_posix()
+    if full.suffix.lower().lstrip(".") not in media.FOOTAGE_TYPES:
+        return _err(f"{rel} is not a video file this tool reads ({', '.join(sorted(media.FOOTAGE_TYPES))}).")
+    size = full.stat().st_size
+    if size > media.MAX_FOOTAGE_BYTES:
+        return _err(f"{rel} is {size / 1048576:.0f} MB; a clip is at most {media.MAX_FOOTAGE_BYTES // 1048576} MB. "
+                    "Cut it shorter, or export it smaller.")
+    return full, rel
+
+
+async def _made_ready(workspace, root, chat, full, rel, language, again_with="footage"):
+    """clip.make_ready within this call's budgets → its result, or what to answer: still sending or
+    reading (call again), or why it cannot be."""
+    from . import clip
+
+    try:
+        r = await clip.make_ready(workspace, root, full, rel, chat=chat, language=language,
+                                  send_budget=BUDGET["send"], read_budget=BUDGET["footage"], by="agent")
+    except clip.NotReady as e:
+        return _err(str(e))
+    if r["state"] == "sending":
+        return (f"Still sending {rel} ({r['sent'] / 1048576:.0f} of {r['size'] / 1048576:.0f} MB so far). Call "
+                f"{again_with} again with the same path: it goes on from there.")
+    if r["state"] == "reading":
+        return (f"Still reading {rel} (about {r['eta_s']} s more: it is being made ready and listened to). Call "
+                f"{again_with} again with the same path to collect it.")
+    return r
+
+
+async def _editor(workspace, root, chat, inp, note=""):
+    """The editor opened for the person on a clip of theirs (the clip made ready, and a video that is the
+    clip alone written for it, clip.py) or on a video already here (`name`)."""
+    from . import clip
+
+    path = inp.get("path")
+    if isinstance(path, str) and path.strip():
+        got = _clip_file(root, path)
+        if isinstance(got, str):
+            return got
+        full, rel = got
+        comp = clip.composition_of(root, rel)
+        if comp:
+            return _result(f"{rel} was rendered from {comp}: that video is open in the editor for the person.", [],
+                           note, _editing(comp))
+        r = await _made_ready(workspace, root, chat, full, rel, inp.get("language"), again_with="editor")
+        if isinstance(r, str):
+            return r
+        try:
+            comp, made, notice = await clip.starter(root, rel, r["info"], by="agent")
+        except clip.NotReady as e:
+            return _err(str(e))
+        files.remember(root, chat, Path(comp).name[: -len(files.SUFFIX)])
+        lead = (f"Made {comp}: the clip alone, whole, as it is." if made else
+                f"{comp} is the video made from this clip before, with any changes made to it since.")
+        text = (f"{lead} It is open in the editor for the person, who can trim it, cut parts out, split it, set "
+                "its volume, fix a word of what is said, and render it. Tell them so in a sentence, and leave the "
+                "video as it is unless they ask for a change; when they do, read the file first (they may have "
+                "changed it by hand)." + (f"\n{notice}" if notice else "") + "\n\n"
+                + report.footage_text(rel, r["info"], words_rel=r["words_rel"], reused=r["reused"]))
+        return _result(text, [], note, _editing(comp))
+    name = files.clean_name(inp.get("name"))
+    if not name:
+        return _err("editor needs path (the person's clip, to edit by hand) or name (a video already here).")
+    comp = files.composition(name)
+    if not (root / comp).is_file():
+        return _err(f"there is no {comp}.")
+    return _result(f"{comp} is open in the editor for the person.", [], note, _editing(comp))
+
+
+def _editing(comp):
+    """The canvas told to open a video in its editor."""
+    return [{"type": "ui", "action": "open_canvas", "path": comp, "name": Path(comp).name, "edit": True}]
+
+
+async def _footage(workspace, root, chat, inp):
     """A clip made ready for video: sent to the service once (by the hash of its bytes, in pieces,
     going on from where an earlier call stopped), read there on the organisation's GPU, and
     described back — its shots, a sheet of its frames, what is said in it and when. The transcript
     is written beside the clip, where a misheard word can be corrected. A clip already made ready
     costs nothing to ask after again."""
-    from cycls._agent import video
-
     from . import stock
 
     credit, others = None, []
@@ -904,72 +984,15 @@ async def _footage(workspace, root, chat, inp, again=True):
     language = inp.get("language")
     if language not in (None, "", "ar", "en"):
         return _err("language: ar or en, or leave it out to have it found.")
-    try:
-        full = _resolve_path(path.strip(), root)
-    except ValueError as e:
-        return _err(str(e))
-    if not full.is_file():
-        return _err(f"{path} is not a file in the workspace.")
-    rel = full.relative_to(Path(root).resolve()).as_posix()
-    if full.suffix.lower().lstrip(".") not in media.FOOTAGE_TYPES:
-        return _err(f"{rel} is not a video file this tool reads ({', '.join(sorted(media.FOOTAGE_TYPES))}).")
-    size = full.stat().st_size
-    if size > media.MAX_FOOTAGE_BYTES:
-        return _err(f"{rel} is {size / 1048576:.0f} MB; a clip is at most {media.MAX_FOOTAGE_BYTES // 1048576} MB. "
-                    "Cut it shorter, or export it smaller.")
-    sha = await asyncio.to_thread(files.clip_sha, root, rel, full)
-    state = await video.clip_state(workspace, sha, sheet=True)
-    info, sheet, reused = None, None, False
-    if state.get("state") == "ready":
-        info, sheet, reused = state["info"], state.get("sheet"), True
-    else:
-        if state.get("state") != "uploaded":
-            try:
-                at, whole = await video.send_clip(workspace, full, sha, budget=BUDGET["send"],
-                                                  at=int(state.get("at") or 0) if state.get("state") == "partial" else 0)
-            except video.Refused as e:
-                return _err(f"the clip was not taken: {e}")
-            if not whole:
-                return (f"Still sending {rel} ({at / 1048576:.0f} of {size / 1048576:.0f} MB so far). Call footage again "
-                        "with the same path: it goes on from there.")
-        pending = files.footage_pending(root, chat, sha)
-        token = pending["token"] if pending else None
-        if token is None:
-            key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|ingest|{sha}|{language or ''}".encode()).hexdigest()
-            try:
-                job = await video.ingest(workspace, sha, language=language or None, key=key)
-            except video.Refused as e:
-                return _err(f"the clip was not made ready: {e}")
-            if job.get("ready"):
-                info, sheet = job["info"], job.get("sheet")
-            else:
-                token = job["token"]
-                files.footage_started(root, chat, sha, token)
-        if info is None:
-            r = await video.wait(workspace, token, BUDGET["footage"])
-            if r.get("state") == "pending":
-                return (f"Still reading {rel} (about {r.get('eta_s', 60)} s more: it is being made ready and listened "
-                        "to). Call footage again with the same path to collect it.")
-            files.footage_done(root, chat, sha)
-            if r.get("state") in ("gone", "expired") and again:     # the service restarted under the job: once more
-                return await _footage(workspace, root, chat, inp, again=False)
-            if r.get("state") != "done":
-                return _err(f"the clip could not be made ready: {r.get('error') or r.get('state')}")
-            info, sheet = r["info"], r.get("sheet")
-    # What is said, beside the clip. A transcript already there for these same bytes is the one to
-    # keep: someone may have corrected it.
-    words_rel = None
-    if info.get("transcript"):
-        words_rel = media.words_path(full).relative_to(Path(root).resolve()).as_posix()
-        kept = media.clip_words(full, sha)
-        if kept is None:
-            said = {**info["transcript"], "sha": sha, "clip": rel}
-            async with lock(root / words_rel):
-                await write_fig(root, words_rel, json.dumps(said, ensure_ascii=False, indent=1).encode("utf-8"),
-                                by="agent", reason="video-footage")
-        else:
-            info = {**info, "transcript": kept}
-    text = report.footage_text(rel, info, words_rel=words_rel, reused=reused, credit=credit)
+    got = _clip_file(root, path)
+    if isinstance(got, str):
+        return got
+    full, rel = got
+    r = await _made_ready(workspace, root, chat, full, rel, language)
+    if isinstance(r, str):
+        return r
+    info, sheet, words_rel = r["info"], r.get("sheet"), r["words_rel"]
+    text = report.footage_text(rel, info, words_rel=words_rel, reused=r["reused"], credit=credit)
     if inp.get("tidy"):
         text += "\n" + report.tidy_text(rel, info)
     if others:
@@ -1032,6 +1055,9 @@ async def _exec_video(inp, workspace, ctx=None):
             return await _guide(workspace, root, loaded)
         if action == "music":
             return _music(inp.get("query") or inp.get("mood")) + note
+        if action == "editor":
+            out = await _editor(workspace, root, chat, inp, note)
+            return out + note if isinstance(out, str) else out
         if action == "footage":
             out = await _footage(workspace, root, chat, inp)
             if isinstance(out, str):

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
-import type { OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
+import type { OfficeEditorApi, VideoClipStep, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
+import { useToast } from "../lib/toast";
 import { track } from "../lib/analytics";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
@@ -19,7 +20,7 @@ import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
-import { VideoEditorView, canEditVideo, flushVideoEditor, videoEditorOpen, watchVideoEditors } from "./video-editor-view";
+import { VideoEditorView, askVideoEdit, canEditVideo, flushVideoEditor, takeVideoEdit, videoEditorOpen, watchVideoEditors } from "./video-editor-view";
 import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
@@ -372,6 +373,15 @@ function VideoComposition({ file, content, openFile, onDownload, onReload, video
   const [editing, setEditing] = useState(false);
   const [aside, setAside] = useState(false);     // stepped aside for Ask Cycls, still open
   const canEdit = !!videoEditor && !!writeFile && canEditVideo();
+  // Asked to open in the editor (Edit on the clip it was made from, or the agent's `editor`).
+  useEffect(() => {
+    if (!canEdit) return;
+    const take = () => { if (takeVideoEdit(file.path)) { setEditing(true); setAside(false); } };
+    take();
+    const on = (e: Event) => { if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) take(); };
+    window.addEventListener("cycls:video-edit", on);
+    return () => window.removeEventListener("cycls:video-edit", on);
+  }, [canEdit, file.path]);
   return (
     <>
       <Suspense fallback={<LoadingBar />}>
@@ -385,6 +395,70 @@ function VideoComposition({ file, content, openFile, onDownload, onReload, video
                          onClose={() => { setEditing(false); setAside(false); onReload?.(); }} />
       )}
     </>
+  );
+}
+
+// A video file on the canvas, played; and Edit where Video is this organisation's: the clip made into a video
+// of its own (POST /video/clip — the first time, it is sent to the video service and read there, which the
+// button counts through), then that video opened in its editor. A rendered MP4 opens the video it came from.
+function ClipView({ file, url, shared, videoEditor, writeFile, onOpenFile }: {
+  file: CanvasFile;
+  url: string;
+  shared?: boolean;
+  videoEditor?: VideoEditorApi;
+  writeFile?: WriteFile;
+  onOpenFile?: (path: string) => void;
+}) {
+  const usable = !shared && !!videoEditor && !!writeFile && !!onOpenFile && canEditVideo();
+  const [offered, setOffered] = useState(false);
+  const [step, setStep] = useState<VideoClipStep | null>(null);
+  const toast = useToast();
+  useEffect(() => {
+    setOffered(false);
+    setStep(null);
+    if (!usable || !videoEditor) return;
+    let gone = false;
+    videoEditor.clip(file.path).then((r) => { if (!gone) setOffered(!!r.editor); }).catch(() => {});
+    return () => { gone = true; };
+  }, [usable, file.path, videoEditor]);
+  const busy = step?.state === "sending" || step?.state === "reading" || step?.state === "ready";
+  const edit = async () => {
+    if (busy || !videoEditor || !onOpenFile) return;
+    track("video_clip_edit", {});
+    setStep({ state: "reading" });
+    const end: VideoClipStep = await videoEditor.fromClip(file.path, setStep)
+      .catch((e: unknown) => ({ state: "failed" as const, message: String((e as Error)?.message || e) }));
+    if (end.state === "ready") {
+      setStep(null);
+      askVideoEdit(end.path);
+      onOpenFile(end.path);
+      if (end.notice) toast.info(end.notice);
+    } else {
+      setStep(end);
+    }
+  };
+  const label = step?.state === "sending" && step.size > 0
+    ? t("videoClipSending").replace("{pct}", String(Math.min(99, Math.floor((100 * step.sent) / step.size))))
+    : step?.state === "reading" ? t("videoClipReading")
+    : step?.state === "ready" ? t("videoEditorOpening")
+    : t("videoEdit");
+  return (
+    <div className="relative flex h-full items-center justify-center bg-black">
+      {offered && (
+        <button type="button" onClick={edit} disabled={busy} title={t("videoClipEditHint")} data-testid="clip-edit"
+                className={cn("absolute start-3 top-3 z-10 rounded-full border border-white/15 bg-black/60 px-3 py-1 text-xs text-white/90 backdrop-blur transition-colors",
+                              busy ? "cursor-default" : "hover:text-white cursor-pointer")}>
+          {label}
+        </button>
+      )}
+      {step?.state === "failed" && (
+        <div role="alert" data-testid="clip-edit-failed"
+             className="absolute start-3 top-12 z-10 max-w-sm rounded-lg border border-white/15 bg-black/75 px-3 py-2 text-xs text-white/90 backdrop-blur">
+          {step.message}
+        </div>
+      )}
+      <video src={url} controls className="max-h-full max-w-full" />
+    </div>
   );
 }
 
@@ -515,11 +589,8 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
     );
   }
   if (isVideo(fileKind(file))) {
-    return (
-      <div className="flex h-full items-center justify-center bg-black">
-        <video src={content ?? ""} controls className="max-h-full max-w-full" />
-      </div>
-    );
+    return <ClipView file={file} url={content ?? ""} shared={shared} videoEditor={videoEditor} writeFile={writeFile}
+                     onOpenFile={onOpenFile} />;
   }
   if (isAudio(fileKind(file))) {
     return (

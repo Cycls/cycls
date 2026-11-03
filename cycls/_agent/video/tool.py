@@ -15,7 +15,7 @@ import contextvars
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
 ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles",
-           "dub")
+           "dub", "editor")
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
@@ -41,6 +41,7 @@ _ACTIONS_TEXT = """ACTIONS
 - render {name, quality?: "final" | "draft"}: the MP4, videos/<name>.mp4 (and videos/<name>.<size>.mp4 for each other size the root lists), opened for the user; when something is said in it, subtitle files beside it (videos/<name>.srt and .vtt, and videos/<name>.<lang>.srt and .vtt for each language it is translated into). Refused while the checks report errors. It takes a minute or two; if the reply says it is still rendering, call render again to collect it — never start over. For "a vertical version" or more platforms, add the sizes to the root's data-sizes (SEVERAL SIZES) and render again rather than writing a second file.
 - subtitles {name} then {name, to, lines}: what is said in the video, in another language. The first call lists its sentences, numbered; translate them yourself and send them back in order with the language code (to: "ar", "en", …). The translation is kept with the words and follows the cut. It makes subtitle files (videos/<name>.<to>.srt and .vtt, beside the MP4: a captions track platforms take, nothing on the picture), captions on the video (the data-cap-lang box in the instructions; the reply gives the line), and a dub. When the person asks for subtitles or captions in a language, give them the files, and put the translation on the video too when the video shows captions or they ask for it there.
 - dub {name, to, lines?}: the video said in another language — to: "ar" (Standard Arabic), "ar-SA" (Arabic in the Saudi voice: use it whenever the person asks for Saudi) or "en" — made as a new video, videos/<name>-<to>.video.html: each sentence spoken in that language where the original says it (sped up a little when it runs long), a voice-over replaced, a person's own voice in footage kept quietly under, the captions in the new language. It needs the translation kept with the words: the first call lists the sentences and how long each is said; translate each FOR SPEAKING, about as long as the original, and call dub again with lines (one string per sentence, in order). The reply says which sentences were sped up and which do not fit even so: shorten those and call dub with all the lines again. On-screen titles are not translated for you: translate them with `edit` on the new video, then look and render it. The dub's voice is a built-in voice (Standard Arabic, or Saudi with to: "ar-SA"), never the person's own: say so if they might expect it.
+- editor {path} or {name}: open the video editor for the person. With path (a clip of theirs: MP4, MOV, WebM), the clip is made ready and videos/<name>.video.html is written holding the clip alone, whole (its first 90 s when longer), and opened in the editor, where they trim it, cut parts out, split it, set its volume, fix a word of what is said, and render it; the same clip again opens the same video. Use it when the person wants to edit a clip themselves, rather than writing a video for them. With name, a video already here opens in the editor.
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
@@ -56,14 +57,14 @@ def _schema():
     return {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS),
                    "description": "guide (first), write, edit, template, look, render, subtitles, dub, restore, voice, "
-                                  "music, footage."},
+                                  "music, footage, editor (the person edits a clip or a video by hand)."},
         "name": {"type": "string",
                  "description": "The video's name: videos/<name>.video.html, rendered to videos/<name>.mp4. "
                                 "Lowercase words and hyphens, e.g. launch-reel."},
         "html": {"type": "string", "description": "write: the whole composition, a full HTML document."},
         "path": {"type": "string",
                  "description": "write: a composition already in the workspace to adopt instead of passing html. "
-                                "footage: the clip's workspace path, e.g. uploads/interview.mp4."},
+                                "footage and editor: the clip's workspace path, e.g. uploads/interview.mp4."},
         "changes": {"type": "array", "description": "edit: exact replacements, applied in order.",
                     "items": {"type": "object", "properties": {
                         "old": {"type": "string", "description": "Text that occurs exactly once (or set all)."},
@@ -141,5 +142,6 @@ VIDEO_PROMPT = (
     "video, export its slides as JPEG with Design first, then write a video that shows those files. Video can "
     "add a voice-over (Arabic or English) and music; add sound only when the person asks for it or agrees. "
     "A video file the person attaches (an interview, a product clip) is cut, captioned and titled with Video too: "
-    "its `footage` action reads the clip first."
+    "its `footage` action reads the clip first. When the person wants to edit the clip by hand themselves, "
+    "`editor {path}` opens it in the video editor instead."
 )

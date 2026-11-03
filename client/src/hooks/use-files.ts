@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { zip } from "fflate";
 import { voteUrl, type PollApi } from "../lib/polls";
 import type { CommentsApi } from "../lib/comments";
-import { useApi } from "./use-api";
+import { reasonOf, useApi } from "./use-api";
 import { track } from "../lib/analytics";
 import type { TrashRow } from "../components/trash-view";
 
@@ -51,8 +51,48 @@ export type FetchVersioned = (path: string) => Promise<{ url: string; version: s
 // The video editor's server side (web/video_routes.py).
 export type VideoEditorSession = { url: string; sid: string; versions: Record<string, string>; notice?: string };
 export type VideoRenderState = { state: "idle" | "rendering" | "done" | "failed"; progress?: number; path?: string; message?: string };
+// A clip of the person's made into a video they edit (POST /video/clip): one step at a time as it goes.
+export type VideoClipStep =
+  | { state: "sending"; sent: number; size: number }
+  | { state: "reading"; eta_s?: number | null }
+  | { state: "ready"; path: string; made?: boolean; notice?: string }
+  | { state: "failed"; message: string };
+// POST /video/clip's answer read as it comes: one JSON line a step, each told to `onStep`; the last is ready
+// or failed. A stream cut short (the connection dropped) is a failure Edit can go on from.
+export async function readClipSteps(body: ReadableStream<Uint8Array> | null,
+                                    onStep: (step: VideoClipStep) => void): Promise<VideoClipStep> {
+  const reader = body?.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let last: VideoClipStep | null = null;
+  const take = (line: string) => {
+    if (!line.trim()) return;
+    try { last = JSON.parse(line) as VideoClipStep; } catch { return; }
+    onStep(last);
+  };
+  try {
+    for (;;) {
+      const { value, done } = reader ? await reader.read() : { value: undefined, done: true };
+      buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        take(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+      if (done) break;
+    }
+    take(buf);
+  } catch { /* the connection dropped: said below */ }
+  const end = last as VideoClipStep | null;
+  return end && (end.state === "ready" || end.state === "failed") ? end
+    : { state: "failed", message: "The connection ended before the video was ready. Press Edit to go on." };
+}
 export type VideoEditorApi = {
   open: (path: string) => Promise<VideoEditorSession>;
+  // May this clip open in the editor (Video is this organisation's), and the video made from it before.
+  clip: (path: string) => Promise<{ editor: boolean; video: string | null }>;
+  // Its video, made: the clip sent and read on the video service, then written; ends ready or failed.
+  fromClip: (path: string, onStep: (step: VideoClipStep) => void) => Promise<VideoClipStep>;
   replace: (path: string, sid: string) => Promise<void>;
   close: (sid: string) => Promise<void>;
   render: (path: string, quality: "draft" | "standard" | "final") => Promise<VideoRenderState>;
@@ -290,6 +330,18 @@ export function useFiles(baseUrl: string = "") {
     readText: async (filePath) => {
       const res = await api(`/files/${encPath(filePath)}`, { silent: true });
       return { text: await res.text(), version: res.headers.get("X-Version") ?? "" };
+    },
+    clip: async (filePath) =>
+      (await api(`/video/clip?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),
+    fromClip: async (filePath, onStep) => {
+      let res: Response;
+      try {
+        res = await api(`/video/clip?path=${encodeURIComponent(filePath)}`, { method: "POST", silent: true });
+      } catch (e) {
+        const r = (e as { response?: Response }).response;
+        return { state: "failed", message: r ? await reasonOf(r) : String((e as Error).message || e) };
+      }
+      return readClipSteps(res.body, onStep);
     },
   }), [api]);
 

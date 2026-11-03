@@ -6,7 +6,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
-import { editWorkingPath, ext, isDesignEditor } from "./canvas-utils";
+import { editWorkingPath, ext, isComposition, isDesignEditor } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { useApps, type AppInfo } from "../hooks/use-apps";
@@ -29,7 +29,7 @@ import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensP
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
-import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
+import { askVideoEdit, detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText, langOf } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
@@ -443,6 +443,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         track("artifact_completed", { path: done, kind: ext(done) });
         setWorkingPaths((ws) => ws.filter((x) => x !== done));
         const app = appsRef.current.find((a) => a.entry === ev.path);
+        // The agent's Video `editor`: the video opens in its editor, for the person to change by hand.
+        if (ev.edit === true && isComposition(ev.path)) askVideoEdit(ev.path);
         if (app) openApp(app);
         // A design the agent is making opens live: the person watches it in the editor until the turn ends.
         else openFileInCanvas(ev.path, typeof ev.name === "string" ? ev.name : undefined, isDesignEditor(ev.path) ? { live: true } : undefined);

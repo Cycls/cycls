@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import { Canvas, type CanvasFile } from "../src/components/canvas";
-import type { VideoEditorApi } from "../src/hooks/use-files";
+import { readClipSteps, type VideoClipStep, type VideoEditorApi } from "../src/hooks/use-files";
 import { ToastProvider } from "../src/lib/toast";
 
 // A video's editor is a full-page overlay of its own. When another tab is shown while it is open
@@ -114,5 +114,99 @@ describe("a video's editor in the canvas", () => {
     await flush();
     expect(editor()).toBeNull();
     expect(a.close).toHaveBeenCalledWith("abc");
+  });
+});
+
+// Edit on a video file the person sent: its own video made (POST /video/clip, counted through), then
+// opened in its editor as the canvas shows it.
+const CLIP: CanvasFile = { path: "attachments/1a2b3c4d-interview.mp4", name: "1a2b3c4d-interview.mp4" };
+const MADE: CanvasFile = { path: "videos/interview.video.html", name: "interview.video.html" };
+
+function clipCanvas(tabs: CanvasFile[], active: string, videoEditor: VideoEditorApi, onAddFile: (p: string) => void) {
+  return (
+    <ToastProvider>
+      <Canvas tabs={tabs} active={active} docked hidden={false} expanded={false}
+              onToggleExpand={() => {}} onSelectTab={() => {}} onCloseTab={() => {}} onHide={() => {}}
+              readFile={async () => PLAYER} openFile={async () => "blob:mp4"} writeFile={async () => ({ version: "v2" })}
+              videoEditor={videoEditor} onAddFile={onAddFile} />
+    </ToastProvider>
+  );
+}
+
+describe("Edit on a clip", () => {
+  beforeEach(() => { URL.revokeObjectURL = vi.fn(); });
+  afterEach(() => cleanup());
+
+  it("counts through making its video, then opens that video in the editor", async () => {
+    let go = () => {};
+    const gate = new Promise<void>((r) => { go = r; });
+    const a = Object.assign(api(), {
+      clip: vi.fn(async () => ({ editor: true, video: null })),
+      fromClip: vi.fn(async (_p: string, onStep: (s: VideoClipStep) => void) => {
+        onStep({ state: "sending", sent: 40, size: 100 });
+        await gate;
+        onStep({ state: "reading" });
+        return { state: "ready" as const, path: MADE.path, made: true };
+      }),
+    });
+    const opened = vi.fn();
+    const { rerender } = render(clipCanvas([CLIP], CLIP.path, a, opened));
+    fireEvent.click(await screen.findByTestId("clip-edit"));
+    await flush();
+    expect(a.fromClip).toHaveBeenCalledWith(CLIP.path, expect.any(Function));
+    expect(screen.getByTestId("clip-edit").textContent).toMatch(/40/);       // the upload, counted
+    expect((screen.getByTestId("clip-edit") as HTMLButtonElement).disabled).toBe(true);
+    go();
+    await flush();
+    expect(opened).toHaveBeenCalledWith(MADE.path);                           // its video opened beside it
+    rerender(clipCanvas([CLIP, MADE], MADE.path, a, opened));
+    await flush();
+    await flush();
+    expect(a.open).toHaveBeenCalledWith(MADE.path);                           // and its editor, with no second press
+    expect(editor()).not.toBeNull();
+  });
+
+  it("is not offered where Video is not, and says why it could not be made", async () => {
+    const off = Object.assign(api(), { clip: vi.fn(async () => ({ editor: false, video: null })), fromClip: vi.fn() });
+    render(clipCanvas([CLIP], CLIP.path, off, vi.fn()));
+    await flush();
+    await flush();
+    expect(off.clip).toHaveBeenCalledWith(CLIP.path);
+    expect(screen.queryByTestId("clip-edit")).toBeNull();
+    cleanup();
+    const failing = Object.assign(api(), {
+      clip: vi.fn(async () => ({ editor: true, video: null })),
+      fromClip: vi.fn(async () => ({ state: "failed" as const, message: "The clip was not taken: That file is not a video." })),
+    });
+    const opened = vi.fn();
+    render(clipCanvas([CLIP], CLIP.path, failing, opened));
+    fireEvent.click(await screen.findByTestId("clip-edit"));
+    await flush();
+    expect(screen.getByTestId("clip-edit-failed").textContent).toContain("not a video");
+    expect((screen.getByTestId("clip-edit") as HTMLButtonElement).disabled).toBe(false);   // Edit again goes on
+    expect(opened).not.toHaveBeenCalled();
+  });
+});
+
+describe("readClipSteps", () => {
+  const stream = (chunks: string[], fail = false) => new ReadableStream<Uint8Array>({
+    start(c) {
+      for (const s of chunks) c.enqueue(new TextEncoder().encode(s));
+      if (fail) c.error(new Error("reset")); else c.close();
+    },
+  });
+
+  it("reads a step split across chunks, and the last line with no newline", async () => {
+    const steps: VideoClipStep[] = [];
+    const end = await readClipSteps(stream(['{"state":"send', 'ing","sent":1,"size":2}\n{"state":"reading"}\n',
+                                            '{"state":"ready","path":"videos/a.video.html"}']), (s) => steps.push(s));
+    expect(steps.map((s) => s.state)).toEqual(["sending", "reading", "ready"]);
+    expect(end).toEqual({ state: "ready", path: "videos/a.video.html" });
+  });
+
+  it("a stream cut short is a failure Edit can go on from", async () => {
+    const end = await readClipSteps(stream(['{"state":"sending","sent":1,"size":2}\n'], true), () => {});
+    expect(end.state).toBe("failed");
+    expect((end as { message: string }).message).toMatch(/Press Edit to go on/);
   });
 });

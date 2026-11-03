@@ -65,6 +65,15 @@ export function watchVideoEditors(fn: () => void): () => void {
 }
 const changed = () => queueMicrotask(() => watchers.forEach((w) => w()));
 
+// A video to open in its editor as soon as the canvas shows it (Edit on a clip made it, or the agent's
+// `editor` opened it): asked here, taken once by the video's view, whether it mounts now or is already up.
+const editAsked = new Set<string>();
+export function askVideoEdit(path: string): void {
+  editAsked.add(path);
+  window.dispatchEvent(new CustomEvent("cycls:video-edit", { detail: { path } }));
+}
+export const takeVideoEdit = (path: string): boolean => editAsked.delete(path);
+
 // Where the editor makes sense: a pointer, and room for a timeline beside a preview.
 export function canEditVideo(): boolean {
   if (typeof window === "undefined") return false;

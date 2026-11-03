@@ -161,6 +161,7 @@ Two things seen on the way:
 | `restore` | `name` | The version before the last save. |
 | `voice`, `music`, `footage`, `subtitles` | (below) | Sound, clips, and what is said in another language. |
 | `dub` | `name`, `to`, `voice?`, `lines?` | The video said again in another language, as `<name>-<to>` (Dubbing, below). |
+| `editor` | `path` (a clip of the person's), or `name` | The editor opened for the person: on a clip, the clip made ready and a video of it alone written for it (A clip the person sent, below). |
 
 Rules that shaped it:
 
@@ -501,6 +502,45 @@ In production since 2026-10-18: the service from cycls-video `d6fdc9a` (the edit
 client rebuilt) with `VIDEO_EDITOR_URL` set. Checked with a real chat on the Cycls organisation's
 Personal workspace: made, rendered, Edit, a trim saved, Ask, the agent's change over it, the MP4 tab
 with the editor still open, Back, Done.
+
+### A clip the person sent, edited by hand
+
+A person who sends a video (an attachment, or any MP4, MOV or WebM in the workspace) can start editing
+it at once, with no video made for them first. The work is `video/clip.py`; two ways in:
+
+- **Edit on the clip.** A video file on the canvas shows Edit where Video is the organisation's
+  (`GET /video/clip?path=` → `{editor, video}`; hidden on a shared page, on touch and below 900 px, as
+  for a composition). Pressing it calls `POST /video/clip?path=`, which answers one JSON line a step
+  as it goes — `{state: sending, sent, size}`, `{state: reading, eta_s}`, then `{state: ready, path,
+  made, notice?}` or `{state: failed, message}` — and the button counts through them ("Uploading…
+  40%", "Getting the video ready…"). Ready, the canvas opens the video and its editor
+  (`askVideoEdit`: the video's view takes the ask once, whether it mounts then or is already up).
+  The work belongs to the request: closing the canvas stops it, and Edit again goes on from where it
+  stopped (the upload resumes at the service's count; the read is one job a clip, by its key).
+- **The agent's `editor {path}`** (or `{name}` for a video already here) does the same within a
+  call's budgets ("Still sending…", "Still reading…": call again), and its reply opens the canvas with
+  `open_canvas {path, edit: true}`. The note on an attached clip names it beside `footage`; the tool
+  says to leave the video alone until the person asks for a change.
+
+What is made: the clip is made ready exactly as `footage` makes it (`clip.make_ready`, which `footage`
+now uses too: sent in pieces, read on the organisation's GPU, the transcript beside the clip), then
+`videos/<name>.video.html` holding the clip alone — one `<video id="clip">` piece from its start, the
+whole clip, its own sound — in the format for its shape (wide for anything filmed sideways, 4:3 too;
+square near 1:1; portrait for 3:4 to 4:5; vertical for a phone held upright), fitted on black
+(`object-fit: contain`) so nothing is cut off. The name is the clip's, the chat's attachment id taken
+off, never one a video or MP4 already has. A video runs 3 to 90 s on the service (and a render must
+finish inside the renderer's 15 minutes, about 2.2× a footage video's length), so a longer clip's video
+holds its first 90 s and Edit says so; one under 3 s is refused.
+
+Edit again on the same clip opens the same video with what was changed there: the video made from a
+clip is remembered by the clip's path (`.cache/video/edits.json`) and never written over. Edit on a
+rendered MP4 (`videos/<name>.mp4`, or one of its sizes) opens the composition it was rendered from.
+The editor's Render writes `videos/<name>.mp4` beside the new video; the clip the person sent is
+never replaced.
+
+In the editor the person trims, cuts parts out, splits, sets the volume, fixes a word of what is
+said, and renders. Captions, a title, music or another size are not buttons there (upstream's
+add-media and add-text panels were taken out of the Cycls editor); they are Ask Cycls.
 
 ## The contract
 
