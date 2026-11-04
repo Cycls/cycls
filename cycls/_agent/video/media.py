@@ -130,6 +130,48 @@ def collect_audio(html, root, base_dir="videos"):
 # already holds once the `footage` action has made the clip ready. What is said in it travels as
 # words, like a voice-over's: the transcript the action wrote beside the clip (<name>.words.json),
 # so a word corrected there is the word the captions show.
+# Lottie animations (protocol 5): a workspace .json a composition names in data-lottie (a library animation,
+# data-lottie="lottie:<id>", is the service's own and is not sent).
+LOTTIE_BYTES = 1_500_000
+MAX_LOTTIES = 16
+_LOTTIE_REF = re.compile(r"""\sdata-lottie\s*=\s*("([^"]*)"|'([^']*)')""", re.I)
+
+
+def collect_lotties(html, root, base_dir="videos"):
+    """→ (lotties {path as written: hashed name}, files {hashed name: bytes}, errors [str])."""
+    lotties, files, errors = {}, {}, []
+    for m in _LOTTIE_REF.finditer(html):
+        ref = (m.group(2) if m.group(2) is not None else m.group(3) or "").strip()
+        if not ref or ref.startswith("lottie:") or ref in lotties:
+            continue
+        path = _local(ref)
+        if path is None:
+            errors.append(f"{ref}: a Lottie file is named by its workspace path, or lottie:<id> from the library.")
+            continue
+        rel = posixpath.normpath(posixpath.join(base_dir, path)) if path.startswith("../") else path
+        if not rel.lower().endswith(".json"):
+            errors.append(f"{path}: a Lottie animation is a .json file (export it from After Effects or LottieFiles as JSON).")
+            continue
+        try:
+            full = _resolve_path(rel, root)
+        except ValueError as e:
+            errors.append(f"{path}: {e}")
+            continue
+        if not full.is_file():
+            continue   # the service says it is missing
+        data = full.read_bytes()
+        if len(data) > LOTTIE_BYTES:
+            errors.append(f"{path} is {len(data) / 1048576:.1f} MB; an animation is at most 1.5 MB.")
+            continue
+        if len(files) >= MAX_LOTTIES:
+            errors.append(f"A video names at most {MAX_LOTTIES} Lottie files.")
+            break
+        hashed = hashlib.sha256(data).hexdigest()[:32] + ".json"
+        lotties[ref] = hashed
+        files[hashed] = data
+    return lotties, files, errors
+
+
 FOOTAGE_TYPES = {"mp4", "mov", "m4v", "webm", "mkv"}
 MAX_FOOTAGE_BYTES = 512 * 1024 * 1024
 MAX_FOOTAGE = 8

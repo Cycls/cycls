@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-PROTO = 4          # 2: sound (audio files with word timings, voice-overs, the sound map); 3: footage;
+PROTO = 5          # 2: sound (audio files with word timings, voice-overs, the sound map); 3: footage; 5: motion;
                    # 4: the editor (at() given to the page, offsets within the scene, tracks)
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 # A clip goes to the door in pieces of this size (the door takes up to 40 MiB). Small enough that a
@@ -202,11 +202,11 @@ def _footage_meta(footage):
 
 
 async def compile(workspace, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None,
-                  fonts=None):
+                  fonts=None, lotties=None):
     """Prepare and lint on CPU; with `preview`, the page the canvas plays. `fonts`: the brand fonts
     the composition names ({hashed file: {family, weight, style, arabic}}, video/fonts.py)."""
     meta = {"html": html, "images": images or {}, "preview": preview, "audio": audio or {}, "words": words or {},
-            **_footage_meta(footage), **({"fonts": fonts} if fonts else {})}
+            **_footage_meta(footage), **({"fonts": fonts} if fonts else {}), **({"lotties": lotties} if lotties else {})}
     resp = await _request("POST", "/v1/compile", workspace=workspace, retry=True, files=_parts(meta, files),
                           timeout=httpx.Timeout(120.0, connect=15.0))
     if resp.status_code != 200:
@@ -215,10 +215,11 @@ async def compile(workspace, html, images=None, files=None, *, preview=False, au
 
 
 async def submit(workspace, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
-                 footage=None, fonts=None):
+                 footage=None, fonts=None, lotties=None):
     """Start a review, look or render. → {token, eta_s, times, sound}. A repeated `key` returns the same job."""
     meta = {"kind": kind, "html": html, "images": images or {}, "params": params or {}, "audio": audio or {},
-            "words": words or {}, **_footage_meta(footage), **({"fonts": fonts} if fonts else {})}
+            "words": words or {}, **_footage_meta(footage), **({"fonts": fonts} if fonts else {}),
+            **({"lotties": lotties} if lotties else {})}
     headers = {"Idempotency-Key": key} if key else {}
     resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, files),
                           headers=headers, timeout=httpx.Timeout(120.0, connect=15.0))
@@ -227,6 +228,19 @@ async def submit(workspace, kind, html, images=None, files=None, *, params=None,
         raise Refused(data.get("error") or "the composition has errors", data.get("findings") or [], data.get("sound"))
     if resp.status_code == 429 and _ours(resp):
         raise OverAllowance(_body(resp)["error"])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()
+
+
+async def piece(workspace, html, piece_name, at, variables):
+    """A motion piece (lower-third, logo-reveal, chart, kinetic-title) put into a composition by the service.
+    → {html, id}; ValueError says what is wrong with the piece's variables."""
+    resp = await _request("POST", "/v1/piece", workspace=workspace, retry=True,
+                          json={"html": html, "piece": piece_name, "at": at, "vars": variables},
+                          timeout=httpx.Timeout(60.0, connect=15.0))
+    if resp.status_code in (400, 422):
+        raise ValueError((_body(resp) or {}).get("error") or "the piece could not be made")
     if resp.status_code != 200:
         raise _error(resp)
     return resp.json()

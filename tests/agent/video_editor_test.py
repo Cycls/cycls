@@ -148,7 +148,7 @@ def test_a_session_carries_what_the_video_names_and_the_versions_it_may_write(mo
     assert sent.headers["x-video-key"] == "k" * 40 and sent.headers["x-video-tenant"] and "x-video-proto" not in sent.headers
     meta = json.loads(_meta(sent))
     assert meta["path"] == "videos/launch.video.html" and meta["host_origin"] == "https://app.cycls.test"
-    assert set(meta["images"]) == {"../brand/logo.png"} and set(meta["audio"]) == {"videos/voice/intro.m4a"}
+    assert set(meta["images"]) == {"../brand/logo.png", "brand/logo.png"} and set(meta["audio"]) == {"videos/voice/intro.m4a"}
     w = meta["words"]["videos/voice/intro.words.json"]
     assert w["media"] == "videos/voice/intro.m4a" and w["json"]["text"] == "Hello." and w["shared"] is True
 

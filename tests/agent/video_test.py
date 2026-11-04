@@ -76,7 +76,7 @@ def test_headers_carry_the_key_and_hashes_never_the_names(monkeypatch, tmp_path)
     seen = _transport(monkeypatch, lambda r: httpx.Response(200, json={"started": True}))
     asyncio.run(video.warm(_ws(tmp_path)))
     h = seen[0].headers
-    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "4"
+    assert h["x-video-key"] == "k" * 40 and h["x-video-proto"] == "5"
     assert "org1" not in h["x-video-tenant"] and len(h["x-video-tenant"]) == 32
     assert h["x-video-user"] != h["x-video-tenant"]
     assert str(seen[0].url) == "https://video.test/v1/warm"
@@ -311,9 +311,10 @@ class FakeService:
         return COMP.replace("Hi", variables.get("title", "Hi"))
 
     async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
-                     footage=None, fonts=None):
+                     footage=None, fonts=None, lotties=None):
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key,
-                               "audio": audio, "words": words, "files": files, "footage": footage, "fonts": fonts})
+                               "audio": audio, "words": words, "files": files, "footage": footage, "fonts": fonts,
+                               "lotties": lotties})
         if self.refuse:
             raise video.Refused("fix first", self.refuse)
         if self.over:
@@ -970,7 +971,7 @@ def test_the_client_sends_a_clip_in_pieces_and_goes_on_from_where_the_door_says(
     at, whole = asyncio.run(video.send_clip(_ws(tmp_path), tmp_path / "uploads" / "interview.mp4", sha))
     assert whole and at == len(data) and bytes(got) == data
     assert calls == [(0, False), (1000, False), (1000, False), (2000, True)]
-    assert seen[0].url.path == f"/v1/assets/{sha}" and seen[0].headers["x-video-proto"] == "4"
+    assert seen[0].url.path == f"/v1/assets/{sha}" and seen[0].headers["x-video-proto"] == "5"
 
     seen = _transport(monkeypatch, lambda request: httpx.Response(200, json={"token": "t", "eta_s": 5}))
     asyncio.run(video.submit(_ws(tmp_path), "render", "<html>", footage={"uploads/a.mp4": {"sha": sha, "words": SAID},

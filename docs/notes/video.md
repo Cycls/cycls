@@ -601,6 +601,33 @@ does, and the editor's font list offers the brand fonts beside the catalogue's.
   renders it whole, inside the Renderer's 3600 s. `clip.MAX_S` follows; the built-in contract
   (`fallback.py`) is the re-signed v4.
 
+### Motion: Lottie, transitions, motion pieces (protocol 5, contract v5, 2026-11-04)
+
+What the user chose: Lottie animations (people's own `.json` files and a built-in library), four motion
+pieces (lower third, logo reveal, chart, kinetic title) as editor buttons and an agent action, and GPU
+scene transitions.
+
+- **Lottie.** `<div class="lottie" data-lottie="lottie:<id>" …>` (the library) or `data-lottie="uploads/x.json"`
+  (a workspace file: `media.collect_lotties` sends it, hashed, as `meta.lotties`). It plays from its scene's
+  start (+`data-delay`), once or `data-loop`, `data-speed`, `data-color` recolours an accent. The service
+  injects lottie-web's light player (no expressions) and its own runtime (cycls-video `node/motion.mjs`).
+- **The library** (902): Cycls's own 24 accents (cycls-video `lottie/accents.py`, drawn in a marker colour the
+  video recolours) and Google's 878 animated Noto emoji (CC BY 4.0: the render's MP4 carries
+  "Animated emoji: Google Noto Emoji Animation, CC BY 4.0" in its details; the reply says so). LottieFiles was
+  ruled out: its licence forbids compiling its files into a library. The contract signs the library's
+  public fields (`data.lottie`), which `lottie {query}` searches (`run._lottie`).
+- **Transitions.** `data-transition="<kind>"` (+`data-transition-duration`) on the scene that comes in, centred
+  on the cut. `fade` is CSS; the 14 others are HyperFrames' WebGL shaders, composited in the page by the
+  renderer (page-side compositing; no GSAP — its licence excludes no-code animation tools). The editor's preview
+  and `look` draw a CSS approximation. Between footage pieces a transition is a crossfade over where they
+  overlap (a shader cannot capture a playing clip: tried, the frames came out black).
+- **Motion pieces.** `motion {name, piece, start, vars}` → the service's `POST /v1/piece` (the same
+  `editor-add.mjs addPiece` the editor's Motion menu calls) puts the markup in; the SDK fills the brand kit's
+  accent, background, heading font and logo, saves and checks. `editor.open` now sends the brand logo's bytes
+  with the session, so the editor's logo reveal and Media's "Brand logo" can use it.
+- **The editor.** Header buttons Motion (the four pieces) and Transitions (every cut, one or all, a length);
+  Media gains an Animations tab (the library, searched by the editor server's `cycls/lottie`).
+
 ## The contract
 
 The text the model learns from lives with the service (`cycls-video/contract/v1.md`) and ships

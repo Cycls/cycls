@@ -87,20 +87,22 @@ def _sha(html, images_files, words=None, footage=None):
 
 
 def _media(html, root):
-    """The images, audio, footage and brand fonts a composition names, ready to send.
-    → (images, audio, files, words, footage, problems, fonts)."""
+    """The images, audio, footage, brand fonts and Lottie files a composition names, ready to send.
+    → (images, audio, files, words, footage, problems, extra), `extra` {fonts, lotties} for the request."""
     from . import fonts as kit_fonts
 
     images, image_files, problems = media.collect(html, root)
     audio, audio_files, words, more = media.collect_audio(html, root)
     footage, clips = media.collect_footage(html, root)
     fonts, font_files = kit_fonts.for_html(root, html)
-    return images, audio, {**image_files, **audio_files, **font_files}, words, footage, problems + more + clips, fonts
+    lotties, lottie_files, animations = media.collect_lotties(html, root)
+    return (images, audio, {**image_files, **audio_files, **font_files, **lottie_files}, words, footage,
+            problems + more + clips + animations, {"fonts": fonts, "lotties": lotties})
 
 
-def _fonts_kw(fonts):
-    """The brand fonts for a request, only when there are some (video/fonts.py)."""
-    return {"fonts": fonts} if fonts else {}
+def _fonts_kw(extra):
+    """The brand fonts and Lottie files for a request, only those there are (video/fonts.py, media.py)."""
+    return {k: v for k, v in (extra or {}).items() if v}
 
 
 async def _save(root, chat, name, html, reason):
@@ -1033,6 +1035,85 @@ def _music(query):
     return "\n".join(lines)
 
 
+def _lottie(query):
+    """The animation library's entries that fit the words asked for, from the signed contract's data."""
+    from .fallback import FALLBACK
+
+    c = contract_mod.cached() or {}
+    rows = (c.get("data") or FALLBACK.get("data") or {}).get("lottie") or []
+    if not rows:
+        return "The animation library is not available yet: leave animations out, or use a Lottie file of the person's."
+    words = [w for w in str(query or "").lower().replace(",", " ").split() if w]
+
+    def score(r):
+        hay = " ".join([r.get("id", ""), r.get("title", ""), " ".join(r.get("tags") or []), r.get("kind", "")]).lower()
+        return sum(2 if w in (r.get("tags") or []) else 1 for w in words if w in hay)
+
+    picked = sorted((r for r in rows if score(r)), key=lambda r: (-score(r), r.get("kind") != "accent")) if words else \
+        [r for r in rows if r.get("kind") == "accent"]
+    if not picked:
+        accents = ", ".join(r["id"] for r in rows if r.get("kind") == "accent")
+        return f"Nothing in the animation library for {query!r}. The accents: {accents}. Try other words for an emoji."
+    lines = [f"Animations{' for ' + repr(query) if words else ''} (use one as data-lottie=\"lottie:<id>\"):"]
+    for r in picked[:10]:
+        bits = [r.get("kind", ""), f"{r.get('duration', 0):g} s", "loops" if r.get("loop") else "plays once",
+                f"{r.get('w')}x{r.get('h')}" if r.get("w") else "", "data-color recolours it" if r.get("recolour") else ""]
+        line = f"- {r['id']}: {r.get('title', '')} — {'; '.join(b for b in bits if b)}"
+        if r.get("credit"):
+            line += f". Credit (said in the MP4's details for you): {r['credit']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+async def _motion(workspace, root, chat, name, rel, inp, note):
+    """A motion piece put into the saved video by the service (motion pieces, protocol 5), then the checks."""
+    from cycls._agent import video
+    from . import brand as brand_mod
+
+    piece = str(inp.get("piece") or "").strip()
+    if piece not in ("lower-third", "logo-reveal", "chart", "kinetic-title"):
+        return _err("motion needs piece: lower-third, logo-reveal, chart or kinetic-title.")
+    if not (root / rel).exists():
+        return _err(f"there is no {rel}; `write` it first.")
+    variables = dict(inp.get("vars") or {}) if isinstance(inp.get("vars"), dict) else {}
+    try:
+        kit = brand_mod.kit(root, _catalogue()[0])
+    except Exception:  # noqa: BLE001 - a kit that cannot be read is no kit
+        kit = None
+    if kit:
+        colours = kit.get("colours") or {}
+        variables.setdefault("accent", colours.get("accent") or colours.get("primary"))
+        if piece in ("logo-reveal", "chart") and colours.get("background"):
+            variables.setdefault("background", colours.get("background"))
+        heading = kit.get("heading") or kit.get("body")
+        if heading and (heading[1] or heading[2]):
+            variables.setdefault("font", heading[0])
+        if piece == "logo-reveal" and kit.get("logo"):
+            variables.setdefault("logo", kit["logo"])
+    variables = {k: v for k, v in variables.items() if v is not None}
+    start = inp.get("start", inp.get("at"))
+    start = start[0] if isinstance(start, list) and start else start
+    async with lock(root / rel):
+        for attempt in (1, 2):
+            data = (root / rel).read_bytes()
+            try:
+                made = await video.piece(workspace, data.decode("utf-8"), piece, start if isinstance(start, (int, float)) else 0,
+                                         variables)
+            except ValueError as e:
+                return _err(f"{piece}: {e}")
+            try:
+                version = await write_fig(root, rel, made["html"].encode("utf-8"), base=version_of(data), by="agent",
+                                          reason="video-motion")
+                break
+            except Stale:
+                if attempt == 2:
+                    return _err(f"{rel} changed while the piece was being added (the person is editing it); try again.")
+    files.remember(root, chat, name)
+    text, blocks, clean = await _checks(workspace, root, rel, made["html"])
+    return _result(f"Added a {piece} to {rel}: its id is {made.get('id')}, from {start or 0:g} s.\n{text}", blocks, note,
+                   _shown(rel, name, clean, version))
+
+
 async def _exec_video(inp, workspace, ctx=None):
     from cycls._agent import video
 
@@ -1057,6 +1138,8 @@ async def _exec_video(inp, workspace, ctx=None):
             return await _guide(workspace, root, loaded)
         if action == "music":
             return _music(inp.get("query") or inp.get("mood")) + note
+        if action == "lottie":
+            return _lottie(inp.get("query")) + note
         if action == "editor":
             out = await _editor(workspace, root, chat, inp, note)
             return out + note if isinstance(out, str) else out
@@ -1159,6 +1242,9 @@ async def _exec_video(inp, workspace, ctx=None):
             text, blocks, clean = await _checks(workspace, root, rel, new)
             return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}"
                            f"{_brand_hint(root, new)}", blocks, note, _shown(rel, name, clean, version))
+
+        if action == "motion":
+            return await _motion(workspace, root, chat, name, rel, inp, note)
 
         if action == "look":
             try:

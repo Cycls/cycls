@@ -127,12 +127,25 @@ def _gather(html, root, rel):
     # The brand kit's fonts, every one: the preview draws a video's brand font as its render does, and
     # the editor's font list offers them beside the catalogue's.
     fonts, font_files = kit_fonts.for_html(root, html, every=True)
+    lotties, lottie_files, animations = media.collect_lotties(html, root)
+    problems += animations
     meta = {"images": images, "audio": audio, "footage": {p: f["sha"] for p, f in footage.items()},
-            "words": words, **({"fonts": fonts} if fonts else {})}
+            "words": words, **({"fonts": fonts} if fonts else {}), **({"lotties": lotties} if lotties else {})}
     brand = _brand(root)
     if brand:
         meta["brand"] = brand
-    return meta, {**image_files, **audio_files, **font_files}, problems
+        # The logo goes with the session, so Media's "Brand logo" and the Motion menu's logo reveal can use it.
+        logo = brand.get("logo")
+        if logo and logo not in images:
+            try:
+                data = (Path(root) / logo).read_bytes()
+                if len(data) <= media.MAX_BYTES and logo.rsplit(".", 1)[-1].lower() in media.TYPES:
+                    hashed = hashlib.sha256(data).hexdigest()[:32] + "." + logo.rsplit(".", 1)[-1].lower()
+                    images[logo] = hashed
+                    image_files[hashed] = data
+            except OSError:
+                pass
+    return meta, {**image_files, **audio_files, **font_files, **lottie_files}, problems
 
 
 def _brand(root):
@@ -316,10 +329,11 @@ async def _render(workspace, root, rel, quality, key):
         audio, audio_files, words, more = await asyncio.to_thread(media.collect_audio, html, root)
         footage, clips = await asyncio.to_thread(media.collect_footage, html, root)
         fonts, font_files = await asyncio.to_thread(kit_fonts.for_html, root, html)
-        problems += more + clips
+        lotties, lottie_files, animations = await asyncio.to_thread(media.collect_lotties, html, root)
+        problems += more + clips + animations
         if problems:
             raise ValueError(problems[0])
-        sent = {**image_files, **audio_files, **font_files}
+        sent = {**image_files, **audio_files, **font_files, **lottie_files}
         # The main size and each other size the root lists (sizes.py), one job each, at once.
         shapes, problems = sizes.declared(html)
         if problems:
@@ -332,7 +346,7 @@ async def _render(workspace, root, rel, quality, key):
             try:
                 job = await video.submit(workspace, "render", h, images, sent, params={"quality": quality},
                                          key=job_key, audio=audio, words=words, footage=footage,
-                                         **({"fonts": fonts} if fonts else {}))
+                                         **({"fonts": fonts} if fonts else {}), **({"lotties": lotties} if lotties else {}))
             except video.Refused as e:
                 if shape:
                     e.findings = [{**f, "message": f"At {shape}: {f.get('message')}"} for f in e.findings]

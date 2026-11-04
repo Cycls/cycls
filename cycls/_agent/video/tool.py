@@ -15,7 +15,7 @@ import contextvars
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
 ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles",
-           "dub", "editor")
+           "dub", "editor", "lottie", "motion")
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
@@ -45,6 +45,8 @@ _ACTIONS_TEXT = """ACTIONS
 - restore {name}: put back the version before the last save.
 - voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en"}: read the script aloud as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
 - music {query?}: the library's tracks for a mood or a few words ("calm piano", "upbeat"), each with the id to use as src="music:<id>".
+- lottie {query}: the animation library's accents and animated emoji for a few words ("check", "underline", "confetti", "fire emoji"), each with the id to use as data-lottie="lottie:<id>", its length, its shape and whether it loops (ANIMATIONS in the instructions).
+- motion {name, piece, start, vars}: put a motion piece into the saved video at `start` seconds (MOTION PIECES in the instructions): piece "lower-third" (vars {name, role?}), "logo-reveal" ({logo?, title?}), "chart" ({kind: "bars" | "donut", title?, items: [{label, value}], suffix?}) or "kinetic-title" ({text}); vars may also set accent, background, font and duration. The brand kit fills the accent, the font and the logo you leave out. The same checks as write; the reply names the piece's id.
 - footage {path} or {stock: "a few words", pick?, orientation?}: make a clip ready for video — one of the person's, by its workspace path (MP4, MOV, WebM; up to 512 MB and 10 minutes), or a stock clip found for those words and saved in the workspace. The reply is what you cannot see or hear: the clip's length and shape, where its shots change, a sheet of its frames, what is said in it sentence by sentence with times, the <video> line to use, and whether a face in it can be followed (data-reframe). Call it before writing a video that uses the clip; calling it again for the same clip is free. A long clip takes a minute or two: if the reply says it is still sending or reading, call footage again with the same path. With tidy: true the reply also gives the clip tidied — its long pauses cut, every word kept — as <video> pieces to put back to back: use it when the person asks to tighten, clean up or shorten a talking clip.
 
 A reply shows lint errors with their fixes, or the browser check and ONE sheet of frames, each labelled with its time, the pieces of footage as you placed them, and the sound map when there is sound. Look at the sheet before you render.
@@ -72,7 +74,11 @@ def _schema():
                         "all": {"type": "boolean", "description": "Replace every occurrence."}},
                         "required": ["old", "new"]}},
         "template": {"type": "string", "description": "template: which template (they are listed in the instructions)."},
-        "vars": {"type": "object", "description": "template: its variables, as the instructions list them."},
+        "vars": {"type": "object", "description": "template: its variables, as the instructions list them. "
+                                                  "motion: the piece's (name, role, title, items, text, accent, …)."},
+        "piece": {"type": "string", "enum": ["lower-third", "logo-reveal", "chart", "kinetic-title"],
+                  "description": "motion: which piece."},
+        "start": {"type": "number", "description": "motion: when the piece starts, in seconds."},
         "at": {"type": "array", "items": {"type": "number"},
                "description": "look: times in seconds, up to 9."},
         "zoom": {"type": "string", "description": "look: a CSS selector or x,y,w,h to look at closely."},
@@ -86,7 +92,8 @@ def _schema():
         "language": {"type": "string", "enum": ["ar", "en"],
                      "description": "voice: the script's language, when not plain from it. footage: the language spoken "
                                     "in the clip, when you know it."},
-        "query": {"type": "string", "description": "music: a mood or a few words, e.g. calm piano."},
+        "query": {"type": "string", "description": "music: a mood or a few words, e.g. calm piano. lottie: a few "
+                                                   "words, e.g. checkmark, confetti, fire emoji."},
         "stock": {"type": "string", "description": "footage: a few words to find a stock clip, e.g. waves at sunset."},
         "pick": {"type": "integer", "description": "footage with stock: which result to fetch (0 is the first)."},
         "orientation": {"type": "string", "enum": ["landscape", "portrait", "square"],
