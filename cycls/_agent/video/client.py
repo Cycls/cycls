@@ -246,10 +246,11 @@ async def piece(workspace, html, piece_name, at, variables):
     return resp.json()
 
 
-async def voice(workspace, text, *, language=None, voice_id=None, key=None):
-    """Start a voice-over: the script read aloud on the organisation's GPU. → {token, eta_s}.
-    Refused (with the reason) when the script is empty or too long, or the voice unknown."""
-    meta = {"kind": "voice", "voice": {"text": text, "language": language, "voice": voice_id or "default"}}
+async def voice(workspace, text, *, language=None, voice_id=None, key=None, speed=None):
+    """Start a voice-over: the script read aloud on the organisation's GPU. → {token, eta_s}. `speed` 0.75 to
+    1.25 (slower below 1). Refused (with the reason) when the script is empty or too long, or the voice unknown."""
+    meta = {"kind": "voice", "voice": {"text": text, "language": language, "voice": voice_id or "default",
+                                       **({"speed": speed} if speed and speed != 1 else {})}}
     headers = {"Idempotency-Key": key} if key else {}
     resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
                           headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))

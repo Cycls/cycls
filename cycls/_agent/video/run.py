@@ -631,9 +631,9 @@ def _subtitles(root, name, sound, audio, words, footage):
     return len(cs), done, short
 
 
-async def _voice(workspace, root, chat, name, text, voice_id, language):
+async def _voice(workspace, root, chat, name, text, voice_id, language, speed=1.0):
     """A voice-over: read on the organisation's GPU, saved as videos/voice/<name>.m4a and its word
-    timings. The same name, script and voice again is the same take, not a second job."""
+    timings. The same name, script, voice and speed again is the same take, not a second job."""
     from cycls._agent import video
 
     if not isinstance(text, str) or not text.strip():
@@ -644,15 +644,17 @@ async def _voice(workspace, root, chat, name, text, voice_id, language):
         old = json.loads((root / words_rel).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = None
-    if old and old.get("text") == text and old.get("voice") == voice_id and (root / rel).is_file():
+    if old and old.get("text") == text and old.get("voice") == voice_id and float(old.get("speed") or 1) == speed \
+            and (root / rel).is_file():
         return report.voice_text(old, rel, reused=True, voice_id=voice_id)
-    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|voice|{name}|{voice_id}|{language}|{text}".encode()).hexdigest()
+    key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|voice|{name}|{voice_id}|{language}|{text}"
+                         f"{'|' + str(speed) if speed != 1 else ''}".encode()).hexdigest()
     pending = files.voice_pending(root, chat, name)
     if pending and pending.get("key") == key:
         token = pending["token"]
     else:
         try:
-            job = await video.voice(workspace, text, language=language, voice_id=voice_id, key=key)
+            job = await video.voice(workspace, text, language=language, voice_id=voice_id, key=key, speed=speed)
         except video.Refused as e:
             return _err(f"the voice-over was not made: {e}")
         token = job["token"]
@@ -1190,7 +1192,10 @@ async def _exec_video(inp, workspace, ctx=None):
             if language not in (None, "", "ar", "en"):
                 return _err("language: ar or en, or leave it out to have it found.")
             voice_id = inp.get("voice") or "default"
-            out = await _voice(workspace, root, chat, name, inp.get("text"), voice_id, language or None)
+            speed = inp.get("speed", 1)
+            if not isinstance(speed, (int, float)) or isinstance(speed, bool) or not 0.75 <= speed <= 1.25:
+                return _err("speed: 0.75 (slower) to 1.25 (faster); leave it out for the voice's own pace.")
+            out = await _voice(workspace, root, chat, name, inp.get("text"), voice_id, language or None, float(speed))
             return out + note if isinstance(out, str) else out
 
         if action == "template":

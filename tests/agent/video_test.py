@@ -702,8 +702,8 @@ class FakeVoice:
         self.calls = []
         monkeypatch.setattr(video, "voice", self.voice)
 
-    async def voice(self, ws, text, *, language=None, voice_id=None, key=None):
-        self.calls.append({"text": text, "language": language, "voice": voice_id, "key": key})
+    async def voice(self, ws, text, *, language=None, voice_id=None, key=None, speed=None):
+        self.calls.append({"text": text, "language": language, "voice": voice_id, "key": key, "speed": speed})
         return {"token": f"v{len(self.calls)}", "eta_s": 30}
 
 
@@ -723,6 +723,12 @@ def test_a_voice_over_is_made_saved_with_its_words_and_said_with_the_lines_to_us
     assert len(fv.calls) == 1 and again.startswith("Already made")                 # the same take, not a second job
     _run({"action": "voice", "name": "hi", "text": "A new script.", "voice": "saudi"}, _ws(tmp_path))
     assert len(fv.calls) == 2 and fv.calls[1]["voice"] == "saudi"
+    words = json.loads((tmp_path / "videos" / "voice" / "hi.words.json").read_text(encoding="utf-8"))
+    words.update(text="A new script.", voice="saudi")
+    (tmp_path / "videos" / "voice" / "hi.words.json").write_text(json.dumps(words), encoding="utf-8")
+    _run({"action": "voice", "name": "hi", "text": "A new script.", "voice": "saudi", "speed": 0.85}, _ws(tmp_path))
+    assert len(fv.calls) == 3 and fv.calls[2]["speed"] == 0.85, "a slower take is a new take"
+    assert _run({"action": "voice", "name": "hi", "text": "x", "speed": 0.5}, _ws(tmp_path)).startswith("Error: speed")
 
 
 def test_a_voice_over_still_reading_is_collected_by_the_next_call(monkeypatch, tmp_path):
