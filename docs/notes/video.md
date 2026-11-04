@@ -562,6 +562,15 @@ half joins the lists its piece was in, a removed piece leaves them. (Before, rem
 piece left a list naming nothing, and that video's preview and render failed — agent-made videos
 too.)
 
+**Cut pauses, cut words, Sizes and caption looks (2026-11-04, cycls-video `f698623`):** the header's
+**Cut pauses** takes the silences out of what is said (0.4, 0.7 or 1.2 s; counted first), the
+Transcript's **Cut words** mode takes a run of words out of every piece that shows it (struck through
+after), both as a ripple edit that brings the rest forward, undone with the editor's own Undo;
+**Sizes** sets `data-sizes` (Render makes one MP4 a size) and `data-reframe` where a clip has a face;
+captions take a **look** (classic, bold, boxed, minimal), a highlight colour and the brand kit's font.
+`editor.open` sends the brand kit's colours and font (`meta.brand`, `editor._brand`); Text uses its
+font.
+
 **Brand fonts:** `editor.open` now sends every font of the workspace's brand kit with the session
 (`fonts.for_html(…, every=True)`), so the editor's preview draws a video's brand font as its render
 does, and the editor's font list offers the brand fonts beside the catalogue's.

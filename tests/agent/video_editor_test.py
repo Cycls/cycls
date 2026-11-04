@@ -168,6 +168,23 @@ def test_a_session_carries_every_brand_font_so_the_preview_draws_them_and_the_li
         assert name.endswith(".ttf") and f'name="{name}"' in body                                # each file sent
 
 
+def test_a_session_carries_the_brand_kit_for_the_buttons(monkeypatch, tmp_path):
+    from tests.agent.video_test import _kit
+
+    client, root = _client(tmp_path)
+    _video(root)
+    _on(monkeypatch)
+    fake = FakeEditor(monkeypatch)
+    assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
+    assert "brand" not in json.loads(_meta(fake.calls[0])), "no kit, nothing sent"
+    _kit(root)
+    assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
+    opened = [c for c in fake.calls if c.method == "POST" and c.url.path == "/v1/sessions"]
+    brand = json.loads(_meta(opened[-1]))["brand"]
+    assert brand["font"] == "Playfair Display"                      # the heading's, a catalogue family
+    assert brand["colours"]["primary"].lower() == "#0c2340" and brand["colours"]["accent"].lower() == "#f5a623"
+
+
 def test_an_older_video_is_upgraded_and_the_upgrade_kept_as_a_version(monkeypatch, tmp_path):
     client, root = _client(tmp_path)
     _video(root)

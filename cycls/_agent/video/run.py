@@ -941,7 +941,8 @@ async def _editor(workspace, root, chat, inp, note=""):
         lead = (f"Made {comp}: the clip alone, whole, as it is." if made else
                 f"{comp} is the video made from this clip before, with any changes made to it since.")
         text = (f"{lead} It is open in the editor for the person, who can trim it, cut parts out, split it, set "
-                "its volume, fix a word of what is said, add captions, a text or music from its header, and render "
+                "its volume, fix a word of what is said or cut words out in its transcript, cut the pauses, add captions, "
+                "a text or music, make other sizes, and render "
                 "it. Tell them so in a sentence, and leave the "
                 "video as it is unless they ask for a change; when they do, read the file first (they may have "
                 "changed it by hand)." + (f"\n{notice}" if notice else "") + "\n\n"

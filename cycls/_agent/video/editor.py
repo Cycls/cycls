@@ -129,7 +129,27 @@ def _gather(html, root, rel):
     fonts, font_files = kit_fonts.for_html(root, html, every=True)
     meta = {"images": images, "audio": audio, "footage": {p: f["sha"] for p, f in footage.items()},
             "words": words, **({"fonts": fonts} if fonts else {})}
+    brand = _brand(root)
+    if brand:
+        meta["brand"] = brand
     return meta, {**image_files, **audio_files, **font_files}, problems
+
+
+def _brand(root):
+    """The brand kit as the editor's buttons use it: its colours (the word being said, in a caption) and
+    the font a caption or a text can take — the heading's, else the body's, when the video can draw it."""
+    from . import brand
+    from .run import _catalogue
+
+    try:
+        k = brand.kit(root, _catalogue()[0])
+    except Exception:  # noqa: BLE001 - a kit that cannot be read is no kit
+        return None
+    if not k:
+        return None
+    font = next((f[0] for f in (k.get("heading"), k.get("body")) if f and (f[1] or f[2])), None)
+    colours = {role: v for role, v in (k.get("colours") or {}).items() if isinstance(v, str)}
+    return {"colours": colours, "font": font} if colours or font else None
 
 
 async def open(workspace, root, rel, host_origin):
