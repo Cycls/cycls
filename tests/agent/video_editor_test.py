@@ -81,6 +81,9 @@ class FakeEditor:
                                                  "upgraded": bool(self.upgraded), "notice": None})
             if request.method == "PUT":
                 return httpx.Response(200, json={"ok": True})
+            if request.method == "POST" and request.url.path.endswith("/media"):
+                kind = json.loads(_meta(request))["kind"]
+                return httpx.Response(200, json={"ok": True, "id": {"picture": "picture", "logo": "logo"}.get(kind, "cutaway")})
             return httpx.Response(200, json={"ok": True})
 
         monkeypatch.setattr(editor.httpx, "AsyncClient",
@@ -176,7 +179,10 @@ def test_a_session_carries_the_brand_kit_for_the_buttons(monkeypatch, tmp_path):
     _on(monkeypatch)
     fake = FakeEditor(monkeypatch)
     assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
-    assert "brand" not in json.loads(_meta(fake.calls[0])), "no kit, nothing sent"
+    assert json.loads(_meta(fake.calls[0]))["brand"] == {"colours": {}, "font": None, "logo": "brand/logo.png"},         "no brand file: the logo alone"
+    (root / "brand" / "logo.png").unlink()
+    assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
+    assert "brand" not in json.loads(_meta(fake.calls[-1])), "no kit, nothing sent"
     _kit(root)
     assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
     opened = [c for c in fake.calls if c.method == "POST" and c.url.path == "/v1/sessions"]
@@ -362,3 +368,60 @@ def test_a_render_from_the_editor_makes_every_size_the_root_lists(monkeypatch, t
     assert (root / "videos" / "launch.mp4").read_bytes() == b"tok1"
     assert (root / "videos" / "launch.square.mp4").read_bytes() == b"tok2"
     client.__exit__(None, None, None)
+
+
+# ---- the Add menu: pictures, the brand logo and clips from the workspace ---------------------------
+
+def test_the_add_menu_lists_pictures_and_clips_and_adds_one_at_the_playhead(monkeypatch, tmp_path):
+    from cycls._agent import video as video_pkg
+
+    client, root = _client(tmp_path)
+    _video(root)
+    (root / "uploads").mkdir()
+    (root / "uploads" / "photo.jpg").write_bytes(b"\xff\xd8\xff jpeg")
+    (root / "uploads" / "big.png").write_bytes(b"x" * (3 * 1024 * 1024))
+    (root / "uploads" / "broll.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42 clip")
+    (root / ".cache").mkdir()
+    (root / ".cache" / "hidden.png").write_bytes(b"png")
+    _on(monkeypatch)
+    fake = FakeEditor(monkeypatch)
+    listed = client.get("/video/editor/media?path=videos/launch.video.html").json()["files"]
+    paths = {f["path"]: f["kind"] for f in listed}
+    assert paths == {"uploads/photo.jpg": "picture", "uploads/broll.mp4": "video", "brand/logo.png": "picture"}, paths
+
+    r = client.post("/video/editor/media?path=videos/launch.video.html&sid=" + "a" * 32 + "&file=uploads/photo.jpg&kind=picture&at=2.5")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "id": "picture", "path": "uploads/photo.jpg"}
+    sent = [c for c in fake.calls if c.url.path == "/v1/sessions/" + "a" * 32 + "/media"][-1]
+    meta = json.loads(_meta(sent))
+    assert meta["path"] == "uploads/photo.jpg" and meta["kind"] == "picture" and meta["at"] == 2.5
+    assert meta["file"].endswith(".jpg") and f'name="{meta["file"]}"' in sent.read().decode("latin-1")
+
+    async def ready(ws, root_, full, rel, **kw):
+        return {"state": "ready", "sha": "b" * 64, "info": {}, "sheet": None, "reused": True, "words_rel": None}
+    monkeypatch.setattr("cycls._agent.video.clip.make_ready", ready)
+    r = client.post("/video/editor/media?path=videos/launch.video.html&sid=" + "a" * 32 + "&file=uploads/broll.mp4&kind=video&at=1")
+    assert r.status_code == 200 and r.json()["id"] == "cutaway"
+    meta = json.loads(_meta([c for c in fake.calls if c.url.path.endswith("/media")][-1]))
+    assert meta == {"path": "uploads/broll.mp4", "kind": "video", "at": 1.0, "sha": "b" * 64}
+
+    base = "/video/editor/media?path=videos/launch.video.html&sid=" + "a" * 32
+    assert client.post(base + "&file=uploads/broll.mp4&kind=picture").status_code == 422      # a clip is not a picture
+    assert client.post(base + "&file=uploads/big.png&kind=picture").status_code == 422          # over 2 MB
+    assert client.post(base + "&file=uploads/none.png&kind=picture").status_code == 404
+    assert client.post(base + "&file=uploads/photo.jpg&kind=sticker").status_code == 400
+    monkeypatch.setenv("VIDEO_ORGS", "someone-else")
+    assert client.post(base + "&file=uploads/photo.jpg&kind=picture").status_code == 503
+
+
+def test_the_brand_logo_goes_with_the_session(monkeypatch, tmp_path):
+    from tests.agent.video_test import _kit
+
+    client, root = _client(tmp_path)
+    _video(root)
+    _kit(root)
+    _on(monkeypatch)
+    fake = FakeEditor(monkeypatch)
+    assert client.post("/video/editor?path=videos/launch.video.html").status_code == 200
+    assert json.loads(_meta(fake.calls[0]))["brand"]["logo"] == "brand/logo.png"
+

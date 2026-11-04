@@ -927,6 +927,29 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     window.addEventListener("cycls:compose", onCompose);
     return () => window.removeEventListener("cycls:compose", onCompose);
   }, []);
+  // A request sent from elsewhere on the page as the person's own message (Translate in the video
+  // editor). What is typed in the composer, and its attachments, stay where they are; mid-reply it queues.
+  const pageSend = useRef<(text: string, origin: string) => void>(() => {});
+  pageSend.current = (text, origin) => {
+    const extra: SendExtra | undefined = files?.path ? { folder: files.path } : undefined;
+    if (isStreaming) {
+      const next = [...queuedRef.current, { id: crypto.randomUUID(), text, attachments: undefined, origin, extra }];
+      queuedRef.current = next;
+      setQueued(next);
+      return;
+    }
+    onSend(text, undefined, origin, extra);
+    setTimeout(() => scrollToBottom(), 0);
+  };
+  useEffect(() => {
+    const onPageSend = (e: Event) => {
+      const d = (e as CustomEvent<{ text?: string; origin?: string }>).detail;
+      if (typeof d?.text !== "string" || !d.text.trim()) return;
+      pageSend.current(d.text.trim(), typeof d.origin === "string" ? d.origin : "page");
+    };
+    window.addEventListener("cycls:send", onPageSend);
+    return () => window.removeEventListener("cycls:send", onPageSend);
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;

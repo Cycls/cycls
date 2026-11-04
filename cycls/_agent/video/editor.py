@@ -149,7 +149,9 @@ def _brand(root):
         return None
     font = next((f[0] for f in (k.get("heading"), k.get("body")) if f and (f[1] or f[2])), None)
     colours = {role: v for role, v in (k.get("colours") or {}).items() if isinstance(v, str)}
-    return {"colours": colours, "font": font} if colours or font else None
+    logo = k.get("logo")
+    return ({"colours": colours, "font": font, **({"logo": logo} if logo else {})}
+            if colours or font or logo else None)
 
 
 async def open(workspace, root, rel, host_origin):
@@ -198,6 +200,75 @@ async def replace(workspace, root, sid, rel):
         raise LookupError("the editor session has ended")
     if resp.status_code != 200:
         raise ValueError((client._body(resp) or {}).get("error") or f"the editor answered {resp.status_code}")
+
+
+MEDIA_KINDS = ("picture", "logo", "video")
+
+
+def media_kind(rel):
+    """What a workspace file can be in a video: "picture" (an image the video can show), "video" (a clip),
+    or None."""
+    ext = rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
+    return "picture" if ext in media.TYPES else "video" if ext in media.FOOTAGE_TYPES else None
+
+
+def media_list(root, limit=400):
+    """The workspace's pictures and clips the Add menu offers, newest first: [{path, kind, size, modified}]."""
+    root = Path(root)
+    out = []
+    for p in root.rglob("*"):
+        rel = p.relative_to(root).as_posix()
+        if any(part.startswith(".") for part in rel.split("/")) or rel.startswith(("videos/voice/", "videos/.")):
+            continue
+        kind = media_kind(rel)
+        if not kind or not p.is_file():
+            continue
+        st = p.stat()
+        if kind == "picture" and st.st_size > media.MAX_BYTES:
+            continue
+        out.append({"path": rel, "kind": kind, "size": st.st_size, "modified": st.st_mtime})
+    out.sort(key=lambda f: f["modified"], reverse=True)
+    return out[:limit]
+
+
+async def add_media(workspace, root, sid, rel, kind, at=0.0):
+    """A picture, the brand logo or a clip of the workspace's, put into editor session `sid` at `at` seconds
+    (the Add menu, a file dropped on the timeline): a picture's bytes are sent; a clip is made ready first
+    (sent to the service and read there, as `footage` does) and named by its sha. → {id}. ValueError says
+    why it cannot be."""
+    from . import clip
+
+    root = Path(root)
+    full = _resolve_path(rel, root)
+    if not full.is_file():
+        raise LookupError(f"{rel} is not a file in the workspace.")
+    what = media_kind(rel)
+    if what is None or (kind == "video") != (what == "video"):
+        raise ValueError(f"{rel} is not a {'clip' if kind == 'video' else 'picture'} a video can show.")
+    meta = {"path": rel, "kind": kind, "at": max(0.0, float(at or 0))}
+    sent = {}
+    if kind == "video":
+        if full.stat().st_size > media.MAX_FOOTAGE_BYTES:
+            raise ValueError(f"{rel} is over {media.MAX_FOOTAGE_BYTES // 1048576} MB; a clip in a video is at most that.")
+        try:
+            r = await clip.make_ready(workspace, root, full, rel, by="user")
+        except clip.NotReady as e:
+            raise ValueError(str(e)) from e
+        meta["sha"] = r["sha"]
+    else:
+        data = await asyncio.to_thread(full.read_bytes)
+        if len(data) > media.MAX_BYTES:
+            raise ValueError(f"{rel} is {len(data) / 1048576:.1f} MB; a picture in a video is at most 2 MB. Export it smaller.")
+        name = hashlib.sha256(data).hexdigest()[:32] + "." + rel.rsplit(".", 1)[-1].lower()
+        meta["file"] = name
+        sent[name] = data
+    resp = await _call("POST", f"/v1/sessions/{sid}/media", workspace, files=_parts(meta, sent))
+    if resp.status_code == 404:
+        raise LookupError("the editor session has ended")
+    body = client._body(resp) or {}
+    if resp.status_code != 200:
+        raise ValueError(body.get("error") or f"the editor answered {resp.status_code}")
+    return {"id": body.get("id")}
 
 
 async def close(workspace, sid):

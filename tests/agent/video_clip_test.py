@@ -130,15 +130,19 @@ def test_a_clip_becomes_a_video_of_itself_once(monkeypatch, tmp_path):
     assert 'data-media-start="2"' in (tmp_path / "videos" / "interview.video.html").read_text(encoding="utf-8")
 
 
-def test_a_long_clip_holds_its_first_90_seconds_and_a_short_one_is_refused(monkeypatch, tmp_path):
+def test_a_long_clip_holds_its_first_10_minutes_and_a_short_one_is_refused(monkeypatch, tmp_path):
     _on(monkeypatch)
-    door = FakeDoor(monkeypatch, state="ready", info={**INFO, "duration": 250.437, "width": 1080, "height": 1920,
+    door = FakeDoor(monkeypatch, state="ready", info={**INFO, "duration": 700.437, "width": 1080, "height": 1920,
                                                        "transcript": {**SAID, "language": "ar"}})
     _clip(tmp_path, "uploads/long.mov")
     out, _ = _open(tmp_path, "uploads/long.mov")
-    assert out["path"] == "videos/long.video.html" and "first 90 s" in out["notice"] and "4:10" in out["notice"]
+    assert out["path"] == "videos/long.video.html" and "first 10 of the clip" in out["notice"] and "11:40" in out["notice"]
     html = (tmp_path / "videos" / "long.video.html").read_text(encoding="utf-8")
-    assert 'data-duration="90"' in html and 'data-width="1080" data-height="1920"' in html and '<html lang="ar">' in html
+    assert 'data-duration="600"' in html and 'data-width="1080" data-height="1920"' in html and '<html lang="ar">' in html
+    door.info = {**INFO, "duration": 250.437}
+    _clip(tmp_path, "uploads/four.mp4")
+    out, _ = _open(tmp_path, "uploads/four.mp4")
+    assert "notice" not in out and 'data-duration="250.43"' in (tmp_path / out["path"]).read_text(encoding="utf-8")
     door.info = {**INFO, "duration": 2.4}
     _clip(tmp_path, "uploads/blink.mp4")
     with pytest.raises(clip.NotReady, match="at least 3 seconds"):

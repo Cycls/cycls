@@ -173,6 +173,8 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `video_edited` | a change from the video editor written into the workspace | `kind` (`composition` / `words`) — timing, text and music, or a caption word? |
 | `video_save_conflict` | a video save refused because the file changed elsewhere (an agent edit, another tab), then the choice made | `choice` (`shown` / `latest` / `mine`) — how often do the person and the agent collide? |
 | `video_rendered_from_editor` | Render in the video editor finished, the MP4 beside the video | `quality` — do people render their own edits? |
+| `video_editor_media_added` | a picture, the brand logo or a clip put into a video from the editor's Media menu (or dropped on its timeline) | `kind` (`picture` / `logo` / `video`) — do people bring their own pictures and clips into a video? |
+| `video_editor_translate` | Translate in the video editor: the agent asked, in the chat, for captions in another language or a dub | `kind` (`captions` / `dub`), `to` — which languages people want their videos in |
 | `design_selection_attached` | "Add selection" — what's selected in an open design, attached to a message | `nodes` (how many) — do people point at the design rather than describe it? |
 | `design_comment_added` | a comment pinned on a design — a click on a slide in comment mode, then its words posted | — do people review designs here? |
 | `design_comment_replied` | a reply posted under a comment | — replies ÷ comments is how much of a conversation a pin becomes |

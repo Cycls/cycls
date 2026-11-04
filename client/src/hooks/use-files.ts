@@ -98,6 +98,11 @@ export type VideoEditorApi = {
   render: (path: string, quality: "draft" | "standard" | "final") => Promise<VideoRenderState>;
   renderState: (path: string) => Promise<VideoRenderState>;
   readText: (path: string) => Promise<{ text: string; version: string }>;
+  // The Add menu: the workspace's pictures and clips; one put into session `sid` at `at` seconds (a clip
+  // is made ready first); a file dropped on the editor, saved in uploads/ under a free name.
+  media: (path: string) => Promise<{ path: string; kind: "picture" | "video"; size: number }[]>;
+  addMedia: (path: string, sid: string, file: string, kind: "picture" | "logo" | "video", at: number) => Promise<{ id?: string }>;
+  saveDropped: (file: File) => Promise<string>;
 };
 
 // Cycls Sheets and Cycls Docs: may this workspace open the file in the editor, and where from.
@@ -330,6 +335,25 @@ export function useFiles(baseUrl: string = "") {
     readText: async (filePath) => {
       const res = await api(`/files/${encPath(filePath)}`, { silent: true });
       return { text: await res.text(), version: res.headers.get("X-Version") ?? "" };
+    },
+    media: async (filePath) =>
+      (await (await api(`/video/editor/media?path=${encodeURIComponent(filePath)}`, { silent: true })).json()).files ?? [],
+    addMedia: async (filePath, sid, file, kind, at) => {
+      const q = new URLSearchParams({ path: filePath, sid, file, kind, at: String(Math.max(0, at)) });
+      let res: Response;
+      try {
+        res = await api(`/video/editor/media?${q}`, { method: "POST", silent: true });
+      } catch (e) {
+        const r = (e as { response?: Response }).response;
+        throw new Error(r ? await reasonOf(r) : String((e as Error).message || e));
+      }
+      return res.json();
+    },
+    saveDropped: async (file) => {
+      const name = file.name.replace(/[\\/]/g, "_").trim() || "clip";
+      const res = await api(`/files/${encPath(`uploads/${name}`)}?dedupe=1`, { method: "PUT", body: file, silent: true });
+      track("file_uploaded", { file_name: file.name, file_type: file.type, file_size: file.size, context: "video_editor" });
+      return (await res.json()).path as string;
     },
     clip: async (filePath) =>
       (await api(`/video/clip?path=${encodeURIComponent(filePath)}`, { silent: true })).json(),

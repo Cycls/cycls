@@ -212,6 +212,38 @@ def video_router(ws_dep, changed):
             raise HTTPException(422, str(e))
         return {"ok": True}
 
+    @r.get("/video/editor/media")
+    async def editor_media(path: str, ws: Workspace = ws_dep):
+        """The workspace's pictures and clips, for the editor's Add menu (newest first)."""
+        from cycls._agent.video import editor
+        _rel(ws, path)
+        return {"files": await asyncio.to_thread(editor.media_list, ws.root)}
+
+    @r.post("/video/editor/media")
+    async def editor_add_media(path: str, sid: str, file: str, kind: str = "picture", at: float = 0.0,
+                               ws: Workspace = ws_dep):
+        """A picture, the brand logo or a clip put into the open editor at `at` seconds; a clip is made
+        ready first (the first time, it is sent to the video service and read there)."""
+        from cycls._agent.video import editor
+        _rel(ws, path)
+        if kind not in editor.MEDIA_KINDS:
+            raise HTTPException(400, "kind: picture, logo or video")
+        file_path = _safe_path(ws.root, file)
+        if not file_path.is_file():
+            raise HTTPException(404, "There is no such file.")
+        rel = file_path.relative_to(Path(ws.root).resolve()).as_posix()
+        if not editor.offered(ws):
+            raise HTTPException(503, "The video editor is not available here.")
+        try:
+            done = await editor.add_media(ws, ws.root, sid, rel, kind, at)
+        except LookupError as e:
+            raise HTTPException(410 if "session" in str(e) else 404, str(e))
+        except editor.Unavailable as e:
+            raise HTTPException(503, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return {"ok": True, **done, "path": rel}
+
     @r.delete("/video/editor")
     async def close_editor(sid: str, ws: Workspace = ws_dep):
         from cycls._agent.video import editor

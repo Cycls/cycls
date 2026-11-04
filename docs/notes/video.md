@@ -528,9 +528,10 @@ now uses too: sent in pieces, read on the organisation's GPU, the transcript bes
 whole clip, its own sound — in the format for its shape (wide for anything filmed sideways, 4:3 too;
 square near 1:1; portrait for 3:4 to 4:5; vertical for a phone held upright), fitted on black
 (`object-fit: contain`) so nothing is cut off. The name is the clip's, the chat's attachment id taken
-off, never one a video or MP4 already has. A video runs 3 to 90 s on the service (and a render must
-finish inside the renderer's 15 minutes, about 2.2× a footage video's length), so a longer clip's video
-holds its first 90 s and Edit says so; one under 3 s is refused.
+off, never one a video or MP4 already has. A video runs 3 s to 10 minutes on the service (90 s
+before 2026-11-04; a render must finish inside the renderer's hour, about 2.2× a footage video's
+length), so a longer clip's video holds its first 10 minutes and Edit says so; one under 3 s is
+refused.
 
 Edit again on the same clip opens the same video with what was changed there: the video made from a
 clip is remembered by the clip's path (`.cache/video/edits.json`) and never written over. Edit on a
@@ -574,6 +575,31 @@ font.
 **Brand fonts:** `editor.open` now sends every font of the workspace's brand kit with the session
 (`fonts.for_html(…, every=True)`), so the editor's preview draws a video's brand font as its render
 does, and the editor's font list offers the brand fonts beside the catalogue's.
+
+**Media, Translate, and ten minutes (2026-11-04, cycls-video `feat/long-videos`):**
+
+- **Media** in the header lists the workspace's pictures and clips (`GET /video/editor/media`,
+  `editor.media_list`: newest first, hidden folders and voice-overs left out, pictures over 2 MB
+  too) and the brand logo. The one picked goes in at the playhead through `POST /video/editor/media`
+  (`editor.add_media`): a picture's bytes, or a clip made ready first (`clip.make_ready`, as
+  `footage` does) and named by its sha, sent to the session's `POST /v1/sessions/:sid/media`; the
+  service puts it in as source (`editor-add.mjs addMedia`: a picture centred for 3 s, the logo in the
+  top corner — left in an Arabic video — for the whole video, a clip as a muted cutaway over the
+  frame for up to 5 s) and the editor reloads it; the bridge then sends it to Cycls like any edit.
+  A file dropped on the timeline from the desktop is saved in `uploads/` under a free name
+  (`PUT /files/…?dedupe=1`) and added the same way, one after another from where it was dropped.
+  `editor.open` sends the brand kit's logo path in `meta.brand.logo`.
+- **Translate** in the header asks the agent, in the chat, for the captions in Arabic or English or
+  a dub into Standard Arabic, Saudi or English (`request` → the canvas sends "Translate the captions
+  of videos/<name>.video.html into Arabic." as the person's message, a `cycls:send` event the chat
+  sends without touching the composer, queued mid-reply); the editor steps aside to show the chat,
+  and the agent's change reaches it as a load.
+- Both show only when the host says it does them (`host {features: ["media", "request"]}` after
+  `ready`), so a newer editor beside an older Cycls page has neither.
+- **Ten minutes:** the service takes a video up to 600 s (its `LIMITS`, the contract's line: a video
+  cut from footage runs as long as its pieces; any other stays short) and an MP4 up to 1 GiB; one GPU
+  renders it whole, inside the Renderer's 3600 s. `clip.MAX_S` follows; the built-in contract
+  (`fallback.py`) is the re-signed v4.
 
 ## The contract
 

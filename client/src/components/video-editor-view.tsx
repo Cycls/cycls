@@ -14,6 +14,10 @@
 //   from it         {source: "cycls-video-editor", type}: ready {protocol} · loaded {doc} · flushed {id} ·
 //                   saved {doc, id, composition?, words?: [{path, text}]} · selection {doc, path, time, nodes} ·
 //                   ask {…selection} · render {doc, quality} · error {doc, lost?, message?}
+//   and, for the Add menu and Translate (told to the editor with host {features}):
+//     from it         media-list {doc, id} · media-add {doc, id, file, kind, at} · media-drop {doc, id, files, at} ·
+//                     request {doc, kind: "captions" | "dub", to}
+//     to it           media-list {id, files | error} · media-added {id, ok, added?, error?}
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
@@ -246,6 +250,24 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
     }
   }, [post]);
 
+  // ── the Add menu: pictures and clips of the workspace, put in by the SDK (one at a time) ──────────
+  const addMedia = useCallback(async (id: string, items: { file: string; kind: unknown; at: number }[]) => {
+    if (!session) return;
+    let added = 0;
+    for (const it of items) {
+      const kind = it.kind === "logo" || it.kind === "video" ? it.kind : "picture";
+      try {
+        await latest.current.api.addMedia(latest.current.path, session.sid, it.file, kind, it.at);
+        added++;
+        track("video_editor_media_added", { kind });
+      } catch (err) {
+        post({ type: "media-added", id, ok: false, added, error: String((err as Error).message || err) });
+        return;
+      }
+    }
+    post({ type: "media-added", id, ok: true, added });
+  }, [session, post]);
+
   // ── the editor's messages ──────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session || !origin) return;
@@ -257,7 +279,52 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
         case "ready":
           void load().catch(() => setStatus("error"));
           post({ type: "theme", theme: dark ? "dark" : "light" });
+          post({ type: "host", features: ["media", "request"] });
           break;
+        case "media-list":
+          if (typeof m.id !== "string") break;
+          void latest.current.api.media(latest.current.path)
+            .then((files) => post({ type: "media-list", id: m.id, files }))
+            .catch(() => post({ type: "media-list", id: m.id, error: "unavailable" }));
+          break;
+        case "media-add":
+          if (typeof m.id !== "string" || m.doc !== doc.current || typeof m.file !== "string") break;
+          void addMedia(m.id, [{ file: m.file, kind: m.kind, at: Number(m.at) || 0 }]);
+          break;
+        case "media-drop": {
+          if (typeof m.id !== "string" || m.doc !== doc.current || !Array.isArray(m.files)) break;
+          const files = (m.files as unknown[]).filter((f): f is File => f instanceof File).slice(0, 10);
+          void (async () => {
+            const id = m.id as string;
+            latest.current.toast.info(t("videoMediaSaving"));
+            const items: { file: string; kind: string; at: number }[] = [];
+            let at = Math.max(0, Number(m.at) || 0);
+            try {
+              for (const f of files) {
+                const kind = f.type.startsWith("video/") || /\.(mp4|mov|m4v|webm)$/i.test(f.name) ? "video" : "picture";
+                items.push({ file: await latest.current.api.saveDropped(f), kind, at });
+                at += kind === "video" ? 5 : 3;                // one after another, as long as each is shown
+              }
+            } catch (err) {
+              const detail = await (err as { response?: Response }).response?.json().then((j: { detail?: string }) => j?.detail).catch(() => undefined);
+              post({ type: "media-added", id, ok: false, error: detail || "The file couldn't be saved in your files." });
+              return;
+            }
+            await addMedia(id, items);
+          })();
+          break;
+        }
+        case "request": {
+          if (m.doc !== doc.current || (m.kind !== "captions" && m.kind !== "dub")) break;
+          const lang = m.to === "en" ? t("videoLangEnglish") : m.to === "ar-SA" ? t("videoLangSaudi")
+            : m.kind === "dub" ? t("videoLangStandardArabic") : t("videoLangArabic");
+          const text = t(m.kind === "dub" ? "videoAskDub" : "videoAskCaptions")
+            .replace("{path}", latest.current.path).replace("{lang}", lang);
+          track("video_editor_translate", { kind: m.kind, to: String(m.to) });
+          latest.current.onAside?.();                       // the chat is where the agent answers
+          window.dispatchEvent(new CustomEvent("cycls:send", { detail: { text, origin: "video_editor" } }));
+          break;
+        }
         case "loaded":
           if (m.doc === doc.current) setStatus("ready");
           break;
@@ -293,7 +360,7 @@ export function VideoEditorView({ path, name, api, writeFile, onClose, onRendere
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [session, origin, load, post, saved, render, dark]);
+  }, [session, origin, load, post, saved, render, dark, addMedia]);
 
   useEffect(() => { post({ type: "theme", theme: dark ? "dark" : "light" }); }, [dark, post]);
 

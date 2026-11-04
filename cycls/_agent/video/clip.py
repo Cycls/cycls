@@ -3,8 +3,8 @@
 Edit on an MP4 in the canvas (POST /video/clip, web/video_routes.py) and the Video tool's `editor
 {path}` both come here. The clip is made ready as `footage` makes it — sent to the service in pieces,
 read on the organisation's GPU, what is said in it written beside it — and then a video that is the
-clip alone is written: videos/<name>.video.html, the whole clip (its first 90 s when it is longer: a
-video runs 3 to 90 s), in the format nearest its shape, fitted on black so nothing is cut off, with
+clip alone is written: videos/<name>.video.html, the whole clip (its first 10 minutes when it is longer:
+a video runs 3 s to 10 min), in the format nearest its shape, fitted on black so nothing is cut off, with
 its own sound. The editor opens on that.
 
 Edit again on the same clip opens the same video, with whatever was changed there: the video made
@@ -28,7 +28,7 @@ from ..design.deck import lock
 from ..design.store import write_fig
 from . import files, media, sizes
 
-MIN_S, MAX_S = 3, 90            # the service's limits on a video (cycls-video validate.LIMITS)
+MIN_S, MAX_S = 3, 600           # the service's limits on a video (cycls-video validate.LIMITS, 10 min since 2026-11-04)
 _STEP_SEND = 5                  # seconds of sending between two words of progress
 _STEP_READ = 20                 # and of waiting for the read
 _READ_CAP = 20 * 60             # Edit gives up on a read after this long (the agent's call has its own budget)
@@ -238,7 +238,7 @@ async def starter(root, rel, info, by="user"):
     await asyncio.to_thread(_remember, root, rel, comp)
     notice = None
     if whole > MAX_S:
-        notice = (f"A video runs up to {MAX_S} seconds, so this one holds the first {MAX_S} s of the clip "
+        notice = (f"A video runs up to {MAX_S // 60} minutes, so this one holds the first {MAX_S // 60} of the clip "
                   f"(it runs {_clock(whole)}). Ask Cycls for a different part of it.")
     return comp, True, notice
 

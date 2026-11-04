@@ -252,4 +252,65 @@ describe("VideoEditorView", () => {
     await mount({ api: a });
     expect(screen.getByText("The video editor is not available here.")).toBeTruthy();
   });
+
+  it("tells the editor it does media and requests; lists, adds and saves dropped files through the SDK", async () => {
+    const a = api({
+      media: vi.fn(async () => [{ path: "uploads/p.jpg", kind: "picture", size: 10 }]),
+      addMedia: vi.fn(async () => ({ id: "picture" })),
+      saveDropped: vi.fn(async (f: File) => `uploads/${f.name}`),
+    } as never);
+    const { frame, post } = await mount({ api: a });
+    const load = await ready(frame, post);
+    expect(sent(post, "host").at(-1)).toMatchObject({ features: ["media", "request"] });
+    fromEditor(frame, "media-list", { doc: load.doc, id: "q1" });
+    await flush();
+    expect(sent(post, "media-list").at(-1)).toMatchObject({ id: "q1", files: [{ path: "uploads/p.jpg", kind: "picture" }] });
+    fromEditor(frame, "media-add", { doc: load.doc, id: "q2", file: "uploads/p.jpg", kind: "picture", at: 2.5 });
+    await flush();
+    expect(a.addMedia).toHaveBeenLastCalledWith(PATH, "abc", "uploads/p.jpg", "picture", 2.5);
+    expect(sent(post, "media-added").at(-1)).toMatchObject({ id: "q2", ok: true, added: 1 });
+    fromEditor(frame, "media-add", { doc: "old", id: "q3", file: "uploads/p.jpg", kind: "picture", at: 0 });
+    await flush();
+    expect(a.addMedia).toHaveBeenCalledTimes(1);                          // not for a copy no longer loaded
+    const clip = new File(["x"], "b roll.mp4", { type: "video/mp4" });
+    const pic = new File(["y"], "logo.png", { type: "image/png" });
+    fromEditor(frame, "media-drop", { doc: load.doc, id: "q4", files: [clip, pic, "not a file"], at: 1 });
+    await flush();
+    await flush();
+    await flush();
+    expect((a.saveDropped as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as File).name)).toEqual(["b roll.mp4", "logo.png"]);
+    expect((a.addMedia as ReturnType<typeof vi.fn>).mock.calls.slice(1).map((c) => [c[2], c[3], c[4]]))
+      .toEqual([["uploads/b roll.mp4", "video", 1], ["uploads/logo.png", "picture", 6]]);    // one after the other
+    expect(sent(post, "media-added").at(-1)).toMatchObject({ id: "q4", ok: true, added: 2 });
+    (a.addMedia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("A picture in a video is at most 2 MB."));
+    fromEditor(frame, "media-add", { doc: load.doc, id: "q5", file: "uploads/big.png", kind: "picture", at: 0 });
+    await flush();
+    expect(sent(post, "media-added").at(-1)).toMatchObject({ id: "q5", ok: false, error: "A picture in a video is at most 2 MB." });
+  });
+
+  it("Translate asks the agent in the chat, naming the video, and steps the editor aside", async () => {
+    const asked: unknown[] = [];
+    const onSend = (e: Event) => asked.push((e as CustomEvent).detail);
+    window.addEventListener("cycls:send", onSend);
+    const onAside = vi.fn();
+    render(<ToastProvider><VideoEditorView path={PATH} name="launch.video.html" api={api()} writeFile={vi.fn() as never}
+                                           onClose={vi.fn()} onAside={onAside} /></ToastProvider>);
+    await flush();
+    await flush();
+    const frame = document.querySelector("iframe") as HTMLIFrameElement;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const load = await ready(frame, post);
+    fromEditor(frame, "request", { doc: load.doc, kind: "captions", to: "ar" });
+    fromEditor(frame, "request", { doc: load.doc, kind: "dub", to: "ar-SA" });
+    fromEditor(frame, "request", { doc: load.doc, kind: "dub", to: "ar" });
+    fromEditor(frame, "request", { doc: load.doc, kind: "delete everything", to: "en" });   // not a request it makes
+    await flush();
+    expect(asked).toEqual([
+      { text: `Translate the captions of ${PATH} into Arabic.`, origin: "video_editor" },
+      { text: `Dub ${PATH} into Saudi Arabic.`, origin: "video_editor" },
+      { text: `Dub ${PATH} into Standard Arabic.`, origin: "video_editor" },
+    ]);
+    expect(onAside).toHaveBeenCalled();
+    window.removeEventListener("cycls:send", onSend);
+  });
 });
