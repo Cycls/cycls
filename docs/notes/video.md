@@ -153,6 +153,7 @@ Two things seen on the way:
 | Action | Input | What comes back |
 |---|---|---|
 | `guide` | — | Loads the contract, starts the GPU, lists formats, fonts and the videos already here. |
+| `skill` | `skill: [names]` | The tool's own skills as text, in one call (Skills, below); nothing made. |
 | `footage` | `path`, or `stock` (+ `pick`, `orientation`); `language?` | The clip made ready: its facts, shots, a sheet of its frames, what is said with times, the `<video>` line. |
 | `write` | `name`, `html` (or `path` to adopt a file) | Saved even with errors. Lint errors with fixes; when clean, the browser check and one sheet. Opens the composition when clean. |
 | `edit` | `name`, `changes: [{old, new, all?}]` | Every change or none; a miss names the closest line. Same report. Refreshes the canvas. |
@@ -401,8 +402,8 @@ brand-kit skill writes it), `brand/logo.*`, and the brand's own font files in `b
   whose composition names one of those families sends its files with `meta.fonts`; the service gives them an
   `@font-face` for that job alone (a family the catalogue has keeps the catalogue's faces) and they ship with the
   project, so the GPU renders them and the preview inlines them. At most 8 files of 4 MB. The family a stack
-  meant, dropped for a fallback, is now a warning (`font_substituted`) instead of silent. Not yet: the video
-  editor's own preview shows such a family as its fallback (the render is right).
+  meant, dropped for a fallback, is now a warning (`font_substituted`) instead of silent. The video
+  editor's own preview draws them too since 2026-11-03 (`editor.open` sends the kit's fonts: The header's buttons, below).
 
 Checked on the dev service: the catalogue's Amiri renamed "Brand Serif" in `brand/fonts`, named before Cairo:
 the sheet drew it in the brand font and the canvas page carried it inline.
@@ -627,6 +628,33 @@ scene transitions.
   with the session, so the editor's logo reveal and Media's "Brand logo" can use it.
 - **The editor.** Header buttons Motion (the four pieces) and Transitions (every cut, one or all, a length);
   Media gains an Animations tab (the library, searched by the editor server's `cycls/lottie`).
+
+### Skills: the craft of a video (2026-11-05)
+
+The contract says how a video is written correctly; it says almost nothing about making one attractive. Five
+skills carry that craft, loaded like Design's: `video {"action": "skill", "skill": [...]}` returns them as text
+and they stay with the chat (`video/skill.py`, files in `video/skills/`, each one's frontmatter `description` is
+its line in the tool).
+
+- **video-direction** — the brief in one breath, the story (hook, value first, a beat plan with seconds), named
+  looks with palettes and font pairs from the catalogue, composing a frame, type for video, backgrounds.
+- **motion-design** — easing and speed as meaning, build / breathe / resolve, text in motion (Arabic by words),
+  element recipes, camera moves, seams between scenes without a shader, when a GPU transition earns its place.
+- **promo-reel**, **explainer-video**, **footage-video** — each kind of video: its structures and timings, the
+  scenes it needs, its sound.
+
+Every code example in them was checked on the dev service (lint, browser check, frames). The guide's reply
+asks for them (`video-direction`, `motion-design`, and the kind); a `write` or `template` in a chat that has
+loaded none says which to load (`VIDEO_SKILLED`, set by the loop beside `DESIGN_SKILLED`; the kind guessed from
+the composition: a `<video>` = footage, a voice-over `<audio>` = explainer, else a promo). Decorative text (a
+huge faded word behind a scene) carries `data-layout-ignore aria-hidden="true"`, or the checks fail it for
+contrast and overflow; `linear(...)` spring easings work in `at()`.
+
+They are adapted in part from HyperFrames' skills (Apache-2.0; 0.8.143 and 0.9.15) and four MIT skill packs
+(motion-video-kit, motion-video-skill, motion-design-skills, LottieFiles' motion-design-skill), rewritten for
+our format: `video/skills/NOTICE.md` credits them and carries their licences. Left out on purpose: anything
+written for an animation library (their recipes are GSAP), their command line and agent steps, Remotion's
+skills (no licence) and AGPL packs.
 
 ## The contract
 

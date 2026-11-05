@@ -24,6 +24,7 @@ from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_
                            design_tool, design_wanted)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
+from ..video.tool import VIDEO_SKILLED, video_skills_loaded
 from ..office.client import offered as office_offered
 from ..transcribe.client import configured as transcribe_configured
 from ..tools import skills as skills_mod
@@ -778,6 +779,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
             DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
+            VIDEO_SKILLED.set(video_skills_loaded(messages))     # the same for Video: a skill loaded beside a save
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
             for step, _ in pairs: yield step

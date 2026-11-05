@@ -1,7 +1,7 @@
 """The Video tool as the model is given it.
 
-Every request carries the SHORT form (about 700 characters): what Video is for and that `guide`
-comes first. The contract (how a composition is written, about 6,000 characters, fetched from the
+Every request carries the SHORT form (about 870 characters): what Video is for, that `guide`
+comes first and its skills next. The contract (how a composition is written, fetched from the
 service and verified, contract.py) joins the description from the first Video call of a chat on:
 the harness swaps the tool through tools/ondemand.py, read back from the transcript each turn.
 
@@ -10,12 +10,17 @@ composition costs minutes of writing. It runs, and its reply says the instructio
 """
 import contextvars
 
+from .skill import SKILLS, catalog as _skill_catalog
+
 # What the model was shown when it made a call: True the whole tool, False the short form (the
 # harness swaps it in after this call), None when no harness swaps it (a custom loop): then `guide`
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
 ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles",
-           "dub", "editor", "lottie", "motion")
+           "dub", "editor", "lottie", "motion", "skill")
+# Has this chat loaded the tool's skills? Set by the loop before its tools run; a first save without
+# them says which to load. Unset (a test, a caller with no chat) counts as loaded: nothing is said.
+VIDEO_SKILLED = contextvars.ContextVar("video_skilled", default=True)
 
 _PURPOSE = (
     "Video: make short videos that move — explainers, reels and stories, announcements, animated stats and "
@@ -27,13 +32,16 @@ _PURPOSE = (
 )
 
 _SHORT = _PURPOSE + (
-    "\n\nThis is the SHORT form of the tool: how a video is written is not in it. Call {\"action\": \"guide\"} "
-    "first — the full instructions load into this description and the renderer starts warming up — then write "
-    "the video."
+    "\n\nSHORT form: how a video is written is not in it. Call {\"action\": \"guide\"} first (the instructions "
+    "load, the renderer warms up), then its skills in one call, {\"action\": \"skill\", \"skill\": [\"video-direction\", "
+    "\"motion-design\", <kind>]} (kinds: " + ", ".join(n for n in SKILLS if n not in ("video-direction", "motion-design"))
+    + "), then write the video."
 )
 
 _ACTIONS_TEXT = """ACTIONS
 - guide: load these instructions (done) and start the renderer; lists the formats, fonts and the videos already here.
+- skill {skill: [names]}: load this tool's skills — the craft of a video that looks made by a studio, not a template: its story and look, how things move, and each kind of video. Before writing a new video, load video-direction, motion-design and the skill for its kind, in ONE call: {"action": "skill", "skill": ["video-direction", "motion-design", "promo-reel"]}. They stay with the chat; nothing is made. The skills:
+""" + _skill_catalog() + """
 - write {name, html}: save the whole composition as videos/<name>.video.html and check it. When the workspace has a brand kit (the guide names it), every video uses its colours, fonts and logo unless the person asks otherwise. Or {name, path} to adopt a composition you wrote with the editor. Saved even when the checks find errors.
 - edit {name, changes: [{old, new, all?}]}: exact find and replace in the saved composition; every change applies or none does. Same checks as write. Prefer it to rewriting the whole file.
 - template {name, template, vars}: make the composition from one of the templates above with your words, numbers and images (the brand kit fills the colours and fonts you leave out), then the same checks as write.
@@ -58,8 +66,11 @@ The person can open a video in the editor (Edit on the canvas) and change it by 
 def _schema():
     return {"type": "object", "properties": {
         "action": {"type": "string", "enum": list(ACTIONS),
-                   "description": "guide (first), write, edit, template, look, render, subtitles, dub, restore, voice, "
-                                  "music, footage, editor (the person edits a clip or a video by hand)."},
+                   "description": "guide (first), skill (the craft: load before writing a new video), write, edit, "
+                                  "template, look, render, subtitles, dub, restore, voice, music, footage, lottie, motion, "
+                                  "editor (the person edits a clip or a video by hand)."},
+        "skill": {"type": ["string", "array"], "items": {"type": "string"},
+                  "description": "skill: the skills to load, in one call — " + ", ".join(SKILLS) + "."},
         "name": {"type": "string",
                  "description": "The video's name: videos/<name>.video.html, rendered to videos/<name>.mp4. "
                                 "Lowercase words and hyphens, e.g. launch-reel."},
@@ -132,6 +143,17 @@ def video_tool(loaded=False, contract_text=None):
 
 def is_video(tool):
     return isinstance(tool, dict) and tool.get("name") == "video"
+
+
+def video_skills_loaded(messages):
+    """Has this chat loaded any of the Video tool's skills?"""
+    for m in messages or []:
+        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "video"
+               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in m["content"]):
+            return True
+    return False
 
 
 def video_called(messages):

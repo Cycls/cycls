@@ -1,6 +1,6 @@
 """The Video tool's executor. `_exec_video(inp, workspace, ctx)` reads a call and makes it:
-guide, write, edit, template, look, render, restore, for sound voice and music, and for the
-person's clips and stock video footage. Registered in cycls/_agent/tools as the `video` tool.
+guide, skill, write, edit, template, look, render, restore, for sound voice and music, and for the
+person's clips and stock video footage. `skill` gives the tool's own skills (skill.py), text only. Registered in cycls/_agent/tools as the `video` tool.
 
 The SDK owns the schema, the argument checks, every write to the workspace and the report; the
 service owns the contract, the checks, the frames, the preview and the render.
@@ -17,8 +17,8 @@ from ..design.deck import lock
 from ..design.store import Stale, version_of, write_fig
 from ..paths import _resolve_path
 from . import contract as contract_mod
-from . import dubbing, files, media, report
-from .tool import ACTIONS, VIDEO_LOADED
+from . import dubbing, files, media, report, skill
+from .tool import ACTIONS, VIDEO_LOADED, VIDEO_SKILLED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
 # limit, so the client keeps its own: a save with its frames, a look, a render.
@@ -267,6 +267,16 @@ def _brand_hint(root, html):
     return f"\n{line}" if line else ""
 
 
+def _skill_hint(html):
+    """A save in a chat that has loaded none of the tool's skills says which to load (VIDEO_SKILLED, set by the loop)."""
+    if VIDEO_SKILLED.get():
+        return ""
+    want = json.dumps(skill.suggested(skill.kind_of(html)))
+    return (f"\nNo video skill is loaded in this chat: {{\"action\": \"skill\", \"skill\": {want}}} holds the looks, the "
+            "motion and how this kind of video is built and paced. Load them in one call, then make this video better "
+            "with `edit` before you render.")
+
+
 def _result(text, blocks, note="", ui=None):
     text = report.clip(text + note)
     if not blocks and ui is None:
@@ -294,6 +304,10 @@ async def _guide(workspace, root, loaded):
     kit = brand.note(brand.kit(root, c["fonts"]), c["fonts"])
     if kit:
         lines.append(kit)
+    if not VIDEO_SKILLED.get():
+        lines.append("Before you write a new video, load its skills in one call — the craft that makes it look made, "
+                     "not templated: {\"action\": \"skill\", \"skill\": [\"video-direction\", \"motion-design\", "
+                     f"<one of {', '.join(skill._KINDS)}>]}}.")
     if loaded is None:   # no harness swaps this tool's description: the instructions come in the reply
         lines.append("\n" + c["text"])
     else:
@@ -1138,6 +1152,8 @@ async def _exec_video(inp, workspace, ctx=None):
     try:
         if action == "guide":
             return await _guide(workspace, root, loaded)
+        if action == "skill":     # text only: the craft, read beside the instructions
+            return skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name")) + note
         if action == "music":
             return _music(inp.get("query") or inp.get("mood")) + note
         if action == "lottie":
@@ -1184,7 +1200,7 @@ async def _exec_video(inp, workspace, ctx=None):
             name, rel, named = await _save(root, chat, name, html, "video-write")
             text, blocks, clean = await _checks(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
-            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}{_brand_hint(root, html)}", blocks, note,
+            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}{_brand_hint(root, html)}{_skill_hint(html)}", blocks, note,
                            _shown(rel, name, clean))
 
         if action == "voice":
@@ -1215,7 +1231,7 @@ async def _exec_video(inp, workspace, ctx=None):
             name, rel, named = await _save(root, chat, name, html, "video-template")
             text, blocks, clean = await _checks(workspace, root, rel, html)
             return _result(f"Made {rel} from the {which} template ({len(html) / 1024:.1f} KB).{named} It is an ordinary "
-                           f"composition now: change it with `edit`.\n{text}{_brand_hint(root, html)}", blocks, note,
+                           f"composition now: change it with `edit`.\n{text}{_brand_hint(root, html)}{_skill_hint(html)}", blocks, note,
                            _shown(rel, name, clean))
 
         if action == "edit":

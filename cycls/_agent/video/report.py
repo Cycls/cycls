@@ -78,8 +78,11 @@ def sound_text(sound):
         return "\n".join(lines)
     lines.append("Sound map:")
     for t in sound["tracks"]:
-        what = f"music {t['music']}" if t.get("music") else f"{t.get('kind', 'audio')}, {t.get('src')}"
+        what = (f"music {t['music']}" if t.get("music") else f"sound effect {t['sfx']}" if t.get("sfx")
+                else f"{t.get('kind', 'audio')}, {t.get('src')}")
         bits = [f"{_t(t.get('start'))}–{_t(t.get('end'))} s" if t.get("end") is not None else f"from {_t(t.get('start'))} s"]
+        if t.get("hit") is not None:
+            bits.append(f"hits at {_t(t['hit'])} s")
         if t.get("media_start"):
             bits.append(f"from {_t(t['media_start'])} s into its file")
         if t.get("volume", 1) != 1:

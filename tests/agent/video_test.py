@@ -231,7 +231,7 @@ def test_contract_get_verifies_caches_and_falls_back(monkeypatch):
 def test_short_and_whole_forms():
     short, whole = video_tool(False), video_tool(True, "THE CONTRACT TEXT")
     assert short["name"] == whole["name"] == "video" and short["input_schema"] == whole["input_schema"]
-    assert len(short["description"]) < 800 and "guide" in short["description"]
+    assert len(short["description"]) < 900 and "guide" in short["description"]   # with the skills' one line
     assert "THE CONTRACT TEXT" in whole["description"] and "ACTIONS" in whole["description"]
     assert video_tool(True, "THE CONTRACT TEXT") is whole                    # same dict: the cache holds
     assert "composition" in video_tool(True)["description"]                  # the built-in copy

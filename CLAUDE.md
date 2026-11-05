@@ -65,7 +65,8 @@ cycls/
     │   └── editor.py       # the video editor's sessions on the service (Edit on the canvas → client video-editor-view.tsx) and the render it asks for
     │   ├── client.py       # the door's API (contract, warm, compile, jobs, long-poll, the MP4 streamed to disk; a clip sent in pieces, ingest)
     │   ├── contract.py     # the signed contract, verified (fallback.py: the built-in copy); tool.py — short and whole forms
-    │   └── run.py          # the executor (guide, write, edit, look, render, subtitles, dub, restore, voice, music, footage, editor); clip.py (a clip the person sent made into a video of its own, for Edit and `editor`), files.py, media.py, report.py, stock.py (Pexels clips), subtitles.py (.srt/.vtt beside a render, and in each language translated by sentence), tidy.py (a talking clip's long pauses cut), sizes.py (one composition in several sizes: data-sizes, data-shape), dubbing.py (dub: the video said again in another language), brand.py + fonts.py (the brand kit and its font files in every video)
+    │   ├── skill.py        # the tool's own skills (skills/*.md: video-direction, motion-design, promo-reel, explainer-video, footage-video; NOTICE.md credits)
+    │   └── run.py          # the executor (guide, skill, write, edit, look, render, subtitles, dub, restore, voice, music, footage, editor, lottie, motion); clip.py (a clip the person sent made into a video of its own, for Edit and `editor`), files.py, media.py, report.py, stock.py (Pexels clips), subtitles.py (.srt/.vtt beside a render, and in each language translated by sentence), tidy.py (a talking clip's long pauses cut), sizes.py (one composition in several sizes: data-sizes, data-shape), dubbing.py (dub: the video said again in another language), brand.py + fonts.py (the brand kit and its font files in every video)
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
     │   ├── skill.py        # the tool's own skills (skills/*.md: design-direction, graphic-design, deck-design, document-design), loaded by `skill`
@@ -162,6 +163,7 @@ tests/
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
 │   ├── video_test.py            # Video tool: client, signed contract, short/whole forms + the ondemand seam, executor, ?as=player
+│   ├── video_skills_test.py     # Video tool's skills: loaded in one call, listed in the tool, our format only, asked for by a first save
 │   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool

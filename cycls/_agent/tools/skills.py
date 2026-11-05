@@ -406,11 +406,11 @@ SKILL_TOOL = {
 
 
 def loads_skill(block):
-    """Is this tool call a skill being loaded — the `skill` tool, or the Design tool's own `skill`
-    action? Its result is instructions, not history: never spilled to a file, never cleared."""
+    """Is this tool call a skill being loaded — the `skill` tool, or the Design or Video tool's own
+    `skill` action? Its result is instructions, not history: never spilled to a file, never cleared."""
     if block.get("name") == "skill":
         return True
-    return block.get("name") == "design" and str((block.get("input") or {}).get("action") or "").lower() == "skill"
+    return block.get("name") in ("design", "video") and str((block.get("input") or {}).get("action") or "").lower() == "skill"
 
 
 async def _exec_skill(inp, ws, ctx=None):
