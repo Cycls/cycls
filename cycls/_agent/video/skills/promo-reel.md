@@ -68,7 +68,7 @@ The hook names the subject by its second beat. Never "Introducing…" over a log
 | the deadline | a date or a countdown | "48 hours only" | «٤٨ ساعة بس» |
 | the occasion | the greeting carries the offer | "Ramadan Kareem — coffee's on us" | «رمضان كريم — والقهوة علينا» |
 
-## Beat plans (cut lengths on a 0.5 s grid)
+## Beat plans (cut lengths on the music's beat; 0.5 s without music)
 
 **6 s bumper:** 0–2 hook that names the subject · 2–4.5 the product or the offer · 4.5–6 end card.
 
@@ -204,20 +204,29 @@ a property no other animation of that element touches: the button's press (`tran
 
 ## Cutting to music
 
-- `music {query}`: "upbeat", "tech", "playful", "corporate"; an Arabic flavour is "middle-eastern" (e.g.
-  `playhouse-sound-of-arabia`, upbeat oriental house). Start at one of the reply's good places to start
-  (`data-media-start`); a later one is usually where the beat is going.
-- **The grid.** With a bpm in the reply, a beat is 60 ÷ bpm s (120 → 0.5 s) and a bar is 4 beats. Without one,
-  use 0.5 s. Every cut lands on the grid: regular cut lengths read as rhythm even muted.
-- **Cut on phrases, not every beat:** every 2 beats at an energetic peak, every bar for corporate, every 2 bars
-  with long holds for premium. The reveal and the slam land on a bar's first beat.
+Cutting on the beat is what makes a reel feel edited rather than assembled.
+
+- **Pick the music before the plan.** `music {query}`: "upbeat", "tech", "playful", "corporate"; an Arabic
+  flavour is "middle-eastern" (e.g. `playhouse-sound-of-arabia`, upbeat oriental house). Each track comes with its
+  beat ("a beat every 0.492 s") and good places to start, each on a beat and the start of a bar.
+- **Lock the grid.** `<audio src="music:<id>" data-start="0" data-media-start="<a good place>">`: the beats now
+  fall at 0, then every beat (B). Plan every scene as a whole number of beats: at B = 0.492, 4 beats = 1.97 s,
+  6 = 2.95 s, 8 = 3.94 s, so the cuts land at 1.97, 4.92, 6.89… Round each time to 2 decimals, never to 0.5.
+- **Cut on phrases, not every beat:** every 2 beats at an energetic peak, every bar (4 beats) for corporate,
+  every 2 bars with long holds for premium. The reveal, the slam and the logo land on a bar line.
+- **Inside a scene,** time the entrances in beats too: `at()` offsets of 0, B, 2B (at 0.492: 0, 492, 984 ms), so
+  the words land with the music even mid-scene.
+- **Read it back.** After a write, the sound map lists the beats and bar lines in the video's time; a scene that
+  starts off them comes back as `cut_off_beat` — move it (and what is timed inside it) onto its beat. A track
+  with no steady beat: cut on the picture, scenes of 2–3 s.
 - **Transitions:** hard cuts by default. Use one GPU transition into the centrepiece (`light-leak` warm,
   `whip-pan` energetic, `flash-through-white` a launch), at most one more into the end card.
 - **Hits:** a burst behind the slam, sparkles on the product, `accent-confetti` only for a real win. Under a
   voice-over: `data-duck="<voice id>"`.
 - **Sound effects on the cut and the slam** (`motion-design` §10): a `riser` into the reveal, `impact-bass-1` as
-  the price or the logo lands, a `whoosh` on the GPU transition, a `pop` on the badge. A promo with music and no
-  effects sounds like a slideshow; a hit on every word sounds like a game: 4–6 in a 15 s reel.
+  the price or the logo lands, a `whoosh` on the GPU transition, a `pop` on the badge — each hitting on a beat
+  (data-start = the beat − its hit). A promo with music and no effects sounds like a slideshow; a hit on every
+  word sounds like a game: 4–6 in a 15 s reel.
 
 ## Gulf occasions and Arabic promos
 

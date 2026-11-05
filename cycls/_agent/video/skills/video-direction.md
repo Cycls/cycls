@@ -52,7 +52,10 @@ two in one line of the reply.
 
 **Rhythm.** Name it ("hook-PUNCH-proof-proof-PAYOFF-end"). The shortest scene 1–1.5 s, the longest 3–4.5 s;
 something new every 2–4 s; nothing frozen over 3 s except the end card. In a scene: build (first 30%), breathe
-(one slow move), resolve (land, then hold).
+(one slow move), resolve (land, then hold). With music, choose the track before the plan and write the plan in
+its beats: the `music` reply gives the beat (B), and starting the track at one of its good places puts a beat at
+0 and every B after it. Each scene is a whole number of beats (4 beats at B = 0.492 → 1.97 s), the payoff and the
+end card land on a bar line (every 4 beats), and the plan's seconds are those beat times.
 
 **Every element gets a verb** from the beat's idea: SLAMS, STAMPS, DROPS · SLIDES, PUSHES, WIPES · DRAWS,
 FILLS, COUNTS UP, ASSEMBLES · FLOATS, DRIFTS · TYPES ON, SNAPS, LOCKS IN. No verb: not designed yet.

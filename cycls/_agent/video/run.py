@@ -1040,15 +1040,31 @@ def _music(query):
     lines = [f"Library tracks{' for ' + repr(query) if words else ''} (use one as src=\"music:<id>\"; music only "
              "when the person wants it):"]
     for t in picked[:8]:
-        bits = [", ".join(t.get("mood") or []), f"{t['bpm']} bpm" if t.get("bpm") else "", f"{int(t.get('duration', 0)) // 60}:"
+        beat = t.get("beat") or {}
+        every = beat.get("every")
+        tempo = (f"{_num(t['bpm'])} bpm" if t.get("bpm") else "") + (
+            f", a beat every {every:.3f} s" + (f", a bar every {4 * every:.2f} s" if beat.get("bar") is not None else "")
+            if every else (", no steady beat" if "beat" in t else ""))
+        bits = [", ".join(t.get("mood") or []), tempo.lstrip(", "), f"{int(t.get('duration', 0)) // 60}:"
                 f"{int(t.get('duration', 0)) % 60:02d}" if t.get("duration") else ""]
         line = f"- {t['id']}: {t.get('title', '')} — {'; '.join(b for b in bits if b)}"
         if t.get("desc"):
-            line += f". {t['desc']}"
-        if t.get("starts") and len(t["starts"]) > 1:
-            line += f" Good places to start (data-media-start): {', '.join(str(s) for s in t['starts'])} s."
+            line += f". {str(t['desc']).rstrip('.')}."
+        if t.get("starts") and (len(t["starts"]) > 1 or every):
+            line += (f" Good places to start (data-media-start){', each on a beat' if every else ''}: "
+                     f"{', '.join(_num(s) for s in t['starts'])} s.")
         lines.append(line)
+    if any((t.get("beat") or {}).get("every") for t in picked[:8]):
+        lines.append("Start the music at one of its good places and its beats fall at its data-start, then every beat after "
+                     "it (a scene of 4 beats at 0.5 s a beat is 2 s), and a bar every 4 beats from there: put cuts on the "
+                     "beats and the big moments on the bars. Once written, the sound map lists the beats and bars in the "
+                     "video's time, and a cut off the beat is pointed out.")
     return "\n".join(lines)
+
+
+def _num(x):
+    """A number as the model writes it back: 0.5, 12, 55.388."""
+    return f"{x:.3f}".rstrip("0").rstrip(".") if isinstance(x, float) else str(x)
 
 
 def _lottie(query):

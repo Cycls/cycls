@@ -656,6 +656,29 @@ our format: `video/skills/NOTICE.md` credits them and carries their licences. Le
 written for an animation library (their recipes are GSAP), their command line and agent steps, Remotion's
 skills (no licence) and AGPL packs.
 
+### On the beat (2026-11-05)
+
+Each library track carries its beat (cycls-video `scripts/beats.py`: `beat: {every, first}` in the signed
+data). The `music` reply gives it ("122 bpm, a beat every 0.492 s") with good places to start, each on a beat,
+so music started at one with data-start 0 has a beat at 0 and every beat after, and a bar every 4 beats from
+there. The sound map lists the beats and bar lines in the video's time (`report.beats_text`; bars only when the
+music starts at a good place: the measured bar was dropped, it fell on the half bar too often), and a music-led
+video whose scene starts off the beat gets the service's `cut_off_beat` warning. The skills plan in beats: pick the track first, scenes a
+whole number of beats, the payoff on a bar line, `at()` offsets and effect hits on beats.
+58 of the 72 tracks have a beat; the 14 without (ambient, classical, played freely) say "no steady beat",
+and the skills fall back to cutting on the picture. Eight tracks had their tempo read 3:2 off by librosa (a 140
+bpm track as 93) until `beats.py` learned to try the related tempi.
+
+### The editor's Sound menu, and the lower third (2026-11-05)
+
+The header's Music button is now **Sound**, with two tabs: Music (as before) and **Effects** — the sound-effect
+library, each one heard with its play button (cycls-video `GET cycls/sfx`, `cycls/sfx/<id>.mp3`) and added so
+its loudest moment lands at the playhead (`editor-add.mjs addSfx`, `kind: "sfx"`), on a free track from 7. The
+editor's preview now links the effects into the page too (before, an effect the agent had added was silent
+there). The motion lower third sits above two lines of captions in every shape (vertical: `bottom:40%`, and
+`right:140px` clear of the platforms' buttons when it is on the right), with a larger title (44 px), so the
+footage skill no longer tells the agent to move it.
+
 ## The contract
 
 The text the model learns from lives with the service (`cycls-video/contract/v1.md`) and ships

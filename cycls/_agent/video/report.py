@@ -60,6 +60,19 @@ def _t(x):
     return f"{x:.2f}".rstrip("0").rstrip(".") if isinstance(x, (int, float)) else "?"
 
 
+def beats_text(b, *, most=32, most_bars=16):
+    """A music track's beats in the video's time: where cuts and the big moments go."""
+    times, bars, every = b["times"], b.get("bars"), b.get("every")
+    shown = ", ".join(_t(x) for x in times[:most])
+    if len(times) > most:
+        shown += f", … every {every:.3f} s to {_t(times[-1])}" if every else ", …"
+    text = f"its beats (every {every:.3f} s) in the video: {shown} s" if every else f"its beats in the video: {shown} s"
+    if bars:
+        text += ("; bar lines (every 4th beat from where it starts, for the biggest moments): " + ", ".join(_t(x) for x in bars[:most_bars])
+                 + (", …" if len(bars) > most_bars else "") + " s")
+    return text
+
+
 def sound_text(sound):
     """The sound map, as the model reads it in place of hearing: the tracks, when each sentence is
     spoken, and the notes (a scene starting inside a word). '' for a silent video."""
@@ -92,6 +105,8 @@ def sound_text(sound):
         if t.get("fade_out"):
             bits.append(f"fades out over its last {_t(t['fade_out'])} s")
         lines.append(f"- {t.get('id') or '(no id)'} ({what}): {', '.join(bits)}")
+        if (t.get("beats") or {}).get("times"):
+            lines.append("  " + beats_text(t["beats"]))
     speech = sound.get("speech") or []
     if speech:
         lines.append("Spoken: " + " · ".join(f"{_t(s['start'])}–{_t(s['end'])} \"{s['text'][:80]}\"" for s in speech[:20]))

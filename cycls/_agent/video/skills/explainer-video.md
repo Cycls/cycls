@@ -210,7 +210,8 @@ is the plain version):
   transition (cinematic-zoom, sdf-iris) into the centrepiece. Fade a scene's text out before a transition
   (`at("#wrap", [{ opacity: 1 }, { opacity: 0 }], -350, 300)`) so the two never overlap.
 - Music only when the person wants sound: calm, corporate, inspiring or minimal-piano (`music`), with
-  `data-duck="vo"` so it dips under the voice.
+  `data-duck="vo"` so it dips under the voice. The voice sets the cuts (between sentences); the music's beat
+  only times what moves between them.
 - Small sound effects carry the reveals under the voice at `data-volume="0.5"`: a `pop` as a node appears, a
   `ping` as the number lands, a soft `whoosh` on a camera move, a `chime` on the takeaway (`motion-design` §10).
 - End on the one idea in one line, large, held at least 2 s, about 1 s after the voice ends; a call to action if

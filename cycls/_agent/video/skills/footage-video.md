@@ -44,13 +44,16 @@ looked at on the sheet.
   <video id="cut1" src="uploads/broll.mp4" muted data-start="10.33" data-media-start="3" data-duration="1.5" data-track-index="1"></video>
   ```
   with `#cut1 { z-index: 2; }`. A stock clip comes from `footage {stock: "a few words", orientation: "portrait"}`.
-- **Montage on the music.** One beat = 60 / bpm s (the `music` reply gives bpm). Cut every 2 beats for energy, 4
-  for calm, all pieces `muted`, the music not ducked. 100 bpm → a cut every 1.2 s:
+- **Montage on the music.** The `music` reply gives each track's beat (B) and good places to start on it; start
+  the music there with data-start 0 and a beat falls at 0 and every B after. Cut every 2 beats for energy, 4 for
+  calm, all pieces `muted`, the music not ducked. 100 bpm → B = 0.6 s → a cut every 1.2 s:
   ```html
   <video id="m1" src="uploads/broll.mp4" muted data-start="2.4" data-media-start="0.3" data-duration="1.2" data-track-index="0"></video>
   <video id="m2" src="uploads/broll.mp4" muted data-start="3.6" data-media-start="2.3" data-duration="1.2" data-track-index="0"></video>
   ```
-  Land the best shot on the start of a bar (every 4 beats). Calm music has no reliable beat: hold shots 3–4 s.
+  Land the best shot on a bar line (every 4 beats; the sound map lists both). The sound map's `cut_off_beat` names
+  a piece that starts off the beat. A track with no steady beat: hold shots 3–4 s. When someone speaks, the
+  words set the cuts, not the beat.
 - **Between pieces** a hard cut is the default. A fade only for time passing or a change of place: start the
   incoming piece up to 2 s early on the other track with `data-transition="fade"`. No GPU transition on footage.
 - `data-reframe` only on a person on camera: on any other clip the check warns `reframe_no_face`; frame it with
@@ -85,8 +88,8 @@ The face wins: nothing covers it, one graphic at a time, each timed to the word 
 close-up the face sits about y 400–1000: look at the sheet and keep graphics above or below it.
 
 - **Lower third** at the person's first appearance, once: `motion {name, piece: "lower-third", start: 0.3,
-  vars: {name, role, accent, duration: 2–3}}`. It lands at `right:6%; bottom:30%`, on the caption rail: with
-  captions on, `edit` it straight after: `"right:6%; bottom:30%;"` → `"right:140px; bottom:41%;"`.
+  vars: {name, role, accent, duration: 2–3}}`. It lands just above two lines of captions, clear of the right
+  140 px; check on the sheet that it does not cover the chin, and move it with `edit` only if it does.
 - **Keyword chip** (a place, a product, a name): a pill in the top band, 0.15 s before the word, held about
   1.5 s, leaving faster than it came. A Lottie accent can sit inside it:
   ```html

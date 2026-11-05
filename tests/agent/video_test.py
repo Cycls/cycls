@@ -769,6 +769,29 @@ def test_music_lists_the_library_from_the_signed_contract(monkeypatch, tmp_path)
     assert "not available yet" in _run({"action": "music"}, _ws(tmp_path))
 
 
+def test_music_tells_each_tracks_beat_and_the_sound_map_lists_the_beats_in_the_video(monkeypatch, tmp_path):
+    from cycls._agent.video import report
+
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    library = [{"id": "up-02", "title": "Go", "mood": ["upbeat"], "bpm": 122.0, "duration": 140, "starts": [0.008, 55.388],
+                "beat": {"every": 0.4918, "first": 0.008, "bar": 1.975}},
+               {"id": "drift-03", "title": "Haze", "mood": ["ambient"], "bpm": None, "duration": 200, "starts": [0, 40], "beat": None}]
+    monkeypatch.setattr(contract, "cached", lambda: {"data": {"music": library}})
+    out = _run({"action": "music"}, _ws(tmp_path))
+    assert "122 bpm, a beat every 0.492 s, a bar every 1.97 s" in out
+    assert "Good places to start (data-media-start), each on a beat: 0.008, 55.388 s." in out
+    assert "Haze — ambient; no steady beat" in out and "put cuts on the beats and the big moments on the bars" in out
+    sound = {"tracks": [{"id": "m", "kind": "music", "music": "up-02", "start": 0, "end": 30, "media_start": 0.008,
+                         "beats": {"every": 0.4918, "first": 0, "times": [round(k * 0.4918, 3) for k in range(61)],
+                                   "bars": [round(k * 1.9672, 3) for k in range(16)]}}],
+             "notes": ["1 of 3 cuts miss the music's beat: #s2 at 2.5 s (the beat is at 2.459 s)"]}
+    text = report.sound_text(sound)
+    assert "its beats (every 0.492 s) in the video: 0, 0.49, 0.98, 1.48," in text
+    assert ", … every 0.492 s to 29.51 s" in text and "bar lines (every 4th beat from where it starts, for the biggest moments): 0, 1.97, 3.93," in text
+    assert "Note: 1 of 3 cuts miss the music's beat: #s2 at 2.5 s (the beat is at 2.459 s)." in text
+
+
 def test_a_render_says_how_loud_it_came_out(monkeypatch, tmp_path):
     _on(monkeypatch)
     svc = FakeService(monkeypatch)

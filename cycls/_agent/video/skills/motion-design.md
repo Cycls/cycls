@@ -252,7 +252,8 @@ get none.
 | a number or data point lighting up | `ping` | the moment − its hit |
 | done, sent, a win | `chime` or `sparkle` | the moment − its hit |
 
-- The hit lands on the frame it belongs to, within a frame: late by a beat reads as a mistake.
+- The hit lands on the frame it belongs to, within a frame: late by a beat reads as a mistake. With music, the
+  moment itself sits on a beat (the sound map lists them), so the effect, the cut and the music hit together.
 - One for a moment that earns it, at most one every 1.5 s; the hook and the payoff get the strongest. A montage
   cut to music needs few: the music is the rhythm.
 - Under a voice-over's sentence only small ones, `data-volume="0.5"`. On the end card: one impact or chime as
