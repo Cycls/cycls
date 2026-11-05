@@ -679,6 +679,12 @@ there). The motion lower third sits above two lines of captions in every shape (
 `right:140px` clear of the platforms' buttons when it is on the right), with a larger title (44 px), so the
 footage skill no longer tells the agent to move it.
 
+**58 sound effects.** 39 CC0 effects from Freesound joined the 19 (the user picked them by ear on a listening page):
+shutter, flash, applause, cheer, cash register, coins, soft whooshes, a swoosh in/out pair, stamp, pen, bells,
+phone buzz, drums, bass drop, 808 boom, heartbeat, record scratch, countdown, darbuka and oud. The contract lists
+them all (v5 re-signed, about 1,000 tokens longer); `motion-design` §10 says which moment each is for, and
+`promo-reel` puts the darbuka and the oud in Arabic promos.
+
 ## The contract
 
 The text the model learns from lives with the service (`cycls-video/contract/v1.md`) and ships

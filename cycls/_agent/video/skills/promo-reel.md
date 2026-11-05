@@ -244,6 +244,8 @@ Cutting on the beat is what makes a reel feel edited rather than assembled.
   `.star8 i { position: absolute; inset: 0; background: #f3c977 } .star8 i + i { transform: rotate(45deg) }`.
 - Najdi triangles: `background: conic-gradient(from 135deg at 50% 0, #f3c977 90deg, transparent 0) 0 0 / 60px 40px repeat-x`
   on a 40 px strip, wiped in with `clipPath`.
+- Sound with an Arabic flavour: a `darbuka-fill` into the reveal (it ends on its hit), a `darbuka-hit` on a cut,
+  an `oud-pluck` under the greeting or the logo — over `playhouse-sound-of-arabia` or with no music at all.
 - Never draw the Saudi flag or the national emblem in a promo: the flag carries the Shahada and its
   commercial use is restricted. Use the colours.
 - **Arabic copy.** Headlines ≤ 5 words in Cairo, Tajawal or Almarai at 800–900; greetings in Amiri. Put

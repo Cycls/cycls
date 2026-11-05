@@ -243,14 +243,29 @@ get none.
 | moment | effect | data-start |
 |---|---|---|
 | a seam: cut the curve, zoom-through, a whip, a card flying | `whoosh` / `whoosh-short` | the cut − 0.1 |
+| a calm seam, a card sliding in gently, a message sent | `whoosh-soft` / `swish` | the cut − its hit |
+| something arriving, then leaving | `swoosh-in`, then `swoosh-out` (one recording, reversed) | the arrival − its hit |
 | into the centrepiece or a GPU transition | `whoosh-cinematic` | the cut − its hit |
-| a slam, the big number landing, the logo stamped | `impact-bass-1` | the landing − 0.1 |
-| the seconds before the payoff | `riser` (then the impact on the payoff) | the payoff − its hit |
-| a chip, a badge, an emoji, a burst | `pop` | the pop − 0.1 |
+| a slam, the big number landing, the logo stamped | `impact-bass-1`, `drum-hit` or `stamp` | the landing − its hit |
+| a dramatic title, the reveal of a launch | `stinger`; a cinematic logo in the dark: `sub-boom` | the reveal − its hit |
+| the beat dropping into a reel's main part | `bass-drop` | the drop − its hit |
+| the seconds before the payoff | `riser` or `drum-roll` (its rimshot is the hit), then the impact | the payoff − its hit |
+| a countdown to a launch, a deadline | `countdown-beep` (the long beep is its hit), `clock-tick` under it | the launch − its hit |
+| a chip, a badge, an emoji, a burst | `pop`; playful `bubble-pop`; under a voice `pop-soft` | the pop − its hit |
 | a cursor press, a toggle | `click` | the press |
 | text typing on | `typing`, `data-duration` = the typing | the first letter |
 | a number or data point lighting up | `ping` | the moment − its hit |
-| done, sent, a win | `chime` or `sparkle` | the moment − its hit |
+| done, sent, a win | `chime`, `sparkle` or `ding` | the moment − its hit |
+| a price, a sale, cashback | `cash-register`; a reward `coin-flip`; savings `coins` | the price landing − its hit |
+| a photo, a product shot frozen | `camera-shutter` (`-double` for a burst), `camera-flash` | the freeze − its hit |
+| a message, an order arriving | `phone-vibrate`, `notification`; an order ready `service-bell` | the moment − its hit |
+| a door, a store opening, a customer | `doorbell`, `shop-bell` | the moment − its hit |
+| a letter, a contract, a note | `pen-signature`, `pen-scribble`, `page-turn` | the stroke − its hit |
+| a twist, "wait, what?" | `record-scratch`; a joke's punchline `ba-dum-tss` | the twist − its hit |
+| a magical or premium change | `magic-shimmer`, `twinkle` | the change − its hit |
+| tension before something that matters | `heartbeat` | the moment − its hit |
+| a crowd's reaction to a win | `cheer`, `applause` (under the payoff, not over words) | the win − its hit |
+| an Arabic or Gulf promo's cut or title | `darbuka-fill` (ends on its hit), `darbuka-hit`, `oud-pluck` | the cut − its hit |
 
 - The hit lands on the frame it belongs to, within a frame: late by a beat reads as a mistake. With music, the
   moment itself sits on a beat (the sound map lists them), so the effect, the cut and the music hit together.
