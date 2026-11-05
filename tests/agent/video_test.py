@@ -1209,6 +1209,33 @@ def test_footage_with_tidy_gives_the_pieces_and_says_what_was_cut(monkeypatch, t
     assert 'data-media-start="12.25" data-duration="1.9"' in text and 'data-start="1.9" data-media-start="19.85"' in text
 
 
+def test_each_footage_call_logs_where_its_time_went(monkeypatch, tmp_path):
+    from cycls._agent import logs
+    from cycls._agent.video import stock
+
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    fake = FakeFootage(monkeypatch)
+    fake.whole = False                                     # the send stops part way: logged as well
+    lines = []
+    monkeypatch.setattr(logs, "log", lambda level, **f: lines.append((level, f)))
+
+    async def find(root, query, *, orientation=None, pick=0):
+        _clip(root, "videos/footage/sea-1.mp4")
+        return "videos/footage/sea-1.mp4", "Video by Ana on Pexels.", []
+    monkeypatch.setattr(stock, "find", find)
+    out = _text(_run({"action": "footage", "stock": "sea"}, _ws(tmp_path)))
+    assert "Still sending videos/footage/sea-1.mp4" in out
+    (_, f), = [x for x in lines if x[0] == "video_footage"]
+    assert f["stock"] is True and f["state"] == "sending" and f["bytes"] == 812
+    assert all(isinstance(f[k], int) for k in ("fetch_ms", "hash_ms", "send_ms", "total_ms"))
+    lines.clear()
+    fake.state = "ready"                                   # asked again, made ready meanwhile: no send, no read
+    _run({"action": "footage", "path": "videos/footage/sea-1.mp4"}, _ws(tmp_path))
+    (_, f), = [x for x in lines if x[0] == "video_footage"]
+    assert f["stock"] is False and f["state"] == "ready" and f["reused"] is True and f["send_ms"] is None
+
+
 # ---- in another language -----------------------------------------------------------------------
 
 AR = {"0": "مرحباً بكم.", "1": "اصنع واحداً."}

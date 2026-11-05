@@ -87,12 +87,15 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
     With budgets (the agent's call) it stops when one runs out and says where: {"state": "sending",
     "sent", "size"} or {"state": "reading", "eta_s"}; the next call goes on from there. Without them
     (Edit) it goes on to the end, telling `progress` (an async callable) how far it is.
-    → {"state": "ready", "info", "sheet", "reused", "sha", "words_rel"}. NotReady when it cannot be."""
+    → {"state": "ready", "info", "sheet", "reused", "sha", "words_rel", "ms"}. NotReady when it cannot be.
+    `ms` (on every answer): how long hashing, sending and reading took in this call, for the log."""
     from cycls._agent import video
 
     root = Path(root)
     size = full.stat().st_size
+    ms, t0 = {}, time.monotonic()
     sha = await asyncio.to_thread(files.clip_sha, root, rel, full)
+    ms["hash"] = round((time.monotonic() - t0) * 1000)
     state = await video.clip_state(workspace, sha, sheet=True)
     info, sheet, reused = None, None, False
     if state.get("state") == "ready":
@@ -101,11 +104,13 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
         if state.get("state") != "uploaded":
             at = int(state.get("at") or 0) if state.get("state") == "partial" else 0
             await _tell(progress, {"state": "sending", "sent": at, "size": size})
+            t_send = time.monotonic()
             try:
                 if send_budget is not None:
                     at, whole = await video.send_clip(workspace, full, sha, budget=send_budget, at=at)
+                    ms["send"] = round((time.monotonic() - t_send) * 1000)
                     if not whole:
-                        return {"state": "sending", "sent": at, "size": size}
+                        return {"state": "sending", "sent": at, "size": size, "ms": ms}
                 else:
                     whole, still = False, 0
                     while not whole:
@@ -117,6 +122,8 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
                             raise NotReady("the upload to the video service stopped going forward; try again.")
             except video.Refused as e:
                 raise NotReady(f"the clip was not taken: {e}") from e
+            ms["send"] = round((time.monotonic() - t_send) * 1000)
+        t_read = time.monotonic()
         pending = files.footage_pending(root, chat, sha) if chat else None
         token, eta = (pending["token"] if pending else None), None
         if token is None:
@@ -142,8 +149,9 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
                     if r.get("state") != "pending" or time.monotonic() > deadline:
                         break
                     await _tell(progress, {"state": "reading", "eta_s": r.get("eta_s")})
+            ms["read"] = round((time.monotonic() - t_read) * 1000)
             if r.get("state") == "pending":
-                return {"state": "reading", "eta_s": r.get("eta_s", 60)}
+                return {"state": "reading", "eta_s": r.get("eta_s", 60), "ms": ms}
             if chat:
                 files.footage_done(root, chat, sha)
             if r.get("state") in ("gone", "expired") and again:     # the service restarted under the job: once more
@@ -165,7 +173,7 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
                                 by=by, reason="video-footage")
         else:
             info = {**info, "transcript": kept}
-    return {"state": "ready", "info": info, "sheet": sheet, "reused": reused, "sha": sha, "words_rel": words_rel}
+    return {"state": "ready", "info": info, "sheet": sheet, "reused": reused, "sha": sha, "words_rel": words_rel, "ms": ms}
 
 
 def shape_for(width, height):

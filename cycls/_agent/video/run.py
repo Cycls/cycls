@@ -914,16 +914,36 @@ def _clip_file(root, path):
     return full, rel
 
 
-async def _made_ready(workspace, root, chat, full, rel, language, again_with="footage"):
+def _log_footage(chat, fetch_ms, full, r, seconds):
+    """One line a footage call: where its time went (a stock clip's search and download, hashing, sending,
+    reading on the service) — what to make faster comes from these."""
+    from ..logs import log
+    try:
+        size = full.stat().st_size
+    except OSError:
+        size = None
+    ms = r.get("ms") or {}
+    log("video_footage", chat_id=chat, stock=fetch_ms is not None, fetch_ms=fetch_ms, bytes=size,
+        hash_ms=ms.get("hash"), send_ms=ms.get("send"), read_ms=ms.get("read"), state=r.get("state"),
+        reused=r.get("reused"), total_ms=round(seconds * 1000) + (fetch_ms or 0))
+
+
+async def _made_ready(workspace, root, chat, full, rel, language, again_with="footage", timed=None):
     """clip.make_ready within this call's budgets → its result, or what to answer: still sending or
-    reading (call again), or why it cannot be."""
+    reading (call again), or why it cannot be. `timed` (a stock fetch's ms, the file): a call that stops
+    early is logged too."""
+    import time
+
     from . import clip
 
+    t0 = time.monotonic()
     try:
         r = await clip.make_ready(workspace, root, full, rel, chat=chat, language=language,
                                   send_budget=BUDGET["send"], read_budget=BUDGET["footage"], by="agent")
     except clip.NotReady as e:
         return _err(str(e))
+    if timed and r["state"] != "ready":
+        _log_footage(chat, timed[0], timed[1], r, time.monotonic() - t0)
     if r["state"] == "sending":
         return (f"Still sending {rel} ({r['sent'] / 1048576:.0f} of {r['size'] / 1048576:.0f} MB so far). Call "
                 f"{again_with} again with the same path: it goes on from there.")
@@ -988,13 +1008,18 @@ async def _footage(workspace, root, chat, inp):
     costs nothing to ask after again."""
     from . import stock
 
+    import time
+
     credit, others = None, []
     path = inp.get("path")
+    fetch_ms = None
     if inp.get("stock"):
         try:
             pick = inp.get("pick")
+            t0 = time.monotonic()
             path, credit, others = await stock.find(root, inp["stock"], orientation=inp.get("orientation"),
                                                     pick=int(pick) if isinstance(pick, (int, float)) and pick >= 0 else 0)
+            fetch_ms = round((time.monotonic() - t0) * 1000)
         except ValueError as e:
             return _err(str(e))
         except Exception as e:  # noqa: BLE001 - the network, or the stock service
@@ -1008,9 +1033,11 @@ async def _footage(workspace, root, chat, inp):
     if isinstance(got, str):
         return got
     full, rel = got
-    r = await _made_ready(workspace, root, chat, full, rel, language)
+    t_ready = time.monotonic()
+    r = await _made_ready(workspace, root, chat, full, rel, language, timed=(fetch_ms, full))
     if isinstance(r, str):
         return r
+    _log_footage(chat, fetch_ms, full, r, time.monotonic() - t_ready)
     info, sheet, words_rel = r["info"], r.get("sheet"), r["words_rel"]
     text = report.footage_text(rel, info, words_rel=words_rel, reused=r["reused"], credit=credit)
     if inp.get("tidy"):
