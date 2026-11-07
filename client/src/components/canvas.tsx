@@ -32,7 +32,7 @@ import { SaveDialog } from "./save-dialog";
 import type { AppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { slide, cn } from "../lib/utils";
-import { t, getLang } from "../lib/i18n";
+import { t, tn, getLang } from "../lib/i18n";
 
 // Renderer choice comes from the PATH, never the display name: an app's tab
 // is titled by its manifest ("Sales Portfolio"), which has no extension, and
@@ -266,11 +266,11 @@ const pageQuery = (page?: string) => (page ? `&page=${encodeURIComponent(page)}`
 export function designKind(manifest: string | null): { label: string; several: boolean } | null {
   const deck = manifest ? parseDeck(manifest) : null;
   if (!deck?.count) return null;
-  const n = deck.count, many = (one: "onePage" | "oneSlide", more: "nPages" | "nSlides") => (n === 1 ? t(one) : t(more).replace("{n}", String(n)));
-  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("onePage", "nPages")}`
-    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${t("nPages").replace("{n}", String(deck.pages!.length))}`
-    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("oneSlide", "nSlides")}`
-    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("oneSlide", "nSlides")}`
+  const n = deck.count, many = (what: "pages" | "slides") => tn(what, n);
+  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("pages")}`
+    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${tn("pages", deck.pages!.length)}`
+    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("slides")}`
+    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("slides")}`
     : t("kindPost");
   return { label, several: n > 1 || deck.kind === "deck" || deck.kind === "document" };
 }

@@ -3,13 +3,10 @@ import { useState, useEffect } from "react";
 const translations = {
   en: {
     thinking: "Thinking",
-    step: "step",
-    steps: "steps",
     usedConnectors: "Used {names}",
     request: "Request",
     response: "Response",
     failed: "Failed",
-    nResults: "{n} results",
     verbBash: "ran commands",
     verbWebSearch: "searched the web",
     verbFetch: "fetched pages",
@@ -43,6 +40,10 @@ const translations = {
     noShares: "No shared links yet",
     noSharesSub: "Share a conversation to see it here",
     apps: "Apps",
+    search: "Search",
+    searchAll: "Search chats, files and apps…",
+    all: "All",
+    noResults: "Nothing matches",
     noApps: "No apps yet",
     appCrashed: "This app stopped",
     noAppsSub: "Ask the agent to build one and it appears here",
@@ -91,7 +92,6 @@ const translations = {
     free: "Free",
     orgPlans: "Organization Plans",
     orgPlansFor: "Org plans for",
-    freeTrialDays: "-day free trial",
     perMonth: "/ mo",
     explore: "Explore agents",
     language: "العربية",
@@ -343,7 +343,6 @@ const translations = {
     noTrash: "Trash is empty",
     noTrashSub: "Deleted files, apps and chats stay here for 30 days",
     deleteAppConfirm: "Delete the app {name}? It moves to the trash.",
-    daysAgo: "{n}d ago",
     today: "today",
     followUps: "Suggested follow-up",
     askQuestions: "Clarifying questions",
@@ -614,10 +613,6 @@ const translations = {
     downloadPptx: "Download PowerPoint",
     downloadImages: "Download images (.zip)",
     pages: "Pages",
-    onePage: "1 page",
-    oneSlide: "1 slide",
-    nPages: "{n} pages",
-    nSlides: "{n} slides",
     kindPost: "Post",
     kindCarousel: "Carousel",
     kindDeck: "Deck",
@@ -649,7 +644,6 @@ const translations = {
     savedCopy: "Saved a copy: {name}",
     copyFailed: "Couldn’t save the copy.",
     exportedTo: "Exported to {name}",
-    exportedN: "Exported {n} files to {dir}",
     exportFailed: "Couldn’t export — try again.",
     open: "Open",
     editorLoading: "Loading editor…",
@@ -689,8 +683,6 @@ const translations = {
     commentOnPage: "Page {n}",
     commentSlideGone: "Its slide was removed",
     commentPageGone: "Its page was removed",
-    commentOneReply: "1 reply",
-    commentReplies: "{n} replies",
     commentsAsk: "Ask {agent} to address them",
     commentsTheAgent: "the agent",
     commentsAskText: "Address the open comments on {path}",
@@ -723,13 +715,10 @@ const translations = {
   },
   ar: {
     thinking: "أفكر",
-    step: "خطوة",
-    steps: "خطوات",
     usedConnectors: "استخدم {names}",
     request: "الطلب",
     response: "الاستجابة",
     failed: "فشل",
-    nResults: "{n} نتائج",
     verbBash: "شغّلت أوامر",
     verbWebSearch: "بحثت في الويب",
     verbFetch: "جلبت صفحات",
@@ -763,6 +752,10 @@ const translations = {
     noShares: "لا توجد روابط مشاركة",
     noSharesSub: "شارك محادثة لرؤيتها هنا",
     apps: "التطبيقات",
+    search: "بحث",
+    searchAll: "ابحث في المحادثات والملفات والتطبيقات…",
+    all: "الكل",
+    noResults: "لا توجد نتائج",
     noApps: "لا توجد تطبيقات بعد",
     appCrashed: "توقف هذا التطبيق",
     noAppsSub: "اطلب من الوكيل إنشاء تطبيق وسيظهر هنا",
@@ -811,7 +804,6 @@ const translations = {
     free: "مجاني",
     orgPlans: "باقات المنظمة",
     orgPlansFor: "باقات منظمة",
-    freeTrialDays: " يوم تجربة مجانية",
     perMonth: "/ شهر",
     explore: "استكشف الوكلاء",
     language: "English",
@@ -1063,7 +1055,6 @@ const translations = {
     noTrash: "السلة فارغة",
     noTrashSub: "تبقى الملفات والتطبيقات والمحادثات المحذوفة هنا ٣٠ يومًا",
     deleteAppConfirm: "حذف التطبيق {name}؟ سينتقل إلى السلة.",
-    daysAgo: "قبل {n} يوم",
     today: "اليوم",
     followUps: "الخطوة التالية المقترحة",
     askQuestions: "الأسئلة التوضيحية",
@@ -1334,10 +1325,6 @@ const translations = {
     downloadPptx: "تحميل باوربوينت",
     downloadImages: "تحميل الصور (.zip)",
     pages: "الصفحات",
-    onePage: "صفحة واحدة",
-    oneSlide: "شريحة واحدة",
-    nPages: "{n} صفحات",
-    nSlides: "{n} شرائح",
     kindPost: "منشور",
     kindCarousel: "منشور متعدد الشرائح",
     kindDeck: "عرض تقديمي",
@@ -1369,7 +1356,6 @@ const translations = {
     savedCopy: "حُفظت نسخة: {name}",
     copyFailed: "تعذّر حفظ النسخة.",
     exportedTo: "صُدّر إلى {name}",
-    exportedN: "صُدّر {n} ملفات إلى {dir}",
     exportFailed: "تعذّر التصدير — حاول مجدداً.",
     open: "فتح",
     editorLoading: "جارٍ تحميل المحرر…",
@@ -1409,8 +1395,6 @@ const translations = {
     commentOnPage: "الصفحة {n}",
     commentSlideGone: "حُذفت شريحته",
     commentPageGone: "حُذفت صفحته",
-    commentOneReply: "ردّ واحد",
-    commentReplies: "{n} ردود",
     commentsAsk: "اطلب من {agent} معالجتها",
     commentsTheAgent: "الوكيل",
     commentsAskText: "عالج التعليقات المفتوحة على {path}",
@@ -1450,6 +1434,7 @@ export function getLang(): Lang {
 }
 
 export function setLang(lang: Lang) {
+  localStorage.setItem("cycls_lang", lang);
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
   window.dispatchEvent(new Event("langchange"));
@@ -1467,6 +1452,36 @@ export function tIn(lang: Lang, key: keyof typeof translations.en): string {
 }
 
 // How long ago, in the UI's language: "just now", "5 minutes ago", "yesterday".
+// A count and its noun in the UI's language. Arabic has a form for one, two, 3 to 10, 11 to 99 and the rest
+// (Intl.PluralRules); English, one and the rest.
+const COUNTED = {
+  en: {
+    steps: { one: "{n} step", other: "{n} steps" },
+    results: { one: "{n} result", other: "{n} results" },
+    pages: { one: "1 page", other: "{n} pages" },
+    slides: { one: "1 slide", other: "{n} slides" },
+    replies: { one: "1 reply", other: "{n} replies" },
+    exported: { one: "Exported 1 file to {dir}", other: "Exported {n} files to {dir}" },
+    trialDays: { other: "{n}-day free trial" },
+  },
+  ar: {
+    steps: { one: "خطوة واحدة", two: "خطوتان", few: "{n} خطوات", other: "{n} خطوة" },
+    results: { one: "نتيجة واحدة", two: "نتيجتان", few: "{n} نتائج", other: "{n} نتيجة" },
+    pages: { one: "صفحة واحدة", two: "صفحتان", few: "{n} صفحات", other: "{n} صفحة" },
+    slides: { one: "شريحة واحدة", two: "شريحتان", few: "{n} شرائح", other: "{n} شريحة" },
+    replies: { one: "ردّ واحد", two: "ردّان", few: "{n} ردود", many: "{n} ردًّا", other: "{n} ردّ" },
+    exported: { one: "صُدّر ملف واحد إلى {dir}", two: "صُدّر ملفان إلى {dir}", few: "صُدّرت {n} ملفات إلى {dir}",
+                many: "صُدّر {n} ملفًا إلى {dir}", other: "صُدّر {n} ملف إلى {dir}" },
+    trialDays: { one: "تجربة مجانية ليوم واحد", two: "تجربة مجانية ليومين", few: "تجربة مجانية لـ{n} أيام",
+                 many: "تجربة مجانية لـ{n} يومًا", other: "تجربة مجانية لـ{n} يوم" },
+  },
+};
+
+export function tn(key: keyof typeof COUNTED.en, n: number): string {
+  const forms: Partial<Record<Intl.LDMLPluralRule, string>> = COUNTED[getLang()][key];
+  return (forms[new Intl.PluralRules(getLang()).select(n)] ?? forms.other!).replace("{n}", String(n));
+}
+
 export function timeAgo(iso: string): string {
   const s = (Date.parse(iso) - Date.now()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(getLang(), { numeric: "auto" });

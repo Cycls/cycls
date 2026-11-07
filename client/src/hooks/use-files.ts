@@ -19,7 +19,7 @@ export interface FileEntry {
 // Same predicate the server applies, for servers that don't apply it yet.
 // NFC because a browser-typed query and a name off the mount can differ in
 // normal form and never compare equal — routine with Arabic.
-const fold = (s: string) => s.normalize("NFC").toLowerCase();
+export const fold = (s: string) => s.normalize("NFC").toLowerCase();
 export const matchTokens = (path: string, tokens: string[]) =>
   tokens.every((t) => fold(path).includes(t));
 

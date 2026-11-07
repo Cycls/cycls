@@ -19,7 +19,8 @@ window.addEventListener("vite:preloadError", (e) => {
   e.preventDefault();
   location.reload();
 });
-if (navigator.language.startsWith("ar")) {
+// The language last picked here, else the browser's
+if ((localStorage.getItem("cycls_lang") || navigator.language).startsWith("ar")) {
   document.documentElement.lang = "ar";
   document.documentElement.dir = "rtl";
 }

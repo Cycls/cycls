@@ -36,7 +36,7 @@ describe("writingNow — the value a tool call's input is on", () => {
 describe("a live tool row", () => {
   it("says what is being written until its label arrives", () => {
     const { rerender } = render(<StepPart step="" toolName="Design" isStreaming args={'{"spec":{"title": "Market size'} />);
-    expect(screen.getByTestId("step-writing").textContent).toBe(" — writing… “Market size”");
+    expect(screen.getByTestId("step-writing").textContent).toBe(" · writing… “Market size”");
     rerender(<StepPart step="pitch" toolName="Design" isStreaming args={'{"spec":{"title": "Market size"}}'} />);
     expect(screen.queryByTestId("step-writing")).toBeNull();                   // the call is running: its own label
     rerender(<StepPart step="" toolName="Design" args={'{"spec":{"title": "Market size'} />);

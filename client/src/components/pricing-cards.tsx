@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Show, useUser } from "@clerk/react";
 import { usePlans, useSubscription, CheckoutButton, SubscriptionDetailsButton } from "@clerk/react/experimental";
-import { t, getLang } from "../lib/i18n";
+import { t, tn, getLang } from "../lib/i18n";
 import { track } from "../lib/analytics";
 import { convertReferral } from "../lib/affiliate";
 import { commerceProps } from "../lib/commerce";
@@ -80,7 +80,7 @@ export function PricingCards({ payerType = "user", why, usage, agent, setup, onS
   const per = usage?.per === "month" ? t("usageThisMonth") : usage?.per === "quarter" ? t("usageThisQuarter") : t("usageYour");
   const fine = plan.hasBaseFee ? [
     name(plan),
-    plan.freeTrialEnabled && plan.freeTrialDays ? `${plan.freeTrialDays}${t("freeTrialDays")}` : "",
+    plan.freeTrialEnabled && plan.freeTrialDays ? tn("trialDays", plan.freeTrialDays) : "",
     t(yearly ? "plansAYear" : "plansAMonth").replace("{price}", price(charged)),
     local(charged, setup) && t("plansAbout").replace("{price}", local(charged, setup)),
     t("cancelAnytime"),

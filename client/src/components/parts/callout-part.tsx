@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { cn } from "../../lib/utils";
 import { t } from "../../lib/i18n";
+import { dirOf } from "../../lib/bidi";
 
 // A callout is plain text, but a server that names the page you have to visit — Slack's "enable it
 // here: <url>" — is only useful if the link is one click. Nothing else here is interpreted.
@@ -44,13 +45,14 @@ export const CalloutPart = memo(function CalloutPart({
 }) {
   return (
     <div
+      dir={dirOf(callout)}
       className={cn(
-        "border-l-4 rounded-r-lg p-4 my-3 text-sm",
+        "border-s-4 rounded-e-lg p-4 my-3 text-sm",
         styles[style] || styles.info,
       )}
     >
       {title && <div className="font-semibold mb-1">{title}</div>}
-      <div className="whitespace-pre-wrap" dir="auto">{linkify(callout)}</div>
+      <div className="whitespace-pre-wrap">{linkify(callout)}</div>
       {onRetry && style === "error" && (
         <button
           onClick={onRetry}

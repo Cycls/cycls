@@ -93,7 +93,7 @@ export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: (
 }
 
 // Context menu pinned at cursor coordinates (right-click).
-function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
   useEscape(onClose);
   return (
     <>

@@ -1,6 +1,6 @@
 import type { PollApi } from "../lib/polls";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
-import { useState, useRef, useEffect, useCallback, useMemo, useId } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
@@ -9,6 +9,7 @@ import { Canvas, type CanvasFile } from "./canvas";
 import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
+import { SearchDialog } from "./search-dialog";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, Spinner, type IconName } from "./icon";
@@ -370,9 +371,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
   }, [openFileInCanvas]);
-  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
+  // Never narrower than its tabs and collapse, in either language: the tabs' width + collapse (32), the bar's padding (16), the border
+  const [tabsWidth, setTabsWidth] = useState(0);
+  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, Math.max(240, tabsWidth + 50), 80, 0,
     () => canvasShowing && setRailIcons(true), 0.5);
   const [shareOpen, setShareOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
   const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
@@ -958,6 +962,21 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [undoLast]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      setSearchOpen((o) => !o);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // Search finds what the sidebar lists, fresh each time it opens
+  useEffect(() => {
+    if (!searchOpen) return;
+    if (account && onListChats) onListChats().then(setChats).catch(() => {});
+    if (files) void refreshApps();
+  }, [searchOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // App identity lives in its manifest; the slug (folder) stays immutable.
   const updateApp = useCallback(async (app: AppInfo, patch: { name?: string; icon?: string }) => {
@@ -1001,6 +1020,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     void refreshVideoEditors();              // an open video editor, if a file tool changed its video
   }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (tabsRef.current) setTabsWidth(tabsRef.current.scrollWidth); }, [lang, filesOpen, railIconsOnly]);
   const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
   const closeRight = () => {
@@ -1158,6 +1179,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </button>
               </>
             )}
+            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} />}
             {(files || account) && (
               <button
                 onClick={() => rightOpen ? closeRight() : openRight()}
@@ -1438,6 +1460,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           </div>
         </Popover>
       )}
+      {searchOpen && (files || account) && (
+        <SearchDialog
+          chats={account ? chats : undefined}
+          apps={files ? apps : undefined}
+          searchFiles={files?.searchFiles}
+          onOpenChat={(id) => onLoadChat?.(id)}
+          onOpenFile={(path, name) => openFileInCanvas(path, name)}
+          onOpenApp={openApp}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
       {settingsOpen && account && (
         <SettingsDialog account={account} workspace={settingsWs} onClose={() => setSettingsOpen(false)}
                         onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined}
@@ -1490,7 +1523,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         />
         </CommentsContext.Provider>
       )}
-      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
+      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone; laid out as in English in every language */}
       <AnimatePresence initial={false}>
         {filesOpen && (
           <>
@@ -1511,6 +1544,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
               exit={!isDesktop ? { x: "100%" } : { width: 0 }}
               transition={railResizing ? { duration: 0 } : slide}
+              dir="ltr"
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop
@@ -1547,42 +1581,44 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               ) : (files || account) && (
                 <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
-                  {account && (
-                    <button
-                      onClick={() => selectTab("chats")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("chats")}
-                    </button>
-                  )}
-                  {files && (
-                    <button
-                      onClick={() => selectTab("files")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("files")}
-                    </button>
-                  )}
-                  {files && (
-                    <button
-                      onClick={() => { selectTab("apps"); void refreshApps(); }}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("apps")}
-                    </button>
-                  )}
-                  {account && (
-                    <button
-                      onClick={() => selectTab("shares")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("shares")}
-                    </button>
-                  )}
+                  <div ref={tabsRef} className="flex h-full min-w-0 overflow-hidden">
+                    {account && (
+                      <button
+                        onClick={() => selectTab("chats")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("chats")}
+                      </button>
+                    )}
+                    {files && (
+                      <button
+                        onClick={() => selectTab("files")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("files")}
+                      </button>
+                    )}
+                    {files && (
+                      <button
+                        onClick={() => { selectTab("apps"); void refreshApps(); }}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("apps")}
+                      </button>
+                    )}
+                    {account && (
+                      <button
+                        onClick={() => selectTab("shares")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("shares")}
+                      </button>
+                    )}
+                  </div>
                   <div className="flex-1" />
                   <button
                     onClick={collapseRail}
-                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label={t("collapse")}
                     title={t("collapse")}
                   >
@@ -1627,16 +1663,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                             onClick={() => window.open(s.url, "_blank")}
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                              <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                {isChat ? (
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                                ) : (
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                )}
-                              </svg>
+                              <span className="text-muted-foreground"><Icon name={isChat ? "chat" : "doc"} strokeWidth={1.5} /></span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <span dir="auto" className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                              <span dir="auto" className="text-sm text-foreground truncate block text-left">{s.title || t("untitled")}</span>
                               <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1734,7 +1764,7 @@ function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: s
 }
 
 function formatShortDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
 function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
@@ -1806,7 +1836,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span dir="auto" className={`text-sm text-foreground truncate block ${activeId === s.id ? "font-medium" : ""}`}
+                  <span dir="auto" className={`text-sm text-foreground truncate block text-left ${activeId === s.id ? "font-medium" : ""}`}
                         onDoubleClick={(e) => { e.stopPropagation(); setRenaming(s.id); }}>
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}

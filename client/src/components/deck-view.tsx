@@ -9,7 +9,7 @@ import { saveBlob } from "./canvas-utils";
 import { useSlideNav } from "../hooks/use-slide-nav";
 import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
-import { t } from "../lib/i18n";
+import { t, tn } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
 // A multi-slide design on the canvas. `data` is its slide manifest (?as=slides on the .fig).
@@ -237,7 +237,7 @@ export function DeckView({ data, path, openFile, onReload, onSlideOp: changeSlid
           ))}
         </div>
         <span className="ml-2 text-xs text-muted-foreground tabular-nums">
-          {count === 1 ? t(paper ? "onePage" : "oneSlide") : `${count} ${t(paper ? "pages" : "slidesStage").toLowerCase()}`}
+          {tn(paper ? "pages" : "slides", count)}
         </span>
         {onSlideOp && (
           <button onClick={() => addSlide(mode === "stage" ? nav.active + 1 : count)} disabled={busy}

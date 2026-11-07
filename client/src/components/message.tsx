@@ -22,6 +22,7 @@ import { calloutText } from "../lib/errors";
 import { urlKey } from "./parts/sources-part";
 import { useMemo } from "react";
 import { localStep, t } from "../lib/i18n";
+import { dirOf } from "../lib/bidi";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void, sources?: Map<string, Source>) {
   switch (part.type) {
@@ -152,7 +153,7 @@ export function MessageBubble({
               ))}
             </div>
           )}
-          <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
+          <div dir={dirOf(message.content)} className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
             {message.content}
           </div>
         </div>
@@ -258,7 +259,7 @@ export function MessageBubble({
         {!isEmpty && !isStreaming && (
           <div
             className={cn(
-              "flex gap-0 -ml-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
+              "flex gap-0 -ms-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
             )}
           >
             <button

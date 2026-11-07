@@ -16,6 +16,7 @@ import {
 import { fetchAuthed } from "../../hooks/use-auth-headers";
 import { useDarkMode } from "../../hooks/use-dark-mode";
 import type { ChartMarker, ChartSeries, Part } from "../../hooks/use-chat";
+import { getLang } from "../../lib/i18n";
 
 // A chart a tool sent (`{"type": "chart", series, markers, live}`), drawn with TradingView's Lightweight Charts.
 // A series is candles ([time, open, high, low, close]), a line or an area ([time, value]), or bars under it
@@ -145,7 +146,7 @@ export const ChartPart = memo(function ChartPart({ part }: { part: Part }) {
           first.current.update((series[0]?.kind === "candles"
             ? { time: p.time, open: p.open, high: p.high, low: p.low, close: p.close ?? p.value }
             : { time: p.time, value: p.value ?? p.close }) as never);
-          setLiveAt(p.at || new Date().toLocaleTimeString());
+          setLiveAt(p.at || new Date().toLocaleTimeString(getLang()));
         }
         failures = 0;
       } catch {

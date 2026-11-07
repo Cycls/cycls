@@ -15,6 +15,7 @@
     "@clerk/react": "^6",
     "@clerk/ui": "^1",
     "@emoji-mart/data": "^1.2.1",
+    "@fontsource/ibm-plex-sans-arabic": "^5.3.0",
     "@lexical/link": "0.51.0",
     "@lexical/list": "0.51.0",
     "@lexical/markdown": "0.51.0",
