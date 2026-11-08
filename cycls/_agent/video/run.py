@@ -1169,8 +1169,10 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
                     return _err(f"{rel} changed while the piece was being added (the person is editing it); try again.")
     files.remember(root, chat, name)
     text, blocks, clean = await _checks(workspace, root, rel, made["html"])
-    return _result(f"Added a {piece} to {rel}: its id is {made.get('id')}, from {start or 0:g} s.\n{text}", blocks, note,
-                   _shown(rel, name, clean, version))
+    where = {"up": " It sits higher than usual, above the scene's own text.",
+             "down": " It sits lower than usual, below the scene's own text."}.get(made.get("moved"), "")
+    return _result(f"Added a {piece} to {rel}: its id is {made.get('id')}, from {start or 0:g} s.{where}\n{text}", blocks,
+                   note, _shown(rel, name, clean, version))
 
 
 async def _exec_video(inp, workspace, ctx=None):

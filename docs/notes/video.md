@@ -366,7 +366,8 @@ What opening Video beyond one organisation needs (2026-10-22). Built:
   many videos are ahead and to tell the person. A job that waited past its limit says others were using every
   renderer and that the file is saved.
 - **How many renderers is a setting** (`gpu_slots` in the service's settings Dict, default 2, at most 8), read
-  every 30 s; no deploy to change it.
+  every 30 s; no deploy to change it. `org_slots` (default 2) is how many one organisation may hold at once
+  while nobody else waits: its footage reads and checks then run side by side (2026-11-08, below).
 - **Ceilings**: the whole service a day (`service_gpu_s_day`, default 24 GPU hours: "Video is busy today…"),
   each organisation and person as before, and per organisation overrides (`tenant_overrides`, by tenant hash).
 - **An AI voice is labelled**: a render whose sound has a voice-over or a dub carries `comment`/`description`
@@ -725,8 +726,8 @@ and the door holds each job as a live call. The door is a single container keepi
 door restart loses the jobs in flight and the SDK asks once more.
 
 **One organisation per GPU container.** The renderer is `Renderer(slot, gen)`, each pair a pool of
-at most one container; the door gives each organisation one of two slots, and its jobs queue on
-its own container. A slot passes to another organisation only after the door has stopped its
+at most one container; the door gives each organisation one of two slots (and a second while
+nobody else waits, since 2026-11-08), and its jobs queue on its own container. A slot passes to another organisation only after the door has stopped its
 container and moved its generation on, so no container serves two. Containers also retire after
 50 jobs or on a capture-mode fault.
 
@@ -773,3 +774,25 @@ checklist) and its README.
 | `tests/agent/video_test.py`, `video_editor_test.py`, `scenarios/test_video_live.py` | Mocked and live tests. |
 | `client/tests/video-editor-view.test.tsx` | The editor overlay (vitest). |
 | `examples/agents/video_dev.py` | The agent it is built against. |
+
+### Faster checks, a second GPU, a lower third clear of the text (2026-11-08)
+
+Where a promo's time went on prod (the café run, 695 s): stock footage 288 s, the model 193 s, the checks after
+each edit 167 s (35–42 s each), the render 31 s. Each organisation had one GPU container and its jobs ran one
+after another, so the agent's footage calls and the checks at several sizes queued (10 s on average, 35 s at
+most), while a fresh container starts in about 5 s.
+
+- **A second GPU** (cycls-video `slots.py`): while nobody else waits, an organisation whose renderer is busy takes
+  a second, free one (never another organisation's warm one); it is closed after 2 minutes unused, and passes to
+  another organisation as soon as its job ends. `org_slots` in the settings (1 is the old rule).
+- **The check after an edit** runs its browser check and its frames side by side: 30 s → 20 s on dev for a 20 s
+  footage video; two checks at once 57 s → 20 s.
+- **The lower third** keeps clear of the text on screen. The editor's Motion button measures the text in its
+  preview over the piece's 4.5 s (every text of a scene playing then, shown yet or not) and the service takes
+  the first spot clear of it: above the captions, then higher, then lower (`editor-add.mjs lowerThirdSpot`); the
+  note says when it moved. The agent cannot measure, so `motion` takes `vars.place: "high"` (the footage skill
+  says when) and the reply says when the piece sits higher or lower than usual.
+- **Small fixes**: a clip made ready with the first face track (2026-10-19 to 10-22, the largest face) is read
+  again once, so the crop follows whoever talks (`store.FACES_V`); a long clip's crop cuts with every shot change,
+  not just the first 40 (the agent is still told 40).
+

@@ -89,7 +89,8 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
 
 - **Lower third** at the person's first appearance, once: `motion {name, piece: "lower-third", start: 0.3,
   vars: {name, role, accent, duration: 2–3}}`. It lands just above two lines of captions, clear of the right
-  140 px; check on the sheet that it does not cover the chin, and move it with `edit` only if it does.
+  140 px; check on the sheet that it does not cover the chin, and move it with `edit` only if it does. Over a
+  scene with its own text low in the frame (a promo's headline), add `place: "high"` to its vars.
 - **Keyword chip** (a place, a product, a name): a pill in the top band, 0.15 s before the word, held about
   1.5 s, leaving faster than it came. A Lottie accent can sit inside it:
   ```html

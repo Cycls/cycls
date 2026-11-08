@@ -68,3 +68,21 @@ def test_motion_puts_a_piece_in_through_the_service_with_the_brand_kit(monkeypat
     assert bad.startswith("Error: chart: items")
     assert _run({"action": "motion", "name": "m", "piece": "confetti"}, _ws(tmp_path)).startswith("Error: motion needs piece")
     assert len(svc.submitted) == 3, "write and the two pieces were checked"
+
+
+def test_a_lower_third_placed_higher_says_so_and_place_is_passed_on(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    asked = []
+
+    async def piece(ws, html, name, at, variables):
+        asked.append(variables)
+        return {"html": html.replace("Hi", 'Hi<div id="lower" class="clip"></div>'), "id": "lower", "moved": "up"}
+
+    monkeypatch.setattr(video, "piece", piece)
+    _run({"action": "write", "name": "m", "html": COMP}, _ws(tmp_path))
+    out = _run({"action": "motion", "name": "m", "piece": "lower-third", "start": 1,
+                "vars": {"name": "Sara", "place": "high"}}, _ws(tmp_path))
+    assert "higher than usual" in out["_model"][-1]["text"]
+    assert asked[-1]["place"] == "high"
