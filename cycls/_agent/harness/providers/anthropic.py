@@ -8,7 +8,7 @@ import json
 
 from .. import events
 from ..events import Turn
-from ...tools import tool_step
+from ...tools import tool_head
 
 
 # Cache breakpoint applied to system prompt, last tool, and last user-message
@@ -80,7 +80,7 @@ class AnthropicProvider:
                         yield events.step("", tool=f"{server} · {cb.name}")
                     elif cb.type == "tool_use":
                         tool_idx[ev.index] = cb.id
-                        yield events.step("", tool=tool_step(cb.name, {})["tool_name"], id=cb.id)
+                        yield {**events.step("", id=cb.id), **tool_head(cb.name)}
                 elif ev.type == "content_block_delta":
                     d = ev.delta
                     if d.type == "thinking_delta":

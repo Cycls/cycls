@@ -86,6 +86,23 @@ describe("Cycls Sheets in the canvas", () => {
     expect(posted.map(([m]) => (m as { type: string }).type)).toEqual(expect.arrayContaining(["theme", "locale"]));
   });
 
+  test("on a shared page it opens view only: no saves, no comments, no workspace to name", async () => {
+    const a: OfficeEditorApi = { ...api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" }), readonly: true };
+    render(<SheetsEditorView url="https://office.test/sheets/" path="reports/b.xlsx" name="b.xlsx" api={a} />);
+    const posted: Array<[unknown, string]> = [];
+    const frame = frameWith(posted);
+    await waitFor(() => expect(a.sheetsOpen).toHaveBeenCalledWith("reports/b.xlsx"));
+    say("https://office.test", frame.contentWindow, { type: "ready", protocol: 1 });
+    await waitFor(() => expect(posted.some(([m]) => (m as { type: string }).type === "load")).toBe(true));
+    const load = posted.find(([m]) => (m as { type: string }).type === "load")![0] as { readonly: boolean; doc: string };
+    expect(load.readonly).toBe(true);
+    expect(screen.getByTestId("sheets-status").textContent).toBe("View only");
+    expect(screen.queryByText("/ reports")).toBeNull();
+    say("https://office.test", frame.contentWindow, { type: "saved", doc: load.doc, id: "1", snapshot: { sheetOrder: ["s1"] } });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(a.sheetsSave).not.toHaveBeenCalled();
+  });
+
   test("the header lists what is kept but not shown, and Open offers Excel and PDF", async () => {
     const download = vi.fn();
     const a = api({ editor: true, url: "https://office.test/sheets/", name: "b.xlsx" });

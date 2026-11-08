@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { codeToHtml } from "shiki";
 import { cn } from "../../lib/utils";
 import { useDarkMode } from "../../hooks/use-dark-mode";
+import { t } from "../../lib/i18n";
 
 export const CodePart = memo(function CodePart({
   code,
@@ -20,11 +21,11 @@ export const CodePart = memo(function CodePart({
   };
 
   return (
-    <div className={cn("not-prose my-3 flex w-full flex-col overflow-clip rounded-xl border border-border bg-card text-card-foreground", className)}>
+    <div dir="ltr" className={cn("not-prose my-3 flex w-full flex-col overflow-clip rounded-xl border border-border bg-card text-card-foreground", className)}>
       <div className="flex h-9 items-center justify-between px-4">
         <span className="font-mono text-xs text-muted-foreground">{language || "code"}</span>
         <button onClick={copy} className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
-          {copied ? "Copied!" : "Copy"}
+          {t(copied ? "copied" : "copy")}
         </button>
       </div>
       <HighlightedCode code={code} language={language} />

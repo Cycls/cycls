@@ -242,6 +242,124 @@ def test_mistakes_are_answered_before_the_service_is_called(monkeypatch, tmp_pat
     assert out.startswith("Error:") and says in out
 
 
+# ---- rows from a file, formulas over a range: what the model doesn't type -----------------------
+
+def _sent(monkeypatch):
+    """The edits each call sent the service."""
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"])["edits"])
+        return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(),
+                                         "mutations": [], "ops": [], "report": "1. set_values"})
+
+    _mock(monkeypatch, handler)
+    return seen
+
+
+def test_a_query_s_saved_rows_fill_the_sheet_as_numbers_dates_and_text(monkeypatch, tmp_path):
+    """The Excel turn on namaa (2026-10-31) typed 1,288 cells in one call, 110 s: rows a query saved fill from it."""
+    _on(monkeypatch)
+    seen = _sent(monkeypatch)
+    (tmp_path / ".tmp").mkdir()
+    (tmp_path / ".tmp" / "pe.json").write_text(json.dumps({
+        "columns": ["الرمز", "الشركة", "period_end", "eps", "doc"],
+        "rows": [["2222", "أرامكو", "2025-12-31", 1.92, {"id": 1}], ["1120", "=HYPERLINK(\"x\")", None, None, None]],
+    }, ensure_ascii=False))
+    out = _run({"action": "create", "path": "pe.xlsx", "ops": [
+        {"op": "set_values", "target": "A1", "from": ".tmp/pe.json"},
+        {"op": "set_formulas", "target": "F2:F3", "formulas": [["=D2*2"]]}]}, _ws(tmp_path))
+    fill_op, date_format, formulas = seen[0]
+    assert fill_op == {"op": "set_values", "target": "A1", "values": [
+        ["الرمز", "الشركة", "period_end", "eps", "doc"],
+        ["2222", "أرامكو", 46022, 1.92, '{"id": 1}'],            # a code stays text; a date is Excel's day number
+        ["1120", ' =HYPERLINK("x")', None, None, None]]}         # text from a file never runs as a formula
+    assert date_format == {"op": "format", "target": "C2:C3", "number_format": "yyyy-mm-dd"}
+    assert formulas["formulas"] == [["=D2*2"], ["=D3*2"]]
+    assert "2 rows from .tmp/pe.json into A1:E3 (header in row 1, data from row 2); columns A الرمز, B الشركة" in out["_model"]
+    assert "dates in C" in out["_model"]
+
+
+def test_a_csv_fills_with_its_numbers_and_without_pandas_index(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = _sent(monkeypatch)
+    (tmp_path / "out.csv").write_text(",symbol,close,code,when\n0,2222,27.5,0050,2025-01-05 10:30:00\n"
+                                      "1,1120,98,123456789012345678,2025-01-06\n", encoding="utf-8-sig")
+    _run({"action": "edit", "path": "b.xlsx", "ops": [
+        {"op": "set_values", "target": "'Data 2'!B4", "from": "out.csv", "header": False}]}, _ws(tmp_path))
+    fill_op, when = seen[0]
+    assert fill_op["values"] == [[2222, 27.5, "0050", 45662.4375], [1120, 98, "123456789012345678", 45663]]
+    assert when == {"op": "format", "target": "'Data 2'!E4:E5", "number_format": "yyyy-mm-dd hh:mm"}
+
+
+@pytest.mark.parametrize("data", [
+    [{"date": "2025-01-01", "value": 1}, {"date": "2025-02-01", "value": 2}],
+    {"series_id": "DCOILBRENTEU", "observations": [{"date": "2025-01-01", "value": 1}, {"date": "2025-02-01", "value": 2}]},
+])
+def test_a_list_of_records_fills_with_its_keys_as_the_header(monkeypatch, tmp_path, data):
+    _on(monkeypatch)
+    seen = _sent(monkeypatch)
+    (tmp_path / "r.json").write_text(json.dumps(data))
+    _run({"action": "create", "path": "r.xlsx", "ops": [{"op": "set_values", "target": "A1", "from": "r.json"}]},
+         _ws(tmp_path))
+    assert seen[0][0]["values"] == [["date", "value"], [45658, 1], [45689, 2]]
+
+
+def test_formulas_fill_a_range_like_the_fill_handle():
+    from cycls._agent.office.fill import expand, shift
+    assert shift("=C2/D2", 3, 0) == "=C5/D5"
+    assert shift("=SUM($B$2:B2)+$C2+D$1", 2, 1) == "=SUM($B$2:C4)+$C4+E$1"
+    assert shift('=IF(A2>0,"A2 up",LOG10(A2))+\'Q1 data\'!B2+Q1!B2', 1, 0) == \
+        '=IF(A3>0,"A2 up",LOG10(A3))+\'Q1 data\'!B3+Q1!B3'           # text, functions and sheet names kept
+    assert shift("=A1+Sales2024+ZZZ9", -1, 0) == "=#REF!+Sales2024+ZZZ9"  # off the sheet; names that aren't cells
+    ops, _, _ = expand([{"op": "set_formulas", "target": "B1:C2", "formulas": [["=A1"]]}], ".")
+    assert ops[0]["formulas"] == [["=A1", "=B1"], ["=A2", "=B2"]]
+    same = {"op": "set_formulas", "target": "B1:B2", "formulas": [["=A1"], ["=A2"]]}
+    assert expand([same], ".")[0] == [same]
+
+
+def test_many_typed_cells_get_a_reminder_to_fill_from_the_file(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    _sent(monkeypatch)
+    rows = [[f"co{i}", i, i * 2] for i in range(100)]
+    out = _run({"action": "create", "path": "t.xlsx", "ops": [{"op": "set_values", "target": "A1", "values": rows}]},
+               _ws(tmp_path))
+    assert "300 cells were typed" in out["_model"] and "`from`" in out["_model"]
+    out = _run({"action": "create", "path": "u.xlsx", "ops": [{"op": "set_values", "target": "A1", "values": rows[:5]}]},
+               _ws(tmp_path))
+    assert "typed" not in out["_model"]
+
+
+@pytest.mark.parametrize("op, says", [
+    ({"from": "missing.csv"}, "missing.csv does not exist"),
+    ({"from": "../x.csv"}, "escapes"),
+    ({"from": "rows.txt"}, "a .csv, .tsv or .json file"),
+    ({"from": "rows.csv", "values": [[1]]}, "not both"),
+    ({"from": "bad.json"}, "a list of rows, or a list of objects"),
+])
+def test_a_fill_that_can_t_be_made_changes_nothing(monkeypatch, tmp_path, op, says):
+    _on(monkeypatch)
+    (tmp_path / "rows.txt").write_text("a,b")
+    (tmp_path / "rows.csv").write_text("a,b\n1,2")
+    (tmp_path / "bad.json").write_text('{"a": 1}')
+    _mock(monkeypatch, lambda r: pytest.fail("the service was called"))
+    out = _run({"action": "create", "path": "n.xlsx", "ops": [{"op": "set_values", "target": "A1", **op}]}, _ws(tmp_path))
+    assert out.startswith("Error:") and says in out and out.endswith("Nothing was changed.")
+    assert not (tmp_path / "n.xlsx").exists()
+
+
+def test_a_fill_over_the_cell_limit_is_refused(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    from cycls._agent.office import fill
+    monkeypatch.setattr(fill, "MAX_CELLS", 10)
+    (tmp_path / "big.csv").write_text("a,b\n" + "1,2\n" * 5)
+    _mock(monkeypatch, lambda r: pytest.fail("the service was called"))
+    out = _run({"action": "create", "path": "n.xlsx", "ops": [{"op": "set_values", "target": "A1", "from": "big.csv"}]},
+               _ws(tmp_path))
+    assert "5 rows × 2 columns" in out and "narrow" in out
+
+
 # ---- what the person selected ----------------------------------------------------------------
 
 def test_a_selection_in_a_workbook_reaches_the_model_with_its_sheet():

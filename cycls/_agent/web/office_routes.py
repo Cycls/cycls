@@ -12,6 +12,10 @@
                                        version is kept → {version, unchanged, summary, modified}; 412
                                        {version} when the file changed since `base`
 
+A shared chat or file opens its workbooks and documents in the same editors, view only: the share router answers
+GET /share/{user}/{token}/office/<product>[/open]?path= with `office_views()` over the owner's workspace, for a file
+the share covers. No save, version or comment route is shared.
+
 <product> is sheets (.xlsx, .xlsm) or docs (.docx). The browser frames the editor from `url`; whether an
 organisation has it is answered here, per workspace (SHEETS_ORGS / DOCS_ORGS), so the setting never leaks to
 the page. The service reads the file; what it read is kept beside the workspace's other caches
@@ -63,19 +67,15 @@ def edit_trail(header):
     return [str(line)[:120] for line in lines[:64]]
 
 
-def office_router(ws_dep, required_auth=None, changed=None):
-    from fastapi import APIRouter, Depends, HTTPException, Request, Response
-    from fastapi.responses import JSONResponse
+def office_views():
+    """Per product, what its editor answers for a workspace and a path, with no request in hand:
+    {product: {file, on, check, open, noun, title, patch, …}}. The owner's routes below call these, and so does a
+    share (share_router), over the owner's workspace."""
+    from fastapi import HTTPException, Response
 
-    from cycls._agent.design.store import Stale, load_fig, write_fig
-    from cycls._agent.logs import log
+    from cycls._agent.design.store import load_fig
     from cycls._agent.office import client as office
-    from cycls._agent.web.shared import _safe_path, person
-    from cycls._app.db import Workspace
-
-    user_dep = required_auth if required_auth is not None else Depends(lambda: None)
-
-    r = APIRouter()
+    from cycls._agent.web.shared import _safe_path
 
     async def _read_sheets(data, name):
         read = await office.read_xlsx(data, name=name)
@@ -118,7 +118,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
                  "read": _read_docs, "patch": "patch_docx", "cache": ".cache/docs-review"},
     }
 
-    def _add(product, p):
+    def _views(product, p):
         noun, cache_dir = p["noun"], p.get("cache") or f".cache/{product}"
 
         def _file(ws, path):
@@ -133,7 +133,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
             if not office.offered(ws, product):
                 raise HTTPException(403, f"{p['title']} is not switched on for this workspace.")
 
-        async def editor(path: str, ws: Workspace = ws_dep):
+        async def check(ws, path):
             file_path = _file(ws, path)
             if not office.offered(ws, product):
                 return {"editor": False, "reason": "off"}
@@ -141,7 +141,9 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 return {"editor": False, "reason": "too-large"}
             return {"editor": True, "url": f"{office.editor_url()}/{product}/", "name": Path(path).name}
 
-        async def open_(path: str, ws: Workspace = ws_dep):
+        async def open_(ws, path, mirror=True):
+            """`mirror`: a new version of a Word document brings Cycls's record of its comments in line; a share's
+            viewer only looks, and writes nothing of the owner's."""
             file_path = _file(ws, path)
             _on(ws)
             st = file_path.stat()
@@ -169,7 +171,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 await asyncio.to_thread(_write_cache, Path(ws.root) / cache_dir, version, body)
                 # A new version of a Word document: Cycls's record of its comments brought in line with the file
                 # (comments made in Word, removed there, the agent's) — office/docs_comments.py.
-                if product == "docs":
+                if product == "docs" and mirror:
                     from cycls._agent.office import docs_comments
                     await docs_comments.mirror_file(ws, rel, payload.get("snapshot"),
                                                     datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat())
@@ -177,6 +179,34 @@ def office_router(ws_dep, required_auth=None, changed=None):
             return Response(body, media_type="application/json", headers={
                 "Content-Encoding": "gzip", "Cache-Control": "no-store", "X-Version": version, "X-Modified": modified,
             })
+
+        return {**p, "file": _file, "on": _on, "check": check, "open": open_}
+
+    return {product: _views(product, p) for product, p in products.items()}
+
+
+def office_router(ws_dep, required_auth=None, changed=None):
+    from fastapi import APIRouter, Depends, HTTPException, Request
+    from fastapi.responses import JSONResponse
+
+    from cycls._agent.design.store import Stale, load_fig, write_fig
+    from cycls._agent.logs import log
+    from cycls._agent.office import client as office
+    from cycls._agent.web.shared import person
+    from cycls._app.db import Workspace
+
+    user_dep = required_auth if required_auth is not None else Depends(lambda: None)
+
+    r = APIRouter()
+
+    def _add(product, v):
+        noun, _file, _on = v["noun"], v["file"], v["on"]
+
+        async def editor(path: str, ws: Workspace = ws_dep):
+            return await v["check"](ws, path)
+
+        async def open_(path: str, ws: Workspace = ws_dep):
+            return await v["open"](ws, path)
 
         async def version_(path: str, ws: Workspace = ws_dep):
             """The file's version now (what a save names as its base): an open editor checks it after the file may
@@ -219,7 +249,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
                     return JSONResponse(status_code=412, content={
                         "detail": f"This {noun} changed since it was opened.", "version": version})
                 try:
-                    result = await getattr(office, p["patch"])(data, snapshot_gz)   # looked up per call (tests replace it)
+                    result = await getattr(office, v["patch"])(data, snapshot_gz)   # looked up per call (tests replace it)
                 except office.Unavailable as e:
                     logged("unavailable", error=str(e)[:200])
                     raise HTTPException(503, str(e))
@@ -296,6 +326,6 @@ def office_router(ws_dep, required_auth=None, changed=None):
         if product == "docs":
             r.add_api_route("/office/docs/changes", changes_, methods=["POST"], name="office_docs_changes")
 
-    for product, p in products.items():
-        _add(product, p)
+    for product, v in office_views().items():
+        _add(product, v)
     return r

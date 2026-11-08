@@ -3,10 +3,11 @@
 Mocks the Anthropic streaming API to test incremental history saving
 and crash recovery without hitting a real LLM.
 """
-import asyncio, json, os
+import asyncio, json, os, re
 import sys
 import types
 from pathlib import Path
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -129,11 +130,21 @@ def _stream(responses, summary="<summary>Summary here</summary>", calls=None):
     return stream
 
 
+@contextlib.contextmanager
 def _mock_anthropic(client):
-    """Insert a fake anthropic module into sys.modules that returns *client*."""
+    """A fake anthropic module that returns *client*, in place of that one entry of sys.modules. patch.dict would
+    restore all of sys.modules, dropping what the run imported first (pydantic's lazy root_model, through mcp)."""
     mod = types.ModuleType("anthropic")
     mod.AsyncAnthropic = lambda: client
-    return patch.dict(sys.modules, {"anthropic": mod})
+    real = sys.modules.get("anthropic")
+    sys.modules["anthropic"] = mod
+    try:
+        yield
+    finally:
+        if real is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = real
 
 
 def _history_tool_ids(history):
@@ -1069,9 +1080,24 @@ def test_max_tokens_continuation_is_bounded(agent_env):
     with _mock_anthropic(mock_client):
         items = asyncio.run(_drain(_run(context=ctx)))
 
-    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Continuing past the output limit..."]
+    steps = [i for i in items if isinstance(i, dict) and i.get("step") == "Continuing the reply..."]
     assert len(steps) == MAX_CONTINUATIONS
-    assert any(isinstance(i, dict) and "max_tokens" in str(i.get("callout", "")) for i in items)
+    # not an error: the line the web chat shows a cut-off reply with, and its Continue
+    assert [i for i in items if isinstance(i, dict) and i.get("type") == "callout"] == [
+        {"type": "callout", "callout": "Stopped before it finished.", "style": "info", "code": "cut_off"}]
+
+
+def test_a_refusal_says_so_in_plain_words(agent_env):
+    """A request the model won't answer: our words and a code for the web chat, never `Stopped: refusal`."""
+    ws, ctx = agent_env
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("")], stop_reason="refusal"))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+
+    assert [i for i in items if isinstance(i, dict) and i.get("type") == "callout"] == [
+        {"type": "callout", "callout": "This request couldn't be answered. Try rewording it.", "style": "warning",
+         "code": "declined"}]
 
 
 def test_pause_turn_resume_is_bounded(agent_env):
@@ -1088,7 +1114,7 @@ def test_pause_turn_resume_is_bounded(agent_env):
         items = asyncio.run(_drain(_run(context=ctx)))
 
     assert calls["n"] == MAX_PAUSES + 1
-    assert any(isinstance(i, dict) and "pause_turn" in str(i.get("callout", "")) for i in items)
+    assert any(isinstance(i, dict) and i.get("code") == "cut_off" for i in items)   # Continue picks it up
 
 
 def _failing_rounds(ctx, command, out="Error: old_str not found in videos/a.video.html", good=lambda i: False):
@@ -1569,9 +1595,10 @@ def test_auto_retry_on_overloaded(agent_env):
     callouts = [i for i in items if isinstance(i, dict) and i.get("type") == "callout"]
     assert not callouts
     assert call_count == 3
-    # The attempts are one line that counts up: they share a step id.
-    notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "retrying" in i.get("step", "")]
-    assert ["attempt 1/" in notices[0]["step"], "attempt 2/" in notices[1]["step"]] == [True, True]
+    # The attempts are one line in plain words: they share a step id.
+    notices = [i for i in items if isinstance(i, dict) and i.get("type") == "step" and "busy" in i.get("step", "")]
+    assert [re.sub(r"in [\d.]+s", "in Xs", n["step"]) for n in notices] == [
+        f"The service is busy, retrying in Xs... (attempt {n}/{MAX_RETRIES})" for n in (1, 2)]
     assert notices[0]["id"] == notices[1]["id"] and notices[0]["id"].startswith("retry-")
 
 
@@ -1621,7 +1648,8 @@ def test_a_connection_dropped_before_the_answer_is_tried_again():
     p = _Flaky([([], APIConnectionError("Connection error.")), (["hi", done], None)])
     out = _through_retry(p)
     assert p.calls == 2 and out[-1] is done and "hi" in out
-    assert any(isinstance(e, dict) and "Lost the connection" in e.get("step", "") for e in out)
+    assert any(isinstance(e, dict) and re.fullmatch(rf"The service is busy, retrying in [\d.]+s\.\.\. \(attempt 1/{MAX_DROPPED}\)", e.get("step", ""))
+               for e in out)
 
 
 def test_a_connection_dropped_mid_answer_is_not_tried_again():
@@ -2213,6 +2241,26 @@ def test_a_connector_result_reaches_the_model_but_never_the_chat(agent_env):
     history = _read_history(ctx)
     results = [b["content"] for m in history if m["role"] == "user" for b in (m["content"] if isinstance(m["content"], list) else []) if b.get("type") == "tool_result"]
     assert "RAW CONNECTOR RESULT" in results                               # the model still gets it
+
+
+def test_a_titled_custom_tool_says_what_it_did_in_plain_words_in_each_language():
+    """`.on(title=…)`: the step is the label as a sentence, never `name(input)`, and each UI language's words
+    ride under `i18n`, both before the input has streamed in and once it has."""
+    from cycls import LLM
+    from cycls._agent.tools import register_labels, tool_head, tool_step
+    llm = LLM().on("tasi_sql", AsyncMock(), title={"en": "checked market data", "ar": "راجعت بيانات السوق"},
+                   label=lambda i: {"en": f"Checking prices for {i.get('symbol', '')}", "ar": f"أراجع أسعار {i.get('symbol', '')}"})
+    register_labels(llm._labels, titles=llm._titles)
+    assert tool_head("tasi_sql") == {"tool_name": "checked market data", "plain": True,
+                                     "i18n": {"en": {"tool_name": "checked market data"}, "ar": {"tool_name": "راجعت بيانات السوق"}}}
+    step = tool_step("tasi_sql", {"symbol": "2222", "sql": "SELECT 1"})
+    assert step["step"] == "Checking prices for 2222" and step["plain"]
+    assert step["i18n"]["ar"] == {"tool_name": "راجعت بيانات السوق", "step": "أراجع أسعار 2222"}
+
+    register_labels({"macro": lambda i: "Brent oil price"}, titles={"macro": "checked economic data"})   # one string
+    assert tool_step("macro", {}) == {"tool_name": "checked economic data", "plain": True, "step": "Brent oil price"}
+    register_labels({"broken": lambda i: 1 / 0}, titles={"broken": "did a thing"})
+    assert tool_step("broken", {})["step"] == ""                                     # a label that throws says nothing
 
 
 def test_a_custom_tool_can_carry_an_icon_and_its_own_request_and_response(agent_env):

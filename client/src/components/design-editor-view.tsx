@@ -6,7 +6,7 @@ import { track } from "../lib/analytics";
 import { useComments } from "../lib/comments";
 import { peerColor } from "../lib/people";
 import { CommentsList, OpenComment, editorComments } from "./comments";
-import { getLang, t, useLang } from "../lib/i18n";
+import { getLang, t, tn, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
 import { cn } from "../lib/utils";
 
@@ -436,7 +436,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         host.refreshFiles?.();
         const text = written.length === 1
           ? t("exportedTo").replace("{name}", written[0].split("/").pop() ?? written[0])
-          : t("exportedN").replace("{n}", String(written.length)).replace("{dir}", dir || "/");
+          : tn("exported", written.length).replace("{dir}", dir || "/");
         toast.action(text, t("open"), () => { void leaveFullscreen().then(() => host.openInCanvas(written[0])); });
       } catch {
         toast.error(t("exportFailed"));

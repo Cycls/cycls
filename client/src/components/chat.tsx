@@ -1,22 +1,25 @@
 import type { PollApi } from "../lib/polls";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
-import { editWorkingPath, ext, isComposition, isDesignEditor } from "./canvas-utils";
+import { editWorkingPath, ext, isComposition, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
+import { SearchDialog } from "./search-dialog";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
-import { Icon, IconButton, type IconName } from "./icon";
+import { Icon, IconButton, Spinner, type IconName } from "./icon";
 import { ConnectCard } from "./connect-card";
 import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
+import { FileActions } from "./parts/file-part";
 import { ConnectorsDialog, connectorLabel, openAuth, type Connector } from "./connectors-dialog";
 import { CyclsLogo } from "./cycls-logo";
+import { GlowStar } from "./cycls-star";
 import { LoadingBar } from "./loading-bar";
 import { InputBox } from "./input-box";
 import { ShareDialog, type ShareLink, type ShareLinks } from "./share-dialog";
@@ -24,7 +27,7 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig, SendExtra, Part } from "../hooks/use-chat";
+import type { Attachment, ChatApi, AppConfig, SendExtra, Part, Connection } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
@@ -63,6 +66,7 @@ type PanelTab = "files" | "shares" | "chats" | "apps" | "trash";
 export interface AccountInfo {
   user: UserInfo;
   plan?: PlanInfo;
+  freePlan?: boolean;   // the top bar's Subscribe: billing on for this agent, the payer on a free plan
   org?: { id: string; name: string } | null;
   activeOrg?: { id: string; name: string; imageUrl?: string };
   orgs?: { id: string; name: string; imageUrl: string }[];
@@ -143,8 +147,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   config?: AppConfig | null;
   view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
-  const { user, plan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
+  const { user, plan, freePlan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
@@ -367,9 +371,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
   }, [openFileInCanvas]);
-  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
+  // Never narrower than its tabs and collapse, in either language: the tabs' width + collapse (32), the bar's padding (16), the border
+  const [tabsWidth, setTabsWidth] = useState(0);
+  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, Math.max(240, tabsWidth + 50), 80, 0,
     () => canvasShowing && setRailIcons(true), 0.5);
   const [shareOpen, setShareOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
   const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
@@ -635,8 +642,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setFollowUp(null);
     setAsk(null);
     // Sending mid-run queues instead: the agent's tool loops are long, and a
-    // thought the user has now shouldn't wait on them.
-    if (isStreaming) {
+    // thought the user has now shouldn't wait on them. So does one written while a message waits on the connection.
+    if (isStreaming || connection.held === "send") {
       const next = [...queuedRef.current,
                     { id: crypto.randomUUID(), text, attachments: sendAttachments, origin, extra }];
       queuedRef.current = next;
@@ -651,7 +658,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
     if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -686,6 +693,22 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // A picture in a message is a workspace file, fetched with the person's credentials. Silent: a picture since
   // deleted shows its placeholder, not an error.
   const openFileQuiet = files?.onOpenFile;
+
+  // A file card's quick actions. Download takes a design as its PDF, what people know, and any other file as it is;
+  // Share opens the file's share dialog, as the canvas does.
+  const [sharingFile, setSharingFile] = useState<string | null>(null);
+  const openFileLoud = files?.onOpenFile;
+  const shareFileFn = files?.onShareFile;
+  const fileActions = useMemo(() => openFileLoud ? {
+    download: (path: string) => {
+      const name = path.split("/").pop() || path;
+      const design = isDesignEditor(name);
+      track("file_downloaded", { source: "card", ext: ext(name) });
+      openFileLoud(design ? `${path}?as=pdf` : path)
+        .then((url) => saveBlob(url, design ? `${shownName(name)}.pdf` : name)).catch(() => {});
+    },
+    share: shareFileFn ? (path: string) => setSharingFile(path) : undefined,
+  } : null, [openFileLoud, shareFileFn]);
   const resolveMedia = useMemo(() => (openFileQuiet ? (p: string) => openFileQuiet(p, true) : undefined), [openFileQuiet]);
 
   // Newest step on the transcript — a run this tab never streamed still has one.
@@ -964,6 +987,21 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [undoLast]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      setSearchOpen((o) => !o);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // Search finds what the sidebar lists, fresh each time it opens
+  useEffect(() => {
+    if (!searchOpen) return;
+    if (account && onListChats) onListChats().then(setChats).catch(() => {});
+    if (files) void refreshApps();
+  }, [searchOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // App identity lives in its manifest; the slug (folder) stays immutable.
   const updateApp = useCallback(async (app: AppInfo, patch: { name?: string; icon?: string }) => {
@@ -1007,6 +1045,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     void refreshVideoEditors();              // an open video editor, if a file tool changed its video
   }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (tabsRef.current) setTabsWidth(tabsRef.current.scrollWidth); }, [lang, filesOpen, railIconsOnly]);
   const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
   const closeRight = () => {
@@ -1111,6 +1151,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           <div className="flex items-center gap-1">
             {/* Desktop only; on a phone it stays a row inside the user menu */}
             {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
+            {user && freePlan && <SubscribeButton onClick={() => openPricing(activeOrg ? "organization" : "user", "header")} />}
             {messages.length > 0 && (
               <>
                 <button
@@ -1163,6 +1204,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </button>
               </>
             )}
+            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} />}
             {(files || account) && (
               <button
                 onClick={() => rightOpen ? closeRight() : openRight()}
@@ -1299,6 +1341,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               <div className="pointer-events-none sticky top-0 z-10 h-6 -mb-6 bg-[linear-gradient(to_bottom,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
                 <ConnectorsContext.Provider value={connectors ?? []}>
+                <FileActions.Provider value={fileActions}>
                 <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{messages.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
@@ -1321,10 +1364,23 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     />
                   );
                 })}
-                {runStatus === "interrupted" && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
+                {(runStatus === "interrupted" || messages[messages.length - 1]?.parts?.some((p) => p.type === "callout" && p.code === "cut_off"))
+                  && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
                 )}</ApprovalContext.Provider>
+                </FileActions.Provider>
                 </ConnectorsContext.Provider>
+                {sharingFile && shareFileFn && (
+                  <ShareDialog
+                    onClose={() => setSharingFile(null)}
+                    mode="file"
+                    subtitle={sharingFile.split("/").pop()}
+                    org={files?.org}
+                    onShare={(audience) => shareFileFn(sharingFile, audience)}
+                    path={`file/${sharingFile}`}
+                    links={shareLinks}
+                  />
+                )}
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
@@ -1378,6 +1434,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
                   )}
                 </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {connection.phase !== "online" && <ConnectionState connection={connection} onReconnect={onReconnect} />}
+                </AnimatePresence>
                 {followUpsOn && followUp && !isStreaming && !ask && !approval && (
                   <FollowUpChip
                     text={followUp}
@@ -1425,6 +1484,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
             </div>
           </div>
         </Popover>
+      )}
+      {searchOpen && (files || account) && (
+        <SearchDialog
+          chats={account ? chats : undefined}
+          apps={files ? apps : undefined}
+          searchFiles={files?.searchFiles}
+          onOpenChat={(id) => onLoadChat?.(id)}
+          onOpenFile={(path, name) => openFileInCanvas(path, name)}
+          onOpenApp={openApp}
+          onClose={() => setSearchOpen(false)}
+        />
       )}
       {settingsOpen && account && (
         <SettingsDialog account={account} workspace={settingsWs} onClose={() => setSettingsOpen(false)}
@@ -1478,7 +1548,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         />
         </CommentsContext.Provider>
       )}
-      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
+      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone; laid out as in English in every language */}
       <AnimatePresence initial={false}>
         {filesOpen && (
           <>
@@ -1499,6 +1569,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
               exit={!isDesktop ? { x: "100%" } : { width: 0 }}
               transition={railResizing ? { duration: 0 } : slide}
+              dir="ltr"
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop
@@ -1535,42 +1606,44 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               ) : (files || account) && (
                 <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
-                  {account && (
-                    <button
-                      onClick={() => selectTab("chats")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("chats")}
-                    </button>
-                  )}
-                  {files && (
-                    <button
-                      onClick={() => selectTab("files")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("files")}
-                    </button>
-                  )}
-                  {files && (
-                    <button
-                      onClick={() => { selectTab("apps"); void refreshApps(); }}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("apps")}
-                    </button>
-                  )}
-                  {account && (
-                    <button
-                      onClick={() => selectTab("shares")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("shares")}
-                    </button>
-                  )}
+                  <div ref={tabsRef} className="flex h-full min-w-0 overflow-hidden">
+                    {account && (
+                      <button
+                        onClick={() => selectTab("chats")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("chats")}
+                      </button>
+                    )}
+                    {files && (
+                      <button
+                        onClick={() => selectTab("files")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("files")}
+                      </button>
+                    )}
+                    {files && (
+                      <button
+                        onClick={() => { selectTab("apps"); void refreshApps(); }}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("apps")}
+                      </button>
+                    )}
+                    {account && (
+                      <button
+                        onClick={() => selectTab("shares")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("shares")}
+                      </button>
+                    )}
+                  </div>
                   <div className="flex-1" />
                   <button
                     onClick={collapseRail}
-                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label={t("collapse")}
                     title={t("collapse")}
                   >
@@ -1615,16 +1688,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                             onClick={() => window.open(s.url, "_blank")}
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                              <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                {isChat ? (
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                                ) : (
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                )}
-                              </svg>
+                              <span className="text-muted-foreground"><Icon name={isChat ? "chat" : "doc"} strokeWidth={1.5} /></span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <span dir="auto" className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                              <span dir="auto" className="text-sm text-foreground truncate block text-left">{s.title || t("untitled")}</span>
                               <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1722,7 +1789,7 @@ function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: s
 }
 
 function formatShortDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
 function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
@@ -1794,7 +1861,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span dir="auto" className={`text-sm text-foreground truncate block ${activeId === s.id ? "font-medium" : ""}`}
+                  <span dir="auto" className={`text-sm text-foreground truncate block text-left ${activeId === s.id ? "font-medium" : ""}`}
                         onDoubleClick={(e) => { e.stopPropagation(); setRenaming(s.id); }}>
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}
@@ -1884,6 +1951,64 @@ function RunIndicator({ step, startedAt, onStop }: {
         >
           {t("stopRun")}
         </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// The top bar's way to the plans, for a payer on a free plan: from the first screen it says this is a paid service.
+// Outlined, the one touch of colour its star in the brand's blue and orange.
+function SubscribeButton({ onClick }: { onClick: () => void }) {
+  const id = useId().replace(/\W/g, "");   // a url(#…) reference doesn't take useId's colons
+  return (
+    <button type="button" onClick={onClick} dir="auto"
+            className="me-1 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border ps-2.5 pe-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary">
+      <svg viewBox="0 0 24 24" className="size-3 shrink-0" aria-hidden>
+        <defs>
+          <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0.2" stopColor="#3171F6" /><stop offset="0.8" stopColor="#EF8733" />
+          </linearGradient>
+        </defs>
+        <path fill={`url(#${id})`} d="M12 0l1.11 3.78c.98 3.43 3.68 6.12 7.11 7.12L24 11.98l-3.78 1.09c-3.43 1-6.13 3.69-7.11 7.12L12 24l-1.11-3.78c-.98-3.43-3.68-6.12-7.11-7.11L0 12.02l3.78-1.09c3.43-1 6.13-3.69 7.11-7.12L12 0z" />
+      </svg>
+      {t("subscribeShort")}
+    </button>
+  );
+}
+
+// The connection, over the message box, while it isn't simply there: lost (and what waits on it), coming back,
+// back. Lost is not an error: a message that never left goes again by itself, and a run kept going without us
+// wears the star a working step wears.
+function ConnectionState({ connection: { phase, held }, onReconnect }: { connection: Connection; onReconnect: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 4 }}
+      transition={{ duration: 0.15 }}
+      className="mb-2 px-1"
+    >
+      <div role="status" className="flex items-center gap-2.5 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
+        {phase === "dropped" && held === "run" && <GlowStar size={14} />}
+        {phase === "dropped" && held !== "run" && (
+          <svg className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+            <path d="m2 2 20 20M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07" />
+          </svg>
+        )}
+        {phase === "reconnecting" && <Spinner className="size-3.5 shrink-0 text-muted-foreground" />}
+        {phase === "resumed" && <Icon name="check" className="size-3.5 shrink-0 text-emerald-500" strokeWidth={2} />}
+        <span className="min-w-0 flex-1 py-1 text-sm text-muted-foreground" dir="auto">
+          {t(phase === "reconnecting" ? "connReconnecting" : phase === "resumed" ? "connBack"
+            : held === "send" ? "connPending" : held === "run" ? "connRun" : "connLost")}
+        </span>
+        {phase === "dropped" && (
+          <button
+            onClick={onReconnect}
+            className="shrink-0 rounded-full px-2.5 py-1 text-xs text-muted-foreground/80 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          >
+            {t("reconnect")}
+          </button>
+        )}
       </div>
     </motion.div>
   );

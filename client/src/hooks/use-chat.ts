@@ -6,6 +6,20 @@ import { track } from "../lib/analytics";
 import { webSearchEnabled, autoApprove } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { fetchAuthed } from "./use-auth-headers";
+import { reference, calloutText } from "../lib/errors";
+
+// The connection as the composer's banner shows it. `held` is what waits on it: a send that never left (it
+// goes again) or a run that kept going without us (it is read back). `tries` widens the wait between attempts.
+export type ConnectionPhase = "online" | "dropped" | "reconnecting" | "resumed";
+export type Connection = { phase: ConnectionPhase; held?: "send" | "run"; tries: number };
+
+// The request never got through: the browser says it is offline, or the network failed under it. Fetch says so
+// with a TypeError worded per browser ("Failed to fetch", "Load failed", "NetworkError…", "network error"); a
+// TypeError from our own code is a bug with a reference, not a connection to wait on.
+const unreachable = (err: unknown) => !navigator.onLine ||
+  (err instanceof TypeError && /fetch|network|load failed|offline|connection|stream/i.test(err.message));
+// Another conversation on screen: a message held for the last one is not this one's to send.
+const unheld = (c: Connection): Connection => (c.held === "send" ? { ...c, held: undefined } : c);
 
 // One search result, as the search engine returned it. A citation chip only
 // ever renders from one of these, so a URL the model invented can't pose as a
@@ -22,11 +36,29 @@ export interface Source {
   note?: string;
 }
 
+// A chart part's series and markers (parts/chart-part.tsx): candles are [time, open, high, low, close], the rest
+// [time, value]; time is "YYYY-MM-DD" for days, epoch seconds for intraday.
+export interface ChartSeries {
+  name?: string;
+  kind?: "candles" | "line" | "area" | "histogram";
+  pane?: number;
+  color?: string;
+  data: (string | number)[][];
+}
+export interface ChartMarker {
+  time: string | number;
+  text?: string;
+  position?: "aboveBar" | "belowBar" | "inBar";
+  shape?: "circle" | "square" | "arrowUp" | "arrowDown";
+  color?: string;
+  series?: number;
+}
+
 export interface Part {
   type: string;
   text?: string;
   thinking?: string;
-  code?: string;
+  code?: string;   // a code part's source; on a callout, the name it is worded by (lib/errors.ts calloutText)
   language?: string;
   headers?: string[];
   rows?: string[][];
@@ -40,6 +72,8 @@ export interface Part {
   connector?: string; // a connector's tool: the name whose logo heads the call block
   icon?: string;     // a custom tool's own image, from `.on(icon=…)`
   picture?: string;  // a tool that makes a picture, from `.on(picture=…)`: its shape ("16:9")
+  plain?: boolean;   // a tool with a `.on(title=…)`: its step is a sentence in plain words, never name(input)
+  i18n?: Record<string, { tool_name?: string; step?: string }>;   // those words in each UI language
   result?: string;   // a connector call's outcome, bounded — the block's Response
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
@@ -61,6 +95,14 @@ export interface Part {
   limit?: number;
   per?: string;
   resets?: string;
+  series?: ChartSeries[];   // a `chart` part: what it draws, its markers, the URL that moves its last point, its labels
+  markers?: ChartMarker[];
+  live?: { url: string; every?: number };
+  subtitle?: string;
+  source?: string;
+  as_of?: string;
+  currency?: string;
+  precision?: number;
 }
 
 export type UIAction = { action: string } & Record<string, unknown>;
@@ -162,6 +204,22 @@ export function useChat(baseUrl: string = "") {
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
   const isStreaming = attached || runStatus === "running";
+  const [connection, _setConnection] = useState<Connection>(() => ({ phase: navigator.onLine ? "online" : "dropped", tries: 0 }));
+  const connRef = useRef(connection);
+  const setConnection = useCallback((f: (c: Connection) => Connection) => {
+    _setConnection((c) => (connRef.current = f(c)));
+  }, []);
+  // A send outranks a run: what is held only grows until the connection is back.
+  const lost = useCallback((held?: "send" | "run") => {
+    const was = connRef.current.phase;   // a try that failed is the same drop
+    if (was === "online" || was === "resumed") track("connection_lost", { held, offline: !navigator.onLine });
+    setConnection((c) => ({ phase: "dropped", held: c.held === "send" ? "send" : held ?? c.held, tries: c.tries }));
+  }, [setConnection]);
+  // Reached the server again. A poll that hears back leaves a held send waiting for its own try.
+  const back = useCallback((what?: "send" | "run") => setConnection((c) =>
+    c.phase === "online" ? c
+      : c.held === "send" && what !== "send" ? { ...c, phase: "dropped" }
+      : { phase: "resumed", tries: 0 }), [setConnection]);
   const [chatId, setChatId] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const chatIdRef = useRef<string | null>(null);
@@ -256,9 +314,11 @@ export function useChat(baseUrl: string = "") {
     try {
       for (;;) {
         if (viewRef.current !== view) return;
+        if (!navigator.onLine) throw new TypeError("offline");   // not a sign-in that waits out its own retries first
         const full = cursorRef.current == null;
         const q = full ? "" : `?since=${cursorRef.current}`;
         const res = await api(`/chats/${encodeURIComponent(id)}${q}`);
+        back("run");
         if (res.status === 204) return;
         const data = await res.json();
         heard = true;
@@ -277,14 +337,15 @@ export function useChat(baseUrl: string = "") {
         ours = true;
         await new Promise((r) => setTimeout(r, 2000));
       }
-    } catch {
-      // Leave it: the next trigger (visibility, online, a send) retries.
+    } catch (e) {
+      // The banner says so, and the connection coming back reads the run again.
+      if (unreachable(e) && viewRef.current === view) lost(ours ? "run" : undefined);
     } finally {
       pollingRef.current = false;
       // A run only assumed alive (its stream dropped, the server never answered) is not left on running.
       if (dropped && !heard && viewRef.current === view) setRunStatus((s) => (s === "running" ? null : s));
     }
-  }, [api, applyTail]);
+  }, [api, applyTail, back, lost]);
 
   // Edge does not sleep a tab holding a Web Lock and Chrome does not freeze one,
   // and a locked screen is where most mobile-web drops come from. This is the only
@@ -305,21 +366,6 @@ export function useChat(baseUrl: string = "") {
       .catch(() => {});
     return () => { done = true; release.forEach((f) => f()); };
   }, [isStreaming]);
-
-  // Coming back is the common case the whole design exists for: the tab was
-  // parked or the phone was locked, and the run kept going without us.
-  useEffect(() => {
-    const check = () => {
-      if (document.visibilityState !== "visible") return;
-      if (chatIdRef.current && !attached) void pollRun(chatIdRef.current);
-    };
-    document.addEventListener("visibilitychange", check);
-    window.addEventListener("online", check);
-    return () => {
-      document.removeEventListener("visibilitychange", check);
-      window.removeEventListener("online", check);
-    };
-  }, [attached, pollRun]);
 
   const send = useCallback(
     async (text: string, attachments?: Attachment[], origin: string = "keyboard", extra?: SendExtra) => {
@@ -361,6 +407,8 @@ export function useChat(baseUrl: string = "") {
       const doFetch = async () => {
         const controller = new AbortController();
         abortRef.current = controller;
+        // Offline it never goes: a sign-in token alone would wait out its own retries first.
+        if (!navigator.onLine) throw new TypeError("offline");
 
         const headers: Record<string, string> = { "Content-Type": "application/json" };
 
@@ -407,6 +455,7 @@ export function useChat(baseUrl: string = "") {
           signal: controller.signal,
         });
 
+        back("send");   // the server answered: whatever it says, the connection is not the problem
         if (!response.ok) {
           const err = new Error(
             response.status === 409 ? await reasonOf(response) : `HTTP ${response.status}`,
@@ -443,6 +492,10 @@ export function useChat(baseUrl: string = "") {
               // The loop's keep-alive while a tool runs: not a part. Taken as one, it ended the
               // live tool row after 15 s, so a long call (a render) looked finished while it ran.
               if (type === "ping") continue;
+              // A custom tool's own result (a dict with no `type`) is the agent body's to see, not the
+              // chat's: it renders nothing, and kept as a part it split a run of steps while it streamed
+              // but not after a reload.
+              if (!type) continue;
 
               // Capture chat_id from server, don't add as part
               if (type === "chat_id" && item.chat_id) {
@@ -495,8 +548,8 @@ export function useChat(baseUrl: string = "") {
                 (currentPart as any)[key] = ((currentPart[key] as string) || "") + (item[key] as string);
               } else {
                 if (type === "usage") uiHandlerRef.current?.({ ...item, action: "usage" } as unknown as UIAction);
-                // New part
-                currentPart = { ...item };
+                // New part, stamped when it appeared: the chat times a stretch of work by it
+                currentPart = { at: Date.now(), ...item };
                 if (item.headers) currentPart.rows = [];
                 parts.push(currentPart);
               }
@@ -578,14 +631,25 @@ export function useChat(baseUrl: string = "") {
               }
               return updated;
             });
+            if (!navigator.onLine) throw err;   // no second try into no network: the banner holds it
             await new Promise((r) => setTimeout(r, 1000));
             await doFetch();
           } catch (retryErr) {
-            if ((retryErr as Error).name !== "AbortError") {
-              track("message_failed", {
-                error_message: (retryErr as Error).message,
-                chat_id: chatIdRef.current,
-              });
+            if ((retryErr as Error).name === "AbortError") {
+              // stopped: nothing to say
+            } else if (unreachable(retryErr)) {
+              // It never got through. The message stays, the banner says why, and it goes again when it can.
+              if (mine()) {
+                setMessages((prev) => (prev[prev.length - 1]?.role === "assistant" ? prev.slice(0, -1) : prev));
+                lost("send");
+              }
+            } else {
+              // Our words and a reference; the error's own text goes to analytics under it. Not one to hold.
+              const status = (retryErr as Error & { status?: number }).status;
+              const ref = reference("message_failed", retryErr, { chat_id: chatIdRef.current, status });
+              const code = status === 401 ? "signed_out" : status === 429 ? "too_many"
+                : status && status >= 502 && status <= 504 ? "busy" : undefined;
+              back("send");
               if (mine()) setMessages((prev) => {
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
@@ -595,8 +659,10 @@ export function useChat(baseUrl: string = "") {
                     parts: [
                       {
                         type: "callout",
-                        callout: `Connection error: ${(retryErr as Error).message}`,
+                        callout: calloutText({ code, error_id: ref, style: "error" }),
                         style: "error",
+                        error_id: ref,
+                        ...(code ? { code } : {}),
                       },
                     ],
                   };
@@ -653,7 +719,7 @@ export function useChat(baseUrl: string = "") {
     // `messages` is read via messagesRef inside; keeping it out of deps
     // means `send`'s identity doesn't change on every streamed token
     // (and downstream `useEffect([send])` callers don't re-fire).
-    [isStreaming, baseUrl, authHeaders],
+    [isStreaming, baseUrl, authHeaders, back, lost],
   );
 
   // What was last sent: the request itself while this tab holds it, else the last message on
@@ -685,6 +751,48 @@ export function useChat(baseUrl: string = "") {
     setMessages(shown ? msgs.slice(0, i) : msgs[msgs.length - 1]?.role === "assistant" ? msgs.slice(0, -1) : msgs);
     return send(text, attachments, origin, { ...extra, replay: origin === "confirm" ? undefined : extra?.replay ?? "retry" });
   }, [isStreaming, send, setMessages, lastSent]);
+
+  // Try again what waits on the connection: the send that never left, else the run, else only the network.
+  const recover = useCallback(() => {
+    const c = connRef.current;
+    if (c.phase !== "dropped") return;
+    setConnection((x) => ({ ...x, phase: "reconnecting", tries: x.tries + 1 }));
+    if (c.held === "send" && retry()) return;
+    if (chatIdRef.current && !attached) void pollRun(chatIdRef.current, c.held === "run");
+    else if (navigator.onLine) back();
+    else lost();
+  }, [retry, pollRun, attached, back, lost, setConnection]);
+
+  // Coming back is the common case the whole design exists for: the tab was
+  // parked or the phone was locked, and the run kept going without us.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      if (connRef.current.phase === "dropped") recover();
+      else if (chatIdRef.current && !attached) void pollRun(chatIdRef.current);
+    };
+    const offline = () => lost();
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("online", check);
+    window.addEventListener("offline", offline);
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("online", check);
+      window.removeEventListener("offline", offline);
+    };
+  }, [attached, pollRun, recover, lost]);
+
+  // Out of reach while the browser says it is online (the server, not the network): try again on a widening
+  // wait, 2 s to 30 s. Offline, the browser's `online` is the cue. Back, the banner says so for two seconds.
+  useEffect(() => {
+    if (connection.phase === "resumed") {
+      const id = setTimeout(() => setConnection((c) => (c.phase === "resumed" ? { phase: "online", tries: 0 } : c)), 2000);
+      return () => clearTimeout(id);
+    }
+    if (connection.phase !== "dropped" || !navigator.onLine) return;
+    const id = setTimeout(recover, Math.min(30_000, 2000 * 2 ** connection.tries));
+    return () => clearTimeout(id);
+  }, [connection, recover, setConnection]);
 
   // Run the last exchange again: one request, and the server runs the turn it saved again rather
   // than a copy rebuilt from the screen, replacing only the reply after it. A second click, or
@@ -749,6 +857,7 @@ export function useChat(baseUrl: string = "") {
   const clear = useCallback(() => {
     track("chat_cleared", { chat_id: chatIdRef.current });
     viewRef.current += 1;
+    setConnection(unheld);
     cursorRef.current = openRef.current = null;
     setRunStatus(null);
     setRunStartedAt(null);
@@ -759,7 +868,7 @@ export function useChat(baseUrl: string = "") {
     const u = new URL(window.location.href);
     u.searchParams.delete("id");
     window.history.replaceState({}, "", u.toString());
-  }, []);
+  }, [setConnection]);
 
   // Replace the conversation with a single system message — used to show fork
   // progress / errors on a fresh page load (the chat is empty at that point).
@@ -815,6 +924,7 @@ export function useChat(baseUrl: string = "") {
 
   const loadChat = useCallback(async (id: string) => {
     viewRef.current += 1;   // whatever is streaming stops writing here
+    setConnection(unheld);
     setChatLoading(true);
     try {
       const chat = await (await api(`/chats/${id}`)).json();
@@ -852,7 +962,7 @@ export function useChat(baseUrl: string = "") {
     } finally {
       setChatLoading(false);
     }
-  }, [api, pollRun, setMessages]);
+  }, [api, pollRun, setMessages, setConnection]);
 
   const deleteChat = useCallback(async (id: string) => {
     // Stop first: a detached run would otherwise keep working, and keep
@@ -862,6 +972,7 @@ export function useChat(baseUrl: string = "") {
     track("chat_deleted", { chat_id: id });
     if (chatIdRef.current === id) {
       viewRef.current += 1;
+      setConnection(unheld);
       abortRef.current?.abort();
       cursorRef.current = openRef.current = null;
       setRunStatus(null);
@@ -873,7 +984,7 @@ export function useChat(baseUrl: string = "") {
       u.searchParams.delete("id");
       window.history.replaceState({}, "", u.toString());
     }
-  }, [api]);
+  }, [api, setConnection]);
 
   const renameChat = useCallback(async (id: string, title: string) => {
     await api(`/chats/${id}`, { method: "PUT", json: { title } });
@@ -897,6 +1008,8 @@ export function useChat(baseUrl: string = "") {
     attached,    // a stream is feeding this tab right now
     runStatus,   // "running" while the server still has work, even with no stream
     runStartedAt,
+    connection,  // the banner over the message box: lost, coming back, back
+    reconnect: recover,
     chatLoading,
     chatId,
     send,

@@ -40,9 +40,9 @@ def tool_args(id: str, delta: str) -> dict:
     return {"type": "step_arg", "id": id, "delta": delta}
 
 
-def callout(message: str, style: str = "info") -> dict:
-    """info | warning | error | success."""
-    return {"type": "callout", "callout": message, "style": style}
+def callout(message: str, style: str = "info", code: str = "") -> dict:
+    """info | warning | error | success. `code` names a callout the web client words in the reader's language."""
+    return {"type": "callout", "callout": message, "style": style, **({"code": code} if code else {})}
 
 
 def tool_call(name: str, inp: dict) -> dict:

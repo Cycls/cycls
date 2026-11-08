@@ -14,12 +14,15 @@ import { Gallery, IMAGE_FILE } from "./parts/gallery";
 import { UsageNote, usedUp } from "./usage";
 import { SelectionChip } from "./selection-chip";
 import { SourcesPart } from "./parts/sources-part";
+import { ChartPart } from "./parts/chart-part";
 import { AttachmentBody } from "./attachment-body";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
+import { calloutText } from "../lib/errors";
 import { urlKey } from "./parts/sources-part";
 import { useMemo } from "react";
-import { t } from "../lib/i18n";
+import { localStep, t } from "../lib/i18n";
+import { dirOf } from "../lib/bidi";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void, sources?: Map<string, Source>) {
   switch (part.type) {
@@ -27,11 +30,9 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       return <TextPart key={index} text={part.text || ""} onOpenFile={onOpenFile} sources={sources} />;
     case "thinking":
       return (
-        <ThinkingPart
-          key={index}
-          thinking={part.thinking || ""}
-          isStreaming={isStreaming}
-        />
+        <div key={index} className="mb-2">
+          <ThinkingPart thinking={part.thinking || ""} isStreaming={isStreaming} />
+        </div>
       );
     case "code":
       return (
@@ -40,10 +41,11 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
     case "table":
       return <TablePart key={index} headers={part.headers} rows={part.rows} />;
     case "callout":
+      if (part.code === "cut_off") return null;   // the chat's "Stopped before it finished" line says it, with Continue
       return (
         <CalloutPart
           key={index}
-          callout={part.callout || ""}
+          callout={calloutText(part)}
           style={part.style}
           title={part.title}
           onRetry={part.style === "error" ? onRetry : undefined}
@@ -51,19 +53,24 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       );
     case "sources":
       return <SourcesPart key={index} sources={part.sources || []} />;
+    case "chart":
+      return <ChartPart key={index} part={part} />;
     case "card":   // a confirm card's line, where the agent asked; the card itself waits over the message box
       return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} /> : null;
-    case "step":
+    case "step": {
+      const { step, tool_name } = localStep(part);
       return (
         <StepPart
           key={index}
-          step={part.step || ""}
-          toolName={part.tool_name}
+          step={step || ""}
+          toolName={tool_name}
           isStreaming={isStreaming}
           args={part.args}
           at={part.at}
+          plain={part.plain}
         />
       );
+    }
     case "status":
       return (
         <div
@@ -82,10 +89,13 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
 // Successful canvas calls are deliverables — they render as file cards and
 // must never fold into a step group. A picture is shown as itself, beside the
 // pictures next to it, and one a tool is still making holds its frame there.
+// Thinking folds in with the steps around it: think, call, think, call is one
+// stretch of work.
 function groupKind(p: Part, live?: boolean) {
   if (p.type === "step" && p.tool_name === "Canvas" && p.step && p.ok !== false) return IMAGE_FILE.test(p.step) ? "media" : "file";
   if (p.type === "image" && p.src) return "media";
   if (p.type === "step" && p.picture && live) return "media";
+  if (p.type === "thinking") return "step";
   return p.type;
 }
 
@@ -143,7 +153,7 @@ export function MessageBubble({
               ))}
             </div>
           )}
-          <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
+          <div dir={dirOf(message.content)} className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
             {message.content}
           </div>
         </div>
@@ -178,7 +188,10 @@ export function MessageBubble({
   // the shape it was made in.
   const made = new Set(parts.flatMap((p) => (p.type === "step" && p.id?.endsWith(":file") ? [p.id.slice(0, -5)] : [])));
   const shapes = new Map(parts.flatMap((p): [string, string][] => (p.type === "step" && p.picture && p.id ? [[`${p.id}:file`, p.picture]] : [])));
+  // Text that is only whitespace (a model's newline between tool calls) renders nothing, and the stream's end drops
+  // it anyway: kept until then, it split a run of steps live that a reload shows as one.
   const rendered = parts
+    .filter((p) => p.type && !(p.type === "text" && !p.text?.trim()))
     .filter((p) => p.type !== "sources" && p.type !== "usage" && !(p.type === "step" && (p.tool_name === "Suggest" || p.tool_name === "Ask")))
     .filter((p) => !(p.type === "step" && p.picture && p.id && made.has(p.id)))
     .map((p) => (p.type === "step" && p.id && shapes.has(p.id) ? { ...p, picture: shapes.get(p.id) } : p))
@@ -228,8 +241,9 @@ export function MessageBubble({
         {refused && <UsageNote usage={refused} />}
 
         {groupParts(rendered, isStreaming).map((group, gi, all) => {
-          if (group.kind === "step")
-            return <StepGroup key={gi} items={group.items} live={isStreaming && gi === all.length - 1} />;
+          if (group.kind === "step" && group.items.some((p) => p.type === "step"))
+            return <StepGroup key={gi} items={group.items} live={isStreaming && gi === all.length - 1}
+                              end={rendered[group.startIndex + group.items.length]?.at} />;
           if (group.kind === "media")
             return <Gallery key={gi} items={group.items} resolve={resolveMedia} onOpenFile={onOpenFile} />;
           if (group.kind === "file")
@@ -245,7 +259,7 @@ export function MessageBubble({
         {!isEmpty && !isStreaming && (
           <div
             className={cn(
-              "flex gap-0 -ml-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
+              "flex gap-0 -ms-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
             )}
           >
             <button

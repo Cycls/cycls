@@ -5,6 +5,7 @@ import { t, useLang, getLang, timeAgo } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
+import { FileTile } from "./parts/file-part";
 import { isDesignEditor, isRenderable, saveBlob, shownName, tintTile, tintLabel, tileExt } from "./canvas-utils";
 import { useToast } from "../lib/toast";
 import { useEscape } from "../hooks/use-escape";
@@ -92,7 +93,7 @@ export function DropdownMenu({ items, onClose }: { items: MenuItem[]; onClose: (
 }
 
 // Context menu pinned at cursor coordinates (right-click).
-function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
   useEscape(onClose);
   return (
     <>
@@ -622,11 +623,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                   ) : thumbUrls[entry.name] ? (
                     <img src={thumbUrls[entry.name]} alt={entry.name} className="size-8 rounded object-cover shrink-0" draggable={false} />
                   ) : (
-                    <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg" style={tintTile(entry.name)}>
-                      {isDesignEditor(entry.name)
-                        ? <span style={tintLabel(entry.name)}><Icon name="grid" className="size-4" /></span>
-                        : <span className="text-[10px] font-medium text-muted-foreground uppercase" style={tintLabel(entry.name)}>{tileExt(entry.name)}</span>}
-                    </div>
+                    <FileTile name={entry.name} className="size-8" />
                   )}
 
                   <div className="flex-1 min-w-0">

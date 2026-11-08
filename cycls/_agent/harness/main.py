@@ -215,16 +215,35 @@ def _shape(block, out, ok, handlers, mcp_names):
 
 
 _SOURCE = {"title": 300, "url": 2000, "snippet": 600, "label": 120, "quote": 2000, "status": 60, "note": 300}
+_CHART = {"title": 200, "subtitle": 300, "source": 300, "as_of": 40, "currency": 12}
+_CHART_POINTS = 5_000   # per series: about 20 years of daily closes, or weeks of hourly bars
+
+
+def _chart(ev):
+    """A chart part as the transcript keeps it: its series bounded to their latest points, so a reload draws it again."""
+    series = [{**{k: s[k] for k in ("name", "kind", "pane", "color") if k in s}, "data": s["data"][-_CHART_POINTS:]}
+              for s in (ev.get("series") or ())[:8] if isinstance(s, dict) and isinstance(s.get("data"), list)]
+    if not series:
+        return None
+    out = {k: v[:n] for k, n in _CHART.items() if isinstance(v := ev.get(k), str)}
+    if isinstance(ev.get("precision"), int):
+        out["precision"] = ev["precision"]
+    if isinstance(ev.get("live"), dict) and isinstance(ev["live"].get("url"), str):
+        out["live"] = {k: ev["live"][k] for k in ("url", "every") if k in ev["live"]}
+    markers = [m for m in (ev.get("markers") or ())[:200] if isinstance(m, dict)]
+    return {"type": "chart", "id": ev.get("id"), **out, "series": series, "markers": markers}
 
 
 def _kept(ev):
     """What of a tool's chat events the transcript keeps, since `ui` events never reach it: its sources, bounded,
-    and the card of a file it opened. Without this a reload shows neither."""
+    its charts, and the card of a file it opened. Without this a reload shows none of them."""
     if not isinstance(ev, dict): return None
     if ev.get("type") == "sources":
         rows = [{k: v[:n] for k, n in _SOURCE.items() if isinstance(v := r.get(k), str) and v}
                 for r in ev.get("sources") or () if isinstance(r, dict) and isinstance(r.get("url"), str)]
         return {"type": "sources", "id": ev.get("id"), "sources": rows[:20]} if rows else None
+    if ev.get("type") == "chart":
+        return _chart(ev)
     if ev.get("type") == "step" and str(ev.get("id", "")).endswith(":file"):
         return ev
 
@@ -358,12 +377,12 @@ async def _stream_with_retry(provider, **kw):
             if _is_retryable(e) and attempt < MAX_RETRIES:
                 attempt += 1
                 delay = _retry_delay(attempt, e)
-                yield events.step(f"Model endpoint busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
+                yield events.step(f"The service is busy, retrying in {delay:.1f}s... (attempt {attempt}/{MAX_RETRIES})", id=notice)
             elif _dropped(e) and not shown and dropped < MAX_DROPPED and time.monotonic() - began < DROPPED_WITHIN:
                 dropped += 1
                 delay = _retry_delay(dropped + 2)
                 log("warn", message=f"model connection dropped, trying again ({dropped}/{MAX_DROPPED}): {_cause(e)}")
-                yield events.step(f"Lost the connection to the model, trying again... ({dropped}/{MAX_DROPPED})", id=notice)
+                yield events.step(f"The service is busy, retrying in {delay:.1f}s... (attempt {dropped}/{MAX_DROPPED})", id=notice)   # the log has the cause
             else:
                 raise
             await asyncio.sleep(delay)
@@ -756,7 +775,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     continuations += 1
                     if not ids:
                         messages.append({"role": "user", "internal": True, "content": _CONTINUE})
-                    yield events.step("Continuing past the output limit...")
+                    yield events.step("Continuing the reply...")
                     await session.checkpoint()
                     continue
 
@@ -765,8 +784,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 await session.checkpoint()
                 continue
 
-            if turn.stop_reason not in ("tool_use", "end_turn"):
-                yield events.callout(f"Stopped: {turn.stop_reason}", "warning")
+            if turn.stop_reason == "refusal":
+                yield events.callout("This request couldn't be answered. Try rewording it.", "warning", code="declined")
+            elif turn.stop_reason not in ("tool_use", "end_turn"):
+                # Cut short (the output limit past its continuations, a server tool still paused): not an error.
+                # The web chat shows its "Stopped before it finished" line with Continue in its place.
+                yield events.callout("Stopped before it finished.", "info", code="cut_off")
             if turn.stop_reason != "tool_use":
                 await session.checkpoint(); break
 

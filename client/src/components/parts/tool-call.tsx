@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useState } from "react";
 import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
-import { t } from "../../lib/i18n";
+import { t, tn } from "../../lib/i18n";
 import { track } from "../../lib/analytics";
 import type { Part, Source } from "../../hooks/use-chat";
 import { ConnectorIcon, PLATE, type Connector } from "../connectors-dialog";
@@ -48,7 +48,7 @@ export const ToolCall = memo(function ToolCall({ p, live }: { p: Part; live?: bo
         </span>
         {p.ok === false
           ? <span className="shrink-0 text-xs text-destructive">{t("failed")}</span>
-          : sources.length > 0 && <span className="shrink-0 text-xs text-muted-foreground">{t("nResults").replace("{n}", String(sources.length))}</span>}
+          : sources.length > 0 && <span className="shrink-0 text-xs text-muted-foreground">{tn("results", sources.length)}</span>}
         <Icon name="chevron-down" className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
       </button>
       {open && (

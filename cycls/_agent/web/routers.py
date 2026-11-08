@@ -23,7 +23,7 @@ from cycls._agent.connectors import approval_key
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
 from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
 from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
-from cycls._agent.web.office_routes import office_router
+from cycls._agent.web.office_routes import office_router, office_views
 
 DEFAULT_MAX_UPLOAD_MB = 512   # per-file upload cap when not configured
 
@@ -42,6 +42,17 @@ def _search_rows(body):
     if not isinstance(rows, list):
         return []
     return [r for r in rows if isinstance(r, dict) and r.get("url")]
+
+
+def _call_window(usage):
+    """When a model call began and ended, in epoch ms, as `at` stamps for the parts it wrote: its thinking and text
+    from the start, its tool calls at the end. The chat times a stretch of work by them. None for a call saved
+    without timing."""
+    try:
+        end = int(datetime.fromisoformat(usage["at"]).timestamp() * 1000)
+        return {"at": end - int(usage.get("ms") or 0)}, {"at": end}
+    except (TypeError, KeyError, ValueError):
+        return {}, {}
 
 
 def to_ui_messages(raw):
@@ -129,16 +140,17 @@ def to_ui_messages(raw):
         elif role == "assistant":
             blocks = c if isinstance(c, list) else [{"type": "text", "text": c}] if isinstance(c, str) else []
             parts, texts = [], []
+            began, ended = _call_window(msg.get("usage"))
             for b in blocks:
                 if not isinstance(b, dict):
                     continue
                 t = b.get("type")
                 if t == "text":
-                    parts.append({"type": "text", "text": b.get("text", "")}); texts.append(b.get("text", ""))
+                    parts.append({"type": "text", "text": b.get("text", ""), **began}); texts.append(b.get("text", ""))
                 elif t == "thinking":
-                    parts.append({"type": "thinking", "thinking": b.get("thinking", "")})
+                    parts.append({"type": "thinking", "thinking": b.get("thinking", ""), **began})
                 elif t == "tool_use":
-                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input"))}
+                    part = {"type": "step", "id": b.get("id"), **tool_step(b.get("name", ""), b.get("input")), **ended}
                     if b.get("id") in errored:
                         part["ok"] = False
                     if detailed(b.get("name", "")):
@@ -166,6 +178,11 @@ def to_ui_messages(raw):
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
                 out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+    for m in out:   # what a tool showed (a chart, a file) appeared when its results came back: as the next call began
+        after = None
+        for p in reversed(m.get("parts") or []):
+            if "at" in p: after = p["at"]
+            elif after is not None and p.get("type") in ("chart", "step", "sources", "image"): p["at"] = after
     waiting = []   # a card still waiting when the person typed something else was skipped
     for m in out:
         if m["role"] == "assistant":
@@ -1250,6 +1267,18 @@ async def _poll_tally(ws, deck, session, n, fresh=False):
     return tally
 
 
+EXAMPLES_TTL = 300   # seconds the gallery's resolved cards are served before the pills are read again
+
+
+async def _cms_pills(url, token=None):
+    """An agent's example gallery as the CMS serves it (`.cms(examples=…)`): its pills."""
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    r.raise_for_status()
+    return r.json().get("pills") or []
+
+
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     bearer_scheme = HTTPBearer(auto_error=False)
@@ -1367,16 +1396,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         return {"type": "file", "path": path[5:],
                 "url": f"/share/{user}/{token}/file/{path[5:]}{suffix}", **common}
 
-    @r.get("/share/{user}/{token}/file/{file_path:path}")
-    async def shared_attachment(
-        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
-        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-    ):
-        ws_owner, row = await _resolve_or_403(user, token, bearer, ws)
+    async def _covered(user, token, file_path, bearer, ws_q):
+        """The owner's workspace, when the share covers file_path: the share's file (file share), or part of its
+        chat's shareable surface — an attachment, or a canvas artifact the conversation produced (the shared page
+        shows the chat WITH its output)."""
+        ws_owner, row = await _resolve_or_403(user, token, bearer, ws_q)
         path = row["path"]
-        # Authorize: file_path must be the share's file (file share), or part of
-        # its chat's shareable surface — an attachment, or a canvas artifact the
-        # conversation produced (the shared page shows the chat WITH its output).
         if path.startswith("file/"):
             if file_path != path[5:]:
                 raise HTTPException(403, "Path not in this share")
@@ -1387,6 +1412,37 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             allowed.update(canvas_files(ui))
             if file_path not in allowed:
                 raise HTTPException(403, "Not an attachment of this share")
+        return ws_owner
+
+    # A shared workbook or Word document opens in Cycls Sheets / Docs, view only: whether it may (the owner's
+    # organisation has the editor) and what the editor opens, the owner's routes' answers for a file the share
+    # covers. The editor is never sent a save route; the read is cached by version, so viewers cost one read each.
+    @r.get("/share/{user}/{token}/office/{product}")
+    async def shared_office(
+        user: str, token: str, product: str, path: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        view = office_views().get(product)
+        if view is None:
+            raise HTTPException(404, "No such editor")
+        return await view["check"](await _covered(user, token, path, bearer, ws), path)
+
+    @r.get("/share/{user}/{token}/office/{product}/open")
+    async def shared_office_open(
+        user: str, token: str, product: str, path: str, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        view = office_views().get(product)
+        if view is None:
+            raise HTTPException(404, "No such editor")
+        return await view["open"](await _covered(user, token, path, bearer, ws), path, mirror=False)
+
+    @r.get("/share/{user}/{token}/file/{file_path:path}")
+    async def shared_attachment(
+        user: str, token: str, file_path: str, request: Request, ws: Optional[str] = None,
+        bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    ):
+        ws_owner = await _covered(user, token, file_path, bearer, ws)
         # ?as=slides / ?as=pdf preview an Office file (read-only — shares aren't
         # editable). Same convert+cache path as get_file, over the owner's
         # workspace. Presentations get the slide viewer; everything else, PDF.
@@ -1430,7 +1486,23 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     # ---- Examples (curated public shares — the empty-screen gallery) ----
 
-    _examples_cache = {"at": 0.0, "data": None}
+    _examples_cache = {"at": 0.0, "data": None, "cms": None}
+
+    async def _example_groups():
+        """The gallery's pills: the code's (`.examples()`), else the CMS's (`.cms(examples=…)`), as last read
+        well, so a CMS down for a while still shows a gallery. None while there is none to show."""
+        cfg = getattr(cycls_app, "config", None)
+        if groups := getattr(cfg, "examples", None):
+            return groups
+        cms = getattr(cfg, "cms", None) or {}
+        if cms.get("examples"):
+            try:
+                _examples_cache["cms"] = [
+                    {"label": (p.get("label") or {}).get("en", ""), "label_ar": (p.get("label") or {}).get("ar") or None,
+                     "urls": p.get("cards") or []} for p in await _cms_pills(cms["examples"], cms.get("token"))]
+            except Exception as e:
+                log("warn", chat_id=None, message=f"examples: the CMS read failed: {type(e).__name__}: {e}")
+        return _examples_cache["cms"]
 
     async def _example_card(entry):
         """One configured entry → a gallery card, or None (bad URL, dead
@@ -1478,12 +1550,12 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
     async def examples(response: Response):
         """Resolved example cards for the gallery. Public — this is what the
         signed-out empty screen renders. Cached like /explore: the cards only
-        move when the operator re-curates or the source chats change."""
+        move when the operator re-curates (in code or the CMS) or the source chats change."""
         response.headers["Cache-Control"] = "public, max-age=300"
-        groups = getattr(getattr(cycls_app, "config", None), "examples", None)
-        if not groups:
-            return {"categories": []}
-        if _examples_cache["data"] is None or time.time() - _examples_cache["at"] > 300:
+        if _examples_cache["data"] is None or time.time() - _examples_cache["at"] > EXAMPLES_TTL:
+            groups = await _example_groups()
+            if groups is None:   # none configured, or a CMS that hasn't answered yet: asked again next time
+                return _examples_cache["data"] or {"categories": []}
             cats = []
             for g in groups:
                 items = [c for u in g.get("urls", []) if (c := await _example_card(u))]

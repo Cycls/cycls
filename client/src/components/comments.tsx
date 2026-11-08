@@ -4,7 +4,7 @@ import { peerColor } from "../lib/people";
 import { useEscape } from "../hooks/use-escape";
 import { onPage, placeOf, useComments, type CommentAuthor, type CommentThread } from "../lib/comments";
 import { track } from "../lib/analytics";
-import { t, timeAgo } from "../lib/i18n";
+import { t, tn, timeAgo } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
 // Comment UI for a design (state in lib/comments.ts). A pin is a point in the slide's own
@@ -452,7 +452,7 @@ export function CommentsList({ path, names, page, pages = [], paper, onGo, onPag
                 <span className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
                   {where(thread) && <span className="min-w-0 truncate" dir="auto">{where(thread)}</span>}
                   {thread.replies.length > 0 && (
-                    <span className="shrink-0">{thread.replies.length === 1 ? t("commentOneReply") : t("commentReplies").replace("{n}", String(thread.replies.length))}</span>
+                    <span className="shrink-0">{tn("replies", thread.replies.length)}</span>
                   )}
                 </span>
               </span>

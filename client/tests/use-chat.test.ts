@@ -4,8 +4,8 @@
  * rebuild on loadChat. Streaming/fetch behavior is mocked at the test
  * level since it's bigger surface; for now these are pure-state tests.
  */
-import { renderHook, act, waitFor } from "@testing-library/react";
-import { describe, test, expect, beforeEach, vi } from "vitest";
+import { renderHook, act, waitFor, cleanup } from "@testing-library/react";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { useChat } from "../src/hooks/use-chat";
 import { track } from "../src/lib/analytics";
 
@@ -17,6 +17,9 @@ beforeEach(() => {
   // Reset the URL between tests so each one sees a clean ?id=/?fork= state.
   window.history.replaceState({}, "", "/");
 });
+// Unmount each test's hook: one left mounted keeps its timers, and a send held for the connection would retry
+// into the next test's fetch.
+afterEach(cleanup);
 
 // Count fetches to /chat (ignore auth / file calls).
 function countChatPosts(fetchMock: ReturnType<typeof vi.fn>): number {
@@ -377,8 +380,11 @@ describe("retry() — one request, and the server replays the failed turn if it 
     const { result } = renderHook(() => useChat("http://api.test"));
     await act(async () => { await result.current.send("hello"); });
     await act(async () => { await result.current.send("make a deck"); });
-    const failed = result.current.messages[result.current.messages.length - 1];
-    expect(failed.parts?.some((p: any) => p.type === "callout" && p.style === "error")).toBe(true);
+    // It never got through: no error, the message stays, and the banner holds it for the connection.
+    const shown = result.current.messages;
+    expect(shown[shown.length - 1]).toMatchObject({ role: "user", content: "make a deck" });
+    expect(shown.some((m) => m.parts?.some((p: any) => p.type === "callout"))).toBe(false);
+    expect(result.current.connection).toMatchObject({ phase: "dropped", held: "send" });
 
     const before = calls.length;
     await act(async () => { await result.current.retry(); });
@@ -858,5 +864,80 @@ describe("a run's ending is reported once, and only a real failure is an error",
     const { result } = renderHook(() => useChat(""));
     await act(async () => { await result.current.send("hi"); });
     expect(track).toHaveBeenCalledWith("run_failed", { chat_id: "c1", status: "failed", reason: "error", error_id: "abc123", via: "stream" });
+  });
+});
+
+
+describe("the connection — a banner over the message box, never an error in the chat", () => {
+  // The browser's word on the network, settable per test.
+  function network(online: boolean) {
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => online });
+  }
+  afterEach(() => { delete (navigator as any).onLine; });   // the prototype's getter again
+
+  test("offline, a send never goes: the message waits, and goes by itself when the network is back", async () => {
+    const calls: Call[] = [];
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      record(calls, url, init);
+      return sseTurn("c1", "the answer");
+    }) as any;
+    network(false);
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("update the contract"); });
+
+    expect(posts(calls)).toHaveLength(0);   // no request, and no wait on a sign-in token first
+    expect(result.current.messages.map((m) => m.content)).toEqual(["update the contract"]);
+    expect(result.current.connection).toMatchObject({ phase: "dropped", held: "send" });
+
+    network(true);
+    await act(async () => { window.dispatchEvent(new Event("online")); });
+    await waitFor(() => expect(result.current.messages.map((m) => m.content)).toEqual(
+      ["update the contract", "the answer"]));
+    expect(posts(calls)).toHaveLength(1);
+    expect(posts(calls)[0].body.retry).toBe(await sha("update the contract"));   // the server never runs it twice
+    expect(result.current.connection.phase).toBe("resumed");
+    await waitFor(() => expect(result.current.connection.phase).toBe("online"), { timeout: 3000 });
+  });
+
+  test("a failure that isn't the connection shows our words and a reference, never the error's own text", async () => {
+    global.fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })) as any;
+    const { result } = renderHook(() => useChat("http://api.test"));
+    await act(async () => { await result.current.send("hello"); });
+
+    const callout = result.current.messages[1].parts?.find((p: any) => p.type === "callout") as any;
+    expect(callout.callout).toMatch(/^Something went wrong\. Reference: [0-9a-f]{8}$/);
+    expect(callout.error_id).toBe(callout.callout.slice(-8));
+    expect(track).toHaveBeenCalledWith("message_failed",
+      expect.objectContaining({ error_id: callout.error_id, error_message: "HTTP 500" }));
+    expect(result.current.connection.phase).toBe("online");
+  });
+
+  test("one the person can act on says what to do; a busy service says so, with its reference", async () => {
+    const cases = [[429, /^Too many messages at once\. Wait a moment and try again\.$/],
+                   [503, /^The service is busy right now\. Try again in a minute\. Reference: [0-9a-f]{8}$/]] as const;
+    for (const [status, shown] of cases) {
+      global.fetch = vi.fn(async () => ({ ok: false, status, json: async () => ({}) })) as any;
+      const { result, unmount } = renderHook(() => useChat("http://api.test"));
+      await act(async () => { await result.current.send("hello"); });
+      expect((result.current.messages[1].parts?.find((p: any) => p.type === "callout") as any).callout).toMatch(shown);
+      unmount();
+    }
+  });
+
+  test("a sign-in error's text — a vendor's name and code in it — never reaches the chat", async () => {
+    global.fetch = vi.fn(async () => sseTurn("c1", "unused")) as any;
+    const { result } = renderHook(() => useChat("http://api.test"));
+    act(() => result.current.setGetToken(async () => {
+      throw new Error('Clerk: Something failed. (code="clerk_x")');
+    }));
+    try {
+      await act(async () => { await result.current.send("hello"); });
+      const text = JSON.stringify(result.current.messages);
+      expect(text).not.toContain("Clerk");
+      expect(text).not.toContain("clerk_x");
+      expect(text).toMatch(/Reference: [0-9a-f]{8}/);
+    } finally {
+      act(() => result.current.setGetToken(null as any));   // the module-level getter, for the tests after
+    }
   });
 });

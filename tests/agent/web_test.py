@@ -74,6 +74,24 @@ def test_a_handled_stream_error_is_a_failed_run():
     assert run.failed is True, "a handled error must still mark the run failed"
 
 
+def test_a_service_still_busy_says_so_with_its_reference():
+    """Overloaded past the loop's own retries: the person reads that the service is busy, not that
+    something went wrong, and the web client words it by its code."""
+    import asyncio, json
+    from cycls._agent.web.server import Run, encoder
+
+    async def busy():
+        yield {"type": "text", "text": "partial"}
+        raise RuntimeError("overloaded")
+
+    async def go():
+        return [c async for c in encoder(busy(), chat_id="c1", run=Run(detach=False, chat_id="c1"))]
+
+    shown = [json.loads(c[6:]) for c in asyncio.run(go()) if '"callout"' in c]
+    assert shown[0]["code"] == "busy"
+    assert shown[0]["callout"] == f"The service is busy right now. Try again in a minute. Reference: `{shown[0]['error_id']}`"
+
+
 def test_messages_extracts_text_content():
     """Tests that Messages extracts text-only content from raw messages."""
     print("\n--- Running test: test_messages_extracts_text_content ---")
@@ -584,6 +602,53 @@ def test_shared_office_file_previews_as_pdf(tmp_path, monkeypatch):
     assert raw.status_code == 200 and raw.content == b"raw-pptx"
 
 
+def test_a_shared_workbook_and_document_open_in_the_editors_to_view(tmp_path, monkeypatch):
+    """A shared page showed a workbook as plain values (SheetJS): no formats, formulas or merges. It opens in Cycls
+    Sheets (a .docx in Cycls Docs) as the owner's editor reads it, view only: only for files the share covers,
+    only where the owner's organisation has the editor, and nothing of the owner's is written."""
+    from cycls._app.db import workspace
+    from cycls._agent.office import client as office_client, docs_comments
+
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    ws.root.mkdir(parents=True, exist_ok=True)
+    (ws.root / "pe.xlsx").write_bytes(b"PK\x03\x04 workbook")
+    (ws.root / "memo.docx").write_bytes(b"PK\x03\x04 document")
+    (ws.root / "other.xlsx").write_bytes(b"PK\x03\x04 not shared")
+
+    async def read_xlsx(data, name=None):
+        return {"workbook": {"id": "book", "name": name}, "notices": [], "activeSheet": "s1"}
+
+    async def read_docx(data, name=None):
+        return {"document": {"id": "doc"}, "notices": []}
+
+    async def no_mirror(*a, **k):
+        raise AssertionError("a viewer wrote the owner's comment record")
+
+    monkeypatch.setattr(office_client, "read_xlsx", read_xlsx)
+    monkeypatch.setattr(office_client, "read_docx", read_docx)
+    monkeypatch.setattr(docs_comments, "mirror_file", no_mirror)
+
+    book = client.post("/share", json={"path": "file/pe.xlsx"}).json()["token"]
+    base = f"/share/user_test/{book}/office"
+    assert client.get(f"{base}/sheets", params={"path": "pe.xlsx"}).json() == {"editor": False, "reason": "off"}
+    monkeypatch.setenv("SHEETS_ORGS", "*")
+    monkeypatch.setenv("DOCS_ORGS", "*")
+    assert client.get(f"{base}/sheets", params={"path": "pe.xlsx"}).json() == \
+        {"editor": True, "url": "https://office.test/sheets/", "name": "pe.xlsx"}
+    opened = client.get(f"{base}/sheets/open", params={"path": "pe.xlsx"})
+    assert opened.status_code == 200 and opened.json()["snapshot"]["name"] == "pe" and opened.headers["x-version"]
+    assert client.get(f"{base}/sheets/open", params={"path": "other.xlsx"}).status_code == 403   # not this share's
+    assert client.get(f"{base}/slides", params={"path": "pe.xlsx"}).status_code == 404
+    assert client.put(f"{base}/sheets/save", params={"path": "pe.xlsx"}, content=b"{}").status_code in (404, 405)
+    assert client.get(f"{base}/sheets/version", params={"path": "pe.xlsx"}).status_code in (404, 405)
+
+    memo = client.post("/share", json={"path": "file/memo.docx"}).json()["token"]
+    doc = client.get(f"/share/user_test/{memo}/office/docs/open", params={"path": "memo.docx"})
+    assert doc.status_code == 200 and doc.json()["snapshot"] == {"id": "doc"}
+
+
 def test_a_shared_design_shows_as_its_picture(tmp_path, monkeypatch):
     """The shared page of a .fig said "Preview isn't available": a visitor has no editor.
     Over the share transport it gets the design's slide manifest (?as=slides) and its
@@ -728,6 +793,39 @@ def test_first_use_marker_fires_once_per_account(tmp_path):
 def test_examples_empty_without_config(tmp_path):
     svc, user, client = _share_test_app(tmp_path)
     assert client.get("/examples").json() == {"categories": []}
+
+
+def test_examples_come_from_the_cms(tmp_path, monkeypatch):
+    """`.cms(examples=…)`: the pills come from the CMS and resolve like the code's; a read that fails keeps
+    the last good copy, so a CMS down for a while still shows a gallery; pills declared in code win."""
+    from types import SimpleNamespace
+    import cycls
+    from cycls._agent.web import routers
+
+    assert cycls.Web().cms(examples="https://cms.test/x")._cms == {"examples": "https://cms.test/x"}
+    svc, user, client = _share_test_app(tmp_path)
+    pills = [{"label": {"en": "Tutorials", "ar": "دروس"}, "cards": [{"video": "https://cdn.test/v.mp4", "title": "Start"}]}]
+    reads = []
+
+    async def cms(url, token=None):
+        reads.append((url, token))
+        if len(reads) > 1:
+            raise RuntimeError("down")
+        return pills
+    monkeypatch.setattr(routers, "_cms_pills", cms)
+    monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)   # every request reads again
+    svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/examples/a", "token": "t"})
+
+    gallery = {"categories": [{"label": "Tutorials", "label_ar": "دروس",
+                               "items": [{"video": "https://cdn.test/v.mp4", "title": "Start"}]}]}
+    assert client.get("/examples").json() == gallery
+    assert client.get("/examples").json() == gallery   # the CMS is down: the last good copy stands
+    assert reads == [("https://cms.test/site/examples/a", "t")] * 2
+
+    svc.config = SimpleNamespace(examples=[{"label": "Code", "urls": [{"video": "https://cdn.test/c.mp4", "title": "C"}]}],
+                                 cms=svc.config.cms)
+    assert client.get("/examples").json()["categories"][0]["label"] == "Code"
+    assert len(reads) == 2   # the code's pills win, and the CMS isn't asked
 
 
 def test_examples_builder_normalizes_labels():

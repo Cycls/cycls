@@ -12,7 +12,7 @@ import re
 from ..design.deck import lock
 from ..design.store import Stale, load_fig, write_fig
 from ..paths import _resolve_path
-from . import client
+from . import client, fill
 
 ACTIONS = ("read", "edit", "create", "comments")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
@@ -36,7 +36,9 @@ SHEETS_TOOL = {
         "answer it (`reply`) and close or reopen it (`resolve`). read lists the open ones too.\n"
         "Targets are A1 ranges (B3, B3:D9, 'Sheet 2'!A1:C4), rows (5 or 5:7), columns (C or C:D) or a "
         "sheet name. Values are rows of cells: [[\"Item\", \"Qty\"], [\"Tea\", 5]]; a value starting with = "
-        "is a formula. Read before editing a file you have not seen. `ops` is always sent: [] for read."
+        "is a formula. Rows a query, a tool or a script produced are not typed: set_values `from` fills them from "
+        "its .csv or .json file. One formula over a range fills it like Excel's fill handle (target F2:F93, "
+        "formulas [[\"=C2/D2\"]]). Read before editing a file you have not seen. `ops` is always sent: [] for read."
     ),
     "input_schema": {
         "type": "object",
@@ -56,9 +58,17 @@ SHEETS_TOOL = {
                                    "description": "A1 range, rows (5:7), columns (C:D) or a sheet name; "
                                                   "set_values/set_formulas: the top-left cell"},
                         "values": {"type": "array", "items": {"type": "array", "items": {}},
-                                   "description": "set_values: rows of cells"},
+                                   "description": "set_values: rows of cells, typed (or give `from`)"},
+                        "from": {"type": "string",
+                                 "description": "set_values: a .csv or .json file in the workspace to fill from "
+                                                "instead of `values`, e.g. a query's saved result (.tmp/screen.json). "
+                                                "Its column names are the first row; numbers stay numbers, ISO dates "
+                                                "become dates, nothing in it runs as a formula"},
+                        "header": {"type": "boolean",
+                                   "description": "set_values from a file: false leaves out its column names"},
                         "formulas": {"type": "array", "items": {"type": "array", "items": {"type": "string"}},
-                                     "description": "set_formulas: rows of formulas, e.g. [[\"=SUM(B2:B9)\"]]"},
+                                     "description": "set_formulas: rows of formulas, e.g. [[\"=SUM(B2:B9)\"]]; on a "
+                                                    "larger range they fill it, references moving ($ keeps one fixed)"},
                         "count": {"type": "integer", "description": "insert_rows / insert_cols: how many"},
                         "name": {"type": "string", "description": "add_sheet / rename_sheet: the sheet name; define_name: the name (letters, digits, _)"},
                         "text": {"type": "string", "description": "note: the note's text ('' removes the note)"},
@@ -99,7 +109,10 @@ SHEETS_PROMPT = (
     "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
     "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
     "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
-    "person's open editor."
+    "person's open editor. Rows a query, a tool or a script produced go in with set_values `from` (their "
+    ".csv or .json file), never retyped into `values`: typing is for what exists nowhere else (the person's "
+    "own figures, assumptions, labels) or a few cells, and a typed figure from a document or a page says "
+    "where it came from beside it. A column of formulas is one formula over its range, not one per row."
 )
 
 
@@ -215,6 +228,13 @@ async def _exec_comments(inp, workspace, rel):
             f"workbook. {left} comment{'s' if left != 1 else ''} still open.")
 
 
+def _typed_hint(typed):
+    if typed <= fill.TYPED_HINT_CELLS:
+        return ""
+    return (f"({typed:,} cells were typed into values. Rows a query, a tool or a script produced fill faster and "
+            "exactly from their file: set_values `from`.)\n")
+
+
 def _check_ops(ops):
     if not isinstance(ops, list):
         return "ops must be a list of {op, target, …}"
@@ -268,6 +288,11 @@ async def exec_sheets(inp, workspace, ctx=None):
 
         if bad := _check_ops(ops):
             return _err(bad)
+        try:   # files and formula fills become plain values, formats and formulas before the service sees them
+            ops, filled, typed = await asyncio.to_thread(fill.expand, ops, root)
+        except fill.Bad as e:
+            return _err(f"{e}. Nothing was changed.")
+        said = "".join(f"{n}\n" for n in filled) + _typed_hint(typed)
         if action == "create":
             if path.exists():
                 return _err(f"{rel} already exists: edit it, or create under another name.")
@@ -283,7 +308,7 @@ async def exec_sheets(inp, workspace, ctx=None):
                 await write_fig(root, rel, result["bytes"], base="", by="agent", reason="agent", intent=inp.get("intent"))
             except Stale:
                 return _err(f"{rel} appeared while it was being created: read it, then edit.")
-            ack = f"Created {rel}.\n{result['report']}".strip()
+            ack = f"Created {rel}.\n{said}{result['report']}".strip()
             return {"_model": ack, "_ui": {"type": "ui", "action": "open_canvas", "path": rel}}
 
         # edit
@@ -296,7 +321,7 @@ async def exec_sheets(inp, workspace, ctx=None):
                     return _err(f"{rel} does not exist (use create for a new workbook).")
                 result = await client.sheets_apply(data, path.name, ops)
                 if result["unchanged"]:
-                    return f"Nothing in {rel} changed.\n{result['report']}".strip()
+                    return f"Nothing in {rel} changed.\n{said}{result['report']}".strip()
                 try:   # a save in the editor meanwhile: apply to that, once
                     version = await write_fig(root, rel, result["bytes"], base=base, by="agent", reason="agent",
                                               intent=inp.get("intent"))
@@ -323,4 +348,4 @@ async def exec_sheets(inp, workspace, ctx=None):
         ui["intent"] = str(intent)[:80]
     if len(json.dumps(ui["mutations"], default=str)) > 2_000_000:   # too large to replay: the editor reopens the file
         ui["mutations"], ui["reload"] = [], True
-    return {"_model": f"Edited {rel}.\n{result['report']}".strip(), "_ui": ui}
+    return {"_model": f"Edited {rel}.\n{said}{result['report']}".strip(), "_ui": ui}

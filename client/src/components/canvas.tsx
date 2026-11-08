@@ -33,7 +33,7 @@ import { SaveDialog } from "./save-dialog";
 import type { AppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { slide, cn } from "../lib/utils";
-import { t, getLang } from "../lib/i18n";
+import { t, tn, getLang } from "../lib/i18n";
 
 // Renderer choice comes from the PATH, never the display name: an app's tab
 // is titled by its manifest ("Sales Portfolio"), which has no extension, and
@@ -267,11 +267,11 @@ const pageQuery = (page?: string) => (page ? `&page=${encodeURIComponent(page)}`
 export function designKind(manifest: string | null): { label: string; several: boolean } | null {
   const deck = manifest ? parseDeck(manifest) : null;
   if (!deck?.count) return null;
-  const n = deck.count, many = (one: "onePage" | "oneSlide", more: "nPages" | "nSlides") => (n === 1 ? t(one) : t(more).replace("{n}", String(n)));
-  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("onePage", "nPages")}`
-    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${t("nPages").replace("{n}", String(deck.pages!.length))}`
-    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("oneSlide", "nSlides")}`
-    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("oneSlide", "nSlides")}`
+  const n = deck.count, many = (what: "pages" | "slides") => tn(what, n);
+  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("pages")}`
+    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${tn("pages", deck.pages!.length)}`
+    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("slides")}`
+    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("slides")}`
     : t("kindPost");
   return { label, several: n > 1 || deck.kind === "deck" || deck.kind === "document" };
 }
@@ -353,6 +353,7 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
         <div className="absolute bottom-4 end-4 flex gap-2">
           <button onClick={() => save("png")} className={pill}>{t("downloadImage")}</button>
           <button onClick={() => save("pdf")} className={pill}>{t("downloadPdf")}</button>
+          <button onClick={() => openFile(file.path).then((url) => saveBlob(url, `${stem}.fig`)).catch(() => {})} className={pill}>{t("downloadFig")}</button>
         </div>
       )}
     </div>
@@ -537,7 +538,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   // bytes — a document view, not a flat PDF — unless it opens in Cycls Docs (asked per file).
   if (isDocx(fileKind(file))) {
     if (!content) return null;
-    return officeEditor?.docs && !shared
+    return officeEditor?.docs && (!shared || officeEditor.readonly)
       ? <DocsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<DocxView url={content} />} />
       : <DocxView url={content} />;
   }
@@ -601,7 +602,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   }
   if (isSpreadsheet(fileKind(file))) {
     if (!content) return null;
-    return officeEditor && !shared
+    return officeEditor && (!shared || officeEditor.readonly)
       ? <SheetsOrPreview path={file.path} name={file.name} api={officeEditor} onDownload={onDownload} live={file.live} contentKey={content} preview={<SpreadsheetView url={content} name={file.name} />} />
       : <SpreadsheetView url={content} name={file.name} />;
   }
