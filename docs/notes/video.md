@@ -819,3 +819,25 @@ own parts in `gpu`, `start_s`, `cold`), so the next real chat shows the rest.
 - **The editor on a short window**: the timeline took a fixed 360 px, so a laptop window (about 640 px tall)
   left the preview about 130 px of video. It now takes 38% of the editor's height (180 to 360 px); the line
   between the preview and the timeline drags (a 4 px line just under the preview).
+
+### Looks, text that animates itself, graded and matched footage, 60 fps (2026-11-08, evening)
+
+Video runs inside agents with different models (super-dev's is a cheap one), so quality has to come from the tool,
+not the model's taste. The service now carries eight designed looks (cycls-video `looks/looks.json`): the agent
+picks one with `data-look` and writes plain markup (scene modifiers, text roles: kicker, hl with an `<em>`, sub,
+num, tag, cta, quote/by, body, brand, meta); the look sets the type, colours and spacing, animates each role, grades
+the footage and photos, and puts its transition between scenes. The contract's LOOKS section lists them (signed),
+and the five skills start from a look: video-direction maps its ten old hand-built directions onto the eight and
+keeps their motifs (G1–G6) as decorations on top; promo-reel, explainer, footage and motion-design write role markup
+and keep `at()` for what is not text.
+
+- **What the SDK says**: the footage reply names each clip's best stretch, its weak stretches and its light
+  (`report.quality_lines`), and its example `<video>` starts at the best stretch when nobody speaks in the clip;
+  a check's reply says which pieces the service matched to the others (`report.matched_text`); a motion piece in a
+  video with a look says it is set in the look. With a brand kit, `brand.hint` gives the one rule to put the kit over
+  the look: `#root[data-look] { --look-accent: …; --look-display: … }` (`#root` outranks the look's Arabic rule).
+- **render** takes `fps: 60` (motion graphics, moving type; twice the render time), kept apart from the 30 fps job
+  by its key and its pending record (`asked` = `final@60`). A final of a video up to 30 s gets motion blur from the
+  service.
+- **Stock**: `footage {stock}` with no orientation looks for the shape of the video this chat is making
+  (`_chat_orientation`): a wide clip cropped into a vertical video is enlarged almost twice and comes out soft.

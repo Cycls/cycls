@@ -174,6 +174,9 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     sound = "" if quiet else report.sound_text(dubbing.for_reading(job.get("sound"), dubbing.dubbed_ids(html)))
     if sound:
         head += "\n" + sound
+    matched = "" if quiet else report.matched_text(job.get("matched"))
+    if matched:
+        head += "\n" + matched
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
     state = r.get("state")
     _timed(kind, label, r, t0, t_media, t_lint)
@@ -337,7 +340,7 @@ async def _guide(workspace, root, loaded):
     return "\n".join(lines)
 
 
-async def _render(workspace, root, chat, name, quality):
+async def _render(workspace, root, chat, name, quality, fps=30):
     """`_render_once`, with the browser check beside it when this version never had one: the last
     edits were small and checked by their frames alone (quick.py). It runs at the same time (an
     organisation's second GPU when free), so the render waits for nothing it did not already."""
@@ -350,7 +353,7 @@ async def _render(workspace, root, chat, name, quality):
     if html is not None and await asyncio.to_thread(files.checked, root, rel) != _digest(html):
         beside = asyncio.create_task(_check(workspace, root, rel, html, quiet=True))
     try:
-        out = await _render_once(workspace, root, chat, name, quality)
+        out = await _render_once(workspace, root, chat, name, quality, fps)
     except BaseException:
         if beside:
             beside.cancel()
@@ -372,7 +375,7 @@ async def _render(workspace, root, chat, name, quality):
     return out
 
 
-async def _render_once(workspace, root, chat, name, quality):
+async def _render_once(workspace, root, chat, name, quality, fps=30):
     """The MP4 at the main size and at each other size the root lists, one job each, all at once.
     A job cut off (Stop, a dropped connection) is collected by the next call, never paid twice."""
     from cycls._agent import video
@@ -390,30 +393,33 @@ async def _render_once(workspace, root, chat, name, quality):
     if problems:
         return _err("the images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
     jobs = []      # {shape, slot, sha, token, sound, collected}
+    # what a render is asked for, as one name: a 60 fps render is never the 30 fps one collected
+    asked = quality if fps == 30 else f"{quality}@{fps}"
     for shape, h in [(None, html)] + [(s, sizes.variant(html, s)) for s in shapes]:
         sha = _sha(h, sent, words, footage)
         slot = name if shape is None else f"{name}@{shape}"
         pending = files.render_pending(root, chat, slot)
-        if pending and pending.get("sha") == sha and pending.get("quality") == quality:
+        if pending and pending.get("sha") == sha and pending.get("quality") == asked:
             jobs.append({"shape": shape, "slot": slot, "sha": sha, "token": pending["token"],
                          "sound": pending.get("sound"), "collected": True})
             continue
-        key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{slot}|{sha}|{quality}".encode()).hexdigest()
+        key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{slot}|{sha}|{asked}".encode()).hexdigest()
         try:
-            job = await video.submit(workspace, "render", h, images, sent, params={"quality": quality}, key=key,
+            params = {"quality": quality, **({"fps": fps} if fps != 30 else {})}
+            job = await video.submit(workspace, "render", h, images, sent, params=params, key=key,
                                      audio=audio, words=words, footage=footage, **_fonts_kw(fonts))
         except video.Refused as e:
             where = f" at {shape}" if shape else ""
             return (report.findings_text(e.findings, title=f"Not rendered{where} — lint")
                     + "\nFix them with `edit`, then render.")
-        files.render_started(root, chat, slot, job["token"], sha, quality, sound=job.get("sound"))
+        files.render_started(root, chat, slot, job["token"], sha, asked, sound=job.get("sound"))
         jobs.append({"shape": shape, "slot": slot, "sha": sha, "token": job["token"], "sound": job.get("sound"),
                      "collected": False})
     results = await asyncio.gather(*(video.wait(workspace, j["token"], BUDGET["render"]) for j in jobs))
     for j, r in zip(jobs, results):
         if r.get("state") in ("gone", "expired") and j["collected"]:
             files.render_done(root, chat, j["slot"], None)   # that job is lost; start it again
-            return await _render_once(workspace, root, chat, name, quality)
+            return await _render_once(workspace, root, chat, name, quality, fps)
     waiting = [(j, r) for j, r in zip(jobs, results) if r.get("state") == "pending"]
     if waiting:
         left = ", ".join(j["shape"] or "the main size" for j, _ in waiting)
@@ -1057,6 +1063,23 @@ def _editing(comp):
     return [{"type": "ui", "action": "open_canvas", "path": comp, "name": Path(comp).name, "edit": True}]
 
 
+def _chat_orientation(root, chat):
+    """The shape of the video this chat is making (its latest composition's root), as stock search names it, or
+    None. A stock clip asked for without an orientation then fits the video: a wide clip cropped into a vertical
+    one is enlarged almost twice and comes out soft."""
+    for name in reversed(files.load(root, chat).get("names", []) if chat else []):
+        try:
+            head = (Path(root) / files.composition(name)).read_text(encoding="utf-8")[:6000]
+        except OSError:
+            continue
+        w = re.search(r'data-width\s*=\s*"(\d+)"', head)
+        h = re.search(r'data-height\s*=\s*"(\d+)"', head)
+        if w and h:
+            w, h = int(w.group(1)), int(h.group(1))
+            return "portrait" if h > w else "landscape" if w > h else "square"
+    return None
+
+
 async def _footage(workspace, root, chat, inp):
     """A clip made ready for video: sent to the service once (by the hash of its bytes, in pieces,
     going on from where an earlier call stopped), read there on the organisation's GPU, and
@@ -1074,7 +1097,8 @@ async def _footage(workspace, root, chat, inp):
         try:
             pick = inp.get("pick")
             t0 = time.monotonic()
-            path, credit, others = await stock.find(root, inp["stock"], orientation=inp.get("orientation"),
+            path, credit, others = await stock.find(root, inp["stock"],
+                                                    orientation=inp.get("orientation") or _chat_orientation(root, chat),
                                                     pick=int(pick) if isinstance(pick, (int, float)) and pick >= 0 else 0)
             fetch_ms = round((time.monotonic() - t0) * 1000)
         except ValueError as e:
@@ -1230,7 +1254,9 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
              "down": " It sits lower than usual, below the scene's own text."}.get(made.get("moved"), "")
     own = made.get("colours") if isinstance(made.get("colours"), dict) else {}
     hues = " and ".join(f"{what} {own[k]}" for k, what in (("accent", "accent"), ("dark", "dark ground")) if own.get(k))
-    if hues:
+    if made.get("look"):
+        where += f" It is set in the look's type and colours ({made['look']}): it already matches, nothing to re-style."
+    elif hues:
         where += f" It takes the video's own colours ({hues}): it already matches, nothing to re-colour."
     return _result(f"Added a {piece} to {rel}: its id is {made.get('id')}, from {start or 0:g} s.{where}\n{text}", blocks,
                    note, _shown(rel, name, clean, version))
@@ -1402,7 +1428,13 @@ async def _exec_video(inp, workspace, ctx=None):
             quality = inp.get("quality") or "final"
             if quality not in ("final", "draft"):
                 return _err("quality: final or draft.")
-            out = await _render(workspace, root, chat, name, quality)
+            try:
+                fps = int(inp.get("fps") or 30)
+            except (TypeError, ValueError):
+                fps = 0
+            if fps not in (30, 60):
+                return _err("fps: 30 or 60.")
+            out = await _render(workspace, root, chat, name, quality, fps)
             if note and isinstance(out, str):
                 out += note
             return out

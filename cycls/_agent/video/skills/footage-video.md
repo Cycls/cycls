@@ -1,13 +1,12 @@
 ---
 name: footage-video
-description: Load for any video made from the person's clips or stock footage: the story in the transcript, cutting on words, layouts for a wide clip in a reel, dressing a talking head, captions, sound.
+description: Load for any video made from the person's clips or stock footage: the story in the transcript, best stretches, cutting on words, the look's grade, a wide clip in a reel, dressing a talking head, captions, sound.
 ---
 
 # footage-video — the person on camera is the star
 
 Load `video-direction` and `motion-design` with this skill for the look and the motion. This one is about
-footage: choosing it, cutting it, dressing it and captioning it. Every snippet here passed the checks and was
-looked at on the sheet.
+footage: choosing it, cutting it, dressing it and captioning it.
 
 ## 1. Read before you cut
 
@@ -21,8 +20,28 @@ looked at on the sheet.
     last. Frame 0 is the thumbnail: a face mid-sentence or a bold line, never black or a logo.
   - Then context → two or three moments → the result → an end card with one ask.
   - Cut what restates, fillers, false starts and "as you can see".
+- **Where nobody speaks** (stock, b-roll) the reply names each clip's best stretch, its weak ones (a shaky
+  start, a fade, a soft or dark patch) and its light. Start every piece in a best stretch, out of the weak ones;
+  pick clips whose light agrees.
 
-## 2. Cutting
+## 2. The look on footage
+
+- `cinematic` for brand films, travel and documentary; `editorial` for interviews and founders; `pop` for
+  talking-head social; `warm` for food and family; `bold` for sport and event recaps; `luxe` for property.
+- The look grades every piece and `<img class="photo">`, after the pieces from different cameras are matched to
+  each other: they read as one shoot. No `filter` of your own for colour. `data-grade="none"` keeps one piece as
+  shot (a screen recording); `data-match="none"` (a piece or the root) keeps it as filmed. The sheet shows pieces as
+  shot; the render and the editor's preview carry the grade.
+- A title over footage is a scene with `on-footage` (and `bottom` or `top`) above the pieces; the look puts its
+  scrim under the words. The first frame's headline is set to none so it is there at 0 s:
+  ```html
+  <div id="t1" class="clip scene on-footage bottom" data-start="0" data-duration="3" data-track-index="2" style="z-index: 10">
+    <p class="kicker">Riyadh, 2019</p><h1 class="hl" data-anim="none">Where it <em>started</em></h1></div>
+  ```
+  On a close-up, `top` or a lower third, never over the face. The look's seam goes only between scenes that meet
+  end to start; pieces of footage cut hard or fade (§3).
+
+## 3. Cutting
 
 - **A piece** begins 0.15 s before its first word and ends 0.25 s after its last; between two sentences cut in
   the middle of the pause. The next piece's `data-start` = this one's `data-start + data-duration`.
@@ -46,7 +65,8 @@ looked at on the sheet.
   with `#cut1 { z-index: 2; }`. A stock clip comes from `footage {stock: "a few words", orientation: "portrait"}`.
 - **Montage on the music.** The `music` reply gives each track's beat (B) and good places to start on it; start
   the music there with data-start 0 and a beat falls at 0 and every B after. Cut every 2 beats for energy, 4 for
-  calm, all pieces `muted`, the music not ducked. 100 bpm → B = 0.6 s → a cut every 1.2 s:
+  calm, all pieces `muted`, each starting in its best stretch, the music not ducked. 100 bpm → B = 0.6 s → a cut
+  every 1.2 s:
   ```html
   <video id="m1" src="uploads/broll.mp4" muted data-start="2.4" data-media-start="0.3" data-duration="1.2" data-track-index="0"></video>
   <video id="m2" src="uploads/broll.mp4" muted data-start="3.6" data-media-start="2.3" data-duration="1.2" data-track-index="0"></video>
@@ -59,7 +79,7 @@ looked at on the sheet.
 - `data-reframe` only on a person on camera: on any other clip the check warns `reframe_no_face`; frame it with
   `object-position` ("30% 50%" keeps the left third).
 
-## 3. A wide clip in a vertical reel (1080 × 1920)
+## 4. A wide clip in a vertical reel (1080 × 1920)
 
 Change the layout only on a cut: a new piece with another id and box. A boxed piece takes `inset: auto` and
 its own box; everything else stays the global `video { position: absolute; inset: 0; width: 100%; height: 100%;
@@ -82,25 +102,26 @@ A clip shot upright keeps its shape: full-bleed, or a PiP box of the same 9:16 s
 **The safe band (vertical):** every word, caption and graphic between y 220 and y 1440, the right 140 px
 clear. Below y 1440 the apps draw their own caption and buttons: only picture there. Wide videos: 6% margins.
 
-## 4. Dressing a talking head
+## 5. Dressing a talking head
 
 The face wins: nothing covers it, one graphic at a time, each timed to the word that says it. In a vertical
 close-up the face sits about y 400–1000: look at the sheet and keep graphics above or below it.
 
 - **Lower third** at the person's first appearance, once: `motion {name, piece: "lower-third", start: 0.3,
-  vars: {name, role, accent, duration: 2–3}}`. It lands just above two lines of captions, clear of the right
-  140 px; check on the sheet that it does not cover the chin, and move it with `edit` only if it does. Over a
-  scene with its own text low in the frame (a promo's headline), add `place: "high"` to its vars.
+  vars: {name, role, duration: 2–3}}`, in the look's type and colours (and the kit's). It lands just above two
+  lines of captions, clear of the right 140 px; check on the sheet that it does not cover the chin, and move it
+  with `edit` only if it does. Over a scene with its own text low in the frame, add `place: "high"` to its vars.
 - **Keyword chip** (a place, a product, a name): a pill in the top band, 0.15 s before the word, held about
   1.5 s, leaving faster than it came. A Lottie accent can sit inside it:
   ```html
   <div id="k1" class="clip" data-start="8.8" data-duration="1.6" data-track-index="2">
-    <div id="chip1" class="chip" dir="rtl"><div id="pin1" class="lottie" data-lottie="lottie:accent-pin" data-color="#14110f"></div>الرياض</div>
+    <div id="chip1" class="chip" dir="rtl"><div id="pin1" class="lottie" data-lottie="lottie:accent-pin"></div>الرياض</div>
   </div>
   ```
   ```css
   #k1 { z-index: 20; }
-  .chip { position: absolute; right: 140px; top: 240px; display: flex; align-items: center; gap: 8px; padding: 8px 40px 8px 18px; border-radius: 999px; background: #ffb547; color: #14110f; font: 800 72px/1.5 "Cairo", sans-serif; }
+  .chip { position: absolute; right: 140px; top: 240px; display: flex; align-items: center; gap: 8px; padding: 8px 40px 8px 18px; border-radius: 999px;
+    background: var(--look-accent); color: var(--look-on-accent); font-family: var(--look-display); font-size: 72px; line-height: 1.5; }
   .chip .lottie { position: relative; width: 110px; height: 110px; }
   ```
   ```js
@@ -109,16 +130,17 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
   ```
 - **Punch line**: the 2–3 words that carry a sentence, big, in word blocks above the captions, each on its own
   spoken time, the key word in the accent. Blocks keep 3:1 contrast over any footage (bare text over bright
-  footage fails it):
+  footage fails it). Its words are spans of your own (not a role), so at() moves them:
   ```html
   <div id="k2" class="clip" data-start="11.85" data-duration="1.9" data-track-index="3">
     <div id="punch" class="punch" dir="rtl"><span id="p1">في</span> <span id="p2">كل</span> <span id="p3" class="hot">مدينة</span></div>
   </div>
   ```
   ```css
-  .punch { position: absolute; left: 60px; right: 140px; top: 960px; text-align: center; white-space: nowrap; font: 900 112px/1.5 "Cairo", sans-serif; }
+  .punch { position: absolute; left: 60px; right: 140px; top: 960px; text-align: center; white-space: nowrap;
+    font-family: var(--look-display); font-size: 112px; line-height: 1.5; color: #fff; }
   .punch span { display: inline-block; padding: 0 26px; border-radius: 18px; background: #14110f; }
-  .punch .hot { background: #ffb547; color: #14110f; }
+  .punch .hot { background: var(--look-accent); color: var(--look-on-accent); }
   ```
   ```js
   at("#p1", [{ opacity: 0, transform: "translateY(60px)" }, { opacity: 1, transform: "none" }], 0, 400, "cubic-bezier(0.16, 1, 0.3, 1)");
@@ -129,30 +151,32 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
 - **Accents** (`lottie {query}`: underline, circle, arrow, check): on a plain word, not on a block of the same
   colour. A Lottie's stroke sits in the middle of its box: place the box so its middle is just under the word,
   and never on the caption rail (the captions hide it).
-- **A number said aloud**: count up to it so it lands as the number is heard (the counter in the
-  instructions), in the split panel or a chip.
+- **A number said aloud**: a `num` in the split panel (`data-anim="count"` with its delay) lands as the number
+  is heard; one the preset cannot count is your own counter (`motion-design` §2).
 - **Quote card**: the strongest line as a full-frame graphic with the speaker in a PiP saying it.
 - **How often**: under a minute, one graphic every 6–8 s; up to 3 min, every 8–12 s. A graphic held past 8 s
   needs a second beat. Most of the words live in the captions; a punch line is earned, once every 15–20 s.
 
-## 5. Captions — the rail
+## 6. Captions — the rail
 
 ```html
 <div id="cap1" class="cap" data-captions="h" data-cap-style="word" dir="rtl"></div>
 <div id="cap2" class="cap" data-captions="a b" data-cap-style="word" dir="rtl"></div>
 ```
 ```css
-.cap { position: absolute; z-index: 35; left: 60px; right: 140px; bottom: 500px; text-align: center; font: 700 60px/1.6 "Cairo", sans-serif; color: #fff; --cap-active: #ffb547; }
+.cap { position: absolute; z-index: 35; left: 60px; right: 140px; bottom: 500px; text-align: center; font-weight: 700; font-size: 60px; line-height: 1.6; color: #fff; }
 .cap-line { background: rgba(10, 8, 6, .66); padding: 4px 24px; border-radius: 18px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 ```
+- The look sets the captions' font and the said word's colour (`--cap-active`); you place and size the box. To
+  change them, write it on the box's id (`#cap1 { --cap-active: #ffb547; }`): a `.cap` rule loses to the look's.
 - **One box per stretch of speech.** A box over pieces with a music-only stretch between them builds a line
   across the gap: it hangs over the montage with words from both sides. Split the ids at every silent stretch.
 - The `.cap-line` backing is sized to the words: readable over any shot, never a full-width bar or a grade.
 - `word` lights each word as it is said (reels, energy); `phrase` for interviews and calm talk. One family,
   two weights, one accent. The accent on a dark backing is light (amber, yellow, mint): a mid orange-red fails 3:1.
 - Sizes: 60–72 px on a reel, 44–56 px on a wide video 80–120 px from the bottom. Never italic for emphasis.
-- **Arabic**: `dir="rtl"` on the box, an Arabic family (Cairo, IBM Plex Sans Arabic, Tajawal, Almarai),
-  line-height 1.5 or more.
+- **Arabic**: `dir="rtl"` on the box, line-height 1.5 or more; an Arabic family of your own (Cairo, IBM Plex
+  Sans Arabic, Tajawal, Almarai) goes on its id.
 - **Another language**: `subtitles {name}`, translate each sentence short and natural, `subtitles {name, to,
   lines}`, then a second box. For a Gulf audience the Arabic line is the rail and the original sits above it,
   smaller:
@@ -166,7 +190,7 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
   ```
 - Never type captions by hand: the service fills the box from the words.
 
-## 6. Sound
+## 7. Sound
 
 - The speaker's voice is the clock and the loudest thing. Music only when the person wants it, under the
   speech with `data-duck` naming every speech piece: it dips under each sentence, rises in a montage and on the
@@ -181,7 +205,7 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
 - Sound effects stay out of the speech: a `pop` on a chip at `data-volume="0.4"`, a `whoosh` into a montage or
   the end card, an `impact-bass-1` on the punch line's last word in a gap (`motion-design` §10).
 
-## 7. Shapes that work
+## 8. Shapes that work
 
 | kind | length | beats |
 |---|---|---|
@@ -191,14 +215,15 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
 | **Podcast clip** | 20–45 s | one strong exchange; box + title band with both names; word captions |
 | **Interview with b-roll** | 30–60 s | the voice carries; a cutaway on every noun worth showing, never more than half the time |
 
-## 8. The end card, sizes, the last look
+## 9. The end card, sizes, the last look
 
-- **End card**: a scene after the last piece with its own background, 2–3 s: the brand or logo, one line, one
-  handle or ask. The root's `data-duration` = the last piece's end + the card. Nothing to read below y 1440.
+- **End card**: a `card` scene after the last piece, 2.5–4 s: the logo (carried in with at()) or a `brand`, one
+  `cta`, a `meta` with the handle, set and brought in by the look. The root's `data-duration` = the last piece's
+  end + the card. Nothing to read below y 1440.
 - **Several sizes**: `data-sizes="vertical square"` on the root; a `data-reframe` piece follows at every size, a
   boxed piece and the graphics around it need a rule for each other size
   (`#root[data-shape="square"] #b { top: 60px; height: 608px; }`). `look {name, size}` each one: a PiP clear of
   the headline in vertical covered it in square.
-- **Before render**: the face clear in every frame; captions readable over every shot; each callout on its
-  word (check the "Spoken:" times); no caption line across a silent stretch; nothing in the bottom 480 px or the
-  right 140 px; the lower third off the caption rail; the end card reached.
+- **Before render** (30 fps for footage): the face clear in every frame; captions readable over every shot;
+  each callout on its word (check the "Spoken:" times); no caption line across a silent stretch; nothing in the
+  bottom 480 px or the right 140 px; the lower third off the caption rail; the end card reached.

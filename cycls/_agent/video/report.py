@@ -177,6 +177,56 @@ def tidy_text(rel, info):
     ])
 
 
+_WEAK = {"fade": "fades in or out", "black": "is black", "shaky": "shakes", "soft": "is soft", "dark": "is dark",
+         "blown": "is blown out", "whip": "whips past"}
+
+
+def quality_lines(q):
+    """A clip's best stretch, its weak ones and its light (cycls-video quality.py), as the footage reply says them."""
+    if not isinstance(q, dict):
+        return []
+    lines, span = [], lambda a, b: f"{_t(a)}–{_t(b)} s"
+    best = q.get("best") or []
+    if best:
+        b = best[0]
+        lines.append(f"Best stretch: {span(b['start'], b['end'])}" + (f" ({', '.join(b['why'])})" if b.get("why") else "")
+                     + ("; also " + ", ".join(span(x["start"], x["end"]) for x in best[1:3]) if len(best) > 1 else "")
+                     + ". Start a piece there.")
+    weak = [w for w in q.get("avoid") or [] if w.get("what") in _WEAK][:6]
+    if weak:
+        lines.append("Weak: " + "; ".join(f"{span(w['start'], w['end'])} {_WEAK[w['what']]}" for w in weak) + ".")
+    if q.get("words"):
+        lines.append(f"Light: {q['words']} (a video matches its clips to each other for you).")
+    return lines
+
+
+def matched_text(matched):
+    """The footage the service evened out (cycls-video match.mjs), as the check's reply says it, or ''."""
+    if not isinstance(matched, list) or not matched:
+        return ""
+    def did(m):
+        a = m.get("adjust") or {}
+        parts = []
+        if a.get("exposure"):
+            parts.append(f"{'lifted' if a['exposure'] > 0 else 'darkened'} {abs(a['exposure']):.1f} stops")
+        if a.get("temperature"):
+            parts.append("warmed" if a["temperature"] > 0 else "cooled")
+        if a.get("tint"):
+            parts.append("less green" if a["tint"] > 0 else "less magenta")
+        if a.get("saturation"):
+            parts.append("more vivid" if a["saturation"] > 0 else "calmer in colour")
+        name = (m.get("src") or "").split("/")[-1]
+        return f"{m.get('id')} ({name}) {', '.join(parts) or 'evened out'}"
+    text = "Footage matched to the other clips: " + "; ".join(did(m) for m in matched[:6]) + "."
+    limited = [m.get("id") for m in matched if m.get("limited")]
+    if limited:
+        text += (f" {', '.join(limited)} still stands out (the most it is moved): look at it, pick another clip, or keep "
+                 "it as filmed with data-match=\"none\" if that is meant.")
+    else:
+        text += " data-match=\"none\" on a <video> keeps it as filmed."
+    return text
+
+
 def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
     """A clip made ready, as the model reads it in place of watching: what the clip is, where its
     shots change, what is said in it and when, and the lines that put a piece of it in a video."""
@@ -203,6 +253,7 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
                      + (f" … ({len(shots)} in all)" if len(shots) > MAX_SHOTS else "") + ".")
     else:
         lines.append("One shot, with no cut in it.")
+    lines += quality_lines(info.get("quality"))
     said = info.get("transcript") or {}
     sentences = said.get("sentences") or []
     first = None
@@ -226,8 +277,14 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
     elif info.get("has_audio"):
         why = f" ({info['transcript_note']})" if info.get("transcript_note") else ""
         lines.append(f"Nobody is heard speaking in it{why}: its sound is ambience or music.")
-    start = round(max(0.0, first["start"] - 0.15), 2) if first else 0
-    length = round(first["end"] + 0.25 - start, 2) if first else round(min(d or 5, 5), 2)
+    best = (((info.get("quality") or {}).get("best")) or [None])[0]
+    if first:
+        start = round(max(0.0, first["start"] - 0.15), 2)
+        length = round(first["end"] + 0.25 - start, 2)
+    elif best:
+        start, length = best["start"], round(best["end"] - best["start"], 2)
+    else:
+        start, length = 0, round(min(d or 5, 5), 2)
     lines.append(
         "Put a piece of it in the composition as a direct child of the root, never inside a scene:\n"
         f"  <video id=\"a\" src=\"{rel}\" data-start=\"0\" data-media-start=\"{_t(start)}\" data-duration=\"{_t(length)}\" "
@@ -235,7 +292,7 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
         "data-media-start is where in the clip the piece begins, data-duration how long it shows"
         + (": that example is the first sentence, begun 0.15 s before its first word and ended 0.25 s after its last. "
            "Captions for it: <div class=\"cap\" data-captions=\"a\" data-cap-style=\"phrase\"></div>."
-           if first else "."))
+           if first else ": that example is its best stretch." if best else "."))
     focus = info.get("focus") or {}
     if focus.get("points"):
         w, h = info.get("width") or 0, info.get("height") or 0

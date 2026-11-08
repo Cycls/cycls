@@ -1606,6 +1606,10 @@ def test_a_video_that_leaves_the_brand_out_is_told_so(monkeypatch, tmp_path):
     assert "none of the workspace brand kit's colours (#0c2340" in brand.hint(tmp_path, COMP)
     assert brand.hint(tmp_path, COMP.replace("Hi", '<b style="color:#F5A623">Hi</b>')) == ""     # a brand colour, any case
     assert brand.hint(tmp_path, COMP.replace("Hi", '<img src="brand/logo.png">')) == ""
+    # with a look, the kit goes over it in one rule of the look's variables
+    looked = brand.hint(tmp_path, COMP.replace('data-composition-id="main"', 'data-composition-id="main" data-look="editorial"'))
+    assert "Over the look, add to your <style>: #root[data-look] { --look-accent: " in looked
+    assert "--look-bg: " in looked or "--look-ink: " in looked or looked.count("--look-") >= 1
     _on(monkeypatch)
     FakeService(monkeypatch)
     VIDEO_LOADED.set(True)

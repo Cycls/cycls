@@ -99,8 +99,21 @@ def hint(root, html, fonts=()):
         what.append("colours (" + ", ".join(list(k["colours"].values())[:4]) + ")")
     if k["logo"]:
         what.append(f"logo ({k['logo']})")
-    return (f"Brand: this video uses none of the workspace brand kit's {' or its '.join(what)}. Use them unless the "
+    line = (f"Brand: this video uses none of the workspace brand kit's {' or its '.join(what)}. Use them unless the "
             "person asked for another look.")
+    if "data-look" in html and k["colours"]:
+        # A look is styled through its variables: the kit goes over it in one rule, the look's design kept.
+        c = k["colours"]
+        sets = [f"--look-{var}: {c[key]}" for var, key in (("accent", "accent"), ("bg", "background"), ("ink", "text"))
+                if c.get(key)]
+        if not c.get("accent") and c.get("primary"):
+            sets.insert(0, f"--look-accent: {c['primary']}")
+        for role, var in (("heading", "display"), ("body", "text")):
+            f = k.get(role)
+            if f and f[1]:
+                sets.append(f'--look-{var}: "{f[0]}", sans-serif')
+        line += " Over the look, add to your <style>: #root[data-look] { " + "; ".join(sets) + "; }"
+    return line
 
 
 def template_vars(k, takes, fonts=(), arabic=False):

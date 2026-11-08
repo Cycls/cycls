@@ -1,6 +1,6 @@
 ---
 name: explainer-video
-description: Explainers, how-tos, listicles, data stories, a report or deck as a video — script and voice first, a picture for every sentence, diagrams that build, numbers that move, pacing. Load before writing one.
+description: Explainers, how-tos, listicles, data stories, a report or deck as a video — script and voice first, the look, a picture for every sentence, reveals on the word, diagrams that build, numbers that move, pacing.
 ---
 
 # explainer-video — one idea, understood by the end
@@ -9,6 +9,11 @@ Load `video-direction` (the look) and `motion-design` (how things move) with thi
 act of understanding, not the source read aloud over slides. Every sentence gets a picture that shows it, and each
 part of that picture appears when the voice names it. The two ways it fails: the slideshow (everything on screen
 at the start of a scene, then frozen) and the narrator reading the text that is already on screen.
+
+**The look.** `minimal` for numbers, reports, processes and anything that must be clear first; `tech` for a
+product, an app, AI or fintech; `editorial` for culture, history and case studies; `warm` for food, recipes and
+how-tos at home. The look sets the text and moves it; you build the picture (diagrams, charts, photos) and time
+both to the voice. Diagrams, charts and lines are drawn: render at `fps: 60`.
 
 ## 1. Before a word is written
 
@@ -100,22 +105,33 @@ row, never the whole diagram at once.
 
 Each element enters when the voice reaches it. With the voice at `data-start="0.5"` and a scene at
 `data-start="7"`, a word the voice reply puts at 8.39 s is at 8.39 + 0.5 − 7 = 1.89 s into the scene; start the
-element about 0.15 s before: `at("#c1", pop, 1740, 500, spring)`. Spread reveals across the scene, most of them
-in its back half; at offset 0 show only what the first words say. A scene never opens on an empty frame while it
-waits for its first word: give it something from its first frame (the stage it will build on — the axis, the empty
-grid, a faint outline, the term in small type), or start the scene on its first word rather than before it. Hold
-still once everything has landed: stillness after motion reads as confidence.
+element about 0.15 s before. A role takes its moment as a preset and a delay (the delay is read only beside a
+data-anim); anything else, as an at() offset:
+```html
+<div id="s3" class="clip scene card top" data-start="7" data-duration="4.4" data-track-index="2">
+  <p class="kicker">Compound growth</p>
+  <div class="num" data-anim="count" data-anim-delay="1.74">68%</div>
+  <p class="sub" data-anim="fade-up" data-anim-delay="2.9">of the gain comes in the last ten years</p>
+  <svg id="curve" viewBox="0 0 1600 560" style="width: 100%; height: auto">…</svg>
+</div>
+```
+A node of the diagram: `at("#c1", [{ opacity: 0, transform: "scale(.4)" }, { opacity: 1, transform: "none" }], 1740, 500, SPRING)`.
+A diagram in the scene's column (the svg here) is laid out with the text, clear of it. Spread reveals across the
+scene, most in its back half; at offset 0 show only what the first words say. A scene never opens on an empty
+frame while it waits for its first word: give it the stage it will build on (the axis, the empty grid, the term in
+small type), or start the scene on its first word. Hold still once everything has landed: stillness after motion
+reads as confidence.
 
-Frame 0 is the thumbnail: the hook's title is already on screen in the first frame (give it no entrance) and the
-first motion starts after it.
+Frame 0 is the thumbnail: the hook's title is already on screen in the first frame (`data-anim="none"` on its
+hl) and the first motion starts after it.
 
 ## 6. One stage across several sentences
 
 When three sentences develop one picture (year 1 → year 10 → year 20), keep them in ONE scene and move the same
-elements again. One element's property moves in ONE `at()`: give its keyframes `offset`s (0 to 1 over the whole
-scene) and an `easing` on the keyframe where each move starts. Two two-keyframe `at()` on the same property of one
-element fight: the later one's starting value shows from the scene's first frame (a later move that gives only
-its end keyframe is fine: motion-design).
+parts of the picture again (a role comes in once, as the look brings it). One element's property moves in ONE
+`at()`: give its keyframes `offset`s (0 to 1 over the whole scene) and an `easing` on the keyframe where each move
+starts. Two two-keyframe `at()` on the same property of one element fight: the later one's starting value shows
+from the scene's first frame (a later move that gives only its end keyframe is fine: motion-design).
 
 ```js
 const io = "cubic-bezier(0.65, 0, 0.35, 1)";
@@ -128,8 +144,9 @@ at("#plot", [
   { clipPath: "inset(0 0% 0 0)", offset: 1 }], 0, 10650, "linear");
 ```
 
-The same keyframe offsets on a counter (`--y`: 0 → 1 → 10 → 20, shown as "السنة 20") keep the year in step with
-the curve. A word that is on, then off (a slot whose words change) is also one `at()`:
+The same keyframe offsets on a counter of your own (`--y`: 0 → 1 → 10 → 20, shown as "السنة 20", on a num set
+to `data-anim="none"`) keep the year in step with the curve. A word that is on, then off (a slot whose words
+change: spans inside an hl set to none) is also one `at()`:
 
 ```js
 const win = [{ opacity: 0, transform: "translateY(60px)" }, { opacity: 1, transform: "none", offset: 0.2 },
@@ -139,39 +156,41 @@ at("#w1", win, 300, 800, "linear");   // each word: its own window; the anchor b
 
 ## 7. Numbers that move
 
-- A count-up: an integer `@property`, `font-variant-numeric: tabular-nums` so the digits don't jitter, 1.2–1.6 s
-  on an ease-out, then held. Count thousands and print the zeros:
+- A `num` counts itself up (1.4 s, then held) when it is one whole number of up to six digits with what goes
+  round it (68%, 3x, +350): `data-anim="count"` and a delay land it on the word. Anything else is your own
+  counter on a num set to none (the look still sizes it). Thousands, printing the zeros:
   `@property --k { syntax: "<integer>"; initial-value: 0; inherits: true; }`,
   `#total { counter-reset: k var(--k); } #total::after { content: counter(k) ",000"; }`,
-  `at("#total", [{ "--k": 0 }, { "--k": 590 }], 8000, 1500, out)`.
+  `<div id="total" class="num" data-anim="none"></div>`, `at("#total", [{ "--k": 0 }, { "--k": 590 }], 1800, 1500, LAND)`.
   Eastern Arabic digits: `counter(k, arabic-indic) "٪"` gives ٦٨٪.
 - Wrap figures in Arabic text with `direction: ltr; unicode-bidi: isolate` so "240,000" keeps its order.
 - Give every number a shape that shows its size: a bar (`scaleX()` from `transform-origin: left`, `right` in
   Arabic), a ring, a filled area, a grid of units. A number alone floats.
 - A ring (68%):
   ```html
-  <circle id="arc" cx="180" cy="180" r="150" fill="none" stroke="#5cc8a0" stroke-width="28" stroke-linecap="round"
+  <circle id="arc" cx="180" cy="180" r="150" fill="none" style="stroke: var(--look-accent)" stroke-width="28" stroke-linecap="round"
           pathLength="100" stroke-dasharray="100" stroke-dashoffset="100" transform="rotate(-90 180 180)"/>
   ```
-  `at("#arc", [{ strokeDashoffset: 100 }, { strokeDashoffset: 32 }], 600, 1500, out)` — the offset is 100 − the percent.
+  `at("#arc", [{ strokeDashoffset: 100 }, { strokeDashoffset: 32 }], 600, 1500, LAND)` — the offset is 100 − the percent.
 - A line chart: compute the points from the real values (x by time, y by value, the axis from zero), draw the
   axis and a reference line first, then reveal the data by `clip-path: inset(0 X% 0 0)` on its wrapper (linear in
   time, unlike a dash on a curve), then mark the point that matters with a dot and a label, last. The gap between
   two lines can be a filled shape with its own label ("your profits +350,000").
 - Highlight one series, grey the rest; one annotation per chart; a source line ("assuming 8% a year —
   illustrative"). No pie charts, gridlines, legends or six-number dashboards.
-- Quick charts: `motion` piece chart (bars or donut), `template` stats-reel; build your own when the chart is the story.
+- Quick charts: the `motion` piece chart (bars or donut, in the look's type and colours by itself), `template`
+  stats-reel; build your own when the chart is the story.
 
 ## 8. Diagrams that build
 
 - **Drawn lines.** `pathLength="1" stroke-dasharray="1" stroke-dashoffset="1"` on any `<path>`, then
-  `at("#k1", [{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], 2300, 500, io)`: arrows, connectors, a brace,
+  `at("#k1", [{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], 2300, 500, MOVE)`: arrows, connectors, a brace,
   an outline around the point that matters.
 - **Nodes.** Each pops in (scale 0.4 → 1 on a spring easing) as the voice names it, then its connector draws.
   In Arabic the chain reads right to left: the first link on the right.
 - **Units that fill.** A grid of dots in one element: an empty pattern
   `background-image: radial-gradient(circle at 22px 22px, transparent 11px, rgba(255,255,255,.28) 11px 13px, transparent 13px); background-size: 44px 44px`,
-  a filled copy above it revealed row by row:
+  (`rgba(0,0,0,.18)` on a light look), a filled copy in `var(--look-accent)` above it revealed row by row:
   `at("#fill", [{ clipPath: "inset(0 0 100% 0)" }, { clipPath: "inset(0 0 0% 0)" }], 1650, 2200, "steps(20, end)")`.
 - **Stations.** Put the steps side by side on one wide `#world` (3 × 1920 px) and move only the world, in one
   `at()` with holds: `translateX(0)` → `-1920px` → `-3840px`, each move starting on its sentence. A road line
@@ -183,10 +202,11 @@ at("#w1", win, 300, 800, "linear");   // each word: its own window; the anchor b
 
 ## 9. Captions and the words on screen
 
-- With a voice-over, add captions unless the person says not to: `<div class="cap" data-captions="vo"
-  data-cap-style="phrase" dir="rtl">` ("word" lights each word, for a punchier reel). Place it low but inside
-  the safe band (reel: the box's bottom edge at about y 1420, clear of the app's own caption and buttons below;
-  wide: bottom ≈ 90 px), the picture's text above it. A pill per line reads on anything:
+- With a voice-over, add captions unless the person says not to: `<div id="cap" class="cap" data-captions="vo"
+  data-cap-style="phrase" dir="rtl">` ("word" lights each word, for a punchier reel). The look sets its font and
+  the said word's colour; you place and size it (`#cap { z-index: 30; … }`), low but inside the safe band (reel:
+  the box's bottom edge at about y 1420, clear of the app's own caption and buttons; wide: bottom ≈ 90 px), the
+  picture's text above it. A pill per line reads on anything:
   `.cap .cap-line { justify-self: center; background: rgba(0,0,0,.6); padding: .1em .55em; border-radius: .35em; }`.
 - The screen carries what the ear cannot hold: the numbers, the names, the term being taught, a label on each
   part. Never the spoken sentence word for word; at most about 10 words of other text in a scene.
@@ -195,7 +215,8 @@ at("#w1", win, 300, 800, "linear");   // each word: its own window; the anchor b
 ## 10. A deck, a report or a document as a video
 
 Export its pages as JPEG with Design; make each page a scene that moves, one finding a page (`template` deck
-is the plain version):
+is the plain version). A page or a screenshot is a plain `<img>`, never `class="photo"`: the look's grade is for
+photographs, not a page's own colours:
 - a slow push toward the line or bar that matters: `transform-origin` at that point on a wrapper around the
   image, `scale(1)` → `scale(1.12)` over the scene, the wrapper `data-layout-allow-overflow`, the frame around it
   `overflow: hidden`;
@@ -206,9 +227,8 @@ is the plain version):
 ## 11. Pacing, sound and the end
 
 - Scenes of 2–5 s; vary them. After the biggest number, hold 0.8–1.2 s with nothing new: let it land.
-- One transition kind for the whole video, if any: a plain cut between steps, `fade` for a soft layer, one GPU
-  transition (cinematic-zoom, sdf-iris) into the centrepiece. Fade a scene's text out before a transition
-  (`at("#wrap", [{ opacity: 1 }, { opacity: 0 }], -350, 300)`) so the two never overlap.
+- One kind of seam for the whole video: the look's. At most one GPU transition of your own (cinematic-zoom,
+  sdf-iris) into the centrepiece; once you set any data-transition, the look sets none and the other scenes cut.
 - Music only when the person wants sound: calm, corporate, inspiring or minimal-piano (`music`), with
   `data-duck="vo"` so it dips under the voice. The voice sets the cuts (between sentences); the music's beat
   only times what moves between them.
@@ -223,7 +243,8 @@ is the plain version):
 
 - The hook is a question, a number, a belief turned over — not a greeting; the thesis lands by sentence 3.
 - Every sentence has its picture; nothing appears before the voice names it; no scene front-loads then freezes.
-- One stage carries each run of sentences about the same picture; its moves are one `at()` per property.
+- One stage carries each run of sentences about the same picture; its moves are one `at()` per property, and no
+  role is also moved by at() (set it to `data-anim="none"` first).
 - Every number has a shape, a source line, and the same rounding everywhere.
 - Captions in the bottom band; the screen never repeats the sentence.
 - The last scene: the takeaway in one line, held.

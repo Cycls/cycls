@@ -90,6 +90,48 @@ def test_the_check_beside_the_render_says_what_it_found(monkeypatch, tmp_path):
     assert "runs off the frame" in out["_model"] and "render again before you hand it over" in out["_model"]
 
 
+def test_a_render_at_60_frames_a_second_is_asked_for_and_never_mistaken_for_the_30(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    ws = _ws(tmp_path)
+    _run({"action": "write", "name": "promo", "html": PROMO}, ws)
+    svc.state = "pending"                         # the 30 fps render is still running when 60 is asked for
+    _run({"action": "render", "name": "promo"}, ws)
+    thirty = svc.submitted[-1]
+    assert thirty["kind"] == "render" and thirty["params"] == {"quality": "final"}
+    _run({"action": "render", "name": "promo", "fps": 60}, ws)
+    sixty = svc.submitted[-1]
+    assert sixty["params"] == {"quality": "final", "fps": 60} and sixty["key"] != thirty["key"], "a job of its own"
+    assert _run({"action": "render", "name": "promo", "fps": 24}, ws).startswith("Error: fps: 30 or 60")
+
+
+def test_a_clips_best_stretch_weak_stretches_and_light_are_said_and_the_example_starts_at_the_best():
+    from cycls._agent.video import report
+    info = {"duration": 12, "width": 1920, "height": 1080, "has_audio": False, "shots": [[0, 9], [9, 12]],
+            "quality": {"best": [{"start": 4.5, "end": 7, "why": ["sharp", "steady"]}, {"start": 9.5, "end": 11.5, "why": []}],
+                        "avoid": [{"start": 1, "end": 4.5, "what": "shaky"}, {"start": 9, "end": 12, "what": "dark"}],
+                        "words": "dim, warm, natural colour"}}
+    text = report.footage_text("videos/footage/beans.mp4", info)
+    assert "Best stretch: 4.5–7 s (sharp, steady); also 9.5–11.5 s. Start a piece there." in text
+    assert "Weak: 1–4.5 s shakes; 9–12 s is dark." in text
+    assert "Light: dim, warm, natural colour" in text
+    assert 'data-media-start="4.5" data-duration="2.5"' in text and "that example is its best stretch" in text
+    # a talking clip keeps its first sentence as the example
+    talk = {**info, "transcript": {"language": "en", "sentences": [{"start": 1.0, "end": 3.0, "text": "Hello."}]}}
+    assert 'data-media-start="0.85"' in report.footage_text("a.mp4", talk)
+    assert report.quality_lines(None) == []
+
+
+def test_footage_the_service_matched_is_said():
+    from cycls._agent.video import report
+    said = report.matched_text([{"id": "v3", "src": "videos/footage/night.mp4", "adjust": {"exposure": 0.8, "temperature": 0.3},
+                                 "limited": True}, {"id": "v2", "src": "b.mp4", "adjust": {"saturation": -0.2}}])
+    assert said.startswith("Footage matched to the other clips: v3 (night.mp4) lifted 0.8 stops, warmed; v2 (b.mp4) calmer in colour.")
+    assert "v3 still stands out" in said
+    assert report.matched_text(None) == "" and report.matched_text([]) == ""
+
+
 def test_a_piece_in_the_videos_own_colours_says_so(monkeypatch, tmp_path):
     _on(monkeypatch)
     FakeService(monkeypatch)
