@@ -10,6 +10,7 @@ import difflib
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
 from .. import trash, versions
@@ -17,7 +18,7 @@ from ..design.deck import lock
 from ..design.store import Stale, version_of, write_fig
 from ..paths import _resolve_path
 from . import contract as contract_mod
-from . import dubbing, files, media, report, skill
+from . import dubbing, files, media, quick, report, skill
 from .tool import ACTIONS, VIDEO_LOADED, VIDEO_SKILLED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
@@ -125,6 +126,21 @@ def _root_text(root_info):
     return f"{d:g} s, {w}x{h}" if d and w and h else ""
 
 
+def _digest(html):
+    return hashlib.sha256(html.encode("utf-8")).hexdigest()
+
+
+def _timed(kind, label, r, t0, t_media, t_lint):
+    """Where a check's time went, without its content: gathering what it sends, lint at the door,
+    then the wait (the GPU's own parts in `gpu`, its start in `start_s` and `cold`)."""
+    from ..logs import log
+
+    start = r.get("start") or {}
+    log("video_check", kind=kind, size=bool(label), state=r.get("state"), media_ms=round((t_media - t0) * 1000),
+        lint_ms=round((t_lint - t_media) * 1000), wait_ms=round((time.monotonic() - t_lint) * 1000),
+        gpu=r.get("ms"), start_s=start.get("wait_s"), cold=start.get("cold"))
+
+
 async def _check(workspace, root, rel, html, *, kind="review", params=None, budget=None, again=True, label=None,
                  quiet=False):
     """Lint at the door, then (when clean) the browser check and a sheet, or the frames asked for.
@@ -132,9 +148,11 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     sound map, the reminder to look). → (text, sheet blocks, lint passed)."""
     from cycls._agent import video
 
+    t0 = time.monotonic()
     images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
     if problems:
         return "The images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems), [], False
+    t_media = time.monotonic()
     # Keyed, so a retry after a dropped connection is the same job, not a second one.
     key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|{kind}|{_sha(html, sent, words, footage)}|"
                          f"{json.dumps(params or {}, sort_keys=True)}".encode()).hexdigest()
@@ -150,6 +168,7 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
         # Said only after lint passed: the file is good to preview; frames and the MP4 wait.
         return (f"Lint clean. {e} The file is saved and its preview works; the browser check, frames and "
                 "the MP4 wait until then — tell the person so."), [], True
+    t_lint = time.monotonic()
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
     sound = "" if quiet else report.sound_text(dubbing.for_reading(job.get("sound"), dubbing.dubbed_ids(html)))
@@ -157,6 +176,9 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
         head += "\n" + sound
     r = await video.wait(workspace, job["token"], budget or BUDGET["check"])
     state = r.get("state")
+    _timed(kind, label, r, t0, t_media, t_lint)
+    if state == "done" and kind == "review" and label is None:
+        await asyncio.to_thread(files.mark_checked, root, rel, _digest(html))
     if state == "gone" and again:   # the service restarted under the job: ask once more
         return await _check(workspace, root, rel, html, kind=kind, params=params, budget=budget, again=False,
                             label=label, quiet=quiet)
@@ -316,6 +338,41 @@ async def _guide(workspace, root, loaded):
 
 
 async def _render(workspace, root, chat, name, quality):
+    """`_render_once`, with the browser check beside it when this version never had one: the last
+    edits were small and checked by their frames alone (quick.py). It runs at the same time (an
+    organisation's second GPU when free), so the render waits for nothing it did not already."""
+    rel = files.composition(name)
+    try:
+        html = (root / rel).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        html = None
+    beside = None
+    if html is not None and await asyncio.to_thread(files.checked, root, rel) != _digest(html):
+        beside = asyncio.create_task(_check(workspace, root, rel, html, quiet=True))
+    try:
+        out = await _render_once(workspace, root, chat, name, quality)
+    except BaseException:
+        if beside:
+            beside.cancel()
+        raise
+    if beside is None:
+        return out
+    if not (isinstance(out, dict) and "_model" in out):
+        beside.cancel()      # refused, failed or still rendering: the check is keyed, the next call collects it
+        return out
+    try:
+        said, _, _ = await beside
+    except Exception:  # noqa: BLE001 - the MP4 is made; a check that broke is said, not raised
+        said = "The browser check could not run."
+    first, _, rest = said.partition("\n")
+    found = rest if first.startswith("Lint clean") and rest else said
+    out["_model"] += ("\n\nThe browser check the last small edits left for the render, run beside it:\n" + found
+                      + ("" if "Browser check: no issues." in found
+                         else "\nFix what it found with `edit`, then render again before you hand it over."))
+    return out
+
+
+async def _render_once(workspace, root, chat, name, quality):
     """The MP4 at the main size and at each other size the root lists, one job each, all at once.
     A job cut off (Stop, a dropped connection) is collected by the next call, never paid twice."""
     from cycls._agent import video
@@ -356,7 +413,7 @@ async def _render(workspace, root, chat, name, quality):
     for j, r in zip(jobs, results):
         if r.get("state") in ("gone", "expired") and j["collected"]:
             files.render_done(root, chat, j["slot"], None)   # that job is lost; start it again
-            return await _render(workspace, root, chat, name, quality)
+            return await _render_once(workspace, root, chat, name, quality)
     waiting = [(j, r) for j, r in zip(jobs, results) if r.get("state") == "pending"]
     if waiting:
         left = ", ".join(j["shape"] or "the main size" for j, _ in waiting)
@@ -1171,6 +1228,10 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
     text, blocks, clean = await _checks(workspace, root, rel, made["html"])
     where = {"up": " It sits higher than usual, above the scene's own text.",
              "down": " It sits lower than usual, below the scene's own text."}.get(made.get("moved"), "")
+    own = made.get("colours") if isinstance(made.get("colours"), dict) else {}
+    hues = " and ".join(f"{what} {own[k]}" for k, what in (("accent", "accent"), ("dark", "dark ground")) if own.get(k))
+    if hues:
+        where += f" It takes the video's own colours ({hues}): it already matches, nothing to re-colour."
     return _result(f"Added a {piece} to {rel}: its id is {made.get('id')}, from {start or 0:g} s.{where}\n{text}", blocks,
                    note, _shown(rel, name, clean, version))
 
@@ -1305,7 +1366,14 @@ async def _exec_video(inp, workspace, ctx=None):
                             return _err(f"{rel} changed while it was being edited (the person is editing it); read "
                                         "it again, then edit.")
             files.remember(root, chat, name)
-            text, blocks, clean = await _checks(workspace, root, rel, new)
+            times = quick.moments(data.decode("utf-8"), new)
+            if times:
+                text, blocks, clean = await _checks(workspace, root, rel, new, kind="look", budget=BUDGET["look"],
+                                                    params={"at": times, "zoom": ""})
+                text = (f"A small change (words and inline styles only): lint, and a frame of what it touched at "
+                        f"{', '.join(f'{t:g} s' for t in times)}. The browser check runs beside the render.\n{text}")
+            else:
+                text, blocks, clean = await _checks(workspace, root, rel, new)
             return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}"
                            f"{_brand_hint(root, new)}", blocks, note, _shown(rel, name, clean, version))
 

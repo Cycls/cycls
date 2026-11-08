@@ -150,6 +150,35 @@ def render_done(root, chat_id, name, sha):
     return entry
 
 
+def _checked_path(root):
+    return Path(root) / SIDECAR / "checked.json"
+
+
+def checked(root, rel):
+    """The hash of the version of `rel` the browser check last ran on (at its main size), or None: a
+    small edit is checked by its frames only (quick.py), and the render runs the check it skipped."""
+    try:
+        data = json.loads(_checked_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data.get(rel) if isinstance(data, dict) else None
+
+
+def mark_checked(root, rel, digest):
+    path = _checked_path(root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data[rel] = digest
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".part")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(path)
+
+
 def voice_started(root, chat_id, name, token, key):
     data = load(root, chat_id)
     data.setdefault("voices", {})[name] = {"token": token, "key": key, "at": time.time()}

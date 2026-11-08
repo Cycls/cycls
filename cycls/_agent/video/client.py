@@ -235,7 +235,8 @@ async def submit(workspace, kind, html, images=None, files=None, *, params=None,
 
 async def piece(workspace, html, piece_name, at, variables):
     """A motion piece (lower-third, logo-reveal, chart, kinetic-title) put into a composition by the service.
-    → {html, id}; ValueError says what is wrong with the piece's variables."""
+    → {html, id, moved?, colours? (the video's own, taken where no colour was named)}; ValueError says what is
+    wrong with the piece's variables."""
     resp = await _request("POST", "/v1/piece", workspace=workspace, retry=True,
                           json={"html": html, "piece": piece_name, "at": at, "vars": variables},
                           timeout=httpx.Timeout(60.0, connect=15.0))

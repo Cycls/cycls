@@ -796,3 +796,26 @@ most), while a fresh container starts in about 5 s.
   again once, so the crop follows whoever talks (`store.FACES_V`); a long clip's crop cuts with every shot change,
   not just the first 40 (the agent is still told 40).
 
+
+### Quicker small edits, pieces in the video's colours, the editor on a short window (2026-11-08, later)
+
+Measured on dev (a 20 s footage video with three clips, warm): lint at the door 1.3 s; the full check (browser
+check beside nine frames) 16.5 s; frames alone of one moment 8 s, of three 10 s. In the app an edit's whole call
+took about 26 s; each check now logs where its time went (`video_check`: media_ms, lint_ms, wait_ms, the GPU's
+own parts in `gpu`, `start_s`, `cold`), so the next real chat shows the rest.
+
+- **A small edit** (`video/quick.py`): one that changes only the words and inline styles of elements already
+  there (the same elements in the same places, the same attributes and timing, the same script and <style>) is
+  checked by lint and a frame of each scene it touched (up to three, 60% into the scene). The reply says so.
+  The browser check it skipped runs beside the render (`run._render`): when the version rendered never had the
+  browser check (`files.checked`, the hash of the last version it ran on), it runs at the same time on the
+  organisation's second GPU when free, and the render's reply says what it found. Anything bigger keeps the
+  full check.
+- **A motion piece with no colour named** (no brand kit, none in `vars`) takes the video's own (cycls-video
+  `editor-add.mjs videoPalette`): the vivid colour its CSS uses most for the accent, its most used dark colour
+  for the box behind a lower third and the ground of a full-frame piece. The service says which it took
+  (`colours`) and the reply tells the agent it already matches; in the Dune Roast promo the agent had spent an
+  edit re-colouring a yellow lower third on a blue-black box.
+- **The editor on a short window**: the timeline took a fixed 360 px, so a laptop window (about 640 px tall)
+  left the preview about 130 px of video. It now takes 38% of the editor's height (180 to 360 px); the line
+  between the preview and the timeline drags (a 4 px line just under the preview).
