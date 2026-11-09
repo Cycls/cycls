@@ -326,10 +326,11 @@ async def send_clip(workspace, path, sha, *, at=0, budget=240):
     return at, True
 
 
-async def ingest(workspace, sha, *, language=None, key=None):
+async def ingest(workspace, sha, *, language=None, key=None, transcribe=True):
     """Have a clip the door holds made ready (read on the organisation's GPU). → {token, eta_s}, or
-    {ready: True, info} when it already is."""
-    meta = {"kind": "ingest", "asset": sha, "language": language}
+    {ready: True, info} when it already is. `transcribe=False`: what is said in it is not written down
+    (a stock clip: its sound is ambience or music)."""
+    meta = {"kind": "ingest", "asset": sha, "language": language, **({} if transcribe else {"transcribe": False})}
     headers = {"Idempotency-Key": key} if key else {}
     resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
                           headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))

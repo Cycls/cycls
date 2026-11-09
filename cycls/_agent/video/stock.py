@@ -94,6 +94,11 @@ def _line(n, video):
     return f"{n}: {_title(video)} ({video.get('duration') or '?'} s, {video.get('width')}x{video.get('height')})"
 
 
+def fetched(rel) -> bool:
+    """Is this workspace path a stock clip this tool fetched (videos/footage/<words>-<id>.mp4)?"""
+    return bool(re.fullmatch(re.escape(DIR) + r"/[\w-]+-\d+\.mp4", str(rel or "")))
+
+
 SEARCH_KEPT_S = 24 * 3600   # a search's results are reused this long: another pick from them costs no search
 
 

@@ -82,7 +82,9 @@ def _schema():
                     "items": {"type": "object", "properties": {
                         "old": {"type": "string", "description": "Text that occurs exactly once (or set all)."},
                         "new": {"type": "string"},
-                        "all": {"type": "boolean", "description": "Replace every occurrence."}},
+                        "all": {"type": "boolean", "description": "Replace every occurrence."},
+                        "line": {"type": "integer", "description": "When the old text occurs more than once: the "
+                                                                   "line of the one you mean (an error lists them)."}},
                         "required": ["old", "new"]}},
         "template": {"type": "string", "description": "template: which template (they are listed in the instructions)."},
         "vars": {"type": "object", "description": "template: its variables, as the instructions list them. "

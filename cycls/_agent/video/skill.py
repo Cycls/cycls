@@ -50,6 +50,8 @@ def kind_of(html):
 def load(asked):
     """The skills asked for — a name, a list of them, or names in one string — as the text the model reads."""
     names = asked if isinstance(asked, list) else re.split(r"[\s,]+", str(asked or ""))
+    # a list sent as a string ('["video-direction", "motion-design"]'): its brackets and quotes are not names
+    names = [m for n in names for m in re.split(r"[\s,\[\]\"'`]+", str(n))]
     names = list(dict.fromkeys(str(n).strip().lower() for n in names if str(n).strip()))
     unknown = [n for n in names if n not in SKILLS]
     if not names or unknown:

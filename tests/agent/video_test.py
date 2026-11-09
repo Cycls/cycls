@@ -888,8 +888,8 @@ class FakeFootage:
         size = Path(path).stat().st_size
         return (size, True) if self.whole else (size // 2, False)
 
-    async def ingest(self, ws, sha, *, language=None, key=None):
-        self.ingests.append({"sha": sha, "language": language, "key": key})
+    async def ingest(self, ws, sha, *, language=None, key=None, transcribe=True):
+        self.ingests.append({"sha": sha, "language": language, "key": key, "transcribe": transcribe})
         return {"token": f"i{len(self.ingests)}", "eta_s": 60}
 
 
@@ -2055,3 +2055,61 @@ def test_a_short_stock_clip_is_fetched_before_a_long_one(monkeypatch, tmp_path):
     monkeypatch.setattr(stock, "_download", download)
     rel, _, others = asyncio.run(stock.find(tmp_path, "palm grove"))
     assert rel == "videos/footage/palm-grove-2.mp4" and others == ["1: long take (64 s, 1080x1920)"]
+
+
+# ---- turn time, round 3: lists sent as strings, an edit that names its line, stock clips not listened to ----
+
+def test_a_list_sent_as_a_json_string_is_read_as_the_list(monkeypatch, tmp_path):
+    from cycls._agent.video import run as vrun
+
+    assert vrun._lists({"skill": '["video-direction", "promo-reel"]', "at": "[1.5, 3]", "stock": "sea"}) == \
+        {"skill": ["video-direction", "promo-reel"], "at": [1.5, 3], "stock": "sea"}
+    assert vrun._lists({"stock": "[not json"}) == {"stock": "[not json"}
+    _on(monkeypatch)
+    VIDEO_LOADED.set(True)
+    # what a model sent on 2026-11-09: refused twice, then one skill a call
+    out = _run({"action": "skill", "skill": '["video-direction", "motion-design", "promo-reel"]'}, _ws(tmp_path))
+    assert out.count("<video-skill") == 3
+
+
+def test_skills_named_with_brackets_and_quotes_in_one_string_are_still_found():
+    from cycls._agent.video import skill
+
+    assert skill.load('["video-direction", "promo-reel"]').count("<video-skill") == 2
+    assert skill.load("'motion-design'").count("<video-skill") == 1
+    assert skill.load('["nope"]').startswith("Error: no skill named 'nope'")
+
+
+def test_an_old_text_that_occurs_twice_says_where_and_a_line_picks_one():
+    from cycls._agent.video.run import apply_changes
+
+    html = "<p>\n  <b>x</b>\n</p>\n<p>\n  <b>x</b>\n</p>"
+    out, why = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>"}])
+    assert out is None and "line 2: '<b>x</b>'" in why and "line 5: '<b>x</b>'" in why and '"line"' in why
+    out, why = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>", "line": 5}])
+    assert why is None and out.splitlines()[1].strip() == "<b>x</b>" and out.splitlines()[4].strip() == "<b>y</b>"
+    out, why = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>", "line": 3}])
+    assert out is None, "a line where none of them is changes nothing"
+
+
+def test_a_stock_clip_is_read_without_listening_for_speech_and_the_report_says_so(monkeypatch, tmp_path):
+    from cycls._agent.video import report, stock
+
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fake = FakeFootage(monkeypatch)
+    svc.result = {"state": "done", "kind": "ingest", "info": INFO, "sheet": SHEET}
+
+    async def find(root, query, *, orientation=None, pick=0, timing=None):
+        _clip(root, "videos/footage/sea-1.mp4")
+        return "videos/footage/sea-1.mp4", "Video by Ana on Pexels.", []
+    monkeypatch.setattr(stock, "find", find)
+    _run({"action": "footage", "stock": "sea"}, _ws(tmp_path))
+    _clip(tmp_path, "uploads/interview.mp4", data=b"\x00\x00\x00\x18ftypmp42" + b"mine" * 200)
+    _run({"action": "footage", "path": "uploads/interview.mp4"}, _ws(tmp_path))
+    assert [i["transcribe"] for i in fake.ingests] == [False, True], "the person's own clip is still listened to"
+    assert stock.fetched("videos/footage/perfume-bottle-on-black-silk-123456.mp4")
+    assert not stock.fetched("videos/footage/mine.mp4") and not stock.fetched("uploads/sea-1.mp4")
+    quiet = {k: v for k, v in INFO.items() if k != "transcript"} | {"listened": False}
+    text = report.footage_text("videos/footage/sea-1.mp4", quiet)
+    assert "not listened to for speech" in text and "Nobody is heard" not in text

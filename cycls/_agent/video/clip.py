@@ -81,7 +81,7 @@ def video_for(root, rel):
 
 
 async def make_ready(workspace, root, full, rel, *, chat=None, language=None, send_budget=None, read_budget=None,
-                     progress=None, by="agent", again=True):
+                     progress=None, by="agent", again=True, transcribe=True):
     """The clip sent (from wherever the service has it up to) and read, its transcript beside it.
 
     With budgets (the agent's call) it stops when one runs out and says where: {"state": "sending",
@@ -127,9 +127,10 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
         pending = files.footage_pending(root, chat, sha) if chat else None
         token, eta = (pending["token"] if pending else None), None
         if token is None:
-            key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|ingest|{sha}|{language or ''}".encode()).hexdigest()
+            key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|ingest|{sha}|{language or ''}"
+                                 f"{'' if transcribe else '|quiet'}".encode()).hexdigest()
             try:
-                job = await video.ingest(workspace, sha, language=language or None, key=key)
+                job = await video.ingest(workspace, sha, language=language or None, key=key, transcribe=transcribe)
             except video.Refused as e:
                 raise NotReady(f"the clip was not made ready: {e}") from e
             if job.get("ready"):
@@ -156,7 +157,8 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
                 files.footage_done(root, chat, sha)
             if r.get("state") in ("gone", "expired") and again:     # the service restarted under the job: once more
                 return await make_ready(workspace, root, full, rel, chat=chat, language=language, send_budget=send_budget,
-                                        read_budget=read_budget, progress=progress, by=by, again=False)
+                                        read_budget=read_budget, progress=progress, by=by, again=False,
+                                        transcribe=transcribe)
             if r.get("state") != "done":
                 raise NotReady(f"the clip could not be made ready: {r.get('error') or r.get('state')}")
             info, sheet = r["info"], r.get("sheet")

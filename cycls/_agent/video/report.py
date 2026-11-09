@@ -277,6 +277,9 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
                          + ": music or noise, or speech the recogniser lost. If someone speaks there, captions will "
                          "miss it: ask the person what is said, or keep captions off that stretch.")
         first = sentences[0]
+    elif info.get("has_audio") and info.get("listened") is False:
+        lines.append("Its sound was not listened to for speech (a stock clip): take it as ambience or music, and keep "
+                     "it low or muted under the video's own sound.")
     elif info.get("has_audio"):
         why = f" ({info['transcript_note']})" if info.get("transcript_note") else ""
         lines.append(f"Nobody is heard speaking in it{why}: its sound is ambience or music.")

@@ -914,3 +914,19 @@ two edits that each paid the full check (23-25 s), and an 80 s render with motio
 - **Service** (cycls-video 97f5f28, 23309b5): blur only when something moves fast (node/speed.mjs); a reel's
   check flags text in the bottom quarter (the apps' caption and buttons); a GPU container reads two stock
   clips at once and takes a clip's pieces beside other work.
+
+### Turn time, round 3 (2026-11-09, night)
+
+The rerun of the perfume brief on production (7.9 min) showed three avoidable steps and one wait:
+- **Skills sent as a JSON string**: the model passed `skill: '["video-direction", "motion-design", "promo-reel"]'`
+  (a string, not a list). It was refused twice, then the model loaded one skill a call: five model steps
+  for one. `run._lists` now reads a list sent as a JSON string for skill, stock, at, lines and changes,
+  and `skill.load` drops brackets and quotes from names.
+- **An edit whose old text occurred twice** cost a step reading the file with bash and a retry. The error
+  now lists each occurrence with its line, and a change may carry `line` to pick one.
+- **Stock clips are not listened to** (`stock.fetched`, `client.ingest(transcribe=False)`): a stock clip with
+  a sound track was transcribed, about 20 s on the GPU the other clips and the checks share. The reading
+  says `listened: False` and the report tells the model to take its sound as ambience or music.
+- **Service** (cycls-video): within one organisation, a waiting check, look or render goes ahead of that
+  organisation's waiting clip readings (`slots.FIRST`); a colleague's four-clip batch had held a look in
+  another chat to 44 s.

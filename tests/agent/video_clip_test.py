@@ -61,7 +61,7 @@ class FakeDoor:
         size = Path(path).stat().st_size
         return (size, True) if self.whole else (size // 2, False)
 
-    async def ingest(self, ws, sha, *, language=None, key=None):
+    async def ingest(self, ws, sha, *, language=None, key=None, transcribe=True):
         self.ingests.append({"sha": sha, "key": key})
         return {"token": f"i{len(self.ingests)}", "eta_s": 30}
 

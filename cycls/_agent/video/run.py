@@ -67,10 +67,31 @@ def apply_changes(html, changes):
                 hint = f" The closest line is {at}: {near[0][:200]!r}"
             return None, f"change {i}: the old text is not in the composition (nothing was changed).{hint}"
         if n > 1 and not c.get("all"):
-            return None, (f"change {i}: the old text occurs {n} times (nothing was changed). Give more of the "
-                          "surrounding text so it occurs once, or set all to replace every one.")
+            at = _occurrences(out, c["old"])
+            line = c.get("line")
+            if isinstance(line, (int, float)) and not isinstance(line, bool) and at:
+                k = min(range(len(at)), key=lambda j: (abs(at[j][0] - line), j))
+                if at[k][0] == int(line):
+                    out = out[:at[k][1]] + c["new"] + out[at[k][1] + len(c["old"]):]
+                    continue
+            where = "; ".join(f"line {ln}: {text!r}" for ln, _, text in at[:6])
+            return None, (f"change {i}: the old text occurs {n} times (nothing was changed) — {where}. Send the "
+                          "changes again with \"line\" on this one (the line where the one you mean is, as listed "
+                          "here), or more of the surrounding text so it occurs once, or all to replace every one.")
         out = out.replace(c["old"], c["new"]) if c.get("all") else out.replace(c["old"], c["new"], 1)
     return out, None
+
+
+def _occurrences(html, old):
+    """Where `old` is in the composition → [(its line, from 1; its offset; that line, trimmed)]."""
+    found, at = [], html.find(old)
+    while at >= 0:
+        ln = html.count("\n", 0, at) + 1
+        start = html.rfind("\n", 0, at) + 1
+        end = html.find("\n", at)
+        found.append((ln, at, html[start:end if end >= 0 else len(html)].strip()[:160]))
+        at = html.find(old, at + len(old))
+    return found
 
 
 def _sha(html, images_files, words=None, footage=None):
@@ -1030,10 +1051,13 @@ async def _made_ready(workspace, root, chat, full, rel, language, again_with="fo
 
     from . import clip
 
+    from . import stock
+
     t0 = time.monotonic()
     try:
         r = await clip.make_ready(workspace, root, full, rel, chat=chat, language=language,
-                                  send_budget=BUDGET["send"], read_budget=BUDGET["footage"], by="agent")
+                                  send_budget=BUDGET["send"], read_budget=BUDGET["footage"], by="agent",
+                                  transcribe=not stock.fetched(rel))
     except clip.NotReady as e:
         return _err(str(e))
     if timed and r["state"] != "ready":
@@ -1450,10 +1474,29 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
                    note, _shown(rel, name, clean, version))
 
 
+_LISTS = ("skill", "stock", "at", "lines", "changes")
+
+
+def _lists(inp):
+    """A list argument some models send as a JSON string ('["video-direction", "motion-design"]', seen on
+    2026-11-09: refused twice, then sent one name a call) → the list itself."""
+    out = inp
+    for k in _LISTS:
+        v = inp.get(k)
+        if isinstance(v, str) and v.strip()[:1] == "[":
+            try:
+                got = json.loads(v)
+            except ValueError:
+                continue
+            if isinstance(got, list):
+                out = {**out, k: got}
+    return out
+
+
 async def _exec_video(inp, workspace, ctx=None):
     from cycls._agent import video
 
-    inp = inp if isinstance(inp, dict) else {}
+    inp = _lists(inp if isinstance(inp, dict) else {})
     root = Path(workspace.root)
     chat = getattr(ctx, "chat_id", None)
     action = str(inp.get("action") or "").lower().strip()
