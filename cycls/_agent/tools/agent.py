@@ -37,7 +37,8 @@ TOOL = {
 BRIEFED = (
     "You are doing one part of a larger task, handed to you by the agent the person is talking to. Do the part in "
     "your brief. You can't ask the person anything: make sensible calls and say which you made. Finish with a "
-    "short report: what you did, the files you made or changed (their paths), and anything you're unsure of.")
+    "short report: what you did, the files you made or changed (their paths), and anything you're unsure of. "
+    "Nothing you make opens for the person, so never say it is open.")
 
 WRITES = {"edit", "design", "sheets", "docs"}
 READS = {"read", "inspect", "export", "versions", "comments", "duplicate"}

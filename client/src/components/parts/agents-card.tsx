@@ -49,7 +49,7 @@ export const AgentsCard = memo(function AgentsCard({ items }: { items: Part[] })
         <button key={id} type="button" onClick={() => setOpen(id)}
                 className="flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-start transition-colors hover:bg-secondary/50">
           <span className="flex size-5 shrink-0 items-center justify-center"><Status a={a} /></span>
-          <span className="w-2/5 shrink-0 truncate text-sm text-foreground"><bdi>{a.label}</bdi></span>
+          <span className="w-2/5 shrink-0 truncate text-sm text-foreground"><bdi>{a.label || "…"}</bdi></span>
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground"><bdi>{line(a)}</bdi></span>
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{clock(seconds(a, now))}</span>
         </button>

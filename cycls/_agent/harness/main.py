@@ -512,11 +512,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             skill_catalog = await skills_mod.available(workspace)
         except Exception as e:
             skill_catalog = {}
-            log("warn", user=user, chat_id=session.chat_id, message=f"skills unavailable this turn: {e}")
+            log("warn", user=user, chat_id=billed, message=f"skills unavailable this turn: {e}")
         if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
         ctx = replace(ctx, skills=skill_catalog)
     for _ in vendor_skips(allowed_tools, vendor, web_search):
-        log("warn", user=user, chat_id=session.chat_id,
+        log("warn", user=user, chat_id=billed,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     # With Docs / Sheets on, bash keeps off the files they look after (office/guard.py).
@@ -663,7 +663,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     def compacted(tier, reason, tokens, ok=True):
         """The analytics record of one compaction: a log row, and a `ui` event the client tracks."""
-        log("compaction", user=user, chat_id=session.chat_id, model=bare_model,
+        log("compaction", user=user, chat_id=billed, model=bare_model,
             tier=tier, reason=reason, tokens=tokens, ok=ok)
         return {"type": "ui", "action": "compacted", "tier": tier, "reason": reason, "tokens": tokens, "ok": ok}
 
@@ -691,7 +691,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     cost=round(c, 6), ms=0, compact=True, **({"agent": me} if me else {}))
                 if billed and c:
                     try: await state.add_cost(workspace, billed, c)
-                    except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
+                    except Exception as e: log("warn", user=user, chat_id=billed, message=f"add_cost failed: {e}")
         except Exception as ce:
             # degrades the loop until the context hard-overflows — never silent
             yield compacted(2, reason, tokens_since_compact, False)
@@ -759,7 +759,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 **({"host": turn.host} if turn.host else {}), **({"agent": me} if me else {}))
             if billed:
                 try: await state.add_cost(workspace, billed, turn_cost)
-                except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
+                except Exception as e: log("warn", user=user, chat_id=billed, message=f"add_cost failed: {e}")
 
             # max_tokens with zero output means the input filled the window —
             # an overflow in disguise, not a truncation.
@@ -843,7 +843,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 ok = not isinstance(out, BaseException)
                 good = ok and not (isinstance(out, str) and out.startswith(_FAILED))
                 o = owners.get(block["name"])
-                log("tool_call", user=user, chat_id=session.chat_id,
+                log("tool_call", user=user, chat_id=billed,
                     model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=good,
                     connector=o.name if o else None, credential_scope=o.scope if o else None,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None,
@@ -863,7 +863,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 streak = 0 if good else streak + 1
                 note = _REPEATED.get(n, "").format(n=n)
                 if note:
-                    log("repeat", user=user, chat_id=session.chat_id, model=bare_model, tool=block["name"], times=n)
+                    log("repeat", user=user, chat_id=billed, model=bare_model, tool=block["name"], times=n)
                     if n == max(_REPEATED):
                         terminal = True
                         yield events.callout("Stopped: the same step kept giving the same result.", "warning")
@@ -884,11 +884,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # approve. Ride it on the message the batch already writes.
             messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {}),
                              **({"ui": kept} if kept else {})})
+            if lead and lead.reports:   # in by the next step, not at the turn's end
+                messages.append(lead.take())
             await session.checkpoint()
             if lead and lead.busy() and all(b["name"] == "agent" for b in blocks):
                 idle = True   # nothing to say before a report: anything said now would be a guess
             if stuck and not terminal:   # a repeat's stop has said so already
-                log("warn", user=user, chat_id=session.chat_id, model=bare_model,
+                log("warn", user=user, chat_id=billed, model=bare_model,
                     message=f"turn stopped: tool calls kept failing ({streak} in a row)")
                 yield events.callout("Stopped: the same step kept failing. Reply to go on, or say what to try instead.", "warning")
                 break

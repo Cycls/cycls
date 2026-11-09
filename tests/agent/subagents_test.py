@@ -103,3 +103,32 @@ def test_each_agent_browses_in_its_own_browser(monkeypatch):
     for ctx in (tools.ToolContext(None, None, "chat1"), tools.ToolContext(None, None, None, me="a1")):
         asyncio.run(tools._TOOLS["browser"].run({}, None, ctx=ctx))
     assert seen == ["chat1", "a1"]
+
+
+class _Slow(FakeStream):
+    def __init__(self, response, wait):
+        super().__init__(response)
+        self.wait = wait
+
+    async def get_final_message(self):
+        await asyncio.sleep(self.wait)
+        return self._response
+
+
+def test_a_report_reaches_the_parent_at_its_next_step(tmp_path):
+    """The slow agent ends while the parent is mid-turn: the parent's next step knows, it isn't told at the end."""
+    parent = iter([(_make_response([_agent("a1", "Fast", "fast brief"), _agent("a2", "Slow", "slow brief")],
+                                   stop_reason="tool_use"), 0),
+                   (_make_response([_tool_use_block("e1", "edit", {"command": "create", "path": "n.md", "file_text": "x"})],
+                                   stop_reason="tool_use"), 0.5),
+                   (_make_response([_text_block("Both are done.")]), 0)])
+    seen = []
+    client = MagicMock()
+    def stream(**kw):
+        if BRIEFED in str(kw.get("system")):
+            return _Slow(_make_response([_text_block("done")]), 0.3 if "slow brief" in str(kw["messages"]) else 0)
+        seen.append(kw)
+        return _Slow(*next(parent))
+    client.messages.stream = stream
+    asyncio.run(_drain(_llm().run(context=_make_context(tmp_path / "ws"), client=client)))
+    assert 'label="Slow"' in str(seen[2]["messages"]) and len(seen) == 3
