@@ -127,9 +127,13 @@ def test_footage_the_service_matched_is_said():
     from cycls._agent.video import report
     said = report.matched_text([{"id": "v3", "src": "videos/footage/night.mp4", "adjust": {"exposure": 0.8, "temperature": 0.3},
                                  "limited": True}, {"id": "v2", "src": "b.mp4", "adjust": {"saturation": -0.2}}])
-    assert said.startswith("Footage matched to the other clips: v3 (night.mp4) lifted 0.8 stops, warmed; v2 (b.mp4) calmer in colour.")
+    assert said.startswith("Footage evened out under the look: v3 (night.mp4) lifted 0.8 stops, warmed; v2 (b.mp4) calmer in colour.")
     assert "v3 still stands out" in said
     assert report.matched_text(None) == "" and report.matched_text([]) == ""
+    # the floor under dark footage (cycls-video match.mjs): its shadows opened, and why
+    dark = report.matched_text([{"id": "v1", "src": "c.mp4", "adjust": {"exposure": 0.4, "shadows": 0.2},
+                                 "off": ["dark under the grade (its middle grey 0.17, lifted to 0.30)"]}])
+    assert "v1 (c.mp4) lifted 0.4 stops, its shadows opened (too dark under the look's grade)." in dark
 
 
 def test_a_piece_in_the_videos_own_colours_says_so(monkeypatch, tmp_path):

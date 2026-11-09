@@ -18,6 +18,7 @@ SEARCH = "https://api.pexels.com/videos/search"
 DIR = "videos/footage"
 MAX_BYTES = 200 * 1024 * 1024
 MAX_SECONDS = 120
+SHORT_S = 30
 RESULTS = 6
 FETCH_BUDGET_S = 180      # a clip that is not here by then is given up on: the call says so, and the model picks again
 
@@ -142,6 +143,9 @@ async def find(root, query, *, orientation=None, pick=0, timing=None):
     else:
         data = await _search(query, orientation, RESULTS)
         videos = [_slim(v) for v in data.get("videos") or [] if _file(v) and (v.get("duration") or 0) <= MAX_SECONDS]
+        # A shot in a video is seconds long: the clips of SHORT_S or less first (in the search's order), so a long
+        # one is not fetched, sent and read for two seconds of it (a 132 MB clip took 2.4 min on dev, 2026-11-09).
+        videos.sort(key=lambda v: (v.get("duration") or 0) > SHORT_S)
     if timing is not None:
         timing["search_ms"] = round((time.monotonic() - t0) * 1000)
     if not videos:

@@ -1996,3 +1996,27 @@ def test_no_kit_no_look_no_layer_and_the_guide_names_the_brands_look(monkeypatch
     line = brand.note(brand.kit(tmp_path, fonts), fonts)
     assert 'This brand\'s look is bold: write data-look="brand" (or "bold")' in line
     assert "each save adds a <style data-cycls-brand>" in line
+
+
+def test_a_short_stock_clip_is_fetched_before_a_long_one(monkeypatch, tmp_path):
+    from cycls._agent.video import stock
+
+    monkeypatch.setenv("PEXELS_API_KEY", "pexels-key")
+    mp4 = lambda link: {"file_type": "video/mp4", "width": 1080, "height": 1920, "link": link}  # noqa: E731
+    found = {"videos": [
+        {"id": 1, "duration": 64, "width": 1080, "height": 1920, "url": "https://www.pexels.com/video/long-take-1/",
+         "video_files": [mp4("https://videos.pexels.com/video-files/1/hd.mp4")]},
+        {"id": 2, "duration": 12, "width": 1080, "height": 1920, "url": "https://www.pexels.com/video/short-take-2/",
+         "video_files": [mp4("https://videos.pexels.com/video-files/2/hd.mp4")]}]}
+
+    async def search(query, orientation, per_page):
+        return found
+
+    async def download(url, dest):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(b"clip")
+        return 4
+    monkeypatch.setattr(stock, "_search", search)
+    monkeypatch.setattr(stock, "_download", download)
+    rel, _, others = asyncio.run(stock.find(tmp_path, "palm grove"))
+    assert rel == "videos/footage/palm-grove-2.mp4" and others == ["1: long take (64 s, 1080x1920)"]

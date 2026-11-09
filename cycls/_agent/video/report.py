@@ -215,13 +215,16 @@ def matched_text(matched):
             parts.append("less green" if a["tint"] > 0 else "less magenta")
         if a.get("saturation"):
             parts.append("more vivid" if a["saturation"] > 0 else "calmer in colour")
+        if a.get("shadows"):
+            parts.append("its shadows opened")
         name = (m.get("src") or "").split("/")[-1]
-        return f"{m.get('id')} ({name}) {', '.join(parts) or 'evened out'}"
-    text = "Footage matched to the other clips: " + "; ".join(did(m) for m in matched[:6]) + "."
+        dark = any("dark under the grade" in str(o) for o in m.get("off") or [])
+        return f"{m.get('id')} ({name}) {', '.join(parts) or 'evened out'}" + (" (too dark under the look's grade)" if dark else "")
+    text = "Footage evened out under the look: " + "; ".join(did(m) for m in matched[:6]) + "."
     limited = [m.get("id") for m in matched if m.get("limited")]
     if limited:
-        text += (f" {', '.join(limited)} still stands out (the most it is moved): look at it, pick another clip, or keep "
-                 "it as filmed with data-match=\"none\" if that is meant.")
+        text += (f" {', '.join(limited)} still stands out (the most it is moved): look at it, pick another clip (a darker "
+                 "one under a dark look stays murky), or keep it as filmed with data-match=\"none\" if that is meant.")
     else:
         text += " data-match=\"none\" on a <video> keeps it as filmed."
     return text

@@ -409,6 +409,19 @@ brand-kit skill writes it), `brand/logo.*`, and the brand's own font files in `b
 Checked on the dev service: the catalogue's Amiri renamed "Brand Serif" in `brand/fonts`, named before Cairo:
 the sheet drew it in the brand font and the canvas page carried it inline.
 
+**The brand's look (2026-11-09, `brand.apply`).** A video with a look (`data-look`) in a workspace with a kit carries
+the kit over the look by itself: each `write`, `edit` and `template` save puts `<style data-cycls-brand>` on the
+line of `<head>` (no line of the model's moves), made from the kit as it is then, so a changed kit reaches the next
+save. It sets the look's variables under `#root[data-look]` (an id outranks the look's own Arabic rule): the
+background, text and a muted mix only as a pair; the accent (else the primary) only where it reads on the ground
+in use (WCAG 3:1 against the kit's background, else the look's), with black or white for words on it, and over
+footage only when it is light enough there; the heading and body fonts when the catalogue or the kit's files have
+them, the look's Arabic face after a Latin-only one. An accent that does not read is left out and the reply says
+why. The brand keeps one look for every video: `brand/brand.yaml` `video_look` (a line the first branded save
+appends; the person can change it), `data-look="brand"` is rewritten to it on save, and the guide names it.
+`data-brand="none"` on the root leaves the kit out (and takes an earlier block away). The old one-line hint stays
+for videos without a look.
+
 ## The canvas
 
 A composition is the file kind `composition` (its suffix, before html, on both sides). Opened,
@@ -841,3 +854,36 @@ and keep `at()` for what is not text.
   service.
 - **Stock**: `footage {stock}` with no orientation looks for the shape of the video this chat is making
   (`_chat_orientation`): a wide clip cropped into a vertical video is enlarged almost twice and comes out soft.
+
+### Phone-ready videos, faster turns, motion blur, brand looks (2026-11-09)
+
+From the Tamr & Co promo on production (2026-11-08): bottom headlines under the apps' own caption, kickers that
+read as hairlines on a phone, a dark clip murky under luxe, and 9.5 minutes for the turn, 4 of them before `write`
+(3 `music` and 8 `footage` calls).
+
+- **Phone-ready** (service, cycls-video `e3f38ce`): every look keeps a reel's text in the skills' safe band (top
+  221 px, bottom 481 px, 140 px each side on 1080x1920); 4:5 is portrait again (it took the reel's padding); small
+  text roles have floors on a phone (kicker 2.8u, about 11 pt, Arabic a little larger) in every look and in the page
+  for sizes the agent wrote; a graded clip that would come out murky is lifted (exposure as its highlights allow,
+  then shadows), one clip alone too. The check's reply says so: "Footage evened out under the look: v1 (…) lifted
+  0.7 stops (too dark under the look's grade)" (`report.matched_text`). The editor's captions on a reel sit at
+  26% from the bottom, clear of the right column.
+- **Faster turns** (SDK): `footage {stock: ["…", "…"]}` fetches up to 4 clips side by side in one call (`_footage_many`;
+  the files it rewrites are safe for that: `files._write_json`, a lock on `clips.json`, the stock index read again
+  before each write); another `pick` reuses the day's search; clips of 30 s or less come first (`stock.SHORT_S`).
+  `music {query, length}` takes mood words (energetic, arabic, piano…), puts steady beats first, shows four and names
+  a pick with its start; with `length`, the start that covers the video and its grid (scene lengths on the beat, the
+  bar to end on); a query nothing fits says so and names the moods. Logs: `video_footage` gains `search_ms`,
+  `download_ms`, `service_ms` (the service's encode, faces, quality, transcribe) and `batch`; `video_music` is new.
+  Measured on dev from this machine (tools only, no model): the old pattern (3 music, 8 single footage calls) took
+  11 calls and 313 s; the new one (1 music, 2 footage calls of 4) 3 calls and 222 s — and 8 fewer model steps. Where
+  the rest goes: the upload from here (a 132 MB clip, 70 s; Cloud Run's link is faster) and the service's read of
+  each clip, 16–66 s against 3–8 s of GPU work (shipping to the renderer and back, the volume's commits): the next
+  thing to make faster, on the service.
+- **Motion blur** (service): every final at 30 fps up to 30 s is drawn at 90 fps and each three frames averaged into
+  one (x264 as a final), 2.4x a plain render's time (dev, T4, 30 s 1080p: 17.2 s → 41.5 s); the render's result
+  says `motion_blur` and `blend_s`. The `motion-design` skill's line ("a final of 30 s or less gets motion blur by
+  itself") is true again.
+- **A render asked again after a service deploy** is drawn again: the door's idempotency keys carry its build.
+- **Brand looks** (SDK): the kit goes over a look by itself, and the brand keeps one look (The brand kit, above).
+- The built-in contract v5 re-signed with all of it (cycls-video `bb498a9`).
