@@ -197,8 +197,7 @@ class LLM:
         # A switch in Settings turns a tool off for this person; it never
         # turns one on the operator didn't allow.
         off = set(getattr(context, "disabled_tools", None) or [])
-        async for ev in loop(
-            context=context,
+        kw = dict(
             system=self._system,
             tools=self._tools,
             allowed_tools=[t for t in self._allowed_tools if t not in off],
@@ -224,5 +223,22 @@ class LLM:
             price=self._price,
             context_window=self._context,
             extra_body=self._extra_body,
-        ):
-            yield ev
+        )
+        team = None
+        if loop is _run and "Agent" in kw["allowed_tools"]:
+            from types import SimpleNamespace
+            from ..tools.agent import BRIEFED, Team
+            # An agent starts from its brief, without the tools that need the person or start more agents
+            agent_kw = {**kw, "system": f"{kw['system']}\n\n{BRIEFED}" if kw["system"] else BRIEFED,
+                        "allowed_tools": [t for t in kw["allowed_tools"] if t not in ("Agent", "Ask", "Suggest")],
+                        "mcp_servers": None, "api_connectors": (), "approvals": (), "declined": (), "mentions": ()}
+            chat_id = getattr(context, "chat_id", None)
+            spawn = lambda brief, call: _run(context=SimpleNamespace(
+                workspace=context.workspace, user=getattr(context, "user", None), chat_id=None, bill=chat_id,
+                messages=SimpleNamespace(raw=[{"role": "user", "content": brief}])), team=team, me=call, **agent_kw)
+            team = Team(context.workspace, chat_id, spawn)
+        try:
+            async for ev in loop(context=context, **kw, **({"team": team} if team else {})):
+                yield ev
+        finally:
+            if team: await team.close()

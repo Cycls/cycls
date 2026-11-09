@@ -54,6 +54,22 @@ export interface ChartMarker {
   series?: number;
 }
 
+// An agent the turn handed work to, as the step that started it carries it (cycls/_agent/tools/agent.py)
+export interface AgentState {
+  label: string;
+  brief: string;
+  status: "working" | "done" | "failed" | "stopped";
+  started: string;
+  ended?: string;
+  steps: { id?: string; tool_name?: string; step?: string; ok?: boolean }[];
+  report?: string;
+}
+
+// The chat's record of its agents, on load and while polling: live, each comes with its step.
+const withAgents = (ms: Message[], agents?: Record<string, AgentState>) => !agents ? ms : ms.map((m) =>
+  m.parts?.some((p) => p.id && agents[p.id])
+    ? { ...m, parts: m.parts.map((p) => (p.id && agents[p.id] ? { ...p, agent: agents[p.id] } : p)) } : m);
+
 export interface Part {
   type: string;
   text?: string;
@@ -75,6 +91,7 @@ export interface Part {
   plain?: boolean;   // a tool with a `.on(title=…)`: its step is a sentence in plain words, never name(input)
   i18n?: Record<string, { tool_name?: string; step?: string }>;   // those words in each UI language
   result?: string;   // a connector call's outcome, bounded — the block's Response
+  agent?: AgentState;
   delta?: string;    // a step_arg chunk on the wire (not stored)
   status?: string;
   callout?: string;
@@ -324,6 +341,7 @@ export function useChat(baseUrl: string = "") {
         heard = true;
         if (viewRef.current !== view) return;
         applyTail(data, full);
+        if (data.agents) setMessages((ms) => withAgents(ms, data.agents));
         setRunStatus(data.run ?? null);
         setRunStartedAt(data.run_started ?? null);
         if (data.run !== "running") {
@@ -928,7 +946,7 @@ export function useChat(baseUrl: string = "") {
     setChatLoading(true);
     try {
       const chat = await (await api(`/chats/${id}`)).json();
-      const loaded: Message[] = chat.messages || [];
+      const loaded: Message[] = withAgents(chat.messages || [], chat.agents);
 
       setMessages(loaded);
       setChatId(id);

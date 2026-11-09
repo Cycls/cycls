@@ -14,6 +14,7 @@ Keys:
     chat/{id}/index           — chat metadata (sidebar target)
     chat/{id}/{turn:06d}      — turns (append-only; the full transcript)
     chat/{id}/compaction      — compaction marker (summary, first_kept, cleared)
+    chat/{id}/agents          — the agents its runs started, by the call that started each (tools/agent.py)
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
     <.org/ slot>              — workspaces registry + ACL (docs/workspaces.md)
@@ -119,15 +120,29 @@ async def list_chats(workspace):
         yield key.split("/")[1], meta
 
 
+_COST_LOCKS = {}   # one writer per chat: a run's agents add their cost at once
+
+
 async def add_cost(workspace, chat_id, delta):
     """Increment the chat's running cost total (USD). Stored as a stringified
     decimal in the index so it rides on the str:str meta contract."""
     if delta <= 0: return
     _validate(chat_id)
-    existing = (await get_meta(workspace, chat_id)) or {}
-    current = float(existing.get("cost") or 0)
-    existing["cost"] = f"{current + delta:.6f}"
-    await put_meta(workspace, chat_id, existing)
+    async with _COST_LOCKS.setdefault((workspace.root, chat_id), asyncio.Lock()):
+        existing = (await get_meta(workspace, chat_id)) or {}
+        current = float(existing.get("cost") or 0)
+        existing["cost"] = f"{current + delta:.6f}"
+        await put_meta(workspace, chat_id, existing)
+
+
+async def get_agents(workspace, chat_id):
+    _validate(chat_id)
+    return await DB(workspace).get(f"chat/{chat_id}/agents") or {}
+
+
+async def put_agents(workspace, chat_id, agents):
+    _validate(chat_id)
+    await DB(workspace).put(f"chat/{chat_id}/agents", agents)
 
 
 def _first_line(text, most=80):

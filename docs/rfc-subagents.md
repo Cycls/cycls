@@ -1,6 +1,9 @@
 # Subagents: an agent hands work to agents of its own
 
-**Status**: proposed (2026-11-07), branch `rfc/subagents`.
+**Status**: proposed (2026-11-07), branch `rfc/subagents`. Built (2026-11-08): the tool, background agents, reports
+waking the parent, the limits, file holds, cost, the stored record and the web card; tried live on super-new
+(2026-11-09). Still to build: messages to a
+running run (the inbox below), Stop per agent, paid plans in Super and Haseef, mobile.
 
 An agent gets one more builtin tool, `Agent`. It starts a child agent with a short label and a written brief.
 The child works in the background with the same workspace and tools, while the parent carries on and the person
@@ -65,10 +68,13 @@ A child is `_run` again, with a stand-in context:
 - **Messages**: the brief only. The system prompt is the parent's (operator `system`, `AGENT.md`, skills), plus a
   short preamble: you are doing one part of a larger task; you can't ask the person anything; end with a report of
   what you did, the files you made (paths), and anything you're unsure of.
-- **Tools**: the parent's list minus `Agent` (no grandchildren), `Ask` and `Suggest` (they need the person). A
-  connector call that needs the person's approval is refused with a note to report it back, so the parent asks.
-- **MCP**: the parent's connections are reused, not reopened per child.
-- **Session**: its own, stored under the parent chat (below), so it reloads and can be opened.
+- **Tools**: the parent's list minus `Agent` (no grandchildren), `Ask` and `Suggest` (they need the person).
+- **Connectors**: none in this version, so there are no approvals to forward.
+- **Browser**: its own session, so two agents never browse in one tab.
+- **Session**: in memory. Its steps and report are kept in the chat's agents record (below), so it reloads and opens.
+
+A step that only started agents waits for the first report before the parent speaks again. In live tests the
+parent, asked to report what its agents wrote, wrote it itself before they had: anything it says earlier is a guess.
 
 ### Background, and the run's inbox
 
@@ -79,7 +85,7 @@ arrives. The run ends when the parent has ended its turn, no child is working, a
 
 - A **report** goes into the parent's log as an internal user message, framed as data, never instructions:
   `<agent-report id="a1b2c3" label="…" status="done">…</agent-report>`. The chat hides it; the team card shows it.
-- A **message from the person** while the run is open goes to the inbox instead of today's client-side queue (which
+- A **message from the person** (not built yet) while the run is open goes to the inbox instead of today's client-side queue (which
   holds it until the run ends). Children may run for minutes; the person should be able to keep talking. Stored at
   `chat/{id}/inbox/{ts}` so it reaches the run whichever instance took the request; the run lists it at each drain
   and every 2 s while it waits.
@@ -107,23 +113,22 @@ file apart. So one file has one owner at a time:
 - **Or go in order.** When the second part depends on the first, the parent starts the second agent after the first
   report, telling it which file to build on.
 
-The tool's description says this, and the run enforces it. A run keeps a map of the files each working agent has written. A write by any other agent, the parent included, to
-a file a working child holds is refused: `pricing.xlsx is being worked on by «Draft the comparison sheet». Use
-another file or wait for its report.` The hold ends with the child. It covers the tools we control (write, edit,
-Design, Sheets, Docs, Apps, uploads); `bash` stays unguarded, and the tool description says so. An open Design or
+The tool's description says this, and the run enforces it. The first agent to write a file holds it until it ends:
+no one else, the parent included, writes it or reads it half made (`pricing.xlsx is being worked on by «Draft the
+comparison sheet». Its report will arrive as a message; use another file meanwhile.`). It covers `edit`, `read`,
+Design, Sheets and Docs; `bash` stays unguarded, and the tool description says so. An open Design or
 Sheets editor shows a child's edits live, as it shows the parent's today.
 
-## What we build first (gaps the code review found)
+## Gaps the code review found, and how they closed
 
-1. **Progress from inside a tool.** Today a tool's events reach the chat only when the whole batch ends; the loop
-   just pings while it waits (`harness/main.py:810`). Add `emit` to `ToolContext` and have the wait drain an
-   `asyncio.Queue` alongside the tasks. Throttled to about one update a second per child: the run's stream holds 512.
-2. **Cost.** `state.add_cost` reads, changes and writes the chat index with no lock, so parallel children lose
-   updates. One writer: an in-process lock per chat. Each child's usage is logged with the chat id and its agent id,
-   so `cycls cost` sums it with the chat and can split it.
-3. **Storage.** A child's record at `chat/{id}/agents/{call_id}` (label, brief, status, started, ended, steps, the
-   latest line, report, usage, files it made) and its turns beneath it. Turn readers glob `[0-9]*`, so they never
-   see it. Deleting the chat removes it; regenerating a reply must remove the agents that reply started.
+1. **Progress.** A tool's events reach the chat only when its batch ends. The `agent` call returns at once, so no
+   tool needs to stream: the parent's loop sends the team's changes while it streams, while tools run and while it
+   waits (`tools/agent.py` `Team.drain`).
+2. **Cost.** `state.add_cost` read, changed and wrote the chat index with no lock, so parallel agents lost updates.
+   One writer now: a lock per chat. An agent's usage is logged with the chat id and its agent id.
+3. **Storage.** One record per chat, `chat/{id}/agents`, by the call that started each agent: label, brief, status,
+   times, steps, report. Turn readers glob `[0-9]*`, so they never see it, and deleting the chat removes it. A
+   chat's load and poll return it as `agents`; an entry left by a regenerated reply matches no step and shows nowhere.
 
 ## The wire
 
@@ -131,8 +136,8 @@ Old clients and the mobile app keep working: they see the `Agent` call as an ord
 
 - Launch: the usual `{type: "step", id, tool_name: "Agent", step: "<label>", ok: true}`.
 - Progress, merged into that step by id (the web and mobile clients already `Object.assign` steps by id):
-  `{type: "step", id, agent: {status, now, steps, started, ended?, report?}}` where `status` is
-  `working | done | failed | stopped` and `now` is the child's latest step line.
+  `{type: "step", id, agent: {label, brief, status, started, ended?, steps, report?}}` where `status` is
+  `working | done | failed | stopped`; a row's line is its last step.
 - Reload: `to_ui_messages` fills `agent` on the step from the record, so a reloaded chat looks like the live one.
 
 ## The UI (option B)

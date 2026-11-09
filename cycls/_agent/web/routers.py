@@ -305,7 +305,8 @@ def chats_router(ws_dep):
             turns = await state.load_messages(ws, chat_id)
             end = end if end is not None else await state.turn_end(ws, chat_id)
         ui = to_ui_messages(turns)
-        return {**meta, "messages": ui, "run": run, "next": end,
+        agents = await state.get_agents(ws, chat_id)
+        return {**meta, "messages": ui, "run": run, "next": end, **({"agents": agents} if agents else {}),
                 **({"run_started": row.get("started")} if run == "running" and row else {}),
                 # Why a run didn't finish: its reason, or "lost" when its heartbeat stopped (the container died).
                 **({"run_reason": row.get("reason") or ("lost" if row.get("status") == "running" else None),

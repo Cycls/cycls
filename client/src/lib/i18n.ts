@@ -40,6 +40,10 @@ const translations = {
     noShares: "No shared links yet",
     noSharesSub: "Share a conversation to see it here",
     apps: "Apps",
+    agentAsked: "Asked to",
+    agentReport: "Report",
+    agentFailed: "Couldn't finish",
+    agentStopped: "Stopped",
     search: "Search",
     searchAll: "Search chats, files and apps…",
     all: "All",
@@ -752,6 +756,10 @@ const translations = {
     noShares: "لا توجد روابط مشاركة",
     noSharesSub: "شارك محادثة لرؤيتها هنا",
     apps: "التطبيقات",
+    agentAsked: "المطلوب",
+    agentReport: "التقرير",
+    agentFailed: "لم يكتمل",
+    agentStopped: "أُوقف",
     search: "بحث",
     searchAll: "ابحث في المحادثات والملفات والتطبيقات…",
     all: "الكل",
@@ -1463,6 +1471,7 @@ const COUNTED = {
     replies: { one: "1 reply", other: "{n} replies" },
     exported: { one: "Exported 1 file to {dir}", other: "Exported {n} files to {dir}" },
     trialDays: { other: "{n}-day free trial" },
+    agents: { one: "1 agent", other: "{n} agents" },
   },
   ar: {
     steps: { one: "خطوة واحدة", two: "خطوتان", few: "{n} خطوات", other: "{n} خطوة" },
@@ -1474,6 +1483,7 @@ const COUNTED = {
                 many: "صُدّر {n} ملفًا إلى {dir}", other: "صُدّر {n} ملف إلى {dir}" },
     trialDays: { one: "تجربة مجانية ليوم واحد", two: "تجربة مجانية ليومين", few: "تجربة مجانية لـ{n} أيام",
                  many: "تجربة مجانية لـ{n} يومًا", other: "تجربة مجانية لـ{n} يوم" },
+    agents: { one: "وكيل واحد", two: "وكيلان", few: "{n} وكلاء", many: "{n} وكيلًا", other: "{n} وكيل" },
   },
 };
 

@@ -3,11 +3,12 @@ API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
 import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
+from .agent import TOOL as _AGENT_TOOL
 from ..connectors import approval_key
 from ..logs import log
 from ..state import _exec_database, app_shelf, apps_db
@@ -387,6 +388,7 @@ _BUILTINS = {
     "Apps":     [_BUILD_APP_TOOL],
     "Suggest":  [_SUGGEST_TOOL],
     "Ask":      [_ASK_TOOL],
+    "Agent":    [_AGENT_TOOL],
 }
 
 
@@ -1146,7 +1148,7 @@ def _browser_step(inp):
 
 
 _TOOLS = {
-    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "chat_id", None)), _browser_step,
+    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "me", None) or getattr(ctx, "chat_id", None)), _browser_step,
                        interrupted="The page is still open but may have moved; re-read it "
                                    "before acting on any element ref."),
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
@@ -1186,6 +1188,9 @@ _TOOLS = {
                        lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
     "web_fetch":  Tool(lambda inp, ws, **_: _exec_web_fetch(inp),
                        lambda inp: {"tool_name": "Fetching", "step": inp.get("url", "")}),
+    "agent":      Tool(lambda inp, ws, ctx=None, **_: ctx.team.start(inp, ctx) if getattr(ctx, "team", None)
+                       else asyncio.sleep(0, result="Error: agents aren't available here."),
+                       lambda inp: {"tool_name": "Agent", "step": inp.get("description", "")}),
 }
 
 
@@ -1380,6 +1385,9 @@ class ToolContext:
     skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
     office: frozenset = frozenset()      # "docs" / "sheets" when on this turn: bash keeps off their files (office/guard.py)
     built: set = field(default_factory=set)   # Word / Excel files a bash command made this turn (they may be opened)
+    team: object = None                  # the run's agents (tools/agent.py)
+    me: str | None = None                # the agent this run is, by the call that started it; None for the parent
+    call: str | None = None              # the tool_use id being run
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)
@@ -1400,6 +1408,8 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
     to handlers that take one."""
     bid, name, inp = block["id"], block["name"], block.get("input") or {}
     entry = _TOOLS.get(name)
+    if ctx is not None and ctx.team and (refused := ctx.team.refuse(name, inp, ctx.me)):
+        return {"type": "step", "id": bid, **tool_step(name, inp), "ok": False}, asyncio.sleep(0, result=refused)
     if entry and entry.once and seen is not None:
         if name in seen:
             # Refused, but still a step and a tool_result — every tool_use keeps its pair.
@@ -1418,7 +1428,7 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
                 return {**step, "ok": False}, asyncio.sleep(0, result=refused)
         if card := _gate(name, inp, ctx, step):
             return step, asyncio.sleep(0, result=card)
-        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
+        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx and replace(ctx, call=bid))
     if handlers and name in handlers:
         fn = handlers[name]
         return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)
