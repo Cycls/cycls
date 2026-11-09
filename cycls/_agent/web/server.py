@@ -389,6 +389,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
         folder: str = ""           # the folder open in Files: where a design named without one is saved
         replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
+        agent_name: str = ""       # the agent's name as the chat shows it: what it signs a Word comment with
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -401,6 +402,12 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         @property
         def workspace(self) -> Workspace:
             return workspace(self.user, volume, base=config.storage, ws=self.workspace_id)
+
+    def _agent_name():
+        """The agent's name as the chat shows it (the brand's English name, else the agent's own), read at each turn
+        since the CMS can rename it — the one the comments panel shows beside the agent's badge."""
+        brand = (config.pass_metadata or {}).get("en")
+        return " ".join(str(getattr(brand, "name", "") or config.name or "").split())[:60]
 
     @asynccontextmanager
     async def _lifespan(app):
@@ -450,7 +457,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           approvals=[t for t in (data.get("approvals") or []) if isinstance(t, str)][:20],
                           declined=[t for t in (data.get("declined") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
-                          selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")))
+                          selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")),
+                          agent_name=_agent_name())
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
         # counts it, and shutdown drains it. A fresh id simply never collides.

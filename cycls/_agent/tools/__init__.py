@@ -1388,6 +1388,7 @@ class ToolContext:
     team: object = None                  # the run's agents (tools/agent.py)
     me: str | None = None                # the agent this run is, by the call that started it; None for the parent
     call: str | None = None              # the tool_use id being run
+    agent: str = ""                      # the agent's name as people see it (its brand): what it signs comments with
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)

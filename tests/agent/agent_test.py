@@ -2286,6 +2286,25 @@ def test_a_custom_tool_can_carry_an_icon_and_its_own_request_and_response(agent_
     assert "RAW ROWS" in results                                                     # and whole, for the model
 
 
+def test_tools_are_told_the_agent_s_name_as_the_chat_shows_it(agent_env):
+    """What the docs tool signs a Word comment with (Haseef, not Super): the turn's name, handed to every tool."""
+    ws, ctx = agent_env
+    ctx.agent_name = "Haseef"
+    seen = []
+
+    async def who(inp, tool_ctx):
+        seen.append(tool_ctx.agent)
+        return "ok"
+
+    round1 = _make_response([_tool_use_block("t1", name="who", inp={"q": 1})], stop_reason="tool_use")
+    responses = iter([round1, _make_response([_text_block("done")])])
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(next(responses))
+    with _mock_anthropic(mock_client):
+        asyncio.run(_drain(_run(context=ctx, handlers={"who": who})))
+    assert seen == ["Haseef"]
+
+
 def test_a_confirm_card_ends_the_turn_instead_of_inviting_a_retry(agent_env):
     """The ack asked the model to stop and Kimi K3 called straight through it, card after card. The card
     is a question put to the person, so the loop ends the turn the way `ask` does."""
