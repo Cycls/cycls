@@ -887,3 +887,17 @@ read as hairlines on a phone, a dark clip murky under luxe, and 9.5 minutes for 
 - **A render asked again after a service deploy** is drawn again: the door's idempotency keys carry its build.
 - **Brand looks** (SDK): the kit goes over a look by itself, and the brand keeps one look (The brand kit, above).
 - The built-in contract v5 re-signed with all of it (cycls-video `bb498a9`).
+
+### Grades in the browser, checks on proxies, 30 fps by default (2026-11-09, evening)
+
+- **Browser previews never draw a grade.** HyperFrames' grading shader never finishes compiling on Windows (ANGLE's
+  Direct3D, Chrome's default there): the canvas preview stuck at 0:00 and the editor froze on any graded clip or
+  photo. The service switches grades off in the canvas player's copy and draws a CSS stand-in (exposure, contrast,
+  saturation, warmth), and in the editor's page; the editor has no Grade or Effects section. Renders grade as before.
+  The player route keeps a page only under the service's bundle (`video_routes`, b1cfaeb1), so a fix reaches pages
+  made before it.
+- **Checks read proxies:** a check's frames and browser check use each clip's 640 px proxy (28 s → 19 s on a 15 s
+  reel of four clips).
+- **30 fps by default:** a final at 30 fps of up to 30 s carries motion blur (3 samples a frame), so the tool text,
+  the skills and the contract now say 30 for promos, motion graphics and footage; 60 only when the person asks, or for
+  a screen recording or UI demo.
