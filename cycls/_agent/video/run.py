@@ -1208,13 +1208,17 @@ async def _footage_many(workspace, root, chat, inp, queries):
     parts, blocks = [], []
     parts.append((f"{len(ready)} of {len(queries)} stock clips ready" if len(ready) < len(queries)
                   else f"{len(queries)} stock clips ready, fetched together")
-                 + ". Each is below with its sheet: pick the stretches you need from each.")
+                 + ". Each is below with its sheet: pick the stretches you need from each, and write with "
+                   "these — a clip near enough is trimmed, pushed or cropped into place, and the look grades them to "
+                   "match. Fetch again only for a shot that is plainly wrong (another subject, a watermark, words "
+                   "burnt in).")
     for d in ready:
         info = d["r"]["info"]
         text = f"For {d['query']!r}:\n" + report.footage_text(d["rel"], info, words_rel=d["r"]["words_rel"],
                                                               reused=d["r"]["reused"], credit=d["credit"])
         if d["others"]:
-            text += ("\nOther clips for these words (footage {\"stock\": \"" + d["query"] + "\", \"pick\": n} fetches one): "
+            text += ("\nIf this one is plainly wrong, other clips for these words (footage {\"stock\": \"" + d["query"]
+                     + "\", \"pick\": n} fetches one): "
                      + "; ".join(d["others"]) + ".")
         parts.append(text)
         blocks += report.sheet_blocks(d["r"].get("sheet"), info.get("sheet_times"), d["rel"])
@@ -1225,7 +1229,26 @@ async def _footage_many(workspace, root, chat, inp, queries):
     failed = [d for d in done if "error" in d]
     if failed:
         parts.append("Not found: " + "; ".join(f"{d['query']!r}: {d['error']}" for d in failed) + ".")
+    many = _fetched(chat, [d["rel"] for d in ready if not d["r"].get("reused")])
+    if many >= PLENTY:
+        parts.append(f"This chat has fetched {many} stock clips: a 15–30 s video uses three to six. Write the video "
+                     "with the ones you have before fetching more.")
     return _result("\n\n".join(parts), blocks)
+
+
+PLENTY = 8         # stock clips one chat has fetched before a reply says to write with them (a 15 s reel
+_FETCHED = {}      # on production, 2026-11-09: 11 fetched in four calls for 4 shots, ~2 minutes of the turn)
+
+
+def _fetched(chat, rels):
+    """How many stock clips this chat has fetched (in this process: a nudge, not a limit)."""
+    if not chat:
+        return 0
+    seen = _FETCHED.setdefault(chat, set())
+    seen.update(rels)
+    if len(_FETCHED) > 2000:
+        _FETCHED.pop(next(iter(_FETCHED)))
+    return len(seen)
 
 
 # Words a person or a model uses for a mood, as the library tags it (a word that is a tag counts as itself).
@@ -1567,7 +1590,7 @@ async def _exec_video(inp, workspace, ctx=None):
             if times:
                 text, blocks, clean = await _checks(workspace, root, rel, new, kind="look", budget=BUDGET["look"],
                                                     params={"at": times, "zoom": ""})
-                text = (f"A small change (words and inline styles only): lint, and a frame of what it touched at "
+                text = (f"A small change (no element added or removed; up to three scenes touched): lint, and a frame of what it touched at "
                         f"{', '.join(f'{t:g} s' for t in times)}. The browser check runs beside the render.\n{text}")
             else:
                 text, blocks, clean = await _checks(workspace, root, rel, new)

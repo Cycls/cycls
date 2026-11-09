@@ -44,7 +44,11 @@ a hand — with type cut over them, not type on a flat ground. In this order:
 2. stock footage of the subject, two to four clips in ONE call: `footage {stock: ["barista pouring latte art
    close up", "coffee beans roasting in drum", "cafe window morning light"], orientation: "portrait"}`, each
    search words that describe a SHOT (subject, action, closeness, light), not a topic; read each sheet and keep
-   the shots that match one light (another clip for a search is `{stock: "…", pick: 1}`);
+   the shots that match one light (another clip for a search is `{stock: "…", pick: 1}`). One search per
+   shot the reel needs (a 15 s reel has three to five shots, the end card on a card), then `write` with what
+   came back: a clip near enough is trimmed to its best stretch, pushed or cropped into place, never replaced
+   for a better one. Fetch again only for a shot that is plainly wrong (another subject, a watermark, words
+   burnt in), and then one `pick` for that search, not a new list;
 3. only when neither fits (a sale with no product, an abstract service): a card-led look (bold, pop, tech) with
    a motif from `video-direction`.
 

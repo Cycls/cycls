@@ -1,5 +1,5 @@
-"""A small edit (quick.py): words and inline styles only get lint and a frame of each scene they touched
-instead of the full check, and the render runs the browser check they left for it, beside the render.
+"""A small edit (quick.py): words, inline styles, a clip swapped, a class, a scene moved, an at() and a plain
+<style> rule get lint and a frame of each scene they touched instead of the full check, and the render runs the browser check they left for it, beside the render.
 Also: a motion piece that took the video's own colours says so."""
 from cycls._agent import video
 from cycls._agent.video import files, quick
@@ -29,20 +29,51 @@ def test_words_and_inline_styles_are_a_small_edit_looked_at_where_they_are():
     assert quick.moments(PROMO, PROMO.replace(">end<", ">fin<")) == [9.8], "kept inside the video"
 
 
+def test_a_clip_swap_a_class_a_scene_moved_a_push_and_a_rule_are_small_too():
+    # a <style> rule by tag: every element it names, in their scenes (s1 and s2)
+    assert quick.moments(PROMO, PROMO.replace("h1 { color: #e8a33d; }", "h1 { color: #fff; }")) == [2.4, 6.4]
+    # the numbers of an at() on an element by its #id: that element's scene
+    assert quick.moments(PROMO, PROMO.replace("0, 300", "0, 500")) == [2.4]
+    # a class on a scene
+    assert quick.moments(PROMO, PROMO.replace('class="clip" data-start="9.5"', 'class="clip hot" data-start="9.5"')) == [9.8]
+    # a scene trimmed: it, and every scene that starts from it, where they are now
+    assert quick.moments(PROMO, PROMO.replace('data-duration="1.5"', 'data-duration="1"')) == [9.1]   # 8.5 + 0.6
+    assert quick.moments(PROMO, PROMO.replace('id="s1" class="clip" data-start="0" data-duration="4"',
+                                              'id="s1" class="clip" data-start="0" data-duration="3.5"')) == [2.1, 5.9, 8.9]
+    # a clip swapped, with its push changed (a real edit on production, 2026-11-09)
+    film = PROMO.replace('<div id="glow" style="opacity:0.2"></div>',
+                         '<video id="v3" src="videos/footage/a.mp4" muted data-start="6" data-media-start="4.5" '
+                         'data-duration="3" data-track-index="0"></video>').replace(
+        '</script>', 'at("#v3", [{ transform: "scale(1.26)" }, { transform: "scale(1.34)" }], 0, 3000, "linear");\n</script>')
+    swapped = film.replace("footage/a.mp4", "footage/b.mp4").replace('data-media-start="4.5"', 'data-media-start="0.5"') \
+        .replace("scale(1.26)", "scale(1.02)").replace("scale(1.34)", "scale(1.1)")
+    assert quick.moments(film, swapped) == [7.8]
+    # rules by class, two of them, in one scene
+    card = PROMO.replace("h1 { color: #e8a33d; }", "h1 { color: #e8a33d; }\n.end-cta, .end-meta { font-size: 56px; }") \
+        .replace("<p>end</p>", '<p class="end-cta">end</p>')
+    assert quick.moments(card, card.replace("font-size: 56px", "font-size: 62px")) == [9.8]
+
+
 def test_anything_more_is_the_full_check():
     big = [
         PROMO.replace("<p>end</p>", "<p>end</p><p>new</p>"),                             # an element added
-        PROMO.replace('data-duration="1.5"', 'data-duration="2"'),                        # timing
-        PROMO.replace('class="clip" data-start="9.5"', 'class="clip hot" data-start="9.5"'),  # a class
-        PROMO.replace("h1 { color: #e8a33d; }", "h1 { color: #fff; }"),                   # a <style> rule
-        PROMO.replace("0, 300", "0, 500"),                                                 # the script
         PROMO.replace('data-height="1920">', 'data-height="1920" style="background:#000">'),  # the root
+        PROMO.replace('data-duration="10"', 'data-duration="12"'),                         # the root's length
         PROMO.replace('opacity:0.2', 'opacity:0.4'),                                       # untimed, on all along
         PROMO.replace("SLOW", "S").replace("A WHILE", "B").replace("Dune", "D").replace(">end<", ">E<"),  # 4 scenes
         PROMO,                                                                             # nothing seen changed
+        PROMO.replace('id="t1"', 'id="t2"'),                                               # an id: what names it
+        PROMO.replace('id="s4" class="clip"', 'id="s4" data-transition="whip-pan" class="clip"'),  # a transition
+        PROMO.replace("h1 { color: #e8a33d; }", "h1 { color: #e8a33d; } [data-x] { color: red; }"),  # by attribute
+        PROMO.replace("h1 { color: #e8a33d; }", "h1 { color: #e8a33d; } * { margin: 0; }"),         # everything
+        PROMO.replace("h1 { color: #e8a33d; }", "h1 { color: #e8a33d; } :root { --a: 1; }"),        # the root
+        PROMO.replace("h1 { color: #e8a33d; }", "@media (max-width: 9px) { h1 { color: red; } }"),  # an at-rule
+        PROMO.replace("h1 { color: #e8a33d; }", "#root h1, body { color: #e8a33d; }"),              # body
+        PROMO.replace("</script>", "\nconst k = 2;</script>"),                             # the script, not an at()
+        PROMO.replace('at("#t1"', 'at(".t1"'),                                             # an at() by class
     ]
-    for after in big:
-        assert quick.moments(PROMO, after) is None, after[:0]
+    for n, after in enumerate(big):
+        assert quick.moments(PROMO, after) is None, n
     assert quick.moments("<div", "<div>x") is None
 
 
@@ -62,7 +93,7 @@ def test_a_small_edit_is_looked_at_and_the_render_runs_the_check_it_left(monkeyp
     last = svc.submitted[-1]
     assert last["kind"] == "look" and last["params"]["at"] == [2.4]
     text = out["_model"][-1]["text"]
-    assert "A small change (words and inline styles only)" in text and "at 2.4 s" in text
+    assert "A small change (no element added or removed" in text and "at 2.4 s" in text
     assert "beside the render" in text
 
     out = _run({"action": "render", "name": "promo"}, ws)
@@ -150,3 +181,13 @@ def test_a_piece_in_the_videos_own_colours_says_so(monkeypatch, tmp_path):
     _run({"action": "write", "name": "promo", "html": PROMO}, ws)
     out = _run({"action": "motion", "name": "promo", "piece": "lower-third", "vars": {"name": "Omar"}}, ws)
     assert "takes the video's own colours (accent #e8a33d and dark ground #1a120c)" in out["_model"][-1]["text"]
+
+
+def test_a_chat_with_plenty_of_stock_clips_is_told_to_write_with_them():
+    from cycls._agent.video import run
+    run._FETCHED.clear()
+    assert run._fetched("c1", [f"videos/footage/{i}.mp4" for i in range(7)]) == 7
+    assert run._fetched("c1", ["videos/footage/0.mp4"]) == 7, "the same clip again counts once"
+    assert run._fetched("c1", ["videos/footage/7.mp4"]) == run.PLENTY
+    assert run._fetched("c2", ["videos/footage/0.mp4"]) == 1, "each chat its own"
+    assert run._fetched(None, ["x"]) == 0
