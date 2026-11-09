@@ -34,7 +34,7 @@ needs, in what order, and how fast.
 **The look.** A sale, a drop, sport, an event: `bold` (hard cuts, built for the beat). A café, a restaurant, an
 opening: `warm`. An app, AI or fintech launch: `tech`. Real estate, perfume, a gala, Ramadan, Eid: `luxe`. Deals,
 giveaways, a creator's tip: `pop`. Fashion, a brand story: `editorial`. A teaser, a destination: `cinematic`.
-Render a promo at 30 (the default): its final carries motion blur, so moving type and footage both read as filmed.
+Render a promo at 30 (the default): where type or graphics move fast, the final carries motion blur, so they read as filmed.
 
 ## Real pictures first
 
@@ -304,5 +304,5 @@ order. Check each size with `look {name, at, size: "square"}` before `render`; o
 
 Frame 0 shows the hook and the subject · every word in the safe band · one change every 1.5–3 s · the facts are
 the person's · cuts on the grid · at most two GPU transitions · no role also moved by at() · the end card's call
-to action held ≥ 1.5 s · `look` at the hook, the reveal, the offer and the last second · 30 fps (motion blur) for moving
+to action held ≥ 1.5 s · `look` at the hook, the reveal, the offer and the last second · 30 fps (motion blur on fast moves) for moving
 type.

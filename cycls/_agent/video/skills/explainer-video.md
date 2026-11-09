@@ -13,7 +13,7 @@ at the start of a scene, then frozen) and the narrator reading the text that is 
 **The look.** `minimal` for numbers, reports, processes and anything that must be clear first; `tech` for a
 product, an app, AI or fintech; `editorial` for culture, history and case studies; `warm` for food, recipes and
 how-tos at home. The look sets the text and moves it; you build the picture (diagrams, charts, photos) and time
-both to the voice. Diagrams, charts and lines are drawn: render at 30, which carries motion blur.
+both to the voice. Diagrams, charts and lines are drawn: render at 30 (fast moves get motion blur by themselves).
 
 ## 1. Before a word is written
 

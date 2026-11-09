@@ -139,7 +139,7 @@ const BOUNCE = "linear(0, 0.061 9%, 0.245 18%, 0.551 27%, 1 36.4%, 0.819 45%, 0.
 - **Stillness before the payoff**: 0.3–0.75 s of nothing new just before the big number or the reveal.
 - **Nothing on screen still for more than ~0.6 s**: once the words are landed, the camera, the ground or the next
   reveal moves. A 30 s video is about 12–15 compositions with beats of 1.4–3.5 s.
-- Render at 30 (the default): a final of 30 s or less is drawn with motion blur by itself, as a camera sees fast
+- Render at 30 (the default): a final of 30 s or less whose moves are fast is drawn with motion blur by itself, as a camera sees fast
   moves; never fake it with a blur on a fast move. `fps: 60` only when the person asks for it, or for a screen
   recording or UI demo (smoother, no blur, twice the render time).
 
@@ -285,7 +285,7 @@ get none.
 5. 11.4–14.5 s: `data-transition="whip-pan"` into the end card (the look then adds no other seam: the rest cut,
    as bold does); rings drift at three depths, the logo stamps, brand, cta and meta from the look, 1.5 s of hold.
 
-One accent, one spring, every beat with something moving, every title landed and still. Render at 30: the motion blur comes with it.
+One accent, one spring, every beat with something moving, every title landed and still. Render at 30: fast moves get their motion blur with it.
 
 ## 12. Never
 
