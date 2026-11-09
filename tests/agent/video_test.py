@@ -549,6 +549,39 @@ def test_a_composition_is_its_own_kind():
     assert _kind("videos/reel.mp4") == "video"
 
 
+def _bundle(monkeypatch, bundle):
+    """The contract as the service serves it, with its prepare bundle."""
+    async def get(wait):
+        return {"bundle": bundle} if bundle else dict(FALLBACK)
+    monkeypatch.setattr(contract, "get", get)
+
+
+def test_a_player_page_is_kept_only_under_the_services_bundle(monkeypatch, tmp_path):
+    from cycls._agent.web.video_routes import _video_response
+    _on(monkeypatch)
+    (tmp_path / "videos").mkdir()
+    f = tmp_path / "videos" / "r.video.html"
+    f.write_text(COMP, encoding="utf-8")
+    built = []
+
+    async def compile_(ws, html, images=None, files=None, *, preview=False, audio=None, words=None, footage=None):
+        built.append(1)
+        return {"preview": f"<!doctype html><html><body>PLAYER {len(built)}</body></html>", "findings": []}
+    monkeypatch.setattr(video, "compile", compile_)
+    _bundle(monkeypatch, "")                          # the service's bundle unknown: built each time, nothing kept
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert len(built) == 2 and not list((tmp_path / ".cache" / "video").glob("*.json"))
+    _bundle(monkeypatch, "old")
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    asyncio.run(_video_response(tmp_path, f, "org1:u"))
+    assert len(built) == 3                            # kept under its bundle
+    _bundle(monkeypatch, "new")                       # a deploy that changed the service's prepare: a fresh page
+    assert "PLAYER 4" in asyncio.run(_video_response(tmp_path, f, "org1:u"))["html"]
+    _bundle(monkeypatch, "")                          # and the old one is never served without a bundle
+    assert "PLAYER 5" in asyncio.run(_video_response(tmp_path, f, "org1:u"))["html"]
+
+
 def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, tmp_path):
     from cycls._agent.web.video_routes import _video_response
     (tmp_path / "videos").mkdir()
@@ -565,6 +598,7 @@ def test_the_player_route_builds_once_and_says_why_when_it_cannot(monkeypatch, t
         return {"preview": "<!doctype html><html><head></head><body>PLAYER</body></html>", "findings": []}
 
     monkeypatch.setattr(video, "compile", compile_)
+    _bundle(monkeypatch, "b1")
     out = asyncio.run(_video_response(tmp_path, f, "org1:u"))
     assert "PLAYER" in out["html"] and out["reason"] is None and built == [True]
     (tmp_path / "videos" / "r.mp4").write_bytes(b"mp4")
@@ -1075,6 +1109,7 @@ def test_the_player_route_sends_the_clips_and_keeps_only_pages_in_bounds(monkeyp
         built.append(footage)
         return {"preview": "<!doctype html><html><body>PLAYER</body></html>", "findings": []}
     monkeypatch.setattr(video, "compile", compile_)
+    _bundle(monkeypatch, "b1")
     asyncio.run(_video_response(tmp_path, f, "org1:u"))
     asyncio.run(_video_response(tmp_path, f, "org1:u"))
     assert built == [{"uploads/interview.mp4": {"sha": sha}}]                         # built once

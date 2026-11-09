@@ -101,11 +101,17 @@ async def _video_response(root, file_path, subject, ws_id=None):
     for hashed in fonts:      # a brand font's file named by its bytes: a new file is a fresh page
         stat[f"font:{hashed}"] = hashed
     from cycls._agent.video import contract
-    bundle = (contract.cached() or {}).get("bundle") or ""
+    # The service's bundle names the page: a deploy that changed how a page is prepared is a fresh page. Asked for (a
+    # few seconds at most, once in ten minutes), never left out: a page kept under no bundle outlived the service
+    # that made it (2026-11-09, a fixed preview still served the frozen one). Unknown, nothing is kept or served.
+    try:
+        bundle = (await contract.get(5) or {}).get("bundle") or ""
+    except Exception:  # noqa: BLE001 - the page is built without the cache
+        bundle = ""
     cache = root / _VIDEO_CACHE
     key = _key(html, images, stat, bundle)
     hit = cache / f"{key}.json"
-    if hit.is_file():
+    if bundle and hit.is_file():
         try:
             return {**json.loads(hit.read_text(encoding="utf-8")), "version": out["version"], "render": out["render"],
                     "editor": True}
@@ -127,7 +133,7 @@ async def _video_response(root, file_path, subject, ws_id=None):
         errors = [f for f in r.get("findings") or [] if f.get("severity") == "error"]
         out["reason"] = (f"The composition has {len(errors)} error{'s' if len(errors) != 1 else ''} to fix first."
                          if errors else (r.get("preview_error") or "No preview was built."))
-    if out["html"]:
+    if out["html"] and bundle:
         await asyncio.to_thread(_store, cache, key, {"html": out["html"], "reason": None})
     return out
 
