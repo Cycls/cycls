@@ -901,3 +901,16 @@ read as hairlines on a phone, a dark clip murky under luxe, and 9.5 minutes for 
 - **30 fps by default:** a final at 30 fps of up to 30 s carries motion blur (3 samples a frame), so the tool text,
   the skills and the contract now say 30 for promos, motion graphics and footage; 60 only when the person asks, or for
   a screen recording or UI demo.
+
+### Turn time, round 2 (2026-11-09, evening)
+
+The real perfume turn on production (10.1 min) spent its time on four footage calls (13 clips for 4 shots),
+two edits that each paid the full check (23-25 s), and an 80 s render with motion blur no one could see.
+- **Small edits** (`quick.py`): a clip swapped (src, data-media-start), a class, a scene moved or trimmed,
+  the numbers of an at() on an `#id`, and a `<style>` rule by tag/.class/#id now get lint and a frame of each
+  scene they touch (up to three); the browser check runs beside the render. Both edits of that turn qualify.
+- **Fewer clips**: one stock search per shot, write with what came back (tool text, promo-reel,
+  footage-video, the footage reply), and a nudge once a chat has fetched eight (`run._fetched`).
+- **Service** (cycls-video 97f5f28, 23309b5): blur only when something moves fast (node/speed.mjs); a reel's
+  check flags text in the bottom quarter (the apps' caption and buttons); a GPU container reads two stock
+  clips at once and takes a clip's pieces beside other work.
