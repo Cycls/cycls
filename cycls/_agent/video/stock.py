@@ -93,8 +93,33 @@ def _line(n, video):
     return f"{n}: {_title(video)} ({video.get('duration') or '?'} s, {video.get('width')}x{video.get('height')})"
 
 
-async def find(root, query, *, orientation=None, pick=0):
-    """→ (workspace path of the clip, credit, the other results as lines). ValueError says what to do."""
+SEARCH_KEPT_S = 24 * 3600   # a search's results are reused this long: another pick from them costs no search
+
+
+def _read_index(index_path):
+    try:
+        index = json.loads(index_path.read_text("utf-8"))
+        return index if isinstance(index, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _keep(index_path, entries):
+    """Entries put into the index as it is now: read again just before the write (with no await between), so
+    clips fetched side by side, each writing when its own download ends, never drop each other's."""
+    index = _read_index(index_path)
+    index.update(entries)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = index_path.with_name(f".{index_path.name}.{os.getpid()}.part")
+    tmp.write_text(json.dumps(index, indent=1), "utf-8")
+    tmp.replace(index_path)
+
+
+async def find(root, query, *, orientation=None, pick=0, timing=None):
+    """→ (workspace path of the clip, credit, the other results as lines). ValueError says what to do.
+    `timing` (a dict), when given, gets search_ms and download_ms."""
+    import time
+
     query = " ".join(str(query or "").split())[:80]
     if not query:
         raise ValueError("stock needs a few words to search for, e.g. \"waves at sunset\"")
@@ -104,26 +129,41 @@ async def find(root, query, *, orientation=None, pick=0):
         orientation = None
     folder = Path(root) / DIR
     index_path = folder / ".index.json"
-    try:
-        index = json.loads(index_path.read_text("utf-8"))
-    except (OSError, ValueError):
-        index = {}
+    index = _read_index(index_path)
     key = f"{query.lower()}|{orientation or ''}|{pick}"
     hit = index.get(key)
     if hit and (Path(root) / hit["path"]).is_file():
         return hit["path"], hit["credit"], hit.get("others") or []
-    data = await _search(query, orientation, RESULTS)
-    videos = [v for v in data.get("videos") or [] if _file(v) and (v.get("duration") or 0) <= MAX_SECONDS]
+    skey = f"search:{query.lower()}|{orientation or ''}"
+    kept = index.get(skey)
+    t0 = time.monotonic()
+    if isinstance(kept, dict) and time.time() - kept.get("at", 0) < SEARCH_KEPT_S and kept.get("videos"):
+        videos = kept["videos"]
+    else:
+        data = await _search(query, orientation, RESULTS)
+        videos = [_slim(v) for v in data.get("videos") or [] if _file(v) and (v.get("duration") or 0) <= MAX_SECONDS]
+    if timing is not None:
+        timing["search_ms"] = round((time.monotonic() - t0) * 1000)
     if not videos:
         raise ValueError(f"no stock clip found for {query!r} — try a simpler query (two or three words)")
     pick = min(max(int(pick), 0), len(videos) - 1)
     v = videos[pick]
     rel = f"{DIR}/{_slug(query)}-{v.get('id')}.mp4"
+    t1 = time.monotonic()
     await _download(_file(v)["link"], Path(root) / rel)
+    if timing is not None:
+        timing["download_ms"] = round((time.monotonic() - t1) * 1000)
     by = " ".join(str((v.get("user") or {}).get("name") or "unknown").split())
     credit = f"Video by {by} on Pexels ({v.get('url') or 'pexels.com'})."
     others = [_line(i, x) for i, x in enumerate(videos) if i != pick]
-    index[key] = {"path": rel, "credit": credit, "others": others}
-    folder.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(json.dumps(index, indent=1), "utf-8")
+    _keep(index_path, {key: {"path": rel, "credit": credit, "others": others},
+                       skey: {"at": time.time(), "videos": videos}})
     return rel, credit, others
+
+
+def _slim(video):
+    """What a result needs to be picked later: its page, size, length, filmmaker and the MP4 to fetch."""
+    f = _file(video)
+    return {"id": video.get("id"), "url": video.get("url"), "duration": video.get("duration"), "width": video.get("width"),
+            "height": video.get("height"), "user": {"name": (video.get("user") or {}).get("name")},
+            "video_files": [{k: f.get(k) for k in ("file_type", "width", "height", "link")}]}

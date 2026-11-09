@@ -13,7 +13,9 @@ render it started for each, so a render cut off by Stop, a dropped connection or
 instance is collected by the next `render` instead of being paid for twice.
 """
 import json
+import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -64,12 +66,21 @@ def load(root, chat_id):
         return {}
 
 
-def save(root, chat_id, data):
-    path = _sidecar_path(root, chat_id)
+def _write_json(path, data):
+    """`data` written to `path` whole: through a temp file of this writer's own, so two writers at once (clips
+    made ready side by side, in threads) never move each other's half-written file into place."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".part")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    tmp.replace(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def save(root, chat_id, data):
+    _write_json(_sidecar_path(root, chat_id), data)
 
 
 def mine(root, chat_id, name):
@@ -173,10 +184,7 @@ def mark_checked(root, rel, digest):
     if not isinstance(data, dict):
         data = {}
     data[rel] = digest
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".part")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    tmp.replace(path)
+    _write_json(path, data)
 
 
 def voice_started(root, chat_id, name, token, key):
@@ -197,30 +205,40 @@ def voice_done(root, chat_id, name):
 
 # Footage: a clip is named to the service by the sha256 of its bytes. Hashing a few hundred
 # megabytes on every check would be seconds each time, so a clip's hash is remembered by its
-# path, size and time (.cache/video/clips.json), and read again only when one of those changed.
+# path, size and time (.cache/video/clips.json), and read again only when one of those changed. Several
+# clips are hashed at once (footage with a list of stock clips), each in a thread: the index is read and
+# written under one lock, the hashing outside it.
+_CLIPS_LOCK = threading.Lock()
+
+
+def _read_clips(index_path):
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        return index if isinstance(index, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def clip_sha(root, rel, full=None):
     import hashlib
 
     full = Path(full) if full is not None else Path(root) / rel
     st = full.stat()
     index_path = Path(root) / SIDECAR / "clips.json"
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        index = {}
-    hit = index.get(rel)
+    with _CLIPS_LOCK:
+        hit = _read_clips(index_path).get(rel)
     if isinstance(hit, dict) and hit.get("size") == st.st_size and hit.get("mtime") == st.st_mtime_ns and hit.get("sha"):
         return hit["sha"]
     h = hashlib.sha256()
     with open(full, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
-    index[rel] = {"size": st.st_size, "mtime": st.st_mtime_ns, "sha": h.hexdigest()}
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = index_path.with_suffix(".part")
-    tmp.write_text(json.dumps(index), encoding="utf-8")
-    tmp.replace(index_path)
-    return index[rel]["sha"]
+    entry = {"size": st.st_size, "mtime": st.st_mtime_ns, "sha": h.hexdigest()}
+    with _CLIPS_LOCK:
+        index = _read_clips(index_path)
+        index[rel] = entry
+        _write_json(index_path, index)
+    return entry["sha"]
 
 
 def footage_started(root, chat_id, sha, token):

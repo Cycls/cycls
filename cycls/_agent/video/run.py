@@ -284,6 +284,32 @@ def _with_brand(root, template, given):
     return {**brand.template_vars(k, takes, fonts, arabic), **given}
 
 
+def _branded(root, html):
+    """The kit over the composition's look, data-look="brand" made the brand's look (brand.apply). → (html, what
+    the reply says, the look to keep as the brand's or None)."""
+    from . import brand
+    from .contract import cached
+    from .fallback import FALLBACK
+
+    looks = ((cached() or {}).get("data") or {}).get("looks") or (FALLBACK.get("data") or {}).get("looks") or []
+    return brand.apply(html, root, _catalogue()[0], looks)
+
+
+async def _keep_brand_look(root, look):
+    """The brand's look kept in brand/brand.yaml (video_look) → what the reply says, or ""."""
+    from . import brand
+
+    text = brand.keep_look(root, look)
+    if not text:
+        return ""
+    try:
+        await write_fig(root, "brand/brand.yaml", text.encode("utf-8"), by="agent", reason="video-brand-look")
+    except Exception:  # noqa: BLE001 - the video is saved; the look is kept next time
+        return ""
+    return (f" Kept {look} as this brand's look (brand/brand.yaml video_look): later videos for it name "
+            'data-look="brand".')
+
+
 def _brand_hint(root, html):
     """A save that leaves the workspace's brand kit out is told so (brand.hint)."""
     from . import brand
@@ -977,21 +1003,26 @@ def _clip_file(root, path):
     return full, rel
 
 
-def _log_footage(chat, fetch_ms, full, r, seconds):
+def _log_footage(chat, fetch_ms, full, r, seconds, timing=None, batch=None):
     """One line a footage call: where its time went (a stock clip's search and download, hashing, sending,
-    reading on the service) — what to make faster comes from these."""
+    reading on the service, and the service's own steps) — what to make faster comes from these. `batch`: how
+    many clips the call fetched side by side."""
     from ..logs import log
     try:
         size = full.stat().st_size
     except OSError:
         size = None
     ms = r.get("ms") or {}
+    timing = timing or {}
+    service = (r.get("info") or {}).get("ms") if isinstance(r.get("info"), dict) else None
     log("video_footage", chat_id=chat, stock=fetch_ms is not None, fetch_ms=fetch_ms, bytes=size,
+        search_ms=timing.get("search_ms"), download_ms=timing.get("download_ms"),
         hash_ms=ms.get("hash"), send_ms=ms.get("send"), read_ms=ms.get("read"), state=r.get("state"),
-        reused=r.get("reused"), total_ms=round(seconds * 1000) + (fetch_ms or 0))
+        reused=r.get("reused"), total_ms=round(seconds * 1000) + (fetch_ms or 0),
+        **({"service_ms": service} if isinstance(service, dict) else {}), **({"batch": batch} if batch else {}))
 
 
-async def _made_ready(workspace, root, chat, full, rel, language, again_with="footage", timed=None):
+async def _made_ready(workspace, root, chat, full, rel, language, again_with="footage", timed=None, batch=None):
     """clip.make_ready within this call's budgets → its result, or what to answer: still sending or
     reading (call again), or why it cannot be. `timed` (a stock fetch's ms, the file): a call that stops
     early is logged too."""
@@ -1006,7 +1037,7 @@ async def _made_ready(workspace, root, chat, full, rel, language, again_with="fo
     except clip.NotReady as e:
         return _err(str(e))
     if timed and r["state"] != "ready":
-        _log_footage(chat, timed[0], timed[1], r, time.monotonic() - t0)
+        _log_footage(chat, timed[0], timed[1], r, time.monotonic() - t0, timed[2] if len(timed) > 2 else None, batch)
     if r["state"] == "sending":
         return (f"Still sending {rel} ({r['sent'] / 1048576:.0f} of {r['size'] / 1048576:.0f} MB so far). Call "
                 f"{again_with} again with the same path: it goes on from there.")
@@ -1090,16 +1121,23 @@ async def _footage(workspace, root, chat, inp):
 
     import time
 
+    wanted = inp.get("stock")
+    if isinstance(wanted, list):
+        wanted = list(dict.fromkeys(" ".join(q.split()) for q in wanted if isinstance(q, str) and q.strip()))
+        if len(wanted) > 1:
+            return await _footage_many(workspace, root, chat, inp, wanted[:STOCK_AT_ONCE])
+        wanted = wanted[0] if wanted else None
     credit, others = None, []
     path = inp.get("path")
-    fetch_ms = None
-    if inp.get("stock"):
+    fetch_ms, timing = None, {}
+    if wanted:
         try:
             pick = inp.get("pick")
             t0 = time.monotonic()
-            path, credit, others = await stock.find(root, inp["stock"],
+            path, credit, others = await stock.find(root, wanted,
                                                     orientation=inp.get("orientation") or _chat_orientation(root, chat),
-                                                    pick=int(pick) if isinstance(pick, (int, float)) and pick >= 0 else 0)
+                                                    pick=int(pick) if isinstance(pick, (int, float)) and pick >= 0 else 0,
+                                                    timing=timing)
             fetch_ms = round((time.monotonic() - t0) * 1000)
         except ValueError as e:
             return _err(str(e))
@@ -1115,10 +1153,10 @@ async def _footage(workspace, root, chat, inp):
         return got
     full, rel = got
     t_ready = time.monotonic()
-    r = await _made_ready(workspace, root, chat, full, rel, language, timed=(fetch_ms, full))
+    r = await _made_ready(workspace, root, chat, full, rel, language, timed=(fetch_ms, full, timing))
     if isinstance(r, str):
         return r
-    _log_footage(chat, fetch_ms, full, r, time.monotonic() - t_ready)
+    _log_footage(chat, fetch_ms, full, r, time.monotonic() - t_ready, timing)
     info, sheet, words_rel = r["info"], r.get("sheet"), r["words_rel"]
     text = report.footage_text(rel, info, words_rel=words_rel, reused=r["reused"], credit=credit)
     if inp.get("tidy"):
@@ -1129,25 +1167,130 @@ async def _footage(workspace, root, chat, inp):
     return _result(text, report.sheet_blocks(sheet, info.get("sheet_times"), rel))
 
 
-def _music(query):
-    """The library's tracks that fit the words asked for (all of them when none), from the signed
-    contract's data."""
+STOCK_AT_ONCE = 4
+
+
+async def _footage_many(workspace, root, chat, inp, queries):
+    """Several stock clips in one call: each searched, fetched and made ready side by side (the service reads
+    two or more at once for an organisation), within the same budgets as one. → the clips that are ready, each
+    described with its sheet; those still on their way, to collect by calling again with the same list (the
+    ready ones then come back at once, from the workspace and the service)."""
+    import time
+
+    from . import stock
+
+    orientation = inp.get("orientation") or _chat_orientation(root, chat)
+
+    async def one(query):
+        timing = {}
+        t0 = time.monotonic()
+        try:
+            path, credit, others = await stock.find(root, query, orientation=orientation, timing=timing)
+        except ValueError as e:
+            return {"query": query, "error": str(e)}
+        except Exception as e:  # noqa: BLE001 - the network, or the stock service
+            return {"query": query, "error": f"it could not be fetched ({type(e).__name__}); try again, or other words"}
+        fetch_ms = round((time.monotonic() - t0) * 1000)
+        got = _clip_file(root, path)
+        if isinstance(got, str):
+            return {"query": query, "error": got}
+        full, rel = got
+        t1 = time.monotonic()
+        r = await _made_ready(workspace, root, chat, full, rel, inp.get("language"), timed=(fetch_ms, full, timing),
+                              batch=len(queries))
+        if isinstance(r, str):
+            return {"query": query, "pending": rel, "why": r}
+        _log_footage(chat, fetch_ms, full, r, time.monotonic() - t1, timing, len(queries))
+        return {"query": query, "rel": rel, "r": r, "credit": credit, "others": others}
+
+    done = await asyncio.gather(*(one(q) for q in queries))
+    ready = [d for d in done if "r" in d]
+    parts, blocks = [], []
+    parts.append((f"{len(ready)} of {len(queries)} stock clips ready" if len(ready) < len(queries)
+                  else f"{len(queries)} stock clips ready, fetched together")
+                 + ". Each is below with its sheet: pick the stretches you need from each.")
+    for d in ready:
+        info = d["r"]["info"]
+        text = f"For {d['query']!r}:\n" + report.footage_text(d["rel"], info, words_rel=d["r"]["words_rel"],
+                                                              reused=d["r"]["reused"], credit=d["credit"])
+        if d["others"]:
+            text += ("\nOther clips for these words (footage {\"stock\": \"" + d["query"] + "\", \"pick\": n} fetches one): "
+                     + "; ".join(d["others"]) + ".")
+        parts.append(text)
+        blocks += report.sheet_blocks(d["r"].get("sheet"), info.get("sheet_times"), d["rel"])
+    pending = [d for d in done if "pending" in d]
+    if pending:
+        parts.append("Still on their way: " + ", ".join(f"{d['pending']} ({d['query']!r})" for d in pending)
+                     + ". Call footage again with the same stock list to collect them; the ready ones come back at once.")
+    failed = [d for d in done if "error" in d]
+    if failed:
+        parts.append("Not found: " + "; ".join(f"{d['query']!r}: {d['error']}" for d in failed) + ".")
+    return _result("\n\n".join(parts), blocks)
+
+
+# Words a person or a model uses for a mood, as the library tags it (a word that is a tag counts as itself).
+MUSIC_WORDS = {
+    "energetic": "upbeat", "energy": "upbeat", "happy": "playful", "fun": "playful", "fast": "upbeat", "dance": "upbeat",
+    "chill": "calm", "relaxed": "calm", "soft": "calm", "ambient": "calm", "luxury": "minimal-piano", "elegant": "minimal-piano",
+    "piano": "minimal-piano", "acoustic": "warm-acoustic", "guitar": "warm-acoustic", "folk": "warm-acoustic",
+    "arabic": "middle-eastern", "oud": "middle-eastern", "ramadan": "middle-eastern", "eid": "middle-eastern",
+    "gulf": "middle-eastern", "saudi": "middle-eastern", "khaleeji": "middle-eastern",
+    "business": "corporate", "brand": "corporate", "electronic": "tech", "techno": "tech", "startup": "tech",
+    "epic": "inspiring", "cinematic": "inspiring", "hopeful": "inspiring", "uplifting": "inspiring", "emotional": "inspiring",
+}
+MUSIC_SHOWN = 4
+
+
+def _music(query, length=None, chat=None):
+    """The library's tracks for a mood or a few words, from the signed contract's data: a few, steady beats first,
+    one of them named as the pick. `length` (the video's seconds): the pick's start covers it, and the reply gives
+    the beat grid for that length. A query nothing fits says so and names the moods."""
     from .fallback import FALLBACK
 
     c = contract_mod.cached() or {}
     tracks = (c.get("data") or FALLBACK.get("data") or {}).get("music") or []
     if not tracks:
         return "The music library is not available yet: make this video without music, or with an audio file of the person's."
-    words = [w for w in str(query or "").lower().replace(",", " ").split() if w]
+    moods = sorted({m for t in tracks for m in t.get("mood") or []}, key=lambda m: -sum(m in (t.get("mood") or []) for t in tracks))
+    words = [w for w in str(query or "").lower().replace(",", " ").replace("/", " ").split() if w]
+    tagged = {MUSIC_WORDS.get(w, w) for w in words} | {"-".join(words)} if words else set()
+    length = float(length) if isinstance(length, (int, float)) and 1 <= length <= 600 else None
+
     def score(t):
-        hay = " ".join([t.get("title", ""), t.get("desc", ""), " ".join(t.get("mood") or []), t.get("energy", "")]).lower()
-        return sum(1 for w in words if w in hay)
-    picked = sorted(tracks, key=lambda t: -score(t)) if words else tracks
-    if words and not any(score(t) for t in picked):
-        picked = tracks
-    lines = [f"Library tracks{' for ' + repr(query) if words else ''} (use one as src=\"music:<id>\"; music only "
-             "when the person wants it):"]
-    for t in picked[:8]:
+        tags = [m.lower() for m in t.get("mood") or []]
+        hay = " ".join([t.get("title", ""), t.get("desc", ""), t.get("energy", "")]).lower()
+        return 3 * sum(1 for m in tags if m in tagged) + sum(1 for w in words if w in hay)
+
+    steady = lambda t: bool((t.get("beat") or {}).get("every"))  # noqa: E731
+    ranked = sorted(tracks, key=lambda t: (-score(t), not steady(t)))
+    found = bool(words) and score(ranked[0]) > 0
+    if words and not found:
+        # one track for each of the first moods, steady beats first: something to start from
+        ranked, seen = [], set()
+        for t in sorted(tracks, key=lambda t: not steady(t)):
+            m = (t.get("mood") or ["?"])[0]
+            if m not in seen:
+                seen.add(m)
+                ranked.append(t)
+    shown = ranked[:MUSIC_SHOWN]
+    _log_music(query, found, length, chat)
+
+    def start_of(t):
+        """The first good place to start that leaves the video's length to play."""
+        starts = t.get("starts") or [0]
+        if length:
+            fits = [x for x in starts if (t.get("duration") or 0) - x >= length + 1]
+            if fits:
+                return fits[0]
+        return starts[0]
+
+    if words and not found:
+        lines = [f"No track in the library is described by {query!r}. Its moods: {', '.join(moods)}. One track of each "
+                 "of the first moods, to start from (or ask again with one of those moods):"]
+    else:
+        lines = [f"Library tracks{' for ' + repr(query) if words else ''}, the best fit first (use one as src=\"music:<id>\"; "
+                 "music only when the person wants it):"]
+    for t in shown:
         beat = t.get("beat") or {}
         every = beat.get("every")
         tempo = (f"{_num(t['bpm'])} bpm" if t.get("bpm") else "") + (
@@ -1160,14 +1303,36 @@ def _music(query):
             line += f". {str(t['desc']).rstrip('.')}."
         if t.get("starts") and (len(t["starts"]) > 1 or every):
             line += (f" Good places to start (data-media-start){', each on a beat' if every else ''}: "
-                     f"{', '.join(_num(s) for s in t['starts'])} s.")
+                     f"{', '.join(_num(x) for x in t['starts'])} s.")
         lines.append(line)
-    if any((t.get("beat") or {}).get("every") for t in picked[:8]):
+    pick = shown[0]
+    every = (pick.get("beat") or {}).get("every")
+    at = start_of(pick)
+    lines.append("")
+    lines.append(f"Pick: {pick['id']}, data-media-start=\"{_num(at)}\". Take it unless the person asked for something "
+                 "else: you cannot hear these, so another search will not tell you more.")
+    if every and length:
+        beats = length / every
+        bar = 4 * every
+        under, over = int(length // bar) * bar, (int(length // bar) + 1) * bar
+        end = under if length - under <= over - length and under > 0 else over
+        lines.append(f"Its grid for a {_num(length)} s video: a beat every {every:.3f} s ({beats:.0f} beats), a bar every "
+                     f"{bar:.2f} s. Cut on every 2 beats ({2 * every:.2f} s) for a quick pace or on the bars ({bar:.2f} s) for "
+                     f"a calm one; scene lengths of 4, 6 or 8 beats are {4 * every:.2f}, {6 * every:.2f} and {8 * every:.2f} s. "
+                     f"Ending on a bar: {end:.2f} s.")
+    elif every:
         lines.append("Start the music at one of its good places and its beats fall at its data-start, then every beat after "
                      "it (a scene of 4 beats at 0.5 s a beat is 2 s), and a bar every 4 beats from there: put cuts on the "
-                     "beats and the big moments on the bars. Once written, the sound map lists the beats and bars in the "
-                     "video's time, and a cut off the beat is pointed out.")
+                     "beats and the big moments on the bars. Give music the video's length (length: seconds) for its grid.")
+    if any(steady(t) for t in shown):
+        lines.append("Once written, the sound map lists the beats and bars in the video's time, and a cut off the beat is "
+                     "pointed out.")
     return "\n".join(lines)
+
+
+def _log_music(query, found, length, chat=None):
+    from ..logs import log
+    log("video_music", chat_id=chat, words=len(str(query or "").split()), found=found, length=length)
 
 
 def _num(x):
@@ -1287,7 +1452,7 @@ async def _exec_video(inp, workspace, ctx=None):
         if action == "skill":     # text only: the craft, read beside the instructions
             return skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name")) + note
         if action == "music":
-            return _music(inp.get("query") or inp.get("mood")) + note
+            return _music(inp.get("query") or inp.get("mood"), inp.get("length"), chat) + note
         if action == "lottie":
             return _lottie(inp.get("query")) + note
         if action == "editor":
@@ -1329,10 +1494,12 @@ async def _exec_video(inp, workspace, ctx=None):
                 return _err("write needs html (the whole composition) or path (a composition to adopt).")
             if len(html.encode("utf-8")) > MAX_HTML:
                 return _err(f"the composition is over {MAX_HTML:,} bytes; keep it to the scenes and their animations.")
+            html, said, keep = _branded(root, html)
             name, rel, named = await _save(root, chat, name, html, "video-write")
+            said = (" " + said if said else "") + (await _keep_brand_look(root, keep) if keep else "")
             text, blocks, clean = await _checks(workspace, root, rel, html)
             kb = len(html.encode("utf-8")) / 1024
-            return _result(f"Saved {rel} ({kb:.1f} KB).{named}\n{text}{_brand_hint(root, html)}{_skill_hint(html)}", blocks, note,
+            return _result(f"Saved {rel} ({kb:.1f} KB).{named}{said}\n{text}{_brand_hint(root, html)}{_skill_hint(html)}", blocks, note,
                            _shown(rel, name, clean))
 
         if action == "voice":
@@ -1360,7 +1527,9 @@ async def _exec_video(inp, workspace, ctx=None):
                 html = await video.fill_template(workspace, which.strip(), _with_brand(root, which, given or {}))
             except video.Refused as e:
                 return _err(f"the template was not filled: {e}. Nothing was saved.")
+            html, said, keep = _branded(root, html)
             name, rel, named = await _save(root, chat, name, html, "video-template")
+            named += (" " + said if said else "") + (await _keep_brand_look(root, keep) if keep else "")
             text, blocks, clean = await _checks(workspace, root, rel, html)
             return _result(f"Made {rel} from the {which} template ({len(html) / 1024:.1f} KB).{named} It is an ordinary "
                            f"composition now: change it with `edit`.\n{text}{_brand_hint(root, html)}{_skill_hint(html)}", blocks, note,
@@ -1383,6 +1552,7 @@ async def _exec_video(inp, workspace, ctx=None):
                     new, why = apply_changes(data.decode("utf-8"), changes)
                     if why:
                         return _err(why + _hand_edited(root, rel))
+                    new, said, keep = _branded(root, new)
                     try:
                         version = await write_fig(root, rel, new.encode("utf-8"), base=version_of(data), by="agent",
                                                   reason="video-edit")
@@ -1392,6 +1562,7 @@ async def _exec_video(inp, workspace, ctx=None):
                             return _err(f"{rel} changed while it was being edited (the person is editing it); read "
                                         "it again, then edit.")
             files.remember(root, chat, name)
+            said = (" " + said if said else "") + (await _keep_brand_look(root, keep) if keep else "")
             times = quick.moments(data.decode("utf-8"), new)
             if times:
                 text, blocks, clean = await _checks(workspace, root, rel, new, kind="look", budget=BUDGET["look"],
@@ -1400,7 +1571,7 @@ async def _exec_video(inp, workspace, ctx=None):
                         f"{', '.join(f'{t:g} s' for t in times)}. The browser check runs beside the render.\n{text}")
             else:
                 text, blocks, clean = await _checks(workspace, root, rel, new)
-            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).\n{text}"
+            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).{said}\n{text}"
                            f"{_brand_hint(root, new)}", blocks, note, _shown(rel, name, clean, version))
 
         if action == "motion":

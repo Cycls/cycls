@@ -56,8 +56,8 @@ two in one line of the reply.
 instructions: bold 0.8–2 s, minimal 2.5–3.5 s, luxe and cinematic 3.5–6 s); something new every 2–4 s; nothing
 frozen over 3 s except the end card. The look's text lands 0.3–1.6 s into its scene (luxe and cinematic
 latest): a scene under about 2 s shows its headline and little else. In a scene: build (first 30%), breathe (one
-slow move), resolve (land, then hold). With music, choose the track before the plan and write the plan in its
-beats: the `music` reply gives the beat (B), and starting the track at one of its good places puts a beat at 0
+slow move), resolve (land, then hold). With music, choose the track before the plan (one `music {query, length}`
+call; take its pick) and write the plan in its beats: the reply gives the beat (B), and starting the track at its pick's start puts a beat at 0
 and every B after it. Each scene is a whole number of beats (4 beats at B = 0.492 → 1.97 s), the payoff and the
 end card land on a bar line (every 4 beats), and the plan's seconds are those beat times.
 

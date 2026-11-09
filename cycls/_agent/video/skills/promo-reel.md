@@ -41,9 +41,10 @@ Render a promo of moving type and graphics at `fps: 60`; one mostly of footage a
 An agency reel is built on pictures of the thing itself — the coffee pouring, the shop's door, the product in
 a hand — with type cut over them, not type on a flat ground. In this order:
 1. the person's own photos and clips (`footage {path}` for a clip; photos by their workspace path);
-2. stock footage of the subject: `footage {stock: "barista pouring latte art close up", orientation: "portrait"}`,
-   two to four clips, words that describe a SHOT (subject, action, closeness, light), not a topic; read each
-   sheet and keep the shots that match one light;
+2. stock footage of the subject, two to four clips in ONE call: `footage {stock: ["barista pouring latte art
+   close up", "coffee beans roasting in drum", "cafe window morning light"], orientation: "portrait"}`, each
+   search words that describe a SHOT (subject, action, closeness, light), not a topic; read each sheet and keep
+   the shots that match one light (another clip for a search is `{stock: "…", pick: 1}`);
 3. only when neither fits (a sale with no product, an abstract service): a card-led look (bold, pop, tech) with
    a motif from `video-direction`.
 
@@ -232,9 +233,11 @@ are fine (the button's press and its colour). A role already has the look's anim
 
 Cutting on the beat is what makes a reel feel edited rather than assembled.
 
-- **Pick the music before the plan.** `music {query}`: "upbeat", "tech", "playful", "corporate"; an Arabic
-  flavour is "middle-eastern" (e.g. `playhouse-sound-of-arabia`, upbeat oriental house). Each track comes with its
-  beat ("a beat every 0.492 s") and good places to start, each on a beat and the start of a bar.
+- **Pick the music before the plan, in one call.** `music {query, length}`: the look's first mood (or "upbeat",
+  "tech", "playful", "corporate"; an Arabic flavour is "middle-eastern") and the reel's seconds. The reply names
+  a pick with its start and gives its grid for that length: the beat ("a beat every 0.492 s"), scene lengths of
+  4, 6 and 8 beats, and where to end on a bar. Take the pick; you cannot hear the tracks, so asking again for
+  others tells you nothing.
 - **Lock the grid.** `<audio src="music:<id>" data-start="0" data-media-start="<a good place>">`: the beats now
   fall at 0, then every beat (B). Plan every scene as a whole number of beats: at B = 0.492, 4 beats = 1.97 s,
   6 = 2.95 s, 8 = 3.94 s, so the cuts land at 1.97, 4.92, 6.89… Round each time to 2 decimals, never to 0.5.

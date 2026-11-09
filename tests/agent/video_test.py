@@ -1044,8 +1044,11 @@ def test_stock_footage_is_fetched_once_credited_and_lists_the_other_results(monk
     assert others == ["1: calm sea (9 s, 1920x1080)"]                               # the ten-minute one is not offered
     asyncio.run(stock.find(tmp_path, "waves at sunset", orientation="landscape"))
     assert len(searched) == 1 and len(fetched) == 1                                 # remembered, not fetched again
-    rel2, _, _ = asyncio.run(stock.find(tmp_path, "waves at sunset", orientation="landscape", pick=1))
+    timing = {}
+    rel2, _, _ = asyncio.run(stock.find(tmp_path, "waves at sunset", orientation="landscape", pick=1, timing=timing))
     assert rel2 == "videos/footage/waves-at-sunset-12.mp4"
+    assert len(searched) == 1, "another pick from the same search costs no search"
+    assert set(timing) == {"search_ms", "download_ms"}
     with pytest.raises(ValueError, match="unexpected video host"):                  # only ever Pexels' own hosts
         asyncio.run(real_download("https://evil.example/x.mp4", tmp_path / "x.mp4"))
     # A clip that trickles in is given up on, and leaves nothing behind.
@@ -1220,7 +1223,7 @@ def test_each_footage_call_logs_where_its_time_went(monkeypatch, tmp_path):
     lines = []
     monkeypatch.setattr(logs, "log", lambda level, **f: lines.append((level, f)))
 
-    async def find(root, query, *, orientation=None, pick=0):
+    async def find(root, query, *, orientation=None, pick=0, timing=None):
         _clip(root, "videos/footage/sea-1.mp4")
         return "videos/footage/sea-1.mp4", "Video by Ana on Pexels.", []
     monkeypatch.setattr(stock, "find", find)
@@ -1348,9 +1351,9 @@ def test_a_video_in_several_sizes_is_checked_at_each_and_looked_at_one(monkeypat
     svc = FakeService(monkeypatch)
     VIDEO_LOADED.set(True)
     out = _run({"action": "write", "name": "hi", "html": WIDE}, _ws(tmp_path))
-    sent = [s["html"] for s in svc.submitted]
-    assert len(sent) == 3 and "data-shape" not in sent[0]
-    assert 'data-shape="vertical"' in sent[1] and 'data-shape="square"' in sent[2]
+    sent = [s["html"] for s in svc.submitted]           # the three checks run at once: in any order
+    assert len(sent) == 3 and sum("data-shape" not in h for h in sent) == 1
+    assert any('data-shape="vertical"' in h for h in sent) and any('data-shape="square"' in h for h in sent)
     text = _text(out)
     assert "At vertical 1080x1920 (rendered as videos/hi.vertical.mp4" in text and "At square 1080x1080" in text
     assert '#root[data-shape="vertical"]' in text
@@ -1809,3 +1812,187 @@ def test_a_dubs_voice_is_found_wherever_the_model_puts_it():
     assert v({"to": "ar"}) is None and v({}) is None
     assert v({"voice": "default", "to": "ar-SA"}) == "default" and v({"voice": "MSA"}) == "default"
     assert vrun._language("saudi") == "ar" and vrun._language("ar-SA") == "ar"
+
+
+# ---- faster turns: several stock clips in one call, music picked the first time ----------------------------
+
+def test_several_stock_clips_in_one_call_are_fetched_side_by_side_and_each_described(monkeypatch, tmp_path):
+    from cycls._agent import logs
+    from cycls._agent.video import stock
+
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    FakeFootage(monkeypatch)
+    svc.result = {"state": "done", "kind": "ingest", "info": INFO, "sheet": SHEET}
+    lines = []
+    monkeypatch.setattr(logs, "log", lambda level, **f: lines.append((level, f)))
+    running, most = [0], [0]
+
+    async def find(root, query, *, orientation=None, pick=0, timing=None):
+        running[0] += 1
+        most[0] = max(most[0], running[0])
+        await asyncio.sleep(0.05)                       # all searches in flight at once
+        running[0] -= 1
+        if query == "nothing here":
+            raise ValueError("no stock clip found for 'nothing here' — try a simpler query (two or three words)")
+        rel = f"videos/footage/{query.replace(' ', '-')}-1.mp4"
+        _clip(root, rel, data=query.encode() * 50)
+        if timing is not None:
+            timing.update(search_ms=5, download_ms=7)
+        return rel, f"Video by Ana on Pexels ({query}).", ["1: another (9 s, 1080x1920)"]
+    monkeypatch.setattr(stock, "find", find)
+    out = _run({"action": "footage", "stock": ["barista pouring", "beans roasting", "nothing here", "barista  pouring"],
+                "orientation": "portrait"}, _ws(tmp_path))
+    text = _text(out)
+    assert most[0] == 3, "the three different searches ran side by side (the repeated one once)"
+    assert text.startswith("2 of 3 stock clips ready")
+    assert "For 'barista pouring':" in text and "For 'beans roasting':" in text
+    assert "videos/footage/barista-pouring-1.mp4" in text and "Video by Ana on Pexels (beans roasting)." in text
+    assert "Not found: 'nothing here'" in text
+    assert sum(1 for b in out["_model"] if b["type"] == "image") == 2          # each clip's sheet
+    logged = [f for level, f in lines if level == "video_footage"]
+    assert len(logged) == 2 and all(f["batch"] == 3 and f["search_ms"] == 5 and f["download_ms"] == 7 for f in logged)
+
+
+def test_a_list_of_one_stock_search_is_the_single_call(monkeypatch, tmp_path):
+    from cycls._agent.video import stock
+
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    FakeFootage(monkeypatch)
+    svc.result = {"state": "done", "kind": "ingest", "info": INFO, "sheet": SHEET}
+
+    async def find(root, query, *, orientation=None, pick=0, timing=None):
+        _clip(root, "videos/footage/sea-1.mp4")
+        return "videos/footage/sea-1.mp4", "Video by Ana on Pexels.", []
+    monkeypatch.setattr(stock, "find", find)
+    text = _text(_run({"action": "footage", "stock": ["sea"]}, _ws(tmp_path)))
+    assert text.startswith("Made ready: videos/footage/sea-1.mp4")
+
+
+def test_clip_hashes_kept_from_threads_at_once_lose_none(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from cycls._agent.video import files
+
+    rels = [f"videos/footage/c{i}.mp4" for i in range(12)]
+    for i, rel in enumerate(rels):
+        _clip(tmp_path, rel, data=bytes([i]) * 5000)
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(lambda rel: files.clip_sha(tmp_path, rel), rels))
+    kept = json.loads((tmp_path / ".cache" / "video" / "clips.json").read_text(encoding="utf-8"))
+    assert sorted(kept) == sorted(rels)
+    assert not list((tmp_path / ".cache" / "video").glob("*.part"))
+
+
+MUSIC_LIB = [
+    {"id": "calm-01", "title": "Morning", "mood": ["calm"], "bpm": 72, "duration": 150, "desc": "soft piano", "starts": [0, 48],
+     "beat": None},
+    {"id": "up-02", "title": "Go", "mood": ["upbeat"], "bpm": 122.0, "duration": 140, "starts": [0.008, 130.0],
+     "beat": {"every": 0.5, "first": 0.008}},
+    {"id": "up-03", "title": "Run", "mood": ["upbeat", "playful"], "bpm": 128.0, "duration": 150, "starts": [0.1, 60.2],
+     "beat": {"every": 0.469, "first": 0.1}},
+    {"id": "oud-04", "title": "Souq", "mood": ["middle-eastern"], "bpm": 100.0, "duration": 160, "starts": [140.0, 0.2],
+     "beat": {"every": 0.6, "first": 0.2}},
+]
+
+
+def test_music_names_a_pick_and_with_the_videos_length_its_beat_grid(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    monkeypatch.setattr(contract, "cached", lambda: {"data": {"music": MUSIC_LIB}})
+    out = _run({"action": "music", "query": "energetic", "length": 15}, _ws(tmp_path))
+    assert "calm-01" not in out.split("Pick:")[0].split("\n- ")[1], "a word for a mood counts as that mood"
+    assert 'Pick: up-02, data-media-start="0.008"' in out and "you cannot hear these" in out
+    assert "Its grid for a 15 s video: a beat every 0.500 s (30 beats), a bar every 2.00 s." in out
+    assert "scene lengths of 4, 6 or 8 beats are 2.00, 3.00 and 4.00 s" in out and "Ending on a bar: 14.00 s." in out
+    # a start that leaves less than the video's length is passed over
+    out = _run({"action": "music", "query": "arabic", "length": 30}, _ws(tmp_path))
+    assert 'Pick: oud-04, data-media-start="0.2"' in out
+
+
+def test_music_a_query_nothing_fits_says_so_and_names_the_moods(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    monkeypatch.setattr(contract, "cached", lambda: {"data": {"music": MUSIC_LIB}})
+    out = _run({"action": "music", "query": "heavy metal"}, _ws(tmp_path))
+    assert out.startswith("No track in the library is described by 'heavy metal'. Its moods: upbeat,")
+    assert "middle-eastern" in out and "calm" in out and "Pick: " in out
+    assert out.count("\n- ") == 3, "one track for each of the moods, steady beats first"
+
+
+# ---- the brand's look: the kit over a look by itself, one look kept for the brand ---------------------------
+
+LOOKED = COMP.replace('data-composition-id="main"', 'data-composition-id="main" data-look="luxe"')
+
+
+def _looks():
+    return FALLBACK["data"]["looks"]
+
+
+def test_the_kit_goes_over_a_look_where_it_reads_with_the_looks_arabic_face_after_its_fonts():
+    from cycls._agent.video import brand
+    fonts = FALLBACK["fonts"]
+    k = {"colours": {"primary": "#0c2340", "accent": "#f5a623", "background": "#0b1020", "text": "#ffffff"},
+         "heading": ("Playfair Display", True, False), "body": ("Brand Sans", False, False), "files": {}, "logo": None}
+    luxe = next(lk for lk in _looks() if lk["id"] == "luxe")
+    css, notes = brand.layer(k, luxe, fonts)
+    assert css.startswith("#root[data-look] { ") and notes == []
+    assert "--look-bg: #0b1020; --look-ink: #ffffff;" in css and "--look-muted: color-mix(in srgb, #ffffff 64%, #0b1020)" in css
+    assert "--look-accent: #f5a623;" in css and "--look-on-accent: #111111" in css      # dark words on the light accent
+    assert "--look-footage-accent: #f5a623" in css and "--look-accent2: #0c2340" in css
+    assert f'--look-display: "Playfair Display", "{luxe["fonts"]["ar_display"]}", serif' in css
+    assert "--look-text" not in css, "a font the catalogue lacks and the kit has no file of is left to the look"
+    # a navy brand colour on luxe's near-black ground does not read: the look's own accent is kept, and said
+    navy = {**k, "colours": {"primary": "#0c2340"}, "heading": None}
+    css, notes = brand.layer(navy, luxe, fonts)
+    assert css == "" and "does not read on this look's ground" in notes[0]
+    editorial = next(lk for lk in _looks() if lk["id"] == "editorial")
+    css, _ = brand.layer(navy, editorial, fonts)                                         # on a light ground it does
+    assert "--look-accent: #0c2340" in css and "--look-on-accent: #ffffff" in css
+    assert "--look-footage-accent" not in css, "too dark for words over footage"
+
+
+def test_a_save_with_a_look_carries_the_kit_and_keeps_the_brands_look(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _kit(tmp_path)
+    out = _text(_run({"action": "write", "name": "launch", "html": LOOKED}, _ws(tmp_path)))
+    saved = (tmp_path / "videos" / "launch.video.html").read_text(encoding="utf-8")
+    assert saved.startswith('<!doctype html><html lang="en"><head><style data-cycls-brand>#root[data-look] { ')
+    assert saved.count("\n") == LOOKED.count("\n"), "on the line of <head>: the model's lines stay where they were"
+    assert "--look-accent: #f5a623" in saved and "Brand: this video uses none" not in out
+    assert 'Kept luxe as this brand\'s look (brand/brand.yaml video_look)' in out
+    assert "video_look: luxe" in (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
+    # the next video names the brand's look
+    out = _text(_run({"action": "write", "name": "promo", "html": LOOKED.replace('data-look="luxe"', 'data-look="brand"')},
+                     _ws(tmp_path)))
+    saved = (tmp_path / "videos" / "promo.video.html").read_text(encoding="utf-8")
+    assert 'data-look="luxe"' in saved and "data-cycls-brand" in saved
+    assert 'data-look="brand" is luxe, this brand\'s look.' in out and "Kept" not in out
+    # a changed kit reaches the next edit; data-brand="none" takes the layer out
+    yaml = (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8").replace("#f5a623", "#e94e77")
+    (tmp_path / "brand" / "brand.yaml").write_text(yaml, encoding="utf-8")
+    _run({"action": "edit", "name": "promo", "changes": [{"old": ">Hi<", "new": ">Hello<"}]}, _ws(tmp_path))
+    saved = (tmp_path / "videos" / "promo.video.html").read_text(encoding="utf-8")
+    assert "--look-accent: #e94e77" in saved and saved.count("data-cycls-brand") == 1
+    _run({"action": "edit", "name": "promo", "changes": [{"old": 'data-look="luxe"', "new": 'data-look="luxe" data-brand="none"'}]},
+         _ws(tmp_path))
+    assert "data-cycls-brand" not in (tmp_path / "videos" / "promo.video.html").read_text(encoding="utf-8")
+
+
+def test_no_kit_no_look_no_layer_and_the_guide_names_the_brands_look(monkeypatch, tmp_path):
+    from cycls._agent.video import brand
+    fonts = FALLBACK["fonts"]
+    assert brand.apply(LOOKED, tmp_path, fonts, _looks()) == (LOOKED, "", None)             # no kit
+    _kit(tmp_path)
+    assert brand.apply(COMP, tmp_path, fonts, _looks())[0] == COMP                         # no look
+    html, said, keep = brand.apply(LOOKED.replace('"luxe"', '"brand"'), tmp_path, fonts, _looks())
+    assert "this brand has no look yet" in said and keep is None and "data-cycls-brand" not in html
+    assert "The first look a video uses becomes this brand's look" in brand.note(brand.kit(tmp_path, fonts), fonts)
+    with open(tmp_path / "brand" / "brand.yaml", "a", encoding="utf-8") as f:
+        f.write("video_look: bold\n")
+    line = brand.note(brand.kit(tmp_path, fonts), fonts)
+    assert 'This brand\'s look is bold: write data-look="brand" (or "bold")' in line
+    assert "each save adds a <style data-cycls-brand>" in line

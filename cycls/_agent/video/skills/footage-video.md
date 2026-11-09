@@ -62,8 +62,9 @@ footage: choosing it, cutting it, dressing it and captioning it.
   ```html
   <video id="cut1" src="uploads/broll.mp4" muted data-start="10.33" data-media-start="3" data-duration="1.5" data-track-index="1"></video>
   ```
-  with `#cut1 { z-index: 2; }`. A stock clip comes from `footage {stock: "a few words", orientation: "portrait"}`.
-- **Montage on the music.** The `music` reply gives each track's beat (B) and good places to start on it; start
+  with `#cut1 { z-index: 2; }`. Stock clips come from `footage {stock: ["a few words", "a few more"], orientation:
+  "portrait"}`: every search the video needs in ONE call, fetched side by side.
+- **Montage on the music.** `music {query, length}` names a pick and its grid for the video's seconds: take it. The reply gives each track's beat (B) and good places to start on it; start
   the music there with data-start 0 and a beat falls at 0 and every B after. Cut every 2 beats for energy, 4 for
   calm, all pieces `muted`, each starting in its best stretch, the music not ducked. 100 bpm → B = 0.6 s → a cut
   every 1.2 s:
