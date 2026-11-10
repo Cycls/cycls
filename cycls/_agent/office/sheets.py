@@ -181,8 +181,9 @@ async def _open_comments(workspace, rel):
     return "\n\nOpen comments:\n  " + "\n  ".join(lines) + more
 
 
-async def _exec_comments(inp, workspace, rel):
-    """List a workbook's comments, or reply to / resolve / reopen one by `number`, as the agent."""
+async def _exec_comments(inp, workspace, rel, agent=None):
+    """List a workbook's comments, or reply to / resolve / reopen one by `number`, as the agent (`agent`: its name
+    as the chat shows it)."""
     from ..design import comments
     if not comments.usable(workspace):
         return _err("comments aren't kept in this workspace.")
@@ -212,7 +213,7 @@ async def _exec_comments(inp, workspace, rel):
     if not (isinstance(reply, str) and reply.strip()) and not isinstance(resolve, bool):
         return _err(f"nothing to do to comment #{number} — pass `reply` (your answer) and/or `resolve` "
                     "(true closes it, false opens it again). Without `number`, comments lists them.")
-    me, did = comments.author("agent", agent=True), []
+    me, did = comments.author("agent", agent, agent=True), []
     try:
         if isinstance(reply, str) and reply.strip():
             await comments.change(workspace, rel, thread["id"], "reply", me, {"text": reply})
@@ -284,7 +285,7 @@ async def exec_sheets(inp, workspace, ctx=None):
         if action == "comments":
             if not path.is_file():
                 return _err(f"{rel} does not exist.")
-            return await _exec_comments(inp, workspace, rel)
+            return await _exec_comments(inp, workspace, rel, getattr(ctx, "agent", None))
 
         if bad := _check_ops(ops):
             return _err(bad)

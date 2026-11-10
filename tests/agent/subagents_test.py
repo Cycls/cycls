@@ -105,6 +105,22 @@ def test_each_agent_browses_in_its_own_browser(monkeypatch):
     assert seen == ["chat1", "a1"]
 
 
+def test_an_agent_signs_with_the_parents_name(tmp_path, monkeypatch):
+    """Word comments an agent writes carry the name the chat shows, as the parent's do (office/docs.py)."""
+    from cycls._agent.harness import main as harness
+    signed, made = [], harness.ToolContext
+    def context(*a, **kw):
+        signed.append((kw.get("me"), kw.get("agent")))
+        return made(*a, **kw)
+    monkeypatch.setattr(harness, "ToolContext", context)
+    ctx = _make_context(tmp_path / "ws")
+    ctx.agent_name = "Haseef"
+    client = _client(parent=[_make_response([_agent("a1")], stop_reason="tool_use"), _make_response([_text_block("ok")])],
+                     child=[_make_response([_text_block("done")])])
+    asyncio.run(_drain(_llm().run(context=ctx, client=client)))
+    assert (None, "Haseef") in signed and ("a1", "Haseef") in signed
+
+
 class _Slow(FakeStream):
     def __init__(self, response, wait):
         super().__init__(response)

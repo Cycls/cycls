@@ -466,7 +466,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # And Docs, for the organisations on DOCS_ORGS.
     if "Docs" in allowed_tools and not office_offered(workspace, "docs"):
         allowed_tools = [t for t in allowed_tools if t != "Docs"]
-    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes, team=team, me=me)
+    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes, team=team, me=me,
+                      agent=str(getattr(context, "agent_name", "") or ""))
     lead = team if me is None else None   # the parent follows its agents; an agent has none of its own
     billed = session.chat_id or getattr(context, "bill", None)   # an agent's turns are its parent chat's cost
     if not session.replay:   # a replay runs the saved turn again, as it was
