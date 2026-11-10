@@ -557,12 +557,22 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
 **Keeping in step**
 - A change shows within 15 s of a teammate making it, not at once: there is no push channel, only the
   check. A busy shelf costs one listing per open, visible, listening app per 15 s.
-- The agent's `database` tool has no compare-and-swap. An agent that rebuilds a value from memory
-  instead of `get`-change-`put` overwrites what the person added in the app; the skill says not to.
+- The agent's `database` tool checks its writes to an app's data: it remembers the version of each app key
+  the agent read (`get`, or `scan`) in the conversation, and a `put` or `delete` lands only if the key is still
+  at that version (`gen=` on the store, so GCS refuses a lost race), or, for a key it never read, only if the
+  key does not exist. Otherwise it is refused and the agent is told to read it again — so a value rebuilt from
+  memory, or written over a teammate's edit made since the read, never lands. Kept per instance and bounded;
+  a forgotten read costs one more `get`. The agent's own memory is not checked: nobody else writes it.
 - A file the agent wrote with `bash` reaches the app at turn end, not mid-turn.
 
 **The build**
-- `_collect_source` skips binaries, so an app cannot ship an image file; icons must be data URIs.
+- The builder takes text only. `_collect_source` skips binaries, and `_inline_binaries` writes each font,
+  image or sound a text file refers to (CSS `url()`, `import x from "./a.png"`, `new URL(…, import.meta.url)`,
+  `src`/`href` in HTML) into that text as a `data:` URL. Until 2026-11-10 it did not, and the CSS kept
+  `url(./Inter.woff2)`: in the sandbox that never loads, so every app fell back to the system font, its Arabic
+  too (measured in Chrome: all four faces of the Product apps `error` before, `loaded` after). A file is capped
+  at 3 MB, a text file with its assets at the builder's 2 MB; `build_app` warns when a built page still names
+  a font or image by path.
 - Vite tree-shakes an unused bad import, so a build can succeed with a dependency that was never
   resolvable. Only a *used* import fails the build.
 - The service is a separate deployment in another repo. `--live` covers the contract; nothing

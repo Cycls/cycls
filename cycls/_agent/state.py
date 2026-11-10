@@ -793,6 +793,32 @@ async def _may_write_app(ws, user, key):
         raise ValueError(f"only workspace admins can write {slug}'s shared data")
 
 
+# What the agent last read of each app key, per conversation. A put on an app's data is checked against it,
+# so the agent can neither write over a change someone made in the app since it read the value, nor write a
+# value it never read (from memory) over one that is there: either way it is told to read it again.
+# Bounded; a forgotten entry costs one more `get`.
+_READ, _READ_MAX = {}, 5000
+
+
+def _read_key(ws, chat, key):
+    return (str(getattr(ws, "root", "")), chat or "", key)
+
+
+def _saw(ws, chat, key, version):
+    k = _read_key(ws, chat, key)
+    _READ.pop(k, None)
+    if version is not None:
+        _READ[k] = version
+    while len(_READ) > _READ_MAX:
+        _READ.pop(next(iter(_READ)))
+
+
+_UNREAD = ("Error: {key!r} holds data you have not read in this conversation. Nothing was {done}. `get` it, "
+           "change what you got, and put that back — never write an app's data from memory.")
+_MOVED = ("Error: {key!r} changed since you read it — someone edited it in the app. Nothing was {done}. `get` it "
+          "again and apply your change to what is there now, keeping what they did.")
+
+
 def _app_changed(key, said, version, deleted=False):
     """An app's data the agent just changed: the model reads `said`, and an app open on it hears at
     once (the `app_data` event) and reads it again — before, it showed what it had loaded until it was
@@ -807,24 +833,48 @@ def _app_changed(key, said, version, deleted=False):
                                     **({"deleted": True} if deleted and not whole else {})}}
 
 
-async def _exec_database(inp, ws, user=None):
+async def _exec_database(inp, ws, user=None, chat=None):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
-    values would 400. JSON-encode the data ones."""
+    values would 400. JSON-encode the data ones. `chat` keys what the agent
+    has read of an app's data, which its writes are checked against."""
     cmd, key = inp.get("command"), inp.get("key", "")
     try:
+        app_key = key.startswith(APPS_ROOT) and not key.endswith("/")
         if cmd == "get":
             db, k = _route(ws, key)
-            v = await db.get(k)
+            if not app_key:
+                v = await db.get(k)
+            else:
+                v, version = await db.get_gen(k)
+                _saw(ws, chat, key, version)   # "" when absent: a put may then create it
             return json.dumps(v) if v is not None else f"Error: key {key!r} not found"
         if cmd == "put":
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
-            version = await db.put(k, inp.get("value"))
+            if not app_key:
+                await db.put(k, inp.get("value"))
+                return f"Stored {key!r}"
+            seen = _READ.get(_read_key(ws, chat, key))
+            if seen is None:
+                if (await db.get_gen(k))[1]:
+                    return _UNREAD.format(key=key, done="written")
+                seen = ""
+            try:
+                version = await db.put(k, inp.get("value"), **({"create": True} if seen == "" else {"gen": seen}))
+            except Conflict:
+                _saw(ws, chat, key, None)
+                return _MOVED.format(key=key, done="written")
+            _saw(ws, chat, key, version)   # a second put in a row needs no second get
             return _app_changed(key, f"Stored {key!r}", version)
         if cmd == "delete":
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
+            if app_key:
+                seen, now = _READ.get(_read_key(ws, chat, key)), (await db.get_gen(k))[1]
+                if now and seen != now:
+                    return (_MOVED if seen else _UNREAD).format(key=key, done="deleted")
+                _saw(ws, chat, key, None)
             await db.delete(k)
             return _app_changed(key, f"Deleted {key!r}", None, deleted=True)
         if cmd == "scan":
@@ -832,9 +882,14 @@ async def _exec_database(inp, ws, user=None):
             db, p = _route(ws, prefix, prefix=True)
             app = prefix.startswith(APPS_ROOT)
             limit = max(1, int(inp.get("limit", 100)))
+            # Versions listed BEFORE the values are read: one older than its value only costs a refused put.
+            versions = await db.versions(prefix=p) if app else {}
             pairs = [{"key": APPS_ROOT + k if app else k, "value": v}
                      async for k, v in db.items(prefix=p, limit=limit + 1)
                      if not (app and k.split("/")[1:2] == [USER_MARK])]
+            for k in versions if app else ():
+                if APPS_ROOT + k in {x["key"] for x in pairs}:
+                    _saw(ws, chat, APPS_ROOT + k, versions[k])
             truncated = len(pairs) > limit
             if truncated: pairs = pairs[:limit]
             if not pairs: return f"No keys with prefix {prefix!r}"

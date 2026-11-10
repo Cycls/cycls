@@ -2,7 +2,7 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, posixpath, re, socket, time, uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -131,7 +131,9 @@ _DATABASE_TOOL = {
         "file or an app's data, not your memory.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
-        "- put:    write `value` (any JSON-serializable type) at `key`.\n"
+        "- put:    write `value` (any JSON-serializable type) at `key`. On an app's key, put only what you "
+        "read with `get` (or `scan`) in this conversation, changed: it is refused if you never read the value, or "
+        "if someone changed it in the app since — then `get` it again and apply your change to what is there.\n"
         "- delete: remove `key`. Trailing slash wipes a namespace (`notes/` removes everything under it).\n"
         "- scan:   list {key, value} pairs whose key starts with `prefix`. "
         "Truncates at `limit` (default 100) so a huge prefix won't blow the context.\n\n"
@@ -814,6 +816,84 @@ def _collect_source(src_dir):
     return files
 
 
+# Fonts and images an app's source refers to. The builder takes text only, and `_collect_source` skips
+# binaries, so a font in src/ never reached the bundle: the CSS kept url(./Inter.woff2), the sandbox could not
+# load it, and every app fell back to the system font, its Arabic too. They are written into the text that
+# refers to them as data: URLs, which the CSP allows (font-src data:, img-src data:).
+_ASSET_TYPES = {".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".otf": "font/otf",
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+                ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
+                ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+                ".mp4": "video/mp4", ".webm": "video/webm"}
+_ASSET_MAX = 3_000_000   # one such file, before base64
+_SCRIPT_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+_CSS_URL = re.compile(r"""url\(\s*(['"]?)([^'")\s]+)\1\s*\)""")
+_JS_IMPORT = re.compile(r"""import\s+([A-Za-z_$][\w$]*)\s+from\s+(['"])([^'"\n]+)\2\s*;?""")
+_JS_NEW_URL = re.compile(r"""new\s+URL\(\s*(['"])([^'"\n]+)\1\s*,\s*import\.meta\.url\s*\)""")
+_HTML_ATTR = re.compile(r"""(\s(?:src|href|poster)\s*=\s*)(['"])([^'"\n]+)\2""")
+_LEFT_REF = re.compile(r"""url\(\s*['"]?((?:\.{1,2}/|/)?[\w./-]+\.(?:woff2?|ttf|otf|png|jpe?g|gif|webp|avif|ico))['"]?\s*\)""",
+                       re.IGNORECASE)
+
+
+def _inline_binaries(src_dir, files):
+    """`files` ({path: text} from `_collect_source`) with each font, image or sound in `src_dir` that a text file
+    refers to written in as a data: URL: CSS url(), `import x from "./a.png"`, `new URL("./a.png", import.meta.url)`
+    and src/href in HTML. Raises ValueError naming what is too big."""
+    src_dir = pathlib.Path(src_dir)
+    cache = {}
+
+    def data_url(ref, base):
+        if ref.startswith(("data:", "http:", "https:", "//", "#", "blob:")):
+            return None
+        clean = ref.split("?", 1)[0].split("#", 1)[0]
+        rel = posixpath.normpath(clean.lstrip("/") if clean.startswith("/")
+                                 else posixpath.join(posixpath.dirname(base), clean))
+        mime = _ASSET_TYPES.get(posixpath.splitext(rel)[1].lower())
+        if not mime or rel.startswith("../") or rel in files:
+            return None
+        if rel not in cache:
+            p = src_dir / rel
+            if not p.is_file():
+                return None
+            data = p.read_bytes()
+            if len(data) > _ASSET_MAX:
+                raise ValueError(f"{rel} is {len(data) // 1000} KB; an app can carry a file of at most "
+                                 f"{_ASSET_MAX // 1_000_000} MB")
+            cache[rel] = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+        return cache[rel]
+
+    def swap(group, render):
+        def fn(m):
+            url = data_url(m.group(group), path)
+            return render(m, url) if url else m.group(0)
+        return fn
+
+    out = {}
+    for path, text in files.items():
+        ext = posixpath.splitext(path)[1].lower()
+        if ext in (".css", ".scss", ".sass", ".less", ".html") or ext in _SCRIPT_EXTS:
+            text = _CSS_URL.sub(swap(2, lambda m, u: f'url("{u}")'), text)
+        if ext in _SCRIPT_EXTS:
+            text = _JS_IMPORT.sub(swap(3, lambda m, u: f"const {m.group(1)} = {json.dumps(u)};"), text)
+            text = _JS_NEW_URL.sub(swap(2, lambda m, u: f"new URL({json.dumps(u)})"), text)
+        if ext == ".html":
+            text = _HTML_ATTR.sub(swap(3, lambda m, u: f"{m.group(1)}{m.group(2)}{u}{m.group(2)}"), text)
+        size = len(text.encode())
+        if cache and size > _APP_SRC_MAX_FILE:
+            raise ValueError(f"{path} is {size // 1000} KB with its fonts and images written in; the limit is "
+                             f"{_APP_SRC_MAX_FILE // 1_000_000} MB per file — keep fewer font weights (woff2), "
+                             "or smaller images")
+        out[path] = text
+    if sum(len(t.encode()) for t in out.values()) > _APP_SRC_MAX_BYTES:
+        raise ValueError("source folder is too large to build with its fonts and images written in")
+    return out
+
+
+def _unresolved_assets(html):
+    """Font or image files the built page still names by path: in the sandbox they never load."""
+    return sorted({m.group(1) for m in _LEFT_REF.finditer(html)})
+
+
 _APPS_TTL = 30.0
 _apps_cache = {}   # root -> (deadline, text)
 
@@ -862,7 +942,7 @@ async def _exec_build_app(inp, ws):
         return f"Error: {inp.get('source')} is not a folder"
 
     try:
-        files = _collect_source(src_dir)
+        files = _inline_binaries(src_dir, _collect_source(src_dir))
     except ValueError as e:
         return f"Error: {e}"
     if "index.html" not in files:
@@ -924,6 +1004,10 @@ async def _exec_build_app(inp, ws):
     if result.get("stray"):
         out += ("\nWARNING: these assets could not be inlined and will be blocked "
                 f"when the app runs: {', '.join(result['stray'])}")
+    if missing := _unresolved_assets(result["html"]):
+        out += ("\nWARNING: the app names these files but they are not in it, so they never load (a font falls "
+                f"back to the system one): {', '.join(missing)}. Put each file in the source folder, next to "
+                "what refers to it, and build again.")
     return out
 
 
@@ -1185,7 +1269,8 @@ _TOOLS = {
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
-    "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None)),
+    "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None),
+                                                                     getattr(ctx, "chat_id", None)),
                        lambda inp: {"tool_name": "Database",
                                     "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),
