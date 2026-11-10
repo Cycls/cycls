@@ -191,6 +191,16 @@ class _FileStore:
             return out
         return await asyncio.to_thread(_do)
 
+    async def page(self, prefix, after=None, limit=50):
+        def _do():
+            keys = sorted(k for k, _ in self._walk(prefix=prefix) if after is None or k > after)
+            out = []
+            for k in keys[:limit]:
+                try: out.append((k, json.loads((self.root / f"{k}.json").read_bytes())))
+                except (json.JSONDecodeError, FileNotFoundError): pass
+            return out, (keys[limit - 1] if len(keys) > limit else None)
+        return await asyncio.to_thread(_do)
+
 
 class _GCSStore:
     _STORAGE = "https://storage.googleapis.com"
@@ -271,6 +281,16 @@ class _GCSStore:
         return [(it["name"][p:n], it.get("metadata") or {})
                 for it in await self._list("items(name,metadata),nextPageToken", prefix=prefix, glob=glob)]
 
+    async def page(self, prefix, after=None, limit=50):
+        params = {"fields": "items(name,metadata)", "prefix": f"{self.prefix}{prefix}", "maxResults": limit + 2}
+        if after: params["startOffset"] = f"{self.prefix}{after}.json"   # inclusive: `after` itself is dropped below
+        r = await self._req("GET", f"{self._STORAGE}/storage/v1/b/{self.bucket}/o", params=params)
+        r.raise_for_status()
+        p, n = len(self.prefix), -len(".json")
+        items = [(it["name"][p:n], it.get("metadata") or {}) for it in r.json().get("items", [])
+                 if it["name"].endswith(".json") and (after is None or it["name"][p:n] > after)]
+        return items[:limit], (items[limit - 1][0] if len(items) > limit else None)
+
 
 async def object_read(bucket, name):
     """An object's bytes and generation from the bucket itself, not a server's cached view of the
@@ -338,6 +358,11 @@ class DB:
         FS, the body. `glob` uses `*` to match non-`/`."""
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m
+
+    async def page(self, prefix, *, after=None, limit=50):
+        """One page of `prefix`'s keys in key order, from just after `after`: ([(key, meta)], the next page's
+        `after`, or None at the end). One LIST on object storage."""
+        return await self._store.page(prefix, after, limit)
 
     async def keys(self, *, prefix=None, glob=None):
         """Key names only. Unlike `scan`, reads no bodies — so a file this

@@ -31,6 +31,8 @@ from urllib.parse import unquote
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cycls._agent import activity
+
 SHEETS_EXTS = (".xlsx", ".xlsm")
 DOCS_EXTS = (".docx",)
 MAX_BYTES = 20 * 1024 * 1024     # larger files keep the read-only preview
@@ -269,6 +271,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 logged("written", version=new, replaced=version, summary=result["summary"])
             if changed is not None:
                 changed(ws.root)
+            await _edited(ws, rel)
             # When it was written: the editor's "Last modified" follows its own saves.
             modified = datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
             return {"version": new, "unchanged": False, "summary": result["summary"], "modified": modified}
@@ -317,6 +320,7 @@ def office_router(ws_dep, required_auth=None, changed=None):
                 version=new, replaced=version)
             if changed is not None:
                 changed(ws.root)
+            await _edited(ws, rel)
             return {"version": new, "unchanged": False}
 
         r.add_api_route(f"/office/{product}", editor, methods=["GET"], name=f"office_{product}")
@@ -329,3 +333,10 @@ def office_router(ws_dep, required_auth=None, changed=None):
     for product, v in office_views().items():
         _add(product, v)
     return r
+
+
+async def _edited(ws, rel):
+    """A person's save from the editor, in the file's history and its org's audit log."""
+    from cycls._agent.logs import log
+    try: await activity.record(ws, rel, activity.change(ws, "edited"))
+    except Exception as e: log("warn", message=f"file activity not kept: {type(e).__name__}: {e}")

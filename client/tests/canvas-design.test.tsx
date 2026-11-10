@@ -51,7 +51,7 @@ describe("a design's Download", () => {
     expect(screen.queryByText("Download")).toBeNull();
     openFile.mockClear();
     await act(async () => { fireEvent.click(screen.getByText("Download PDF")); await new Promise((r) => setTimeout(r, 0)); });
-    expect(openFile).toHaveBeenCalledWith("designs/a.fig?as=pdf");
+    expect(openFile).toHaveBeenCalledWith("designs/a.fig?as=pdf&download=1");
   });
 
   it("another file keeps its one Download", async () => {
@@ -272,14 +272,14 @@ describe("a design of several pages", () => {
     };
     openFile.mockClear();
     await download("Download PNG");
-    expect(openFile).toHaveBeenCalledWith("designs/a.fig?as=png&page=Story");
+    expect(openFile).toHaveBeenCalledWith("designs/a.fig?as=png&page=Story&download=1");
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     await flush();
     await flush();
     fireEvent.click(tab("Post"));
     await flush();
     await download("Download PDF");
-    expect(openFile).toHaveBeenLastCalledWith("designs/a.fig?as=pdf&page=Post");
+    expect(openFile).toHaveBeenLastCalledWith("designs/a.fig?as=pdf&page=Post&download=1");
   });
 
   it("a page renamed since falls back to the first one", async () => {

@@ -641,6 +641,17 @@ async def _parsed(path, workspace, chat_id):
             f"in {kept.relative_to(workspace)}: continue with read at offset={lines + 1}, or search it with rg.]")
 
 
+async def _read_noted(inp, ws, ctx):
+    """A file read in a team workspace starts with who last edited it (activity.note)."""
+    out = await _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None))
+    if isinstance(out, str) and not out.startswith("Error") and getattr(ws, "subject", None):
+        from .. import activity
+        try: rel = _resolve_path(str(inp.get("path") or ""), ws.root).relative_to(pathlib.Path(ws.root).resolve()).as_posix()
+        except ValueError: return out
+        return await activity.note(ws, rel) + out
+    return out
+
+
 async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
@@ -1166,7 +1177,7 @@ _TOOLS = {
                                    "before changing it again."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None)),
+    "read":       Tool(lambda inp, ws, ctx=None, **_: _read_noted(inp, ws, ctx),
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),

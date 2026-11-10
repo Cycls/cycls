@@ -6,7 +6,7 @@ from . import credentials
 # The slots cycls keeps in a workspace. Each has its own way in — app data is the `database` tool
 # at apps/<slug>/<key>, skills the `skill` tool — so no file tool, no bash command and no /files
 # request reaches one.
-MANAGED = (".db", ".database", ".apps", ".skills", ".trash", ".versions", ".comments", ".settings",
+MANAGED = (".db", ".database", ".apps", ".skills", ".trash", ".versions", ".comments", ".settings", ".files", ".org",
            credentials.USER, credentials.SHARED)
 
 _TMP_ERROR = ("/tmp is not shared — every bash command gets its own, discarded when it "

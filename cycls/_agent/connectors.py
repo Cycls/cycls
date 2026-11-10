@@ -247,6 +247,10 @@ def gated(fn, tool, label, connector, classify=None, hard=False, allowed=False, 
                else "auto" if (ctx.auto or allowed) and not hard and not risky else "asked")
         if how != "read":
             log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=tool, connector=connector, how=how)
+        if how in ("approved", "auto"):
+            from . import activity
+            try: await activity.acted(ctx, tool, connector, how)
+            except Exception as e: log("warn", message=f"connector action not in the audit log: {e}")
         if how != "asked":
             return await fn(inp, ctx)
         from .tools import tool_step   # the tools module imports this one
