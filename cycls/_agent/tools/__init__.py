@@ -263,7 +263,7 @@ _BROWSER_TOOL = {
         "page stays OPEN between calls this turn — work step by step:\n"
         "- open {url}        go to a page; or a workspace .html file by its path (e.g. deck.html), to see a page you "
         "wrote. The browser runs on another machine and gets only that file, so its images must be inlined, and "
-        "file:// or localhost addresses never reach it\n"
+        "file:// or localhost addresses never reach it. Not an app (apps/<slug>/): it runs only beside the chat\n"
         "- read              get the page text + a NUMBERED list of the "
         "clickable/typable elements\n"
         "- click {ref}       click element number `ref` from the last read\n"
@@ -913,7 +913,9 @@ async def _exec_build_app(inp, ws):
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     kb = (result.get("bytes") or len(result["html"].encode())) / 1024
-    out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab.\n"
+    out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab; open it for the person with "
+           f"`canvas apps/{slug}/index.html`. This result is the check that it built: don't open it in the browser "
+           f"or screenshot it.\n"
            f"Now write apps/{slug}/README.md describing each `cycls.get`/`set` key (reached with "
            f"`database` at apps/{slug}/<key>) and each file under apps/{slug}/data/, and their shape. "
            f"A later session updates that data without you — and without it, the only way to learn "
@@ -1057,6 +1059,15 @@ def _workspace_page(url, workspace):
         return f"Error: {raw} is not a file in the workspace" if named else None
     if path.suffix.lower() not in _PAGE_EXTS:
         return f"Error: only an .html or .svg page opens in the browser; use read for {path.name}"
+    root = pathlib.Path(workspace.root).resolve()
+    parts = path.resolve().relative_to(root).parts if path.resolve().is_relative_to(root) else ()
+    if len(parts) >= 3 and parts[0] == "apps":
+        # A model checking its work screenshotted the app it had just built: the person got a picture in their
+        # files and on the canvas, in front of the app, and the picture was of an app with no data.
+        return (f"Error: apps/{parts[1]}/ is an app. It runs only beside the chat, where the host connects it to "
+                "its data; in this browser it would be an empty page. Don't check an app by opening or "
+                "screenshotting it: build_app's result says whether it built, and the person sees it with "
+                f"`canvas apps/{parts[1]}/index.html`.")
     return path
 
 
