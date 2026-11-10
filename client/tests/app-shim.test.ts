@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { injectShim } from "../src/components/app-shim";
 
 const shimOf = (html: string) => injectShim(html).match(/<script>[\s\S]*?<\/script>/)?.[0] ?? "";
@@ -480,5 +480,44 @@ describe("forms in a sandboxed frame", () => {
     form.querySelector("input")!.required = true;
     document.getElementById("go")!.click();
     expect(heard).toEqual([]);
+  });
+});
+
+
+describe("following the chat's light or dark mode", () => {
+  function install() {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win, { postMessage: () => {} },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0), clearTimeout,
+    );
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    return { api: win.cycls as { ctx: { theme?: string }; onTheme: (fn: (t: string) => void) => () => void }, deliver };
+  }
+  afterEach(() => document.documentElement.classList.remove("dark"));
+
+  it("sets the dark class at init and on every switch, and tells the listeners", () => {
+    const { api, deliver } = install();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "dark" });
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    const heard: string[] = [];
+    const off = api.onTheme((t) => heard.push(t));
+    deliver({ type: "cycls:theme", theme: "light" });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(api.ctx.theme).toBe("light");
+    off();
+    deliver({ type: "cycls:theme", theme: "dark" });
+    expect(heard).toEqual(["light"]);
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+  });
+
+  it("ignores a mode it does not know", () => {
+    const { deliver } = install();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "light" });
+    deliver({ type: "cycls:theme", theme: "sepia" });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
   });
 });

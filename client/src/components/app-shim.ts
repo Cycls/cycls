@@ -49,10 +49,20 @@ const SHIM = `<script>(function(){
     if (m.type === 'cycls:init' && !ctx) {
       ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite };
       api.ctx = ctx;
+      applyTheme(m.theme);
       resolveReady(ctx);
       return;
     }
     if (m.type === 'cycls:changed') { changed(m); return; }
+    if (m.type === 'cycls:theme') {
+      if (m.theme !== 'dark' && m.theme !== 'light') return;
+      if (ctx) ctx.theme = m.theme;
+      applyTheme(m.theme);
+      themeListeners.slice().forEach(function(fn){
+        try { fn(m.theme); } catch (e) { report((e && e.message) || e); }
+      });
+      return;
+    }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
         && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
         && m.type !== 'cycls:data:result') return;
@@ -189,6 +199,15 @@ const SHIM = `<script>(function(){
   // The host says the data changed. Named keys are read again one by one (a value of
   // the app's own on its way wins); anything wider re-lists. Then the listeners hear.
   var listeners = [], listened = false;
+
+  // The app follows the chat's light or dark mode: the "dark" class on <html>, which is what Tailwind's
+  // class-based dark mode and the kit's theme read, set at init and on every switch. An app that needs the
+  // mode in code (a chart's colours) also gets cycls.onTheme.
+  var themeListeners = [];
+  function applyTheme(t){
+    if (t !== 'dark' && t !== 'light') return;
+    try { document.documentElement.classList.toggle('dark', t === 'dark'); } catch (e) {}
+  }
   function changed(m){
     var keys = Array.isArray(m.keys) ? m.keys.map(String) : null;
     var work;
@@ -309,6 +328,13 @@ const SHIM = `<script>(function(){
     onChange: onChange,
     // Read the shared data again now, without waiting to be told.
     refresh: function(){ stale = true; return load().then(function(){}); },
+    // fn("light" | "dark") when the chat switches mode; the "dark" class on <html> is already set. Returns an
+    // unsubscribe.
+    onTheme: function(fn){
+      if (typeof fn !== 'function') throw new Error('cycls.onTheme needs a function');
+      themeListeners.push(fn);
+      return function(){ var i = themeListeners.indexOf(fn); if (i >= 0) themeListeners.splice(i, 1); };
+    },
     // This viewer's own rows — nobody else's, and no id to get wrong.
     me: shelf('me'),
     // Every member's, for an admin. It rejects for anyone else, which is both the

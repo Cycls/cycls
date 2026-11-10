@@ -587,3 +587,35 @@ describe("the handshake", () => {
     expect(sent.filter((m) => (m as { type?: string }).type === MSG.init)).toHaveLength(2);
   });
 });
+
+
+// The chat's mode used to reach an app once, at init: an open app stayed light after the person went dark.
+describe("the chat's light or dark mode", () => {
+  let detach: () => void;
+  afterEach(() => { detach?.(); document.body.classList.remove("dark"); });
+
+  it("tells an open app when the chat switches, and only when it does", async () => {
+    const { frame, sent, contentWindow } = fakeFrame();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "", context: { theme: "light" } });
+    void contentWindow;   // no handshake: messages stay on the window, where the test reads them
+    document.body.classList.add("dark");
+    await settle();
+    document.body.classList.add("something-else");
+    await settle();
+    document.body.classList.remove("dark");
+    await settle();
+    expect(sent.filter((m) => (m as { type?: string }).type === MSG.theme)).toEqual([
+      { type: MSG.theme, theme: "dark" }, { type: MSG.theme, theme: "light" },
+    ]);
+  });
+
+  it("hands a reloaded app the mode it is in now, not the one it opened in", async () => {
+    const { frame, sent, contentWindow } = fakeFrame();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "", context: { theme: "light" } });
+    document.body.classList.add("dark");
+    await settle();
+    send(contentWindow, { type: MSG.ready, doc: "d2" });
+    await settle();
+    expect(sent.find((m) => (m as { type?: string }).type === MSG.init)).toMatchObject({ theme: "dark" });
+  });
+});

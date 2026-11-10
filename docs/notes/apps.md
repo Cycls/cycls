@@ -500,6 +500,12 @@ teammate's change shows within one poll; an app off screen makes no requests, an
 as it is shown; an old app reloads once for the agent's change, never for a teammate's, and once at
 turn end for a file the agent wrote.
 
+**The chat's light or dark mode.** It used to reach an app once, in `cycls:init`, so an open app stayed
+light after the person switched to dark, and apps grew their own toggles, saved under a key the route refuses
+(`u/theme`). The bridge now watches the `dark` class on the chat's `<body>` and posts `cycls:theme`; the shim
+sets the `dark` class on the app's `<html>` (what Tailwind's class-based dark mode and the kit read) at init and
+on every switch, and calls `cycls.onTheme` listeners. A reload gets the mode it is in now. Apps carry no toggle.
+
 ## Known limitations
 
 Current behaviour, not aspiration. Each is a real constraint someone will hit.

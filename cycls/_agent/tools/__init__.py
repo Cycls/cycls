@@ -317,7 +317,8 @@ _BUILD_APP_TOOL = {
         "to put a file anywhere, and "
         "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
         "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
-        "an API key in app source.\n"
+        "an API key in app source. The app follows the chat's light or dark mode by itself (the `dark` class "
+        "on <html>, and `cycls.onTheme(fn)`): give it no theme toggle and store no theme.\n"
         "On failure the build log comes back."
     ),
     "input_schema": {"type": "object", "properties": {

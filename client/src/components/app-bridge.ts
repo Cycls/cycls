@@ -18,6 +18,7 @@ export const MSG = {
   dataResult: "cycls:data:result",
   listen: "cycls:listen",     // app -> host: it has a change listener, so tell it instead of reloading it
   changed: "cycls:changed",   // host -> app: its data changed (the agent, a teammate, another tab)
+  theme: "cycls:theme",       // host -> app: the chat switched between light and dark
 } as const;
 
 // Window events the chat sends the open apps: the agent changed an app's data (the `app_data` tool
@@ -174,6 +175,18 @@ export function attachBridge({
     && frame.getClientRects().length > 0 && getComputedStyle(frame).visibility !== "hidden");
   // Setting srcdoc again, even to the same text, loads the document afresh.
   const reloadFrame = reload ?? (() => { const doc = frame.srcdoc; frame.srcdoc = doc; });
+
+  // The chat's light or dark mode, which an app follows. It used to be told once, in init, so an open app
+  // stayed in the old mode after the person switched. Dark mode is a class on the chat's <body>.
+  const themeNow = () => (document.body?.classList.contains("dark") ? "dark" : "light");
+  let theme = typeof context?.theme === "string" ? context.theme : themeNow();
+  const themeWatch = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
+    const now = themeNow();
+    if (now === theme) return;
+    theme = now;
+    post({ type: MSG.theme, theme });
+  });
+  if (document.body) themeWatch?.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
   function tell(source: ChangeSource, keys?: string[], files?: string[]) {
     if (listening) {
@@ -383,8 +396,8 @@ export function attachBridge({
       const ch = new MessageChannel();
       port = ch.port1;
       port.onmessage = (ev) => void handle(ev.data);
-      frame.contentWindow.postMessage(
-        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context }, "*", [ch.port2]);
+      frame.contentWindow.postMessage(   // the mode now, not when the bridge attached: a reload after a switch
+        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context, theme }, "*", [ch.port2]);
       return;
     }
     void handle(e.data);   // a shim that ignored the port still works
@@ -398,6 +411,7 @@ export function attachBridge({
   if (appData) void check("turn");   // the first look: what a later change is measured against
   return () => {
     closed = true;
+    themeWatch?.disconnect();
     clearInterval(tick);
     clearTimeout(agentTimer);
     clearTimeout(reloadTimer);
