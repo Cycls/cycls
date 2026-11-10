@@ -260,6 +260,10 @@ their author's.
   `docs` edits with comment ops (its items under its badge) — added from the file under the author's name, changed
   as the file says, and removed when gone from the file and older than its last write (newer ones are on their way
   in: the editor saves a moment after a comment). Rename, trash and restore carry them as they do a workbook's.
+  The agent signs its comments, replies and new documents with its name as the chat shows it (the brand's English
+  name, else the agent's own: Haseef, Super…) — `Context.agent_name`, set by the server each turn, reaches the tools
+  as `ToolContext.agent` — so Word names the same author the comments panel does (2026-11-09; it wrote "Super"
+  whatever the agent, and a document `create` made said "Cycls").
 - **Charts are drawn** (2026-10-27, cycls-office `packages/docx/src/charts.ts`, `packages/charts`): a Word chart
   (the same DrawingML chart Excel keeps, with its numbers cached) is described by the Sheets chart reader and drawn
   by the Sheets drawing (ECharts) in the editor, in the file's theme colours; until then, and in a save, it is a

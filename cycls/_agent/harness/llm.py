@@ -235,6 +235,7 @@ class LLM:
             chat_id = getattr(context, "chat_id", None)
             spawn = lambda brief, call: _run(context=SimpleNamespace(
                 workspace=context.workspace, user=getattr(context, "user", None), chat_id=None, bill=chat_id,
+                agent_name=getattr(context, "agent_name", ""),   # its Word comments are signed as the parent's are
                 messages=SimpleNamespace(raw=[{"role": "user", "content": brief}])), team=team, me=call, **agent_kw)
             team = Team(context.workspace, chat_id, spawn)
         try:
