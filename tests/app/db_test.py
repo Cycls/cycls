@@ -234,8 +234,9 @@ def test_concurrent_creates_leave_exactly_one_winner(workspace):
         results = await asyncio.gather(
             *[d.put("chat/c/000000", {"writer": i}, create=True) for i in range(8)],
             return_exceptions=True)
-        assert sum(r is None for r in results) == 1, results
-        assert all(isinstance(r, db.Conflict) for r in results if r is not None)
+        won = [r for r in results if not isinstance(r, BaseException)]
+        assert len(won) == 1 and isinstance(won[0], str), results   # the winner gets its new version
+        assert all(isinstance(r, db.Conflict) for r in results if isinstance(r, BaseException))
         assert (await d.get("chat/c/000000"))["writer"] in range(8)
     _run(t())
 

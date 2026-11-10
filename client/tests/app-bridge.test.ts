@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit, utf8Bytes } from "../src/components/app-bridge";
+import { appScope, inScope, canWrite, attachBridge, MSG, MAX_WRITE_BYTES, overWriteLimit, utf8Bytes,
+         APP_DATA_EVENT, TURN_END_EVENT } from "../src/components/app-bridge";
 
 const APP = "apps/burnup/index.html";
 const scope = appScope(APP)!;
@@ -384,5 +385,205 @@ describe("cycls:fetch — an app calling a connector", () => {
     await settle();
     expect(shared.posted.at(-1)).toMatchObject({ ok: false, error: "connectors are not available here" });
     shared.stop();
+  });
+});
+
+
+// An app loads its data once. The agent, a teammate or another tab could change it and the open app
+// showed the old copy until it was reopened. The bridge compares versions and tells the app.
+describe("keeping an open app in step", () => {
+  let detach: () => void;
+  afterEach(() => { detach?.(); vi.useRealTimers(); });
+
+  type Versions = { keys?: Record<string, string>; files?: Record<string, string> };
+  function setup(start: Versions, extra: { visible?: () => boolean } = {}) {
+    vi.useFakeTimers();
+    const { frame, sent, contentWindow } = fakeFrame();
+    let now: Versions = start;
+    const ops: Record<string, unknown>[] = [];
+    const appData = vi.fn(async (_slug: string, op: Record<string, unknown>) => {
+      ops.push(op);
+      if (op.op === "versions") return now;
+      if (op.op === "put") return { ok: true, version: `own-${String(op.key)}` };
+      return null;
+    });
+    const reload = vi.fn();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "", writeFile: async () => {},
+                            appData, reload, pollMs: 1000, visible: () => true, ...extra });
+    return {
+      sent, contentWindow, appData, reload, ops,
+      set: (v: Versions) => { now = v; },
+      checks: () => ops.filter((o) => o.op === "versions").length,
+    };
+  }
+  const changes = (sent: unknown[]) => sent.filter((m) => (m as { type?: string }).type === MSG.changed);
+  const agent = (detail: Record<string, unknown>) =>
+    window.dispatchEvent(new CustomEvent(APP_DATA_EVENT, { detail: { slug: "burnup", ...detail } }));
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  it("tells a listening app at once which keys the agent changed", async () => {
+    const t = setup({ keys: { a: "1" } });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    agent({ key: "a", version: "2" });
+    agent({ key: "b", version: "1" });
+    await wait(300);
+    expect(changes(t.sent)).toEqual([{ type: MSG.changed, source: "agent", keys: ["a", "b"] }]);
+    expect(t.reload).not.toHaveBeenCalled();
+    // the turn ends: the agent's versions were taken in, so the same change is not told twice
+    t.set({ keys: { a: "2", b: "1" } });
+    window.dispatchEvent(new Event(TURN_END_EVENT));
+    await wait(10);
+    expect(changes(t.sent)).toHaveLength(1);
+  });
+
+  it("names no key when the agent removed a whole subtree", async () => {
+    const t = setup({ keys: {} });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    agent({});
+    await wait(300);
+    expect(changes(t.sent)).toEqual([{ type: MSG.changed, source: "agent" }]);
+  });
+
+  it("ignores another app's changes", async () => {
+    const t = setup({ keys: {} });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    window.dispatchEvent(new CustomEvent(APP_DATA_EVENT, { detail: { slug: "other", key: "a" } }));
+    await wait(1500);
+    expect(changes(t.sent)).toEqual([]);
+  });
+
+  it("reloads an app that does not listen when the agent changes its data", async () => {
+    const t = setup({ keys: {} });
+    await wait(0);
+    agent({ key: "a", version: "1" });
+    agent({ key: "b", version: "1" });
+    await wait(1200);
+    expect(t.reload).toHaveBeenCalledTimes(1);
+    expect(changes(t.sent)).toEqual([]);
+  });
+
+  it("reloads it when a turn changed a data file it reads", async () => {
+    const t = setup({ files: { "data/rows.json": "1-a" } });
+    await wait(0);
+    t.set({ files: { "data/rows.json": "2-b" } });
+    window.dispatchEvent(new Event(TURN_END_EVENT));
+    await wait(1000);
+    expect(t.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reloads an app that does not listen for a teammate's change", async () => {
+    const t = setup({ keys: { a: "1" } });
+    await wait(0);
+    t.set({ keys: { a: "2" } });
+    window.dispatchEvent(new Event("focus"));
+    await wait(5000);
+    expect(t.reload).not.toHaveBeenCalled();
+    expect(t.checks()).toBe(1);   // and does not poll it either: only the first look
+  });
+
+  it("polls a listening app while it is on screen and reports a teammate's change", async () => {
+    const t = setup({ keys: { a: "1" } });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    await wait(2600);   // it just came into view: one look
+    t.set({ keys: { a: "2", c: "1" } });
+    await wait(2600);
+    expect(changes(t.sent)).toEqual([{ type: MSG.changed, source: "poll", keys: ["a", "c"], files: [] }]);
+  });
+
+  it("does not poll an app that is off screen", async () => {
+    const t = setup({ keys: {} }, { visible: () => false });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    await wait(10_000);
+    expect(t.checks()).toBe(1);
+  });
+
+  it("does not tell the app about its own writes", async () => {
+    const t = setup({ keys: { a: "1" }, files: {} });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    send(t.contentWindow, { type: MSG.data, id: 1, op: "put", key: "a", value: 2 });
+    send(t.contentWindow, { type: MSG.write, id: 2, path: "apps/burnup/data/mine.json", content: "{}" });
+    await wait(10);
+    t.set({ keys: { a: "own-a" }, files: { "data/mine.json": "9-9", "data/theirs.json": "1-1" } });
+    window.dispatchEvent(new Event(TURN_END_EVENT));
+    await wait(10);
+    expect(changes(t.sent)).toEqual([{ type: MSG.changed, source: "turn", keys: [], files: ["data/theirs.json"] }]);
+  });
+
+  it("throws away a check that overlapped a write of the app's own", async () => {
+    const t = setup({ keys: { a: "1" } });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    let land: (v: unknown) => void = () => {};
+    t.appData.mockImplementationOnce(async (_s: string, op: Record<string, unknown>) => {
+      t.ops.push(op);
+      return new Promise((r) => { land = r; });   // the check is slow to answer
+    });
+    window.dispatchEvent(new Event(TURN_END_EVENT));
+    send(t.contentWindow, { type: MSG.data, id: 3, op: "put", key: "a", value: 2 });
+    land({ keys: { a: "1" } });   // what the store said before the write landed
+    await wait(10);
+    t.set({ keys: { a: "own-a" } });
+    await wait(1000);
+    expect(changes(t.sent)).toEqual([]);
+  });
+
+  it("keeps its own versions call from the app", async () => {
+    const t = setup({ keys: {} });
+    send(t.contentWindow, { type: MSG.data, id: 4, op: "versions" });
+    await wait(10);
+    expect(t.sent).toContainEqual({ type: MSG.dataResult, id: 4, ok: false, error: "unknown op" });
+  });
+
+  it("makes a new document ask again before it is told rather than reloaded", async () => {
+    const t = setup({ keys: {} });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    send(t.contentWindow, { type: MSG.ready });   // the app reloaded itself
+    agent({ key: "a", version: "1" });
+    await wait(1200);
+    expect(t.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops everything when detached", async () => {
+    const t = setup({ keys: {} });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    detach();
+    agent({ key: "a", version: "1" });
+    await wait(10_000);
+    expect(t.reload).not.toHaveBeenCalled();
+    expect(t.checks()).toBe(1);
+  });
+});
+
+
+describe("the handshake", () => {
+  let detach: () => void;
+  afterEach(() => detach?.());
+
+  // A busy frame announces twice before it hears back. A second channel replaced the one it took,
+  // so every reply went where nobody listened and the app waited for its data forever.
+  it("answers a document once, however often it announces", async () => {
+    const { frame, sent, contentWindow } = fakeFrame();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "" });
+    send(contentWindow, { type: MSG.ready, doc: "d1" });
+    send(contentWindow, { type: MSG.ready, doc: "d1" });
+    await settle();
+    expect(sent.filter((m) => (m as { type?: string }).type === MSG.init)).toHaveLength(1);
+  });
+
+  it("answers a new document again", async () => {
+    const { frame, sent, contentWindow } = fakeFrame();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "" });
+    send(contentWindow, { type: MSG.ready, doc: "d1" });
+    send(contentWindow, { type: MSG.ready, doc: "d2" });
+    await settle();
+    expect(sent.filter((m) => (m as { type?: string }).type === MSG.init)).toHaveLength(2);
   });
 });

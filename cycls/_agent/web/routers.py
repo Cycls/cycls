@@ -1113,6 +1113,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
 APP_DATA_MAX = 1_000_000   # per row: a list reads every one of them, so a value is not a payload
 APP_LIST_MAX = 10_000      # a backstop, not a policy: apps below it are never cut
+APP_FILES_MAX = 500        # data/ files an app's change check looks at: a stat each, on gcsfuse
 
 
 def apps_router(cycls_app, ws_dep, user_dep, volume, base):
@@ -1203,10 +1204,11 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         # the write lands only if nothing changed — "" meaning it must be new.
         cond = {} if version is None else ({"create": True} if version == "" else {"gen": version})
         try:
-            await state.apps_db(ws).put(key(k), value, **cond)
+            gen = await state.apps_db(ws).put(key(k), value, **cond)
         except Conflict:
             raise HTTPException(412, "changed since it was read")
-        return {"ok": True}
+        # The new version, so an open app knows this change is its own and not someone else's.
+        return {"ok": True, "version": gen}
 
     @r.delete("/apps/{slug}/data/{k:path}")
     async def delete_data(slug: str, k: str, who: str = "",
@@ -1215,6 +1217,35 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         await _may_write(slug, k, who, user, ws)
         await state.apps_db(ws).delete(key(k))
         return {"ok": True}
+
+    @r.get("/apps/{slug}/versions")
+    async def data_versions(slug: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        """What an open app polls to learn that its data changed — by the agent, a teammate or
+        another tab — without reading any of it: one listing of the shared shelf (no bodies), and
+        the files under its data/ folder by size and time. Members' own rows are left out."""
+        key = await _scope(slug, "", user, ws)
+        root = key("")
+        rows = await state.apps_db(ws).versions(prefix=root)
+        keys = {}
+        for k, v in rows.items():
+            rel = k[len(root):]
+            if rel and rel.split("/")[0] != state.USER_MARK:
+                keys[rel] = v
+        files, folder = {}, Path(ws.root) / "apps" / slug / "data"
+
+        def walk():
+            for dirpath, dirs, names in os.walk(folder):
+                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                for n in sorted(names):
+                    if len(files) >= APP_FILES_MAX: return True
+                    try: st = os.stat(os.path.join(dirpath, n))
+                    except OSError: continue
+                    rel = os.path.relpath(os.path.join(dirpath, n), folder.parent).replace(os.sep, "/")
+                    files[rel] = f"{st.st_mtime_ns:x}-{st.st_size:x}"
+            return False
+
+        cut = await asyncio.to_thread(walk) if folder.is_dir() else False
+        return {"keys": keys, "files": files, "truncated": cut}
 
     return r
 

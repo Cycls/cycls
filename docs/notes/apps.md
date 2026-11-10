@@ -73,7 +73,7 @@ below is scoped per app instead.
 
 ## What the agent knows about an app
 
-Two things, and both are cheap because neither is stored in the prompt by default.
+Three things, and all are cheap because none is stored in the prompt by default.
 
 **A catalog, on a 30 s TTL.** `app_catalog()` emits one line per app from the `name` and
 `description` in its `app.json`, both set by `build_app` —
@@ -85,6 +85,15 @@ model; three weeks later, in another chat, it does not. So `build_app`'s success
 for `apps/<slug>/README.md`. Before it did, a session could spend most of its shell calls grepping
 a multi-megabyte minified bundle to reverse-engineer a schema it then got wrong, which is one way a
 duplicate-key corruption gets written.
+
+**The app open beside the chat, on the message.** A message sent while the canvas shows an app
+carries its slug (`app` in the request body, from `activeDesign` in `chat.tsx`). The harness adds a
+line after what was typed, `[Open beside the chat: the app "Tasks" at apps/tasks/. They may have
+changed its data there since you last read it: database scan apps/tasks/ before you answer about it
+or change it.]` (`_open_app_line`), and `state.user_text` hides it from the bubble as it does the
+`[Using: …]` and `[Selected in …]` lines. Before it, "add Sara to this" had nothing to point at, and
+an agent answered from what it had `put` an hour earlier while the person had changed the data in
+the app since.
 
 ## The build
 
@@ -142,7 +151,7 @@ asks for everything. Six of these steps are unchanged from the file era — only
  5  injectShim(html)                 prepend window.cycls      canvas.tsx, HtmlDoc
  6  <iframe sandbox="allow-scripts allow-popups" srcDoc={html}>
 
- 7  frame → host    cycls:ready                               on the window, retried 40× / 50 ms
+ 7  frame → host    cycls:ready {doc}                         on the window, retried 40× / 50 ms
  8  host checks     e.source === frame.contentWindow           (opaque origin has no e.origin)
  9  host → frame    cycls:init + a transferred MessagePort
 
@@ -168,6 +177,14 @@ MessagePort**; everything after that rides the port. A window reply would need `
 and a sandboxed frame may navigate *itself* with `frame.contentWindow` following it — so the handle
 check would still pass and the replacement document would receive workspace data. A port belongs to
 the document that received it. A host that sends no port still works on the window alone.
+
+**One answer per document.** The shim names its document in every `cycls:ready` (`doc`, random per
+load) and the host answers each `doc` once. Before 2026-11-10 it answered every announcement: a
+frame busy running a big bundle could announce twice before it processed the first answer, the host
+opened a second channel and replied on it from then on, and the shim, which keeps the first port it
+is given, never heard a reply. The app sat on "Loading…" with its data never arriving. In a test
+page with a 390 kB bundle it happened in 2 runs of 5. A new `doc` is a new document (a reload), so
+it gets a new channel.
 
 **A call (10–14).** The shim keeps a `waiting` map keyed by a sequence number, posts, and resolves
 on the matching `:result`. The host validates, calls the one function the canvas handed it, and
@@ -217,6 +234,14 @@ calls a function instead of hand-rolling the postMessage protocol.
 
 **`cycls.save(name, content)`** is the only way out of the folder, and it opens a host dialog every
 time. An app never holds standing permission to write elsewhere.
+
+**Forms are submitted by the shim.** The sandbox has no `allow-forms`, and the browser checks that
+flag *before* it fires `submit`, so until 2026-11-10 every `<form onSubmit>` in an app did nothing:
+react-hook-form, each shadcn form, any "Add" button inside a form. Adding `allow-forms` would let a
+page post the workspace's data to any URL, so the shim fires the event instead: a submit button's
+click, Enter in a text field and `requestSubmit()` dispatch `submit` (after `reportValidity()`), and
+the blocked native submission is cancelled. A handler that already prevented the click wins. A
+form still never navigates or posts anywhere.
 
 ## The phone client
 
@@ -424,6 +449,57 @@ operator can move such a file by hand; carrying migration code for it is not wor
 An app that wants a file still uses `cycls.read`/`write` on its own JSON under `data/`, and those
 are unaffected.
 
+## Keeping an open app in step
+
+An app reads its data once, and until 2026-11-10 that was the last it heard of it. The agent `put`
+rows while the app was open and the app showed the old ones until it was reopened. The skill even
+said to open it first and fill it after, so a fresh app routinely opened empty. A teammate's change
+or another tab's never appeared either. The canvas's turn-end reload did not help, by design: the
+bundle had not changed, so the frame was left alone to keep its state.
+
+**Who tells the app.** Three sources, all landing in `attachBridge`, which posts `cycls:changed
+{source, keys?, files?}` down the port:
+
+| source | how it arrives | when |
+|---|---|---|
+| `agent` | the `database` tool returns `{_model, _ui: {action: "app_data", slug, key?, version?, deleted?}}`; `chat.tsx` re-dispatches it as the window event `cycls:app-data` | at once, mid-turn, a burst of puts coalesced over 250 ms |
+| `turn` | `chat.tsx` dispatches `cycls:app-turn-end` when streaming stops; the bridge checks versions | after every turn, which catches what the agent wrote under `data/` with `edit` or `bash` |
+| `poll` / `focus` | the bridge checks versions every 15 s while the app listens and is on screen, and at once when it comes back into view or the window regains focus | a teammate's change, another tab's |
+
+**The check is one listing, no values.** `GET /apps/<slug>/versions` returns `{keys: {key:
+version}, files: {"data/x.json": "<mtime>-<size>"}, truncated}`. The keys come from
+`DB.versions()`, a GCS list with `fields=items(name,generation)` that reads no bodies (the file store
+hashes the bytes, like `read_gen`, so the two agree); `u/` rows are left out. The files are a stat
+each under `data/`, capped at 500. The bridge keeps the last answer and diffs the next one against
+it.
+
+**The app's own writes are not news.** `PUT /apps/<slug>/data/<key>` now answers with the new
+version (`DB.put` returns it) and the bridge records it as known. The agent's event carries its
+version too, so the turn-end check does not tell the same change twice. A file the app wrote is
+remembered until the next check sees it change. A check that overlapped a write of the app's own is
+thrown away and run again 600 ms later, since it may have read the store from before the write
+landed.
+
+**In the app.** The shim answers `cycls:changed` by reading the named keys again (up to 20, else the
+whole shelf). A key with a write of the app's own still on its way keeps the local value, so typing
+is never overwritten by a stale read. Then it calls the `cycls.onChange` listeners. The first
+`onChange` call posts `cycls:listen`, and only a listening app is polled. `cycls.refresh()` re-lists
+on demand. The skill's kit wraps all of it in hooks (`useShared`, `useSharedPrefix`, `useMine`,
+`useFile` in `lib/cycls.ts`), so an app built from the kit listens without trying.
+
+**An app that never listens is reloaded,** for `agent` and `turn` changes only: the bridge re-sets
+`srcdoc`, 800 ms after the last change and once no write of its own is on its way. Setting `srcdoc`
+again, even to the same text, loads the document afresh, and the new document announces a new `doc`.
+A teammate's change never reloads it, because that may land while the person is typing in it. This
+covers every app built before `onChange` existed, since the shim is injected at view time rather than
+built in.
+
+Measured in Chrome against the real bridge and shim (a test page with an in-memory store): the
+agent's `put` shows in a listening app with no reload; the app's own add is not told back to it; a
+teammate's change shows within one poll; an app off screen makes no requests, and catches up as soon
+as it is shown; an old app reloads once for the agent's change, never for a teammate's, and once at
+turn end for a file the agent wrote.
+
 ## Known limitations
 
 Current behaviour, not aspiration. Each is a real constraint someone will hit.
@@ -468,6 +544,16 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   Android truncates `loadData` past roughly 2 MB — a 2.4 MB bundle rendered blank in production.
 - The mobile host (`~/Desktop/code/mobile-app`, `src/ui/AppView.tsx`) speaks `cycls:data` but sends
   no MessagePort, so that frame talks on the window.
+- The phone's shim has no `cycls.onChange`, and its host relays no `app_data` event and runs no
+  check, so an app open on the phone still shows what it loaded until it is reopened. The kit's hooks
+  call `cycls.onChange?.()`, so the same bundle runs there unchanged.
+
+**Keeping in step**
+- A change shows within 15 s of a teammate making it, not at once: there is no push channel, only the
+  check. A busy shelf costs one listing per open, visible, listening app per 15 s.
+- The agent's `database` tool has no compare-and-swap. An agent that rebuilds a value from memory
+  instead of `get`-change-`put` overwrites what the person added in the app; the skill says not to.
+- A file the agent wrote with `bash` reaches the app at turn end, not mid-turn.
 
 **The build**
 - `_collect_source` skips binaries, so an app cannot ship an image file; icons must be data URIs.
@@ -490,6 +576,10 @@ Current behaviour, not aspiration. Each is a real constraint someone will hit.
   bites an app is `RELAY_PER_MINUTE`, counted per instance.
 
 **Fixed, and worth not regressing**
+- A busy frame announced itself twice and got two channels; replies went down the one it was not
+  listening on and the app never loaded. The host now answers each document once (`doc`).
+- `<form onSubmit>` never fired in the sandbox. The shim fires `submit` itself.
+- An app showed what it loaded until it was reopened, whatever the agent or a teammate changed.
 - A failed tool used to log `ok=true`: `log("tool_call")` derived it from whether an exception was
   raised, while every tool in this codebase reports failure by *returning* `Error: …`. An agent can
   run broken for weeks behind a thousand tool rows and a single recorded failure.

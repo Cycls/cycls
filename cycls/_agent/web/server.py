@@ -327,6 +327,16 @@ def _clean_folder(raw):
     return raw.strip("/")
 
 
+def _clean_app(raw):
+    """The slug of the app open beside the chat (apps/<slug>/), else ""."""
+    if not isinstance(raw, str) or not 0 < len(raw) <= 64 or set(raw) - _APP_SLUG:
+        return ""
+    return raw
+
+
+_APP_SLUG = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
 def _clean_selection(raw):
     """A selection in an open design, video, workbook or Word document {path: a .fig, .video.html, .xlsx or .docx
     in the workspace, frame, nodes: [{name, type, text?}], page? (a workbook's sheet), time?}, capped; else None."""
@@ -388,6 +398,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         connectors: list = []      # connectors the person @-mentioned — the turn gets a "[Using: …]" line
         selection: Optional[dict] = None   # "Add selection" from an open design — the turn gets a "[Selected in …]" block
         folder: str = ""           # the folder open in Files: where a design named without one is saved
+        app: str = ""              # the app open beside the chat — the turn gets an "[Open beside the chat: …]" line
         replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
         agent_name: str = ""       # the agent's name as the chat shows it: what it signs a Word comment with
 
@@ -458,6 +469,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           declined=[t for t in (data.get("declined") or []) if isinstance(t, str)][:20], auto=data.get("auto") is not False,
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
                           selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")),
+                          app=_clean_app(data.get("app")),
                           agent_name=_agent_name())
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap

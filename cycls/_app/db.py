@@ -153,6 +153,7 @@ class _FileStore:
             finally:
                 tmp.unlink(missing_ok=True)
         await asyncio.to_thread(_do)
+        return _gen_of(data)
 
     async def remove(self, key):
         await asyncio.to_thread(lambda: self._path(key).unlink(missing_ok=True))
@@ -188,6 +189,16 @@ class _FileStore:
             for k, p in self._walk(prefix=prefix, glob=glob):
                 try: out.append((k, json.loads(p.read_bytes())))
                 except (json.JSONDecodeError, FileNotFoundError): pass
+            return out
+        return await asyncio.to_thread(_do)
+
+    async def list_versions(self, *, prefix=None):
+        """Hashes the bytes, as `read_gen` does, so the two agree. Dev and test only."""
+        def _do():
+            out = {}
+            for k, p in self._walk(prefix=prefix):
+                try: out[k] = _gen_of(p.read_bytes())
+                except FileNotFoundError: pass
             return out
         return await asyncio.to_thread(_do)
 
@@ -235,6 +246,10 @@ class _GCSStore:
             headers={"Content-Type": "multipart/related; boundary=cycls"}, content=body)
         if r.status_code == 412: raise Conflict(key, stale=gen is not None)
         r.raise_for_status()
+        # The new object's generation, which `read_gen` reports as x-goog-generation. A reply without
+        # it costs only that: the write has landed either way.
+        try: return str(r.json().get("generation") or "") or None
+        except Exception: return None
 
     async def remove(self, key):
         r = await self._req("DELETE", f"{self._STORAGE}/storage/v1/b/{self.bucket}/o/{self._obj(key)}")
@@ -271,6 +286,11 @@ class _GCSStore:
         return [(it["name"][p:n], it.get("metadata") or {})
                 for it in await self._list("items(name,metadata),nextPageToken", prefix=prefix, glob=glob)]
 
+    async def list_versions(self, *, prefix=None):
+        p, n = len(self.prefix), -len(".json")
+        return {it["name"][p:n]: str(it.get("generation") or "")
+                for it in await self._list("items(name,generation),nextPageToken", prefix=prefix)}
+
 
 async def object_read(bucket, name):
     """An object's bytes and generation from the bucket itself, not a server's cached view of the
@@ -301,11 +321,12 @@ class DB:
         """`create=True` refuses to overwrite. `gen=` is compare-and-swap: the
         write lands only if the key is still at the version that was read, and
         raises `Conflict(stale=True)` otherwise. Both default off, so every
-        existing caller keeps last-write-wins."""
+        existing caller keeps last-write-wins. Returns the new version, as
+        `get_gen` would read it (None if the store did not say)."""
         if meta:
             bad = [(k, type(v).__name__) for k, v in meta.items() if not isinstance(v, str)]
             if bad: raise TypeError(f"meta values must be str; got non-string: {bad}")
-        await self._store.write(key, json.dumps(value).encode(), meta=meta, create=create, gen=gen)
+        return await self._store.write(key, json.dumps(value).encode(), meta=meta, create=create, gen=gen)
 
     async def get_gen(self, key, default=None):
         """(value, version). Pass the version back to `put(gen=…)` to make the
@@ -338,6 +359,11 @@ class DB:
         FS, the body. `glob` uses `*` to match non-`/`."""
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m
+
+    async def versions(self, *, prefix=None):
+        """{key: version} under `prefix` from one listing, no bodies read — how an open
+        app finds out cheaply whether anything changed since it last looked."""
+        return await self._store.list_versions(prefix=prefix)
 
     async def keys(self, *, prefix=None, glob=None):
         """Key names only. Unlike `scan`, reads no bodies — so a file this

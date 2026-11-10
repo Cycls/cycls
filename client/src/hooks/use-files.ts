@@ -233,6 +233,11 @@ export function useFiles(baseUrl: string = "") {
   // is an answer the app renders, not a toast over someone's dashboard.
   const appData = useCallback(async (slug: string, op: Record<string, unknown>) => {
     const kind = String(op.op || "get");
+    if (kind === "versions") {   // the bridge's change check: every key's version, no values
+      const res = await fetch(`${baseUrl}/apps/${slug}/versions`, { headers: await authHeaders() });
+      if (!res.ok) throw Object.assign(new Error(String(res.status)), { status: res.status });
+      return res.json();
+    }
     const q = new URLSearchParams();
     if (op.who) q.set("who", String(op.who));
     if (kind === "list" && op.prefix) q.set("prefix", String(op.prefix));

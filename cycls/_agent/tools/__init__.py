@@ -312,7 +312,9 @@ _BUILD_APP_TOOL = {
         "Nothing else — you cannot add a dependency.\n"
         "In the app: `cycls.read`/`write` reach files in `data/` in its own folder, `cycls.get`/`set` "
         "a key-value store the workspace shares (you read and write it with `database` at "
-        "`apps/<slug>/<key>`), `cycls.save(name, content)` asks where to put a file anywhere, and "
+        "`apps/<slug>/<key>`), `cycls.onChange(fn)` runs when that data or those files changed under "
+        "the app (you, a teammate) so it can read them again, `cycls.save(name, content)` asks where "
+        "to put a file anywhere, and "
         "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
         "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
         "an API key in app source.\n"
@@ -835,7 +837,8 @@ def app_catalog(root):
     text = ("## Apps in this workspace\n"
             "Read apps/<slug>/README.md before changing one. What an app keeps with `cycls.get`/`set` "
             "is reached only with `database` at `apps/<slug>/<key>` (scan `apps/<slug>/`); "
-            "its files are in apps/<slug>/data/.\n"
+            "its files are in apps/<slug>/data/. An app open beside the chat picks up what you change there "
+            "by itself. A message sent while one is open says so on an \"[Open beside the chat: …]\" line.\n"
             + "\n".join(lines)) if lines else ""
     _apps_cache[root] = (time.monotonic() + _APPS_TTL, text)
     return text

@@ -2,6 +2,8 @@
 // instead of hand-rolling postMessage. `get`/`set` are the workspace's shelf in
 // the object store, one row per key; `cycls.me` is the viewer's own and
 // `cycls.users` is everyone's, which the server allows admins only.
+// `cycls.onChange` is how an app hears that its data changed under it (the agent,
+// a teammate, another tab); an app with no listener is reloaded by the host instead.
 
 const SHIM = `<script>(function(){
   // A sandboxed frame has an opaque origin, so even READING window.localStorage
@@ -26,6 +28,10 @@ const SHIM = `<script>(function(){
   }
 
   var seq = 0, waiting = new Map(), ctx = null, resolveReady, tries = 0, link = null;
+  // Names this document in every announcement, so the host answers it once. A busy frame (a big
+  // bundle running) could announce twice before it heard back; the host opened a second channel,
+  // answered on it, and this document, listening on the first, waited for its data forever.
+  var doc = Math.random().toString(36).slice(2) + Date.now().toString(36);
   var ready = new Promise(function(r){ resolveReady = r; });
 
   function send(msg){ if (link) link.postMessage(msg); else parent.postMessage(msg, '*'); }
@@ -46,6 +52,7 @@ const SHIM = `<script>(function(){
       resolveReady(ctx);
       return;
     }
+    if (m.type === 'cycls:changed') { changed(m); return; }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
         && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
         && m.type !== 'cycls:data:result') return;
@@ -82,8 +89,46 @@ const SHIM = `<script>(function(){
   // guarantees it.
   (function announce(){
     if (ctx || tries++ > 40) return;
-    parent.postMessage({ type: 'cycls:ready' }, '*');
+    parent.postMessage({ type: 'cycls:ready', doc: doc }, '*');
     setTimeout(announce, 50);
+  })();
+
+  // The frame is sandboxed without allow-forms, so the browser blocks a form's submission before
+  // the submit event fires: every <form onSubmit> (react-hook-form, each shadcn form) did nothing.
+  // A submit button's click, Enter in a field and requestSubmit() fire the submit event here instead,
+  // after the form's own validation; the blocked native submission is cancelled.
+  if (window.HTMLFormElement && window.document) (function(){
+    function fire(form, submitter){
+      if (!form.noValidate && !(submitter && submitter.formNoValidate) && form.reportValidity && !form.reportValidity()) return;
+      var ev;
+      try { ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: submitter || null }); }
+      catch (e) { ev = new Event('submit', { bubbles: true, cancelable: true }); }
+      form.dispatchEvent(ev);
+    }
+    function submitter(t){
+      var b = t && t.closest ? t.closest('button, input[type=submit], input[type=image]') : null;
+      if (!b || !b.form || b.disabled) return null;
+      return (b.tagName === 'BUTTON' && b.type !== 'submit') ? null : b;
+    }
+    var NOT_TEXT = ['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'color', 'range'];
+    // Bubble phase on the window: after the app's own handlers, so one that prevented it wins.
+    addEventListener('click', function(e){
+      if (e.defaultPrevented) return;
+      var b = submitter(e.target);
+      if (!b) return;
+      e.preventDefault();
+      fire(b.form, b);
+    });
+    addEventListener('keydown', function(e){
+      var t = e.target;
+      if (e.defaultPrevented || e.key !== 'Enter' || e.isComposing || !t || t.tagName !== 'INPUT' || !t.form) return;
+      if (NOT_TEXT.indexOf(String(t.type || 'text').toLowerCase()) >= 0) return;
+      e.preventDefault();
+      var b = t.form.querySelector('button:not([type]), button[type=submit], input[type=submit], input[type=image]');
+      if (b && b.disabled) return;
+      fire(t.form, b);
+    });
+    window.HTMLFormElement.prototype.requestSubmit = function(by){ fire(this, by || null); };
   })();
 
   function resolve(p){
@@ -113,24 +158,64 @@ const SHIM = `<script>(function(){
     };
   }
 
-  var kv = null, loading = null, flying = {}, clipped = false;
+  var kv = null, loading = null, flying = {}, clipped = false, stale = false;
 
   // Concurrent callers share one list, or a later one would clobber the
-  // mutations an earlier set() already made.
+  // mutations an earlier set() already made. A stale copy (something changed
+  // and it was not one key) is listed again on the next read.
   function load(){
-    if (kv) return Promise.resolve(kv);
+    if (kv && !stale) return Promise.resolve(kv);
     if (!loading) loading = (async function(){
-      var next = {};
+      var next = {}, sending = Object.keys(flying);
       try {
         var page = await data({ op: 'list' }) || {};
         (page.rows || []).forEach(function(r){ next[r.key] = r.value; });
         clipped = !!page.truncated;
-      } catch (e) {}
+      } catch (e) {
+        if (kv) { stale = false; loading = null; return kv; }   // a failed refresh keeps what it had
+      }
+      // A value of its own still on its way is newer than what the list saw.
+      if (kv) sending.concat(Object.keys(flying)).forEach(function(k){
+        if (Object.prototype.hasOwnProperty.call(kv, k)) next[k] = kv[k]; else delete next[k];
+      });
       kv = next;
+      stale = false;
       loading = null;
       return kv;
     })();
     return loading;
+  }
+
+  // The host says the data changed. Named keys are read again one by one (a value of
+  // the app's own on its way wins); anything wider re-lists. Then the listeners hear.
+  var listeners = [], listened = false;
+  function changed(m){
+    var keys = Array.isArray(m.keys) ? m.keys.map(String) : null;
+    var work;
+    if (!kv) work = Promise.resolve();   // nothing read yet: the first get() reads it fresh
+    else if (keys && keys.length <= 20) work = Promise.all(keys.map(function(k){
+      return data({ op: 'get', key: k }).then(function(r){
+        if (flying[k]) return;
+        if (r) kv[k] = r.value; else delete kv[k];
+      });
+    })).catch(function(){ stale = true; });
+    else { stale = true; work = load(); }
+    return work.then(function(){
+      var ev = { source: String(m.source || 'poll') };
+      if (keys) ev.keys = keys;
+      if (Array.isArray(m.files)) ev.files = m.files.map(String);
+      listeners.slice().forEach(function(fn){
+        try { fn(ev); } catch (e) { report((e && e.message) || e); }
+      });
+    });
+  }
+
+  function onChange(fn){
+    if (typeof fn !== 'function') throw new Error('cycls.onChange needs a function');
+    listeners.push(fn);
+    // Once per document, after the handshake so it rides the private port.
+    if (!listened) { listened = true; ready.then(function(){ send({ type: 'cycls:listen' }); }); }
+    return function(){ var i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); };
   }
 
   // A set() leaves at once. A WebView that closes or goes to the background runs no timer, and a frame
@@ -218,6 +303,12 @@ const SHIM = `<script>(function(){
       };
     },
     all: async function(){ return Object.assign({}, await load()); },
+    // fn({source, keys?, files?}) after the data changed under the app: "agent", "turn", "poll"
+    // or "focus"; keys are shared keys (absent: maybe any), files are paths like "data/x.json".
+    // cycls.get already answers with the new values inside it. Returns an unsubscribe.
+    onChange: onChange,
+    // Read the shared data again now, without waiting to be told.
+    refresh: function(){ stale = true; return load().then(function(){}); },
     // This viewer's own rows — nobody else's, and no id to get wrong.
     me: shelf('me'),
     // Every member's, for an admin. It rejects for anyone else, which is both the

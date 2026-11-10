@@ -363,9 +363,9 @@ def _is_plain_user(msg):
     return True
 
 
-# What the harness adds to what was typed (`_ingest`, `_with_mention`, `_with_selection`): an
-# attached file's name with its contents after it, and a line each for an @-mention and a selection.
-_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ")
+# What the harness adds to what was typed (`_ingest`, `_with_mention`, `_with_selection`, `_with_line`): an
+# attached file's name with its contents after it, and a line each for an @-mention, a selection and an open app.
+_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ", "[Open beside the chat: ")
 _MENTION = re.compile(r"(?:\n\n)?\[Using: [^\n]*\]\Z")   # on a turn sent as a string
 
 
@@ -793,6 +793,20 @@ async def _may_write_app(ws, user, key):
         raise ValueError(f"only workspace admins can write {slug}'s shared data")
 
 
+def _app_changed(key, said, version, deleted=False):
+    """An app's data the agent just changed: the model reads `said`, and an app open on it hears at
+    once (the `app_data` event) and reads it again — before, it showed what it had loaded until it was
+    reopened. `version` is the row's new one, so the app's own change check does not count it twice;
+    a whole subtree (`apps/x/` or `apps/x/a/`) names no one key, so the app reads everything again."""
+    if not key.startswith(APPS_ROOT):
+        return said
+    slug, _, rest = key[len(APPS_ROOT):].partition("/")
+    whole = not rest or rest.endswith("/")
+    return {"_model": said, "_ui": {"type": "ui", "action": "app_data", "slug": slug,
+                                    **({} if whole else {"key": rest, "version": version}),
+                                    **({"deleted": True} if deleted and not whole else {})}}
+
+
 async def _exec_database(inp, ws, user=None):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
@@ -806,13 +820,13 @@ async def _exec_database(inp, ws, user=None):
         if cmd == "put":
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
-            await db.put(k, inp.get("value"))
-            return f"Stored {key!r}"
+            version = await db.put(k, inp.get("value"))
+            return _app_changed(key, f"Stored {key!r}", version)
         if cmd == "delete":
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
             await db.delete(k)
-            return f"Deleted {key!r}"
+            return _app_changed(key, f"Deleted {key!r}", None, deleted=True)
         if cmd == "scan":
             prefix = inp.get("prefix", "")
             db, p = _route(ws, prefix, prefix=True)

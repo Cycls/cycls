@@ -1,8 +1,10 @@
 """End-to-end scenarios for the DataBase tool — real engine roundtrip,
 isolated from the framework chat DB.
 
-`_exec_database` always returns a string (Anthropic's tool_result.content
-rejects raw dicts/lists), so get/scan results come back JSON-encoded.
+`_exec_database` returns a string (Anthropic's tool_result.content
+rejects raw dicts/lists), so get/scan results come back JSON-encoded. A write
+to an app's data is the one exception: `{"_model": <the string>, "_ui": …}`,
+the harness's two channels, so an app open on it hears at once.
 
 The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh.
@@ -195,7 +197,7 @@ def test_u_is_reserved_under_a_slug(tmp_path):
 def test_u_is_only_reserved_directly_under_the_slug(tmp_path):
     ws = _ws_user(tmp_path)
     out = _run(_exec_database({"command": "put", "key": "apps/standup/notes/u/x", "value": 1}, ws))
-    assert out.startswith("Stored")
+    assert out["_model"].startswith("Stored")
 
 
 def test_scan_hides_members_private_rows_and_reprefixes(tmp_path):
@@ -234,7 +236,57 @@ def test_an_admin_only_app_takes_the_tools_writes_from_admins_only(tmp_path):
     assert "only workspace admins" in _run(_exec_database(put, ws, alice))
     assert "only workspace admins" in _run(_exec_database({"command": "delete", "key": "apps/standup/config"}, ws, alice))
     assert "only workspace admins" in _run(_exec_database(put, ws))   # no person, no admin
-    assert _run(_exec_database(put, ws, bob)).startswith("Stored")
+    assert _run(_exec_database(put, ws, bob))["_model"].startswith("Stored")
     assert json.loads(_run(_exec_database({"command": "get", "key": "apps/standup/config"}, ws, alice))) == 1
     assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws, alice)).startswith("Stored")
 
+
+
+# ---- an open app hears the agent's writes (docs/notes/apps.md, "Keeping an open app in step") ----
+
+def test_an_app_write_tells_the_open_app_which_key_and_its_new_version(tmp_path):
+    ws = _ws_user(tmp_path)
+    out = _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    assert out["_model"] == "Stored 'apps/standup/entries/1'"
+    ui = out["_ui"]
+    assert ui["type"] == "ui" and ui["action"] == "app_data"
+    assert (ui["slug"], ui["key"]) == ("standup", "entries/1")
+    shelf = DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps", ws="t-eng"))
+    # the version the app's own check will read, so it does not count this change twice
+    assert ui["version"] == _run(shelf.get_gen("standup/entries/1"))[1]
+    assert "deleted" not in ui
+
+
+def test_an_app_delete_says_it_was_a_delete(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    out = _run(_exec_database({"command": "delete", "key": "apps/standup/entries/1"}, ws))
+    assert out["_model"] == "Deleted 'apps/standup/entries/1'"
+    assert out["_ui"]["deleted"] is True and out["_ui"]["key"] == "entries/1"
+
+
+def test_a_subtree_delete_names_no_key_so_the_app_reads_everything(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    out = _run(_exec_database({"command": "delete", "key": "apps/standup/entries/"}, ws))
+    assert out["_ui"] == {"type": "ui", "action": "app_data", "slug": "standup"}
+
+
+def test_the_agents_own_keys_and_reads_stay_plain_strings(tmp_path):
+    ws = _ws_user(tmp_path)
+    assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws)) == "Stored 'note'"
+    assert _run(_exec_database({"command": "delete", "key": "note"}, ws)) == "Deleted 'note'"
+    _run(_exec_database({"command": "put", "key": "apps/standup/a", "value": 1}, ws))
+    assert isinstance(_run(_exec_database({"command": "get", "key": "apps/standup/a"}, ws)), str)
+    assert isinstance(_run(_exec_database({"command": "scan", "prefix": "apps/standup/"}, ws)), str)
+
+
+def test_a_put_returns_the_version_a_read_and_a_listing_see(tmp_path):
+    db = DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps"))
+    v1 = _run(db.put("app/a", {"n": 1}))
+    assert v1 and _run(db.get_gen("app/a"))[1] == v1
+    v2 = _run(db.put("app/a", {"n": 2}))
+    assert v2 != v1
+    _run(db.put("app/b", 1))
+    _run(db.put("other/c", 1))
+    assert _run(db.versions(prefix="app/")) == {"app/a": v2, "app/b": _run(db.get_gen("app/b"))[1]}

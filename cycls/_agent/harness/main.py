@@ -158,6 +158,28 @@ def _with_mention(content, line):
 
 
 SELECTED = "[Selected in "
+OPEN_APP = "[Open beside the chat: "
+
+
+def _open_app_line(root, slug):
+    """The app the person has open beside the chat, so "this" in their message points somewhere and the
+    agent reads its data before it answers: they may have changed it in the app since it last looked.
+    None when there is no such app."""
+    folder = Path(root) / "apps" / slug
+    if not (folder / "index.html").is_file():
+        return None
+    try: m = json.loads((folder / "app.json").read_text(encoding="utf-8"))
+    except Exception: m = {}
+    name = m.get("name") if isinstance(m, dict) and isinstance(m.get("name"), str) and m["name"].strip() else slug
+    return (f'{OPEN_APP}the app {json.dumps(name.strip()[:60], ensure_ascii=False)} at apps/{slug}/. '
+            f"They may have changed its data there since you last read it: `database` scan apps/{slug}/ "
+            "before you answer about it or change it.]")
+
+
+def _with_line(content, line):
+    """One more text block after what was typed, as a selection is added."""
+    blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
+    return [*blocks, {"type": "text", "text": line}]
 
 
 def _with_selection(content, sel):
@@ -481,6 +503,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
+        app = getattr(context, "app", "")
+        if app and isinstance(app, str) and (line := await asyncio.to_thread(_open_app_line, workspace.root, app)):
+            content = _with_line(content, line)
         await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
     messages = session.messages
