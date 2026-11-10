@@ -930,3 +930,24 @@ The rerun of the perfume brief on production (7.9 min) showed three avoidable st
 - **Service** (cycls-video): within one organisation, a waiting check, look or render goes ahead of that
   organisation's waiting clip readings (`slots.FIRST`); a colleague's four-clip batch had held a look in
   another chat to 44 s.
+
+### Grades everywhere: HyperFrames 0.9.26 (2026-11-10)
+
+- **The service runs HyperFrames 0.9.26** (cycls-video b406e90). 0.9 builds a grade's shader from only the effects
+  it turns on, so it compiles on Direct3D (Windows Chrome's default), where 0.8.143's one shader never finished.
+  The canvas preview and the editor's preview draw grades again, the editor's Grade and Effects sections are back,
+  and the stand-ins of 2026-11-09 are gone.
+- **The frames `write` and `look` show carry the grade** too (`hyperframes snapshot` draws it in 0.9), so the
+  sheet shows the colour the render will have. The contract (v5, re-signed) and the skills (footage-video,
+  video-direction) say so; before, they told the model to judge the colour after the sheet.
+- **Checked on dev with the Tamr & Co reel** (four graded clips, the luxe look): `look`'s frames carry the grade
+  (graded vs as shot: about 13 levels apart a channel, the dark chandelier clip lifted); the canvas preview plays on
+  Windows Direct3D and matches `look` at the same moment within 1-3 levels; the editor opens the reel, and its Grade
+  panel shows each clip's grade (night-lift 45%, the look's adjustments) without freezing.
+- **Found on the way and fixed in the service:** the editor's preview drew the grade but not the matching or the
+  lift under dark footage (the clip facts it reads lacked how each clip is lit), so it showed the first clip at half
+  the render's brightness; 0.9's player put a loading card with HyperFrames' mark over a clip still loading (off in
+  the canvas page and the editor); and 0.9's storyboard board carried a desktop-app button the editor's gate refused.
+- The grade arithmetic is unchanged, so matching and the floor under dark footage hold as they were. The
+  service's notes (docs/quirks.md, "HyperFrames 0.9.26") have the rest: the players renamed `*.min.js` for 0.9's
+  lint, `check --no-craft --no-cache`, the editor's rewritten edits.

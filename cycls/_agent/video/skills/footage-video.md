@@ -30,8 +30,8 @@ footage: choosing it, cutting it, dressing it and captioning it.
   talking-head social; `warm` for food and family; `bold` for sport and event recaps; `luxe` for property.
 - The look grades every piece and `<img class="photo">`, after the pieces from different cameras are matched to
   each other: they read as one shoot. No `filter` of your own for colour. `data-grade="none"` keeps one piece as
-  shot (a screen recording); `data-match="none"` (a piece or the root) keeps it as filmed. The sheet shows pieces as
-  shot; the render and the editor's preview carry the grade.
+  shot (a screen recording); `data-match="none"` (a piece or the root) keeps it as filmed. The sheet, the previews
+  and the render all carry the grade.
 - A title over footage is a scene with `on-footage` (and `bottom` or `top`) above the pieces; the look puts its
   scrim under the words. The first frame's headline is set to none so it is there at 0 s:
   ```html

@@ -255,8 +255,8 @@ After every `write`, before `render`:
 7. The accent on one thing a scene.
 8. A role missing from a frame has not come in yet (the look's delay or data-anim-delay): `look` a moment later
    before changing anything.
-9. The sheet shows footage and photos as shot: the grade appears in the render and the editor's preview. Judge
-   the light and the framing on the sheet, the colour after.
+9. The sheet shows footage and photos graded, as the render will: judge the light, the framing and the colour
+   on it.
 
 Fix all of it in ONE `edit`, then `look` at the moments you changed. When a video feels busy, remove a third of
 the motion and keep the moves that lead the eye.
