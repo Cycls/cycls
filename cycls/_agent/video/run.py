@@ -404,6 +404,70 @@ def _branded(root, html):
     return brand.apply(html, root, _catalogue()[0], looks)
 
 
+async def _kit(root, inp):
+    """The brand's video kit set (brand.VIDEO_KEYS in brand/brand.yaml) → what the reply says. A voice is kept only with
+    the consent of the person it belongs to, said in this same call."""
+    from . import brand
+
+    values, said = {}, []
+    sample = inp.get("sample")
+    if sample is not None:
+        if str(sample).strip().lower() in ("", "none", "off"):
+            values.update({"voice": None, "voice_speaks": None, "voice_consent": None})
+            said.append("the brand's own voice removed")
+        else:
+            consent = str(inp.get("consent") or "").strip()
+            if len(consent) < 12:
+                return _err("consent: ask the person whether this is their own voice (or they have the speaker's "
+                            "permission) and whether they agree to it reading their videos, and put their answer here "
+                            "with their name and today's date (\"Sara Ali, 2026-11-11: my own voice; I agree\"). A voice "
+                            "is never kept without it.")
+            try:
+                full = _resolve_path(str(sample).strip(), root)
+            except ValueError as e:
+                return _err(f"sample: {e}")
+            ext = full.suffix.lower().lstrip(".")
+            if not full.is_file() or ext not in brand.SAMPLE_TYPES:
+                return _err("sample: the workspace path of an M4A, MP3 or WAV file: 10-30 s of one person speaking "
+                            "clearly, with no music.")
+            if full.stat().st_size > brand.SAMPLE_BYTES:
+                return _err("sample: at most 2 MB (an M4A or MP3 of 30 s is well under it; a WAV that large holds about 20 s).")
+            speaks = str(inp.get("speaks") or "standard").strip().lower()
+            if speaks not in ("saudi", "standard"):
+                return _err("speaks: saudi (the voice speaks Saudi dialect) or standard (Standard Arabic and English).")
+            rel = full.relative_to(root.resolve()).as_posix()
+            values.update({"voice": rel, "voice_speaks": speaks, "voice_consent": consent})
+            said.append(f"the brand's own voice ({rel}, speaking {speaks}; consent: {consent})")
+    if inp.get("music") is not None:
+        music = str(inp.get("music") or "").strip()[:80]
+        values["music"] = music or None
+        said.append(f"its music: {music}" if music else "its music removed")
+    for key in ("intro", "outro"):
+        if inp.get(key) is not None:
+            v = str(inp.get(key)).strip().lower()
+            if v not in ("logo", "none"):
+                return _err(f"{key}: logo or none.")
+            values[key] = v
+            said.append(f"{key}: {v}")
+    if inp.get("folder") is not None:
+        folder = str(inp.get("folder") or "").strip().strip("/")
+        if folder:
+            try:
+                full = _resolve_path(folder, root)
+            except ValueError as e:
+                return _err(f"folder: {e}")
+            if not full.is_dir():
+                return _err(f"folder: {folder} is not a folder in the workspace.")
+        values["footage"] = folder or None
+        said.append(f"its own clips: {folder}" if folder else "its clips folder removed")
+    if not values:
+        return _err("kit needs at least one of: sample (with speaks and consent), music, intro, outro, folder.")
+    text = brand.set_video(root, values)
+    await write_fig(root, "brand/brand.yaml", text.encode("utf-8"), by="agent", reason="video-brand-kit")
+    return ("Saved in the brand kit (brand/brand.yaml): " + "; ".join(said) + ". Every video for this brand uses it. "
+            + (brand.video_note(root) or ""))
+
+
 async def _keep_brand_look(root, look):
     """The brand's look kept in brand/brand.yaml (video_look) → what the reply says, or ""."""
     from . import brand
@@ -464,6 +528,9 @@ async def _guide(workspace, root, loaded):
     kit = brand.note(brand.kit(root, c["fonts"]), c["fonts"])
     if kit:
         lines.append(kit)
+    video_kit = brand.video_note(root)
+    if video_kit:
+        lines.append(video_kit)
     if not VIDEO_SKILLED.get():
         lines.append("Before you write a new video, load its skills in one call — the craft that makes it look made, "
                      "not templated: {\"action\": \"skill\", \"skill\": [\"video-direction\", \"motion-design\", "
@@ -851,22 +918,32 @@ async def _voice(workspace, root, chat, name, text, voice_id, language, speed=1.
     if not isinstance(text, str) or not text.strip():
         return _err("voice needs text: the script to read aloud.")
     voice_id = voice_id or "default"
+    sample, wire, own = None, voice_id, ""
+    if voice_id == "brand":         # the brand's own voice: its sample sent with the script (brand kit, consent kept)
+        from . import brand
+        got = brand.voice_sample(root)
+        if isinstance(got, str):
+            return _err(f"voice brand: {got}")
+        data, ext, wire = got
+        sample = (data, ext)
+        own = "|" + hashlib.sha256(data).hexdigest()[:16]
     rel, words_rel = files.voice_audio(name), files.voice_words(name)
     try:
         old = json.loads((root / words_rel).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = None
     if old and old.get("text") == text and old.get("voice") == voice_id and float(old.get("speed") or 1) == speed \
-            and (root / rel).is_file():
+            and (old.get("own") or "") == own.lstrip("|") and (root / rel).is_file():
         return report.voice_text(old, rel, reused=True, voice_id=voice_id)
     key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|voice|{name}|{voice_id}|{language}|{text}"
-                         f"{'|' + str(speed) if speed != 1 else ''}".encode()).hexdigest()
+                         f"{'|' + str(speed) if speed != 1 else ''}{own}".encode()).hexdigest()
     pending = files.voice_pending(root, chat, name)
     if pending and pending.get("key") == key:
         token = pending["token"]
     else:
         try:
-            job = await video.voice(workspace, text, language=language, voice_id=voice_id, key=key, speed=speed)
+            job = await video.voice(workspace, text, language=language, voice_id=wire, key=key, speed=speed,
+                                    **({"sample": sample} if sample else {}))
         except video.Refused as e:
             return _err(f"the voice-over was not made: {e}")
         token = job["token"]
@@ -885,6 +962,8 @@ async def _voice(workspace, root, chat, name, text, voice_id, language, speed=1.
     data = dest.read_bytes()
     dest.unlink(missing_ok=True)
     words = r.get("words") or {}
+    if sample:            # kept as asked, so the same script in the brand's voice is the same take next time
+        words = {**words, "voice": "brand", "speaks": wire, "own": own.lstrip("|")}
     async with lock(root / rel):
         await write_fig(root, rel, data, by="agent", reason="video-voice")
         await write_fig(root, words_rel, json.dumps(words, ensure_ascii=False, indent=1).encode("utf-8"),
@@ -1606,7 +1685,11 @@ async def _exec_video(inp, workspace, ctx=None):
         if action == "skill":     # text only: the craft, read beside the instructions
             return skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name")) + note
         if action == "music":
-            return _music(inp.get("query") or inp.get("mood"), inp.get("length"), chat) + note
+            from . import brand
+            query = inp.get("query") or inp.get("mood") or brand.video_kit(root).get("music")
+            return _music(query, inp.get("length"), chat) + note
+        if action == "kit":
+            return await _kit(root, inp) + note
         if action == "lottie":
             return _lottie(inp.get("query")) + note
         if action == "editor":

@@ -754,6 +754,45 @@ class FakeVoice:
         return {"token": f"v{len(self.calls)}", "eta_s": 30}
 
 
+class FakeOwnVoice(FakeVoice):
+    async def voice(self, ws, text, *, language=None, voice_id=None, key=None, speed=None, sample=None):
+        self.calls.append({"text": text, "voice": voice_id, "key": key, "sample": sample})
+        return {"token": f"v{len(self.calls)}", "eta_s": 30}
+
+
+def test_the_brands_own_voice_is_kept_only_with_consent_and_read_in_its_voice(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    fv = FakeOwnVoice(monkeypatch)
+    (tmp_path / "uploads").mkdir()
+    (tmp_path / "uploads" / "me.m4a").write_bytes(b"\x00\x00\x00 ftypM4A " + b"\x01" * 300)
+    ws = _ws(tmp_path)
+    # Without the person's own consent, no voice is kept; asked for before then, voice brand says how to set one.
+    assert "consent" in _run({"action": "kit", "sample": "uploads/me.m4a", "speaks": "saudi"}, ws)
+    assert "no voice of its own yet" in _run({"action": "voice", "name": "vo", "text": "Hi", "voice": "brand"}, ws)
+    said = _run({"action": "kit", "sample": "uploads/me.m4a", "speaks": "saudi", "music": "oud, calm",
+                 "consent": "Sara Ali, 2026-11-11: my own voice; I agree to it reading our videos"}, ws)
+    assert "Saved in the brand kit" in said and "speaking saudi" in said
+    yaml = (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
+    assert 'video_voice: "uploads/me.m4a"' in yaml and 'video_voice_speaks: "saudi"' in yaml and "Sara Ali" in yaml
+    # The voice-over sends the sample, speaking Saudi; the take is kept as the brand's.
+    svc.result = {"state": "done", "kind": "voice", "words": WORDS, "audio": {"bytes": 20, "duration": 3.2}, "warnings": []}
+    _run({"action": "voice", "name": "vo", "text": "Hello there. Make one.", "voice": "brand"}, ws)
+    call = fv.calls[0]
+    assert call["voice"] == "saudi" and call["sample"][1] == "m4a" and call["sample"][0].startswith(b"\x00\x00\x00 ftyp")
+    words = json.loads((tmp_path / "videos" / "voice" / "vo.words.json").read_text(encoding="utf-8"))
+    assert words["voice"] == "brand" and words["speaks"] == "saudi" and words["own"]
+    again = _run({"action": "voice", "name": "vo", "text": "Hello there. Make one.", "voice": "brand"}, ws)
+    assert len(fv.calls) == 1 and again.startswith("Already made")
+    # The guide names the kit; music with no query starts from the brand's.
+    from cycls._agent.video import brand
+    note = brand.video_note(tmp_path)
+    assert 'voice {voice: "brand"}' in note and "oud, calm" in note and "ends on its logo" in note
+    assert "Not a mood" not in _run({"action": "music"}, ws)
+    removed = _run({"action": "kit", "sample": "none"}, ws)
+    assert "removed" in removed and "video_voice" not in (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
+
+
 def test_a_voice_over_is_made_saved_with_its_words_and_said_with_the_lines_to_use(monkeypatch, tmp_path):
     _on(monkeypatch)
     svc = FakeService(monkeypatch)

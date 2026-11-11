@@ -247,13 +247,21 @@ async def piece(workspace, html, piece_name, at, variables):
     return resp.json()
 
 
-async def voice(workspace, text, *, language=None, voice_id=None, key=None, speed=None):
+async def voice(workspace, text, *, language=None, voice_id=None, key=None, speed=None, sample=None):
     """Start a voice-over: the script read aloud on the organisation's GPU. → {token, eta_s}. `speed` 0.75 to
-    1.25 (slower below 1). Refused (with the reason) when the script is empty or too long, or the voice unknown."""
+    1.25 (slower below 1). `sample` (bytes, type): read in that voice, a brand's own (consent kept by the brand kit),
+    speaking as `voice_id` says. Refused (with the reason) when the script is empty or too long, the voice unknown,
+    or the sample not audio."""
+    import hashlib
+    parts = {}
+    if sample:
+        data, ext = sample
+        parts[f"{hashlib.sha256(data).hexdigest()[:32]}.{ext}"] = data
     meta = {"kind": "voice", "voice": {"text": text, "language": language, "voice": voice_id or "default",
-                                       **({"speed": speed} if speed and speed != 1 else {})}}
+                                       **({"speed": speed} if speed and speed != 1 else {}),
+                                       **({"sample": next(iter(parts))} if parts else {})}}
     headers = {"Idempotency-Key": key} if key else {}
-    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, {}),
+    resp = await _request("POST", "/v1/jobs", workspace=workspace, retry=bool(key), files=_parts(meta, parts),
                           headers=headers, timeout=httpx.Timeout(60.0, connect=15.0))
     if resp.status_code == 422:
         raise Refused((_body(resp) or {}).get("error") or "the script was refused", [])

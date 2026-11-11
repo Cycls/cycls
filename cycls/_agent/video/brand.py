@@ -75,7 +75,8 @@ def note(k, fonts=()):
     if arabic and (k.get("heading") or k.get("body") or files):
         parts.append(f"Arabic text in a family that has Arabic ({', '.join(arabic[:3])}…)")
     if k["logo"]:
-        parts.append(f"the logo <img src=\"{k['logo']}\"> (on the opening or the closing scene, or small in a corner)")
+        parts.append(f"the logo <img src=\"{k['logo']}\"> (on the closing scene, carried in; on the opening only when the "
+                     "brand's video kit says so)")
     line = ("Brand kit (brand/brand.yaml): use it in every video unless the person asks otherwise — "
             + "; ".join(parts) + ".")
     line += (" Over a look the kit goes by itself: each save adds a <style data-cycls-brand> with its colours and fonts "
@@ -286,3 +287,120 @@ def apply(html, root, fonts=(), looks=()):
         if head:
             html = html[:head.end()] + block + html[head.end():]
     return html, " ".join(said), keep
+
+
+# ── the brand's video kit ───────────────────────────────────────────────────────────────────────────────
+# Beside its colours, fonts, logo and look, a brand keeps how its videos sound and open and close, as flat lines
+# in brand/brand.yaml (the `kit` action writes them):
+#   video_voice: brand/voice.m4a        its own voice: 5-40 s of one person speaking clearly, no music
+#   video_voice_speaks: saudi           how that voice speaks: saudi (dialect) or standard
+#   video_voice_consent: "…"            who agreed, and when: the voice is used only with this line
+#   video_music: oud, calm              mood words or track ids the music pick starts from
+#   video_intro: none                   logo: every video opens on the logo (the brand asked for it)
+#   video_outro: logo                   every video ends on the logo carried in
+#   video_footage: brand/footage        the brand's own clips, used before stock
+VIDEO_KEYS = ("video_voice", "video_voice_speaks", "video_voice_consent", "video_music", "video_intro",
+              "video_outro", "video_footage")
+SAMPLE_TYPES = ("m4a", "mp3", "wav")
+SAMPLE_BYTES = 2 * 1024 * 1024
+CLIP_TYPES = (".mp4", ".mov", ".webm", ".m4v")
+
+
+def _value(text, key):
+    m = re.search(rf"""^{key}\s*:\s*(?:"([^"]*)"|'([^']*)'|([^#\n]*?))\s*(?:#.*)?$""", text, re.M)
+    if not m:
+        return None
+    v = next((g for g in m.groups() if g is not None), "").strip()
+    return v if v and v.lower() not in ("null", "none", "~") or key in ("video_intro", "video_outro") else None
+
+
+def video_kit(root):
+    """The brand's video settings (VIDEO_KEYS without "video_"), {} without any."""
+    try:
+        text = (Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    out = {}
+    for key in VIDEO_KEYS:
+        v = _value(text, key)
+        if v:
+            out[key[len("video_"):]] = v
+    return out
+
+
+def set_video(root, values):
+    """`values` ({key without "video_": text, or None to remove}) written into brand/brand.yaml, each on its own line
+    in place of the one there, the file made when there is none. → the new text."""
+    import json
+    path = Path(root) / "brand" / "brand.yaml"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = ""
+    for short, v in values.items():
+        key = f"video_{short}"
+        text = re.sub(rf"^{key}\s*:.*\n?", "", text, flags=re.M)
+        if v is not None:
+            text = (text if text.endswith("\n") or not text else text + "\n") + f"{key}: {json.dumps(str(v), ensure_ascii=False)}\n"
+    return text
+
+
+def voice_sample(root):
+    """The brand's own voice as a voice-over sends it → (bytes, its type, how it speaks: "saudi" or "default"), or
+    the sentence saying what is missing."""
+    k = video_kit(root)
+    if not k.get("voice"):
+        return ("this workspace's brand kit has no voice of its own yet. Ask the person for 10-30 s of their own voice "
+                "(or one they have the speaker's permission for), one person speaking clearly with no music, as an "
+                "M4A, MP3 or WAV file, and whether they agree to it reading their videos; then kit {sample, speaks, "
+                "consent}. Until then use voice default or saudi.")
+    if not k.get("voice_consent"):
+        return ("the brand kit's voice has no consent recorded: ask the person whether it is their own voice (or they "
+                "have the speaker's permission) and whether they agree to it reading their videos, then kit {sample, "
+                "speaks, consent} again with their answer.")
+    path = Path(root) / k["voice"]
+    ext = path.suffix.lower().lstrip(".")
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return f"the brand kit's voice sample {k['voice']} is not in the workspace any more: kit {{sample}} again."
+    if ext not in SAMPLE_TYPES or len(data) > SAMPLE_BYTES:
+        return (f"the brand kit's voice sample {k['voice']} must be an M4A, MP3 or WAV of at most 2 MB (a WAV that "
+                "large holds about 20 s: send an M4A or MP3).")
+    return data, ext, "saudi" if (k.get("voice_speaks") or "").lower() == "saudi" else "default"
+
+
+def brand_clips(root, k=None):
+    """The brand's own clips (video_footage, or brand/footage when it is there): [workspace path]."""
+    k = k if k is not None else video_kit(root)
+    folder = k.get("footage") or ("brand/footage" if (Path(root) / "brand" / "footage").is_dir() else None)
+    if not folder:
+        return []
+    base = Path(root) / folder
+    try:
+        return sorted(f"{folder.rstrip('/')}/{p.name}" for p in base.iterdir() if p.suffix.lower() in CLIP_TYPES)[:40]
+    except OSError:
+        return []
+
+
+def video_note(root):
+    """The guide's line for the brand's video kit, or ''."""
+    k = video_kit(root)
+    clips = brand_clips(root, k)
+    parts = []
+    if k.get("voice") and k.get("voice_consent"):
+        how = "in Saudi dialect" if (k.get("voice_speaks") or "").lower() == "saudi" else "in Standard Arabic or English"
+        parts.append(f"its own voice: voice {{voice: \"brand\"}} reads a script in it ({how}); use it for every "
+                     "voice-over unless the person asks for another")
+    if k.get("music"):
+        parts.append(f"its music: {k['music']} (music with no query starts from it)")
+    if (k.get("outro") or "logo").lower() == "logo":
+        parts.append("every video ends on its logo, carried in (or motion logo-reveal)")
+    if (k.get("intro") or "").lower() == "logo":
+        parts.append("every video opens on its logo for its first second (the brand asked for it), then the hook")
+    if clips:
+        shown = ", ".join(clips[:8]) + (f" and {len(clips) - 8} more" if len(clips) > 8 else "")
+        parts.append(f"its own clips ({shown}): use them before stock, each made ready with footage {{path}}")
+    if not parts:
+        return ""
+    return "The brand's video kit: " + "; ".join(parts) + ". The person changes it with kit."

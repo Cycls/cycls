@@ -17,7 +17,7 @@ from .skill import SKILLS, catalog as _skill_catalog
 # answers with the instructions themselves.
 VIDEO_LOADED = contextvars.ContextVar("video_loaded", default=None)
 ACTIONS = ("guide", "write", "edit", "template", "look", "render", "restore", "voice", "music", "footage", "subtitles",
-           "dub", "editor", "lottie", "motion", "skill")
+           "dub", "editor", "lottie", "motion", "skill", "kit")
 # Has this chat loaded the tool's skills? Set by the loop before its tools run; a first save without
 # them says which to load. Unset (a test, a caller with no chat) counts as loaded: nothing is said.
 VIDEO_SKILLED = contextvars.ContextVar("video_skilled", default=True)
@@ -51,7 +51,8 @@ _ACTIONS_TEXT = """ACTIONS
 - dub {name, to, lines?}: the video said in another language — to: "ar" (Standard Arabic), "ar-SA" (Arabic in the Saudi voice: use it whenever the person asks for Saudi) or "en" — made as a new video, videos/<name>-<to>.video.html: each sentence spoken in that language where the original says it (sped up a little when it runs long), a voice-over replaced, a person's own voice in footage kept quietly under, the captions in the new language. It needs the translation kept with the words: the first call lists the sentences and how long each is said; translate each FOR SPEAKING, about as long as the original, and call dub again with lines (one string per sentence, in order). The reply says which sentences were sped up and which do not fit even so: shorten those and call dub with all the lines again. On-screen titles are not translated for you: translate them with `edit` on the new video, then look and render it. The dub's voice is a built-in voice (Standard Arabic, or Saudi with to: "ar-SA"), never the person's own: say so if they might expect it.
 - editor {path} or {name}: open the video editor for the person. With path (a clip of theirs: MP4, MOV, WebM), the clip is made ready and videos/<name>.video.html is written holding the clip alone, whole (its first 10 minutes when longer), and opened in the editor, where they trim it, cut parts out, split it, set its volume, fix or cut words in its transcript, cut its pauses, add captions, a text, music, or a picture, logo or clip from their files, make other sizes, ask for a translation, and render it; the same clip again opens the same video. Use it when the person wants to edit a clip themselves, rather than writing a video for them. With name, a video already here opens in the editor.
 - restore {name}: put back the version before the last save.
-- voice {name, text, voice?: "default" | "saudi", language?: "ar" | "en", speed?: 0.75-1.25}: read the script aloud (speed below 1 reads slower: 0.85 is calm; use it when the person asks for a slower voice) as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
+- voice {name, text, voice?: "default" | "saudi" | "brand", language?: "ar" | "en", speed?: 0.75-1.25}: read the script aloud (speed below 1 reads slower: 0.85 is calm; use it when the person asks for a slower voice) as videos/voice/<name>.m4a, with when each sentence and word is spoken; the reply gives the <audio> line to use. Call it before writing the scenes. The same name and text again is the same take; a changed text replaces it (the old take kept as a version). If the reply says it is still reading, call it again to collect it.
+- kit {sample?, speaks?, consent?, music?, intro?, outro?, folder?}: set the brand's video kit, kept in brand/brand.yaml and used by every video for the brand: its own voice (sample: the workspace path of 10-30 s of one person speaking clearly, no music; speaks: standard or saudi; consent: REQUIRED — ask the person whether it is their own voice, or they have the speaker's permission, and whether they agree to it reading their videos, and put their answer with their name and the date; never set a voice without it, never one from a video or a recording of someone else), its music (mood words or track ids), intro (logo: every video opens on the logo; none by default), outro (logo, the default: every video ends on it) and folder (the brand's own clips, used before stock). Use it when the person asks for their voice, music or logo in every video. voice {voice: "brand"} then reads in that voice.
 - music {query?, length?}: the library's tracks for a mood or a few words, the best fit first, each with the id to use as src="music:<id>", its beat and good places to start, on the beat; the reply names a pick and its start. Its moods: calm, upbeat, tech, corporate, inspiring, playful, warm-acoustic, minimal-piano, middle-eastern (the look names the ones that suit it). With length (the video's seconds) the pick starts where the track covers the video, and the reply gives its beat grid: scene lengths on the beat and where to end on a bar. ONE call: take the pick (you cannot hear the tracks, so searching again tells you nothing new).
 - lottie {query}: the animation library's accents and animated emoji for a few words ("check", "underline", "confetti", "fire emoji"), each with the id to use as data-lottie="lottie:<id>", its length, its shape and whether it loops (ANIMATIONS in the instructions).
 - motion {name, piece, start, vars}: put a motion piece into the saved video at `start` seconds (MOTION PIECES in the instructions): piece "lower-third" (vars {name, role?, place?: "high"}: it sits just above two lines of captions; place "high" puts it in the upper part of the frame when a scene's own text sits low), "logo-reveal" ({logo?, title?}), "chart" ({kind: "bars" | "donut", title?, items: [{label, value}], suffix?}) or "kinetic-title" ({text}); vars may also set accent, background, font and duration. The brand kit fills the accent, the font and the logo you leave out; with no kit, the piece takes the video's own accent and dark colour. The same checks as write; the reply names the piece's id.
@@ -68,7 +69,7 @@ def _schema():
         "action": {"type": "string", "enum": list(ACTIONS),
                    "description": "guide (first), skill (the craft: load before writing a new video), write, edit, "
                                   "template, look, render, subtitles, dub, restore, voice, music, footage, lottie, motion, "
-                                  "editor (the person edits a clip or a video by hand)."},
+                                  "editor (the person edits a clip or a video by hand), kit (the brand's video kit)."},
         "skill": {"type": ["string", "array"], "items": {"type": "string"},
                   "description": "skill: the skills to load, in one call — " + ", ".join(SKILLS) + "."},
         "name": {"type": "string",
@@ -103,8 +104,21 @@ def _schema():
         "fps": {"type": "integer", "enum": [30, 60],
                 "description": "render: 30 (default; a final up to 30 s with fast moves carries motion blur) for promos, footage, motion graphics and talking; 60 only when the person asks for it, or for a screen recording or a UI demo."},
         "text": {"type": "string", "description": "voice: the script to read aloud; figures, prices and dates are read out."},
-        "voice": {"type": "string", "enum": ["default", "saudi"],
-                  "description": "voice and dub: default (any language) or saudi (Saudi dialect)."},
+        "voice": {"type": "string", "enum": ["default", "saudi", "brand"],
+                  "description": "voice and dub: default (any language) or saudi (Saudi dialect). voice also: brand (the "
+                                 "brand kit's own voice, when the guide names one)."},
+        "sample": {"type": "string", "description": "kit: the workspace path of the brand's own voice (M4A, MP3 or WAV, "
+                                                    "10-30 s of one person speaking clearly, no music); none removes it."},
+        "speaks": {"type": "string", "enum": ["standard", "saudi"],
+                   "description": "kit: how the brand's voice speaks: standard (Standard Arabic, English) or saudi."},
+        "consent": {"type": "string", "description": "kit, with sample: the person's own answer that it is their voice (or "
+                                                     "they have the speaker's permission) and that they agree to it reading "
+                                                     "their videos, with their name and the date."},
+        "music": {"type": "string", "description": "kit: the brand's music, mood words or track ids (music with no query "
+                                                   "starts from it)."},
+        "intro": {"type": "string", "enum": ["none", "logo"], "description": "kit: logo opens every video on the logo."},
+        "outro": {"type": "string", "enum": ["logo", "none"], "description": "kit: logo ends every video on the logo."},
+        "folder": {"type": "string", "description": "kit: a workspace folder of the brand's own clips, used before stock."},
         "language": {"type": "string", "enum": ["ar", "en"],
                      "description": "voice: the script's language, when not plain from it. footage: the language spoken "
                                     "in the clip, when you know it."},
