@@ -7,7 +7,7 @@ from typing import Optional, Any
 from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
-from cycls._agent import state
+from cycls._agent import activity, state
 from cycls._agent.web import voice
 
 
@@ -115,6 +115,7 @@ def sse(item):
 RUN_BUDGET = 45 * 60   # a run cannot outlive this
 RUN_DRAIN = 5          # how long a cancelled run gets to unwind
 RUN_BEAT = 10          # heartbeat interval; state.RUN_STALE is the reader's patience
+RUN_FILES = 5          # how long the run's end waits on recording what it changed (the rest finishes after)
 QUEUE_MAX = 512        # events buffered for a reader; a view, not a log
 _DONE, _LAGGED = object(), object()
 _OWNER = f"{os.environ.get('K_REVISION', 'local')}/{uuid.uuid4().hex[:8]}"
@@ -126,7 +127,7 @@ class Run:
     `inner` drives the loop and is the only thing stop, budget, disconnect and
     shutdown cancel."""
 
-    def __init__(self, *, detach, workspace=None, chat_id=None, user=None):
+    def __init__(self, *, detach, workspace=None, chat_id=None, user=None, agent=None):
         self.queue = asyncio.Queue(QUEUE_MAX)
         self.detach, self.attached, self.reason = detach, True, None
         self.failed = False   # the encoder handles the error itself
@@ -138,6 +139,7 @@ class Run:
         self.workspace, self.chat_id, self.user = workspace, chat_id, user
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
         self.started_at = datetime.now(timezone.utc).isoformat()
+        self.agent, self.stepped, self.before = agent, False, None
 
     def row(self, status):
         return {"run": self.id, "status": status, "owner": _OWNER,
@@ -177,6 +179,8 @@ class Run:
 
 
 async def _supervise(run, stream, runs, key, on_run):
+    if run.workspace is not None:   # what was there before it, for what it creates: names only, read while the model thinks
+        run.before = asyncio.ensure_future(asyncio.to_thread(activity.names, run.workspace.root))
     run.inner = asyncio.create_task(_drive(run, stream))
     try:
         while True:
@@ -205,6 +209,8 @@ async def _supervise(run, stream, runs, key, on_run):
         # Shielded: this is the only place that knows the run ended, and it runs
         # while the process may already be shutting down.
         await asyncio.shield(asyncio.ensure_future(_finish(run, status, on_run)))
+        if run.stepped and run.workspace is not None:
+            await asyncio.wait({asyncio.ensure_future(_files_changed(run))}, timeout=RUN_FILES)
         run.push(_DONE)
         if runs.get(key) is run: runs.pop(key, None)
 
@@ -251,6 +257,16 @@ async def _drive(run, stream):
         run.emit(chunk)
 
 
+async def _files_changed(run):
+    """A run that called tools may have changed any file, bash included: each is recorded as its change."""
+    try:
+        before = await run.before if run.before else None
+    except Exception:
+        before = None
+    try: await activity.after_run(run.workspace, before, run.started_at, run.chat_id, run.agent)
+    except Exception as e: log("warn", chat_id=run.chat_id, message=f"file changes not recorded: {type(e).__name__}: {e}")
+
+
 async def _forward(run):
     """The response: drains the run's queue. Ending this does not end the run —
     unless the client never opted into detachment, which is today's behaviour."""
@@ -286,6 +302,8 @@ async def encoder(stream, *, chat_id=None, user=None, first=False, run=None):
     if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id, **({"first": True} if first else {})})
     try:
         async for item in _aiter(stream):
+            if run is not None and isinstance(item, dict) and item.get("type") == "step":
+                run.stepped = True   # it called tools: the files it may have changed are recorded as it ends
             if msg := sse(item): yield msg
     except Exception as e:
         import traceback
@@ -432,6 +450,11 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
             await asyncio.wait(tasks, timeout=8)
 
     app = FastAPI(lifespan=_lifespan)
+
+    @app.middleware("http")
+    async def _origin(request: Request, call_next):
+        activity.ORIGIN.set(activity.origin_of(request.headers, request.client))   # where an audit row came from
+        return await call_next(request)
     app.state.runs = runs   # routers read it off the request
 
     validate = validator(auth, config.prod, iap)
@@ -480,7 +503,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         # whose caller is given no chat id to come back to.
         run = Run(detach=data.get("detach") is True and not api,
                   workspace=context.workspace if user is not None else None,
-                  chat_id=chat_id, user=user)
+                  chat_id=chat_id, user=user, agent=config.name)
         busy = JSONResponse(status_code=409, headers={"Retry-After": "2"},
                             content={"error": "run_in_progress", "chat_id": chat_id,
                                      "detail": "This chat is still working on your last message."})
@@ -519,6 +542,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         except BaseException:
             if runs.get(key) is run: runs.pop(key, None)   # no supervisor yet to do it
             raise
+        activity.ORIGIN.set({**activity.ORIGIN.get(), "agent": config.name, "chat": chat_id})   # the run's own rows
         run.task = asyncio.create_task(_supervise(run, stream, runs, key, on_run))
         return StreamingResponse(_forward(run), media_type="text/event-stream")
 

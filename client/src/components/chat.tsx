@@ -1,4 +1,5 @@
 import type { PollApi } from "../lib/polls";
+import { setAgentLabel } from "./file-details";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
@@ -30,7 +31,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra, Part, Connection } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
-import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
@@ -120,6 +121,8 @@ export interface FilesPanelProps {
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
+  fileInfo?: (path: string) => Promise<FileInfo>;
+  onOpenChat?: (id: string) => void;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   shareLinks?: ShareLinks;   // what's already shared, for the Share popover
   onOpenInCanvas?: (path: string, name: string) => void;
@@ -161,6 +164,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const meta = _active
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
+  setAgentLabel((id) => (id === name && meta?.name) || id.charAt(0).toUpperCase() + id.slice(1));
   const inputPlaceholder = meta
     ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
     : undefined;
@@ -709,7 +713,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       const name = path.split("/").pop() || path;
       const design = isDesignEditor(name);
       track("file_downloaded", { source: "card", ext: ext(name) });
-      openFileLoud(design ? `${path}?as=pdf` : path)
+      openFileLoud(design ? `${path}?as=pdf&download=1` : `${path}?download=1`)
         .then((url) => saveBlob(url, design ? `${shownName(name)}.pdf` : name)).catch(() => {});
     },
     share: shareFileFn ? (path: string) => setSharingFile(path) : undefined,
@@ -1635,7 +1639,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles}
+                <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
                        onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (

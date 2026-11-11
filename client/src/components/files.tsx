@@ -5,6 +5,7 @@ import { t, useLang, getLang, timeAgo } from "../lib/i18n";
 import { LoadingBar } from "./loading-bar";
 import { Icon, Spinner } from "./icon";
 import { ShareDialog } from "./share-dialog";
+import { Face, FileDetails } from "./file-details";
 import { FileTile } from "./parts/file-part";
 import { isDesignEditor, isRenderable, saveBlob, shownName, tintTile, tintLabel, tileExt } from "./canvas-utils";
 import { useToast } from "../lib/toast";
@@ -217,7 +218,7 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, maxUpload, org }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, fileInfo, onOpenChat, maxUpload, org }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -226,6 +227,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [shareDialog, setShareDialog] = useState<{ path: string; name: string } | null>(null);
+  const [details, setDetails] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);           // OS file drag → upload overlay
   const [dropDir, setDropDir] = useState<string | null>(null); // folder/crumb under an internal move
   const [uploading, setUploading] = useState<string[]>([]);
@@ -354,7 +356,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
     const ep = fullPath(name);
     if (isDir) return navigate(ep);
     if (isRenderable(name, kind) && onOpenInCanvas) return onOpenInCanvas(ep, name);
-    onOpenFile(ep).then((url) => saveBlob(url, name));
+    onOpenFile(`${ep}?download=1`).then((url) => saveBlob(url, name));
   };
 
   const deleteNames = useCallback(async (names: string[]) => {
@@ -383,8 +385,9 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
     const ep = fullPath(name);
     return [
       { label: selected.has(name) ? t("deselect") : t("select"), onClick: () => toggleSelect(name) },
-      { label: t("download"), onClick: () => onOpenFile(ep).then((u) => saveBlob(u, isDir ? `${name}.zip` : name)) },
+      { label: t("download"), onClick: () => onOpenFile(`${ep}?download=1`).then((u) => saveBlob(u, isDir ? `${name}.zip` : name)) },
       ...(!isDir && onShareFile ? [{ label: t("share"), onClick: () => setShareDialog({ path: ep, name }) }] : []),
+      { label: t("fileDetails"), onClick: () => setDetails(name) },
       { label: t("moveTo"), onClick: () => setMoveDialog({ names: selected.has(name) ? [...selected] : [name] }) },
       { label: t("rename"), onClick: () => setRenaming(name) },
       { label: t("delete"), danger: true, onClick: () => deleteNames([name]) },
@@ -393,7 +396,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
 
   // Download a file (or a folder as <name>.zip).
   const downloadEntry = (name: string, isDir: boolean) =>
-    onOpenFile(fullPath(name)).then((u) => saveBlob(u, isDir ? `${name}.zip` : name)).catch(() => {});
+    onOpenFile(`${fullPath(name)}?download=1`).then((u) => saveBlob(u, isDir ? `${name}.zip` : name)).catch(() => {});
 
   // ---- OS file drag (upload) on the whole panel ----
   const isFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -657,6 +660,15 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                     <span className="hidden @lg:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatSize(entry.size)}</span>
                   )}
                   <span className="hidden @lg:block text-xs text-muted-foreground shrink-0 w-16 text-right">{formatDate(entry.modified)}</span>
+                  {/* Who changed it last */}
+                  <span className="flex w-5 shrink-0 justify-end">
+                    {entry.edited && (
+                      <button type="button" onClick={(e) => { e.stopPropagation(); setDetails(entry.name); }}
+                              aria-label={t("fileDetails")} className="flex cursor-pointer rounded-full transition-opacity hover:opacity-80">
+                        <Face c={entry.edited} />
+                      </button>
+                    )}
+                  </span>
 
                   {/* More menu */}
                   <div className="relative shrink-0">
@@ -690,6 +702,12 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
       </div>
 
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} items={ctx.items} onClose={() => setCtx(null)} />}
+
+      {(() => {
+        const e = details && entries.find((x) => x.name === details);
+        return e && <FileDetails entry={e} path={fullPath(e.name)} size={e.type === "directory" ? "—" : formatSize(e.size)}
+                                 onClose={() => setDetails(null)} onNavigate={navigate} onOpenChat={onOpenChat} fileInfo={fileInfo} />;
+      })()}
 
       {moveDialog && (
         <MoveDialog

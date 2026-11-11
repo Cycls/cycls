@@ -14,6 +14,24 @@ export interface FileEntry {
   // Render class decided server-side, so web and mobile agree on what can be
   // previewed. Absent from servers older than the change — callers fall back.
   kind?: string;
+  created?: FileChange;
+  edited?: FileChange;
+}
+
+// A change to a file: the person it was for, and the agent and chat when an agent made it for them.
+export interface FileChange {
+  by: { id: string; name?: string; image?: string; you?: boolean };
+  at: string;
+  agent?: string;
+  chat?: { id: string; title?: string };
+  action?: "created" | "edited" | "uploaded" | "renamed" | "moved" | "restored";
+  from?: string;
+}
+
+export interface FileInfo {
+  created?: FileChange;
+  edited?: FileChange;
+  activity: FileChange[];
 }
 
 // Same predicate the server applies, for servers that don't apply it yet.
@@ -445,6 +463,13 @@ export function useFiles(baseUrl: string = "") {
     }
   }, [api]);
 
+  // The signed-in person's name and picture, for the faces on what they change.
+  const putMe = useCallback((name?: string | null, image?: string) =>
+    api("/people/me", { method: "PUT", json: { name, image }, silent: true }).catch(() => {}), [api]);
+
+  const fileInfo = useCallback(async (filePath: string) =>
+    (await (await api(`/files-info/${encPath(filePath)}`, { silent: true })).json()) as FileInfo, [api]);
+
   // All folders in the workspace — backs the "Move to…" destination picker.
   const listFolders = useCallback(async () => {
     try {
@@ -478,7 +503,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, officeEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, officeEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, fileInfo, putMe, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

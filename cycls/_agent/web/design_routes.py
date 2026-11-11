@@ -360,6 +360,13 @@ def design_router(ws_dep, user_dep, changed):
             await asyncio.to_thread(tmp.write_bytes, data)
         await asyncio.to_thread(tmp.replace, out)
         changed(ws.root)
+        from cycls._agent import activity
+        try:
+            await activity.record(ws, rel, activity.change(ws, "created"))
+            await activity.audit(ws, activity.change(ws, "downloaded", format=fmt), src.relative_to(root).as_posix())
+        except Exception as e:
+            from cycls._agent.logs import log
+            log("warn", message=f"file activity not kept: {type(e).__name__}: {e}")
         return {"path": rel}
 
     @r.get("/design/live")

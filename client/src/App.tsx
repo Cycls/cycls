@@ -72,6 +72,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     appData: f.appData,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
+    fileInfo: f.fileInfo,
     onShareFile: withShare ? (p: string, audience: string) => f.shareFile(p, audience, author) : undefined,
     onListTrash: f.listTrash,
     onRestoreTrash: f.restoreTrash,
@@ -138,6 +139,8 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
   } : undefined;
 
   useSignupDetect(user);
+  useEffect(() => { if (user) void files.putMe(user.fullName, user.imageUrl); },
+            [user?.id, user?.fullName, user?.imageUrl, organization?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   usePostHogIdentify(
     !!config?.analytics?.length,
     user,

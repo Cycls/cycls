@@ -3,7 +3,7 @@
 Chat metadata + message log and shares live in the workspace DB — see
 `cycls._agent.state`. Files stay on the workspace filesystem (POSIX-shaped).
 """
-import asyncio, base64, hashlib, itertools, json, os, re, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
+import asyncio, base64, csv, hashlib, io, itertools, json, os, re, secrets, shutil, tempfile, time, unicodedata, uuid, zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,11 +11,12 @@ from typing import Any, Optional
 from urllib.parse import urlsplit, parse_qs
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cycls._app.db import DB, Conflict, Workspace, workspace
 from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
+from cycls._agent import activity
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
 from cycls._agent.tools import tool_step, detailed, excerpt, skills
@@ -426,7 +427,7 @@ _KINDS = (
 )
 _KIND_BY_EXT = {ext: kind for kind, exts in _KINDS for ext in exts}
 _SORTS = ("name", "size", "modified", "type")
-_PUBLIC = ("name", "path", "type", "size", "modified", "kind")
+_PUBLIC = ("name", "path", "type", "size", "modified", "kind", "created", "edited")
 
 
 def _kind(name):
@@ -436,7 +437,7 @@ def _kind(name):
 
 
 def _public(entry):
-    return {k: entry[k] for k in _PUBLIC}
+    return {k: entry[k] for k in _PUBLIC if k in entry}
 
 
 # Converted-PDF cache for the Office preview. Hidden (dot-prefixed) so the
@@ -681,6 +682,19 @@ def _sorted(entries, key, desc):
     return [e for g in groups for e in sorted(g, key=sort_key, reverse=desc)]
 
 
+async def _org_row(orgdb, user, action, target, ws_id, **extra):
+    """An org's own change in its audit log: a workspace's or a member's. A personal account keeps no log."""
+    if getattr(user, "org_id", None):
+        await activity.log_org(orgdb, {"by": user.id, "at": datetime.now(timezone.utc).isoformat(), "action": action,
+                                       "target": target, "ws": ws_id, **{("from" if k == "frm" else k): v for k, v in extra.items()}})
+
+
+async def _kept(coro):
+    """Who changed a file is recorded beside the change; a failure to record never fails the change."""
+    try: await coro
+    except Exception as e: log("warn", message=f"file activity not kept: {type(e).__name__}: {e}")
+
+
 def _is_org_admin(user):
     return getattr(user, "org_role", None) == "admin"
 
@@ -772,13 +786,18 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return []
         sort_key = q.get("sort") if q.get("sort") in _SORTS else "name"
         desc = q.get("desc") is not None
-        slice_ = await asyncio.to_thread(_scandir_slice, target, root)
+        slice_ = _sorted(await asyncio.to_thread(_scandir_slice, target, root), sort_key, desc)
         _catalog_warm(root)
-        return [_public(e) for e in _sorted(slice_, sort_key, desc)]
+        try: slice_ = await activity.folder(ws, rel, slice_)
+        except Exception as e: log("warn", message=f"file activity not read: {type(e).__name__}: {e}")
+        return [_public(e) for e in slice_]
 
     @r.get("/files/{path:path}")
     async def get_file(path: str, request: Request, ws: Workspace = ws_dep):
         file_path = _safe_path(ws.root, path)
+        if file_path.is_dir() or request.query_params.get("download") is not None:
+            await _kept(activity.audit(ws, activity.change(ws, "downloaded", format=request.query_params.get("as")),
+                                       file_path.relative_to(Path(ws.root).resolve()).as_posix()))
         if file_path.is_dir():
             return _zip_dir(file_path)   # folders download as <name>.zip
         if not file_path.is_file():
@@ -836,6 +855,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             _safe_path(ws.root, path)
             path = _free_rel(ws.root, unicodedata.normalize("NFC", path))
         file_path = _safe_path(ws.root, path)
+        existed = file_path.exists()
         design_file = _versioned(file_path.name) and not dedupe
         limit_msg = f"File exceeds the {max_bytes // (1024 * 1024)} MB limit"
         if int(request.headers.get("content-length") or 0) > max_bytes:
@@ -889,6 +909,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                     "detail": f"This {what} changed since it was opened.", "version": e.current})
         _catalog_drop(ws.root)
         design_refresh.schedule(ws.root, rel, ws.subject)   # a design's preview, made ready
+        await _kept(activity.record(ws, rel, activity.change(ws, "edited" if existed else "uploaded")))
         return reply
 
     @r.post("/files-batch/{path:path}")
@@ -923,6 +944,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
                     raise HTTPException(413, limit_msg)
                 targets = [(i, _safe_path(ws.root, f"{path}/{i.filename}" if path else i.filename))
                            for i in infos]
+                existed = {d for _, d in targets if d.exists()}
                 sem = asyncio.Semaphore(8)
 
                 scratch = Path(ws.root) / ".tmp"
@@ -943,6 +965,10 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
                 await asyncio.gather(*(_extract(i, d) for i, d in targets))
         _catalog_drop(ws.root)
+        root = Path(ws.root).resolve()
+        for _, d in targets:
+            await _kept(activity.record(ws, d.relative_to(root).as_posix(),
+                                        activity.change(ws, "edited" if d in existed else "uploaded")))
         return {"ok": True, "files": len(targets)}
 
     @r.patch("/files/{path:path}")
@@ -977,13 +1003,18 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if was_app and trash.kind_of(dst, True) == "app":
             await _move_app_data(ws, rel.split("/")[1], dst.split("/")[1])
         _catalog_drop(ws.root)
+        how = "renamed" if Path(rel).parent == Path(dst).parent else "moved"
+        await _kept(activity.moved(ws, Path(rel).as_posix(), Path(dst).as_posix(), activity.change(ws, how, frm=Path(rel).as_posix())))
         return {"ok": True}
 
     @r.post("/files/{path:path}")
     async def mkdir(path: str, ws: Workspace = ws_dep):
         dir_path = _safe_path(ws.root, path)
+        new = not dir_path.exists()
         dir_path.mkdir(parents=True, exist_ok=True)
         _catalog_drop(ws.root)
+        if new:
+            await _kept(activity.record(ws, dir_path.relative_to(Path(ws.root).resolve()).as_posix(), activity.change(ws, "created")))
         return {"ok": True}
 
     # ---- Trash: a delete is a move (docs/notes/trash.md) ----
@@ -998,6 +1029,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if trash.owned_by_app(rel) and not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete apps")
         meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
+        await _kept(activity.trashed(ws, Path(rel).as_posix(), meta["id"], activity.change(ws, "deleted")))
         if meta["kind"] == "file" and _commentable(rel):
             await _comments(ws, "shelve", Path(rel).as_posix(), meta["id"])   # a new file of that name starts with none
         _catalog_drop(ws.root)
@@ -1077,6 +1109,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if _commentable(path):
             await _comments(ws, "unshelve", tid, Path(path).as_posix())
         _catalog_drop(ws.root)
+        await _kept(activity.restored(ws, tid, Path(path).as_posix(), activity.change(ws, "restored")))
         return {"ok": True, "path": path}
 
     @r.delete("/trash/{tid}")
@@ -1093,6 +1126,8 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=404, detail="Not found")
         await _drop_app_data(ws, [meta])
         await _comments(ws, "drop", [tid])
+        await _kept(activity.purged(ws, tid))
+        await _kept(activity.audit(ws, activity.change(ws, "deleted_forever"), meta.get("path", "")))
         return {"ok": True}
 
     @r.delete("/trash")
@@ -1104,7 +1139,58 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         await _comments(ws, "drop", [m["id"] for m in gone if m.get("id")])
         for c in await _trashed_chats(ws):
             await state.delete_chat(ws, c["chat_id"])
+        await _kept(activity.purged(ws))
+        await _kept(activity.audit(ws, activity.change(ws, "trash_emptied", count=len(gone)), ""))
         return {"ok": True}
+
+    # ---- Who changed what (docs/rfc-file-metadata.md) ----
+
+    @r.get("/files-info/{path:path}")
+    async def file_info(path: str, ws: Workspace = ws_dep):
+        target = _safe_path(ws.root, path)
+        return await activity.info(ws, target.relative_to(Path(ws.root).resolve()).as_posix())
+
+    @r.put("/people/me")
+    async def put_me(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        data = await request.json()
+        await activity.put_person(ws, data.get("name") or getattr(user, "name", None),
+                                  data.get("image") or getattr(user, "image_url", None))
+        return {"ok": True}
+
+    def _audit_or_403(user):
+        if not getattr(user, "org_id", None) or not _is_org_admin(user):
+            raise HTTPException(403, "The audit log is for organization admins")
+        return state.org_db(state.org_of(user), volume, base)
+
+    @r.get("/audit")
+    async def audit_log(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        orgdb = _audit_or_403(user)
+        events, nxt = await activity.audit_page(orgdb, ws, after=request.query_params.get("after") or None)
+        return {"events": events, "next": nxt}
+
+    @r.get("/audit.csv")
+    async def audit_csv(ws: Workspace = ws_dep, user: Any = user_dep):
+        orgdb = _audit_or_403(user)
+        await _org_row(orgdb, user, "audit_exported", "", None)
+        async def rows():
+            out = io.StringIO()
+            w = csv.writer(out)
+            w.writerow(["time", "person", "person id", "action", "target", "from", "workspace", "agent", "connector",
+                        "detail", "ip", "client"])
+            after = None
+            while True:
+                events, after = await activity.audit_page(orgdb, ws, after=after, limit=500)
+                for e in events:
+                    detail = " ".join(f"{k}={e[k]}" for k in ("audience", "format", "role", "how", "count", "scope", "tools") if e.get(k))
+                    w.writerow([e.get("at"), e["by"].get("name", ""), e["by"].get("id", ""), e.get("action"), e.get("target"),
+                                e.get("from", ""), e.get("ws_name") or e.get("ws", ""), e.get("agent", ""),
+                                e.get("connector", ""), detail, e.get("ip", ""), e.get("client", "")])
+                yield out.getvalue()
+                out.seek(0); out.truncate()
+                if not after:
+                    return
+        return StreamingResponse(rows(), media_type="text/csv",
+                                 headers={"Content-Disposition": 'attachment; filename="audit-log.csv"'})
 
     return r
 
@@ -1370,6 +1456,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         for k in ("author_name", "author_image_url", "author_org_name", "author_org_image_url"):
             if (v := data.get(k)): row[k] = v
         await DB(ws).put(f"share/{token}", row, meta=row)
+        await _kept(activity.audit(ws, {**activity.change(ws, "shared"), "audience": row["audience"]}, path))
         return {"token": token, "url": _share_url(ws, token), **row}
 
     @r.get("/share")
@@ -1397,7 +1484,10 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
 
     @r.delete("/share/{token}")
     async def revoke_share(token: str, ws: Workspace = ws_dep):
+        row = await DB(ws).get(f"share/{token}")
         await DB(ws).delete(f"share/{token}")
+        if row:
+            await _kept(activity.audit(ws, activity.change(ws, "unshared"), row.get("path")))
         return {"ok": True}
 
     # ---- Viewer side ----
@@ -1872,8 +1962,9 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         await state.ensure_general(user, volume, base)
         orgdb = _orgdb(user)
         await _reserved_name_or_409(orgdb, name)
-        return await state.create_team_ws(orgdb, name, user.id,
-                                          icon=_icon_or_400(data))
+        row = await state.create_team_ws(orgdb, name, user.id, icon=_icon_or_400(data))
+        await _org_row(orgdb, user, "workspace_created", name, row.get("id"))
+        return row
 
     @r.patch("/workspaces/{ws_id}")
     async def update_workspace(ws_id: str, request: Request, user: Any = user_dep):
@@ -1887,6 +1978,8 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         if "name" in data:
             name = _name_or_400(data)
             await _reserved_name_or_409(orgdb, name, exclude=ws_id)
+            if name != row.get("name"):
+                await _org_row(orgdb, user, "workspace_renamed", name, ws_id, frm=row.get("name"))
             row["name"] = name
         if "icon" in data:
             if icon := _icon_or_400(data):
@@ -1906,7 +1999,9 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         elif await _role_or_404(user, ws_id) != "owner" and not _is_org_admin(user):
             raise HTTPException(403, "Deleting a team workspace requires its owner")
         builtin = await _is_builtin(user, ws_id)
+        reg = await _orgdb(user).get(f"workspaces/{ws_id}") or {}
         await state.wipe_workspace(state.org_of(user), ws_id, volume, base)
+        await _org_row(_orgdb(user), user, "workspace_deleted", reg.get("name") or ws_id, ws_id)
         if builtin:
             # Tombstone: blocks lazy re-provisioning — deleting General is permanent.
             row = {"id": ws_id, "deleted": datetime.now(timezone.utc).isoformat()}
@@ -1945,6 +2040,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         row = {"role": role, "added_by": user.id,
                "added_at": datetime.now(timezone.utc).isoformat()}
         await orgdb.put(f"members/{ws_id}/{member_id}", row, meta=row)
+        await _org_row(orgdb, user, "role_changed" if existing else "member_added", member_id, ws_id, role=role)
         return {"user_id": member_id, **row}
 
     @r.delete("/workspaces/{ws_id}/members/{member_id}")
@@ -1962,11 +2058,13 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             row = {"role": "excluded", "added_by": user.id,
                    "added_at": datetime.now(timezone.utc).isoformat()}
             await orgdb.put(f"members/{ws_id}/{member_id}", row, meta=row)
+            await _org_row(orgdb, user, "member_removed", member_id, ws_id)
             return {"ok": True}
         existing = await orgdb.get(f"members/{ws_id}/{member_id}")
         if existing and existing.get("role") == "owner":
             raise HTTPException(403, "The owner cannot be removed")
         await orgdb.delete(f"members/{ws_id}/{member_id}")
+        await _org_row(orgdb, user, "member_removed", member_id, ws_id)
         return {"ok": True}
 
     return r
@@ -2075,6 +2173,8 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         allowed = bool(data.get("allowed"))
         await oauth.set_blocked(ws, name, not allowed)
         log("connector", user=user, action="allowed" if allowed else "blocked", connector=name)
+        await _org_row(state.org_db(state.org_of(user), volume, base), user,
+                       "connector_allowed" if allowed else "connector_blocked", name, None)
         return {"allowed": allowed}
 
     @r.post("/connectors/{name}/authorize")
@@ -2112,6 +2212,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         grant = await o.exchange(pending["client"], code, pending["redirect"], pending["verifier"])
         await credentials.put(ws, name, grant, shared=p["k"] == "workspace")
         log("connector", action="connected", connector=name, scope=p["k"], subject=p["s"], ws=p["w"])
+        await _kept(activity.audit(ws, activity.change(ws, "connector_connected", scope=p["k"]), name))
         return HTMLResponse("<p>Connected — you can close this tab.</p><script>"
                             f"window.opener&&window.opener.postMessage({{type:'cycls:connected',connector:{json.dumps(name)}}},location.origin);"
                             "window.close()</script>")
@@ -2121,6 +2222,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         chosen = await _slot_or_4xx(_get(name), scope, user, ws)
         await credentials.delete(ws, name, shared=chosen == "workspace")
         log("connector", user=user, action="disconnected", connector=name, scope=chosen)
+        await _kept(activity.audit(ws, activity.change(ws, "connector_disconnected", scope=chosen), name))
         return {"ok": True}
 
     @r.put("/connectors/{name}/key")
@@ -2136,6 +2238,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
         chosen = await _connect_slot(o, data.get("scope"), user, ws)
         await credentials.put(ws, name, {"key": key.strip()}, shared=chosen == "workspace")
         log("connector", user=user, action="connected", connector=name, scope=chosen)
+        await _kept(activity.audit(ws, activity.change(ws, "connector_connected", scope=chosen), name))
         return {"ok": True}
 
     @r.get("/connectors/{name}/tools")
@@ -2187,6 +2290,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=400, detail="each tool maps to allow, ask or never")
         await oauth.set_permissions(ws, name, tools)
         log("connector", user=user, action="permissions", connector=name, tools=tools)
+        await _kept(activity.audit(ws, activity.change(ws, "connector_permissions", tools=json.dumps(tools)), name))
         return {"ok": True}
 
     @r.put("/connectors/{name}/tools/{tool}")
@@ -2197,6 +2301,7 @@ def connectors_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=400, detail="mode is allow, ask or never")
         await oauth.set_permissions(ws, name, {**await oauth.permissions(ws, name), tool: m})
         log("connector", user=user, action="permissions", connector=name, tools={tool: m})
+        await _kept(activity.audit(ws, activity.change(ws, "connector_permissions", tools=json.dumps({tool: m})), name))
         return {"ok": True}
 
     return r

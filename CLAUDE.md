@@ -59,6 +59,7 @@ cycls/
 └── _agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
+    ├── activity.py         # who made and changed each file (.files), people's faces, an org's audit log (docs/rfc-file-metadata.md)
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
@@ -167,6 +168,7 @@ tests/
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once, file holds, cost
+│   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding
