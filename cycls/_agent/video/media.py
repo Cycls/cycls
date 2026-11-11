@@ -196,6 +196,59 @@ def clip_words(full, sha):
     return w
 
 
+def heard_path(root, sha):
+    """Where the transcript as first heard is kept (hidden), to see what was corrected in the one beside the clip."""
+    from . import files as files_mod
+    return root / files_mod.SIDECAR / "heard" / f"{sha}.json"
+
+
+def heard_words(root, sha):
+    import json
+    try:
+        w = json.loads(heard_path(root, sha).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return w if isinstance(w, dict) and isinstance(w.get("words"), list) else None
+
+
+def _bare(text):
+    """A word as compared with what was heard: no case, punctuation or Arabic marks."""
+    text = re.sub(r"[ً-ْٰـ]", "", str(text)).lower()
+    return re.sub(r"[^\w]", "", text)
+
+
+def retimed(said, heard):
+    """The transcript beside a clip with times for the words someone wrote in place of others. A word whose text was
+    changed one for one keeps its times; where a run of words was replaced by a different number of words (one
+    misheard word written as two, two as one), or words were added, the new words share the time of the words they
+    replace (or of the gap they fill) by their length. Not an alignment on the sound: the words around keep theirs."""
+    import difflib
+
+    words = (said or {}).get("words") or []
+    old = (heard or {}).get("words") or []
+    if not words or not old:
+        return said
+    a, b = [_bare(w.get("text")) for w in old], [_bare(w.get("text")) for w in words]
+    out = [dict(w) for w in words]
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op not in ("replace", "insert") or (op == "replace" and i2 - i1 == j2 - j1):
+            continue
+        try:
+            start = float(old[i1]["start"]) if op == "replace" else (float(old[i1 - 1]["end"]) if i1 > 0 else 0.0)
+            end = float(old[i2 - 1]["end"]) if op == "replace" else (float(old[i1]["start"]) if i1 < len(old) else start + 0.3)
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        if end - start < 0.05 * (j2 - j1):
+            continue
+        lengths = [max(1, len(b[j])) for j in range(j1, j2)]
+        t, total = start, sum(lengths)
+        for j, n in zip(range(j1, j2), lengths):
+            d = (end - start) * n / total
+            out[j]["start"], out[j]["end"] = round(t, 3), round(t + d, 3)
+            t += d
+    return {**said, "words": out}
+
+
 def resolve_clip(path, root, base_dir="videos"):
     """A clip's path as a composition writes it → (workspace-relative path, the file). ValueError
     when it leaves the workspace."""
@@ -233,5 +286,7 @@ def collect_footage(html, root, base_dir="videos"):
             break
         sha = files_mod.clip_sha(root, rel, full)
         said = clip_words(full, sha)
+        if said:
+            said = retimed(said, heard_words(root, sha))
         footage[path] = {"sha": sha, **({"words": said} if said else {})}
     return footage, errors

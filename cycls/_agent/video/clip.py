@@ -166,6 +166,16 @@ async def make_ready(workspace, root, full, rel, *, chat=None, language=None, se
     # keep: someone may have corrected it.
     words_rel = None
     if info.get("transcript"):
+        # What was heard, kept hidden: a word corrected beside the clip is then found, and given times (media.retimed).
+        heard = media.heard_path(root, sha)
+        if not heard.exists():
+            try:
+                heard.parent.mkdir(parents=True, exist_ok=True)
+                tmp = heard.with_suffix(".part")
+                tmp.write_text(json.dumps(info["transcript"], ensure_ascii=False), encoding="utf-8")
+                tmp.replace(heard)
+            except OSError:
+                pass
         words_rel = media.words_path(full).relative_to(root.resolve()).as_posix()
         kept = media.clip_words(full, sha)
         if kept is None:

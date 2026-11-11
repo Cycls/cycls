@@ -14,7 +14,8 @@ footage: choosing it, cutting it, dressing it and captioning it.
   and shape, shots, the sheet, and every sentence with its times. A long clip: call it again to collect.
   `tidy: true` when the person asks to tighten or clean up a talk.
 - **Fix misheard words first.** Names, brands and dialect are often wrong ("ونبمح" for "ونطمح"). Change the text
-  in `uploads/<clip>.words.json` and keep the times: the captions follow. Ask about a name that matters.
+  in `uploads/<clip>.words.json` and keep the times: the captions follow. A word written as two (or two as one)
+  is timed from the words it replaces. Ask about a name that matters.
 - **Find the story in the sentences.** Pick the best 15–45 s of a long talk, whole sentences only.
   - **Hook**: the strongest line (a result, a number, a surprise, a question) goes FIRST, even when it was said
     last. Frame 0 is the thumbnail: a face mid-sentence or a bold line, never black or a logo.

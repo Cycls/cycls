@@ -976,6 +976,33 @@ def test_what_cannot_be_footage_says_why(monkeypatch, tmp_path):
     assert "stock footage isn't set up" in _run({"action": "footage", "stock": "waves at sunset"}, ws)
 
 
+def test_a_word_corrected_as_two_or_two_as_one_is_timed_from_the_words_it_replaces(monkeypatch, tmp_path):
+    w = lambda rows: {"words": [{"text": t, "start": a, "end": b} for t, a, b in rows]}   # noqa: E731
+    heard = w([("We", 1.0, 1.2), ("opened", 1.25, 1.7), ("innards", 1.75, 2.35), ("March.", 2.4, 2.9)])
+    # One misheard word written as two: they share its 0.6 s by length; the words around keep theirs.
+    fixed = media.retimed(w([("We", 1.0, 1.2), ("opened", 1.25, 1.7), ("in", 1.75, 2.35), ("early", 0, 0), ("March.", 2.4, 2.9)]), heard)
+    times = [(x["text"], x["start"], x["end"]) for x in fixed["words"]]
+    assert times[:2] == [("We", 1.0, 1.2), ("opened", 1.25, 1.7)] and times[-1] == ("March.", 2.4, 2.9)
+    assert times[2] == ("in", 1.75, 1.921) and times[3] == ("early", 1.921, 2.35)
+    # Changed one for one: the times written stay; nothing heard kept: left as it is.
+    same = w([("We", 1.0, 1.2), ("opened", 1.25, 1.7), ("in", 1.75, 2.35), ("March.", 2.4, 2.9)])
+    assert media.retimed(same, heard) == same and media.retimed(same, None) == same
+    # Two written as one (Arabic, diacritics ignored when comparing).
+    ar = w([("بدأنا", 0.5, 0.9), ("في", 0.95, 1.05), ("الريا", 1.1, 1.4), ("ض", 1.4, 1.6)])
+    one = media.retimed(w([("بدأنا", 0.5, 0.9), ("في", 0.95, 1.05), ("الرياض", 1.1, 1.4)]), ar)
+    assert one["words"][2] == {"text": "الرياض", "start": 1.1, "end": 1.6}
+    # Through collect_footage: the heard copy kept hidden beside the workspace's cache.
+    _on(monkeypatch)
+    sha = _clip(tmp_path)
+    media.heard_path(tmp_path, sha).parent.mkdir(parents=True)
+    media.heard_path(tmp_path, sha).write_text(json.dumps(heard), encoding="utf-8")
+    edited = w([("We", 1.0, 1.2), ("opened", 1.25, 1.7), ("in", 1.75, 2.35), ("early", 1.75, 2.35), ("March.", 2.4, 2.9)])
+    (tmp_path / "uploads" / "interview.words.json").write_text(json.dumps({**edited, "sha": sha}), encoding="utf-8")
+    html = COMP.replace("Hi", '<video id="a" src="uploads/interview.mp4" data-start="0"></video>')
+    sent = media.collect_footage(html, tmp_path)[0]["uploads/interview.mp4"]["words"]["words"]
+    assert [x["end"] for x in sent] == [1.2, 1.7, 1.921, 2.35, 2.9]
+
+
 def test_a_composition_names_its_clips_by_hash_with_what_is_said_and_the_reply_reads_the_cuts_back(monkeypatch, tmp_path):
     _on(monkeypatch)
     svc = FakeService(monkeypatch)

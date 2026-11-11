@@ -323,7 +323,8 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
                      "to choose what to show.")
     if words_rel and sentences:
         lines.append(f"The words and their times are in {words_rel}. To correct a misheard word, change its text there "
-                     "and leave its times: the captions follow.")
+                     "and leave its times: the captions follow (a word written as two, or two as one, is timed from "
+                     "the words it replaces).")
     return "\n".join(lines)
 
 
