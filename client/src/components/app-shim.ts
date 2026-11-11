@@ -173,6 +173,7 @@ const SHIM = `<script>(function(){
   }
 
   var kv = null, loading = null, flying = {}, clipped = false, stale = false;
+  function text(v){ try { return JSON.stringify(v); } catch (e) { return undefined; } }
   // What this viewer wrote, by key: newer than any listing the host has looked at, so who() says "you"
   // at once. A change from anyone else, told by the host, clears it.
   var ownWho = {};
@@ -305,7 +306,13 @@ const SHIM = `<script>(function(){
     update: async function(key, fn){
       for (var i = 0; i < 5; i++) {
         var cur = await data({ op: 'get', key: String(key) });
+        // Taken before fn runs: an app often changes the value it is handed in place and returns it.
+        var before = cur ? text(cur.value) : null;
         var next = await fn(cur ? cur.value : undefined);
+        // Nothing changed, nothing written. A write that changes nothing still moves the version: every open
+        // copy would read it again, and who changed it last would become this viewer (an app that fills in
+        // missing seed rows on every open did exactly that).
+        if (before !== null && before === text(next)) { if (kv) kv[key] = next; return next; }
         try {
           await data({ op: 'put', key: String(key), value: next, version: cur ? cur.version : '' });
           wrote(String(key));

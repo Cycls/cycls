@@ -523,6 +523,49 @@ describe("following the chat's light or dark mode", () => {
 });
 
 
+describe("update() writes only a change", () => {
+  function load() {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win, { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0), clearTimeout,
+    );
+    const api = win.cycls as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: "apps/burnup/index.html", scope: "apps/burnup", canWrite: true });
+    const answer = (op: string, result: unknown) => {
+      const m = posted.filter((p) => p.type === "cycls:data" && p.op === op).pop()!;
+      deliver({ type: "cycls:data:result", id: m.id, ok: true, result });
+    };
+    return { api, posted, answer };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("writes nothing when fn changed nothing, even handed the value to change in place", async () => {
+    const { api, posted, answer } = load();
+    const done = api.update("issues", (map: Record<string, number>) => { if (!map.a) map.a = 1; return map; });
+    await tick();
+    answer("get", { value: { a: 1 }, version: "v1" });
+    await expect(done).resolves.toEqual({ a: 1 });
+    expect(posted.filter((m) => m.op === "put")).toHaveLength(0);
+  });
+
+  it("writes a change made in place", async () => {
+    const { api, posted, answer } = load();
+    const done = api.update("issues", (map: Record<string, number>) => { map.b = 2; return map; });
+    await tick();
+    answer("get", { value: { a: 1 }, version: "v1" });
+    await tick();
+    expect(posted.filter((m) => m.op === "put").map((m) => [m.value, m.version])).toEqual([[{ a: 1, b: 2 }, "v1"]]);
+    answer("put", { ok: true, version: "v2" });
+    await expect(done).resolves.toEqual({ a: 1, b: 2 });
+  });
+});
+
 describe("who is using it", () => {
   function load(user: unknown) {
     const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
