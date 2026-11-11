@@ -278,6 +278,8 @@ async def _check(workspace, root, rel, html, *, kind="review", params=None, budg
     t_lint = time.monotonic()
     shape = _root_text(job.get("root"))
     head = f"Lint clean ({shape})." if shape else "Lint clean."
+    if job.get("warnings"):     # what the service saw that does not stop it: a flash cut, silence left in the talk
+        head += "\n" + report.findings_text(job["warnings"], title="Warnings")
     sound = "" if quiet else report.sound_text(dubbing.for_reading(job.get("sound"), dubbing.dubbed_ids(html)))
     if sound:
         head += "\n" + sound

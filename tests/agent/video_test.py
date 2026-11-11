@@ -297,6 +297,7 @@ class FakeService:
     def __init__(self, monkeypatch):
         self.submitted, self.polls, self.refuse, self.state, self.filled = [], [], None, "done", []
         self.over = None
+        self.warnings = None
         self.result = {"state": "done", "kind": "review", "findings": [], "sheet": SHEET}
         monkeypatch.setattr(video, "submit", self.submit)
         monkeypatch.setattr(video, "fill_template", self.fill)
@@ -320,7 +321,8 @@ class FakeService:
         if self.over:
             raise video.OverAllowance(self.over)
         return {"token": f"tok{len(self.submitted)}", "times": (params or {}).get("at") or [0.5, 1.5],
-                "root": {"duration": 10, "width": 1080, "height": 1920}}
+                "root": {"duration": 10, "width": 1080, "height": 1920},
+                **({"warnings": self.warnings} if self.warnings else {})}
 
     async def wait(self, ws, token, budget):
         self.polls.append(token)
@@ -353,6 +355,17 @@ def test_guide_warms_and_lists_and_without_a_seam_carries_the_contract(monkeypat
     assert "HOW YOU WORK" in out or "THE DOCUMENT" in out
     VIDEO_LOADED.set(False)
     assert "THE DOCUMENT" not in _run({"action": "guide"}, _ws(tmp_path))
+
+
+def test_a_check_that_passes_still_shows_the_services_warnings(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    svc = FakeService(monkeypatch)
+    svc.warnings = [{"code": "opens_on_silence", "severity": "warning", "line": 9,
+                     "message": "The video opens on 1.54 s of \"t\" before its first word (\"We\").",
+                     "fixHint": "Begin the piece 0.15 s before the word: data-media-start 1.39, and shorten it by as much."}]
+    text = _text(_run({"action": "write", "name": "launch reel", "html": COMP}, _ws(tmp_path)))
+    assert "Lint clean (10 s, 1080x1920).\nWarnings: 0 errors, 1 warning." in text
+    assert "opens on 1.54 s" in text and "data-media-start 1.39" in text
 
 
 def test_write_saves_checks_and_shows_one_sheet(monkeypatch, tmp_path):
