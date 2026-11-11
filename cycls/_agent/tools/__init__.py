@@ -142,7 +142,8 @@ _DATABASE_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
         "key": {"type": "string", "description": "Key to operate on (get, put, delete)."},
-        "value": {"description": "Value to store (put only). Any JSON-serializable type."},
+        "value": {"description": "Value to store (put only): the JSON value itself — a list or object as it "
+                                 "is, never a string holding JSON."},
         "prefix": {"type": "string", "description": "Key prefix (scan only). Empty = all keys."},
         "limit": {"type": "integer", "description": "Max results returned by scan (default 100)."},
     }, "required": ["command"]}

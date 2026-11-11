@@ -385,3 +385,14 @@ def test_the_agents_write_to_an_app_carries_its_person_and_name_and_reaches_the_
     assert _run(_shelf(tmp_path).get("tasks/a")) == 1   # the value is what was written, nothing added
     [row] = _run(activity.audit_page(state.org_db("tenant", tmp_path, f"file://{tmp_path}"), ws))[0]
     assert (row["action"], row["target"], row["agent"], row["by"]["id"]) == ("app_data", "apps/tasks", "super", "alice")
+
+
+def test_a_list_sent_as_text_is_stored_as_the_list(tmp_path):
+    """Seen on super-dev 2026-11-11: the model sent the tasks as a JSON string, the app got text and stopped."""
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/tasks/tasks", "value": '[{"id": 1}]'}, ws, chat="c1"))
+    assert _run(_shelf(tmp_path).get("tasks/tasks")) == [{"id": 1}]
+    _run(_exec_database({"command": "put", "key": "note", "value": '{"a": 1}'}, ws))
+    _run(_exec_database({"command": "put", "key": "plain", "value": "[not json"}, ws))
+    assert json.loads(_run(_exec_database({"command": "get", "key": "note"}, ws))) == {"a": 1}
+    assert json.loads(_run(_exec_database({"command": "get", "key": "plain"}, ws))) == "[not json"

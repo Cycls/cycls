@@ -352,9 +352,13 @@ const SHIM = `<script>(function(){
       key = String(key);
       if (flying[key]) await flying[key].done.catch(function(){});
       var mine = ownWho[key], theirs = await data({ op: 'who', key: key });
-      if (mine && theirs && theirs.by && theirs.by.id === mine.by.id) return theirs;   // the host's has the picture
-      if (mine && !(theirs && theirs.at && Date.parse(theirs.at) > Date.parse(mine.at))) return mine;
-      return theirs;
+      if (!mine) return theirs;
+      // Someone wrote after this viewer (their change also clears what this viewer wrote when the host tells it).
+      if (theirs && theirs.at && Date.parse(theirs.at) > Date.parse(mine.at) + 1000) return theirs;
+      // The host's look may predate this write, an earlier one of the viewer's own included: the time is mine,
+      // the person the host's when it is the same one, since it has the picture.
+      var same = theirs && theirs.by && theirs.by.id === mine.by.id;
+      return { by: same ? Object.assign({}, theirs.by, { you: true }) : mine.by, at: mine.at };
     },
     // fn("light" | "dark") when the chat switches mode; the "dark" class on <html> is already set. Returns an
     // unsubscribe.

@@ -585,6 +585,25 @@ describe("who is using it", () => {
     expect(await who).toMatchObject({ by: { id: "u_me", name: "Me", you: true } });
   });
 
+  it("says you changed it just now, when the host still has your earlier change", async () => {
+    const { api, posted, deliver, answer } = load({ id: "u_me", name: "Me" });
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    const done = api.set("a", 2);
+    await tick();
+    const put = posted.find((m) => m.op === "put")!;
+    deliver({ type: "cycls:data:result", id: put.id, ok: true, result: { ok: true, version: "v2" } });
+    await done;
+    const who = api.who("a");
+    await tick();
+    answer("who", { by: { id: "u_me", name: "Me", image: "data:image/webp;base64,AA" }, at: "2000-01-01T00:00:00+00:00" });
+    const got = (await who) as { by: { image?: string; you?: boolean }; at: string };
+    expect(got.by).toMatchObject({ image: "data:image/webp;base64,AA", you: true });   // the host's picture
+    expect(Date.parse(got.at)).toBeGreaterThan(Date.parse("2020-01-01"));             // this write's time, not the old one
+  });
+
   it("passes on who changed each key", async () => {
     const { api, deliver } = load({ id: "u_me" });
     const heard: unknown[] = [];

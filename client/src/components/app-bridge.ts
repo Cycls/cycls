@@ -350,6 +350,7 @@ export function attachBridge({
             known.keys.set(key, version);   // what the app wrote, or has just read, is not news to it
           }
         }
+        if (writes) stampsAt = 0;   // who wrote it is now the viewer: the next who() looks again
         reply({ ok: true, result });
       } catch (e) {
         reply({ ok: false, error: said(e).slice(0, 300),

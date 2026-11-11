@@ -852,6 +852,16 @@ async def _app_noted(ws, key, chat):
     except Exception as e: log("warn", chat_id=chat, message=f"app change not recorded: {type(e).__name__}: {e}")
 
 
+def _value(v):
+    """A list or object some models send as a JSON string ('[{"id": 1}]'; seen 2026-11-11, and the app it was for
+    got text where it wanted a list and stopped) -> the list or object itself. Any other string stays a string."""
+    if isinstance(v, str) and v.strip()[:1] in ("[", "{"):
+        try: got = json.loads(v)
+        except ValueError: return v
+        if isinstance(got, (list, dict)): return got
+    return v
+
+
 async def _exec_database(inp, ws, user=None, chat=None):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
@@ -872,7 +882,7 @@ async def _exec_database(inp, ws, user=None, chat=None):
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
             if not app_key:
-                await db.put(k, inp.get("value"))
+                await db.put(k, _value(inp.get("value")))
                 return f"Stored {key!r}"
             seen = _READ.get(_read_key(ws, chat, key))
             if seen is None:
@@ -880,7 +890,7 @@ async def _exec_database(inp, ws, user=None, chat=None):
                     return _UNREAD.format(key=key, done="written")
                 seen = ""
             try:
-                version = await db.put(k, inp.get("value"), meta=app_stamp(ws, _agent_name()),
+                version = await db.put(k, _value(inp.get("value")), meta=app_stamp(ws, _agent_name()),
                                        **({"create": True} if seen == "" else {"gen": seen}))
             except Conflict:
                 _saw(ws, chat, key, None)
