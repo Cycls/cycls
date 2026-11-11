@@ -19,7 +19,7 @@ from ..design.store import Stale, version_of, write_fig
 from ..paths import _resolve_path
 from . import contract as contract_mod
 from . import dubbing, files, media, quick, report, skill
-from .tool import ACTIONS, VIDEO_LOADED, VIDEO_SKILLED
+from .tool import ACTIONS, VIDEO_HEARD, VIDEO_LOADED, VIDEO_SKILLED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
 # limit, so the client keeps its own: a save with its frames, a look, a render.
@@ -404,9 +404,59 @@ def _branded(root, html):
     return brand.apply(html, root, _catalogue()[0], looks)
 
 
-async def _kit(root, inp):
+_AGREE = re.compile(r"\b(i\s+agree|agreed|yes)\b|أوافق|موافق|موافقة|اوافق|نعم", re.I)
+_REFUSE = re.compile(r"\bdisagree|\b(do\s*not|don'?t|not|never)\s+(agree|consent)|\brefuse|^\s*no\b|لا\s*[أا]وافق|"
+                     r"(مو|غير|مب)\s*موافق|ما\s*[أا]وافق|رافض|^\s*لا\b", re.I)
+CONSENT_QUESTION = ("Is this recording your own voice, or do you have the permission of the person speaking in it? Do you "
+                    "agree to Cycls reading your videos in this voice? If so, reply \"I agree\" (or «أوافق») with your "
+                    "full name.")
+
+
+def _voice_consent(root, chat, full, given):
+    """Whether the person agreed to their voice being kept: asked by the tool, answered in their own words, in a
+    message after the question (so a model cannot answer for them in the same turn). → "agreed:<what is kept>", or
+    the reply that asks or refuses. Outside a chat (no messages: a script, a test) `given` is taken as the consent."""
+    import datetime
+    heard = VIDEO_HEARD.get()
+    digest = hashlib.sha256(full.read_bytes()).hexdigest()[:16]
+    today = datetime.date.today().isoformat()
+    if heard is None:
+        given = str(given or "").strip()
+        if len(given) < 12:
+            return _err("consent: the person's own agreement, with their name and the date.")
+        return f"agreed:{given}"
+    path = root / files.SIDECAR / "consent.json"
+    try:
+        asked = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        asked = {}
+    key = f"{chat or ''}|{digest}"
+    at = asked.get(key)
+    if at is None or at > len(heard):
+        asked[key] = len(heard)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(asked), encoding="utf-8")
+        return ("Not kept yet: a voice is kept only when the person it belongs to agrees, in their own words. Ask them "
+                "now, in their language, and END YOUR TURN to wait for their reply — never answer for them:\n"
+                f"«{CONSENT_QUESTION}»\nWhen they have replied, call kit again with the same sample and speaks; it reads "
+                "their reply.")
+    if len(heard) <= at:
+        return ("Waiting for the person's own reply to the consent question: end your turn and let them answer; then "
+                "call kit again.")
+    reply = heard[-1]
+    if _REFUSE.search(reply) or not _AGREE.search(reply):
+        asked.pop(key, None)
+        path.write_text(json.dumps(asked), encoding="utf-8")
+        return (f"The person did not agree (their reply: «{reply[:200]}»), so the voice is not kept. Use the built-in "
+                "voices (default or saudi).")
+    asked.pop(key, None)
+    path.write_text(json.dumps(asked), encoding="utf-8")
+    return f"agreed:the person's own reply in chat {chat or '?'} on {today}, to «{CONSENT_QUESTION[:60]}…»: «{reply[:200]}»"
+
+
+async def _kit(root, inp, chat=None):
     """The brand's video kit set (brand.VIDEO_KEYS in brand/brand.yaml) → what the reply says. A voice is kept only with
-    the consent of the person it belongs to, said in this same call."""
+    the consent of the person it belongs to, in their own words (_voice_consent)."""
     from . import brand
 
     values, said = {}, []
@@ -416,12 +466,6 @@ async def _kit(root, inp):
             values.update({"voice": None, "voice_speaks": None, "voice_consent": None})
             said.append("the brand's own voice removed")
         else:
-            consent = str(inp.get("consent") or "").strip()
-            if len(consent) < 12:
-                return _err("consent: ask the person whether this is their own voice (or they have the speaker's "
-                            "permission) and whether they agree to it reading their videos, and put their answer here "
-                            "with their name and today's date (\"Sara Ali, 2026-11-11: my own voice; I agree\"). A voice "
-                            "is never kept without it.")
             try:
                 full = _resolve_path(str(sample).strip(), root)
             except ValueError as e:
@@ -436,6 +480,10 @@ async def _kit(root, inp):
             if speaks not in ("saudi", "standard"):
                 return _err("speaks: saudi (the voice speaks Saudi dialect) or standard (Standard Arabic and English).")
             rel = full.relative_to(root.resolve()).as_posix()
+            consent = _voice_consent(root, chat, full, inp.get("consent"))
+            if not consent.startswith("agreed:"):
+                return consent
+            consent = consent[len("agreed:"):]
             values.update({"voice": rel, "voice_speaks": speaks, "voice_consent": consent})
             said.append(f"the brand's own voice ({rel}, speaking {speaks}; consent: {consent})")
     if inp.get("music") is not None:
@@ -1689,7 +1737,7 @@ async def _exec_video(inp, workspace, ctx=None):
             query = inp.get("query") or inp.get("mood") or brand.video_kit(root).get("music")
             return _music(query, inp.get("length"), chat) + note
         if action == "kit":
-            return await _kit(root, inp) + note
+            return await _kit(root, inp, chat) + note
         if action == "lottie":
             return _lottie(inp.get("query")) + note
         if action == "editor":

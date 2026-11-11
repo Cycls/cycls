@@ -24,7 +24,7 @@ from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_
                            design_tool, design_wanted)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
-from ..video.tool import VIDEO_SKILLED, video_skills_loaded
+from ..video.tool import VIDEO_HEARD, VIDEO_SKILLED, person_said, video_skills_loaded
 from ..office.client import offered as office_offered
 from ..transcribe.client import configured as transcribe_configured
 from ..tools import skills as skills_mod
@@ -803,6 +803,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             seen = set()
             DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
             VIDEO_SKILLED.set(video_skills_loaded(messages))     # the same for Video: a skill loaded beside a save
+            VIDEO_HEARD.set(person_said(messages))               # Video keeps a brand's voice on the person's own words
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
             for step, _ in pairs: yield step

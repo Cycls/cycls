@@ -793,6 +793,35 @@ def test_the_brands_own_voice_is_kept_only_with_consent_and_read_in_its_voice(mo
     assert "removed" in removed and "video_voice" not in (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
 
 
+def test_in_a_chat_a_brand_voice_is_kept_only_on_the_persons_own_reply_after_the_question(monkeypatch, tmp_path):
+    from cycls._agent.video.tool import VIDEO_HEARD
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    (tmp_path / "uploads").mkdir()
+    (tmp_path / "uploads" / "me.m4a").write_bytes(b"\x00\x00\x00 ftypM4A " + b"\x02" * 300)
+    ws = _ws(tmp_path)
+    kit = {"action": "kit", "sample": "uploads/me.m4a", "speaks": "saudi",
+           "consent": "The user asked for it, confirming it is their voice"}       # the model answering for them
+    heard = ["Use this recording as our brand's voice for all our videos."]
+    token = VIDEO_HEARD.set(heard)
+    try:
+        first = _run(kit, ws)
+        assert "Not kept yet" in first and "END YOUR TURN" in first and "I agree" in first
+        assert not (tmp_path / "brand" / "brand.yaml").exists()
+        assert "Waiting for the person's own reply" in _run(kit, ws)           # the same turn: nothing new from them
+        VIDEO_HEARD.set(heard + ["No, I don't agree to that."])
+        assert "did not agree" in _run(kit, ws) and not (tmp_path / "brand" / "brand.yaml").exists()
+        VIDEO_HEARD.set(heard + ["No, I don't agree to that.", "Use it anyway."])
+        assert "Not kept yet" in _run(kit, ws)                                  # asked again, from the start
+        VIDEO_HEARD.set(heard + ["No, I don't agree to that.", "Use it anyway.", "أوافق، هذا صوتي. سارة علي"])
+        said = _run(kit, ws)
+        assert "Saved in the brand kit" in said
+        yaml = (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
+        assert "أوافق، هذا صوتي. سارة علي" in yaml and "confirming it is their voice" not in yaml
+    finally:
+        VIDEO_HEARD.reset(token)
+
+
 def test_a_voice_over_is_made_saved_with_its_words_and_said_with_the_lines_to_use(monkeypatch, tmp_path):
     _on(monkeypatch)
     svc = FakeService(monkeypatch)
