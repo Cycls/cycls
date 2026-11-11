@@ -2,8 +2,10 @@
 
 `file://` (dev) and `gs://` (prod). `db.scan(...)` is the 1-round-trip
 listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
-+ body reads (no metadata channel locally). `meta=` on `db.put` is an
-object-storage-only perf hint — body is canonical on FS.
++ body reads (no metadata channel locally). `meta=` on `db.put` is mostly an
+object-storage perf hint — body is canonical on FS. The local store keeps it
+beside the body (`<key>.json.meta`) for the one reader that needs it there:
+`versions(meta=True)`, which says who last changed an app's data.
 """
 import asyncio, hashlib, json, os, re
 from dataclasses import dataclass
@@ -132,31 +134,40 @@ class _FileStore:
             try:
                 if not create:
                     tmp.replace(p)
-                    return
-                # link() is the POSIX create-if-absent: it fails rather than
-                # clobber, where replace() would overwrite silently.
-                try:
-                    os.link(tmp, p)
-                except FileExistsError:
-                    raise Conflict(key)
-                except OSError:
-                    # gcsfuse has no hard links (ENOSYS), and `--remote` dev
-                    # services run this store over one. O_EXCL reserves the name
-                    # just as atomically; the write that follows is not atomic,
-                    # but gcsfuse only publishes the object on close.
+                else:
+                    # link() is the POSIX create-if-absent: it fails rather than
+                    # clobber, where replace() would overwrite silently.
                     try:
-                        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                        os.link(tmp, p)
                     except FileExistsError:
                         raise Conflict(key)
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(data)
+                    except OSError:
+                        # gcsfuse has no hard links (ENOSYS), and `--remote` dev
+                        # services run this store over one. O_EXCL reserves the name
+                        # just as atomically; the write that follows is not atomic,
+                        # but gcsfuse only publishes the object on close.
+                        try:
+                            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                        except FileExistsError:
+                            raise Conflict(key)
+                        with os.fdopen(fd, "wb") as f:
+                            f.write(data)
             finally:
                 tmp.unlink(missing_ok=True)
+            # The metadata, beside the body; a write without any clears it, as a new object has none.
+            side = self._meta_path(key)
+            if meta: side.write_text(json.dumps(meta), encoding="utf-8")
+            else: side.unlink(missing_ok=True)
         await asyncio.to_thread(_do)
         return _gen_of(data)
 
+    def _meta_path(self, key): return self.root / f"{key}.json.meta"
+
     async def remove(self, key):
-        await asyncio.to_thread(lambda: self._path(key).unlink(missing_ok=True))
+        def _do():
+            self._path(key).unlink(missing_ok=True)
+            self._meta_path(key).unlink(missing_ok=True)
+        await asyncio.to_thread(_do)
 
     async def remove_prefix(self, prefix):
         if not prefix: raise ValueError("remove_prefix requires non-empty prefix")
@@ -192,13 +203,19 @@ class _FileStore:
             return out
         return await asyncio.to_thread(_do)
 
-    async def list_versions(self, *, prefix=None):
+    async def list_versions(self, *, prefix=None, meta=False):
         """Hashes the bytes, as `read_gen` does, so the two agree. Dev and test only."""
         def _do():
             out = {}
             for k, p in self._walk(prefix=prefix):
-                try: out[k] = _gen_of(p.read_bytes())
-                except FileNotFoundError: pass
+                try: v = _gen_of(p.read_bytes())
+                except FileNotFoundError: continue
+                if not meta:
+                    out[k] = v
+                    continue
+                try: m = json.loads(self._meta_path(k).read_text(encoding="utf-8"))
+                except (FileNotFoundError, ValueError): m = {}
+                out[k] = (v, m if isinstance(m, dict) else {})
             return out
         return await asyncio.to_thread(_do)
 
@@ -296,10 +313,13 @@ class _GCSStore:
         return [(it["name"][p:n], it.get("metadata") or {})
                 for it in await self._list("items(name,metadata),nextPageToken", prefix=prefix, glob=glob)]
 
-    async def list_versions(self, *, prefix=None):
+    async def list_versions(self, *, prefix=None, meta=False):
         p, n = len(self.prefix), -len(".json")
-        return {it["name"][p:n]: str(it.get("generation") or "")
-                for it in await self._list("items(name,generation),nextPageToken", prefix=prefix)}
+        fields = "items(name,generation,metadata),nextPageToken" if meta else "items(name,generation),nextPageToken"
+        items = await self._list(fields, prefix=prefix)
+        if not meta:
+            return {it["name"][p:n]: str(it.get("generation") or "") for it in items}
+        return {it["name"][p:n]: (str(it.get("generation") or ""), it.get("metadata") or {}) for it in items}
 
     async def page(self, prefix, after=None, limit=50):
         params = {"fields": "items(name,metadata)", "prefix": f"{self.prefix}{prefix}", "maxResults": limit + 2}
@@ -380,10 +400,11 @@ class DB:
         for k, m in sorted(await self._store.list_metas(prefix=prefix, glob=glob)):
             yield k, m
 
-    async def versions(self, *, prefix=None):
+    async def versions(self, *, prefix=None, meta=False):
         """{key: version} under `prefix` from one listing, no bodies read — how an open
-        app finds out cheaply whether anything changed since it last looked."""
-        return await self._store.list_versions(prefix=prefix)
+        app finds out cheaply whether anything changed since it last looked. With `meta`,
+        {key: (version, meta)}: what each row was written with, in the same listing."""
+        return await self._store.list_versions(prefix=prefix, meta=meta)
 
     async def page(self, prefix, *, after=None, limit=50):
         """One page of `prefix`'s keys in key order, from just after `after`: ([(key, meta)], the next page's

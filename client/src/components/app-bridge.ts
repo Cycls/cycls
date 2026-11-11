@@ -1,5 +1,6 @@
 // Host side of the canvas <-> sandboxed-app channel. The app has an opaque
 // origin, so the host reads and writes for it, within its own folder only.
+import type { Person } from "../lib/people";
 
 export const MSG = {
   ready: "cycls:ready",
@@ -27,7 +28,10 @@ export const APP_DATA_EVENT = "cycls:app-data";
 export const TURN_END_EVENT = "cycls:app-turn-end";
 
 export type ChangeSource = "agent" | "turn" | "poll" | "focus";
-type Versions = { keys?: Record<string, string>; files?: Record<string, string> };
+// Who last wrote a shared key, as the server keeps it with the row: a person's id, and the agent's name when it
+// wrote for them.
+type Stamp = { by?: string; at?: string; agent?: string };
+type Versions = { keys?: Record<string, string>; who?: Record<string, Stamp>; files?: Record<string, string> };
 
 export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 // The app may set these; Authorization is the server's alone.
@@ -123,6 +127,8 @@ export interface BridgeOptions {
   // resolves the viewer and the role, so the frame cannot name someone else.
   // `{op: "versions"}` is the host's own call: what the change check compares.
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  // The workspace's members for cycls.people(), pictures as data: URLs; none on a shared link.
+  people?: () => Promise<Person[]>;
   // Keeping an open app in step. Each has a default; tests replace them.
   pollMs?: number;               // how often a visible, listening app checks for changes
   visible?: () => boolean;       // on screen: the active tab of a shown canvas in a shown page
@@ -142,7 +148,7 @@ function changedIn(was: Map<string, string>, now: Map<string, string>): string[]
 const said = (e: unknown) => (navigator.onLine ? String((e as Error)?.message ?? e) : "offline");
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData, people,
   pollMs = 15_000, visible, reload,
 }: BridgeOptions) {
   const folder = appScope(appPath);
@@ -176,6 +182,28 @@ export function attachBridge({
   // Setting srcdoc again, even to the same text, loads the document afresh.
   const reloadFrame = reload ?? (() => { const doc = frame.srcdoc; frame.srcdoc = doc; });
 
+  // ---- Who changed what ----
+  // Each look at the versions also says who last wrote each shared key; an id becomes the person, by the
+  // workspace's members. One who has left is their id alone, and so is everyone if the members cannot be had
+  // within a moment: a change is never held back for a name.
+  let stamps: Record<string, Stamp> = {}, stampsAt = 0;
+  async function person(id: string): Promise<Person> {
+    if (!people) return { id };
+    const list = await Promise.race([people().catch(() => [] as Person[]),
+                                     new Promise<Person[]>((r) => setTimeout(() => r([]), 1_500))]);
+    return list.find((p) => p.id === id) ?? { id };
+  }
+  async function stampOf(key: string) {
+    const s = stamps[key];
+    if (!s?.by) return null;
+    return { by: await person(s.by), ...(s.at ? { at: s.at } : {}), ...(s.agent ? { agent: s.agent } : {}) };
+  }
+  async function whoOf(keys: string[]) {
+    const out: Record<string, unknown> = {};
+    for (const k of keys) { const s = await stampOf(k); if (s) out[k] = s; }
+    return Object.keys(out).length ? out : undefined;
+  }
+
   // The chat's light or dark mode, which an app follows. It used to be told once, in init, so an open app
   // stayed in the old mode after the person switched. Dark mode is a class on the chat's <body>.
   const themeNow = () => (document.body?.classList.contains("dark") ? "dark" : "light");
@@ -188,9 +216,9 @@ export function attachBridge({
   });
   if (document.body) themeWatch?.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
-  function tell(source: ChangeSource, keys?: string[], files?: string[]) {
+  function tell(source: ChangeSource, keys?: string[], files?: string[], who?: Record<string, unknown>) {
     if (listening) {
-      post({ type: MSG.changed, source, ...(keys ? { keys } : {}), ...(files ? { files } : {}) });
+      post({ type: MSG.changed, source, ...(keys ? { keys } : {}), ...(files ? { files } : {}), ...(who ? { who } : {}) });
     } else if (source === "agent" || source === "turn") {
       reloadSoon();
     }
@@ -220,12 +248,16 @@ export function attachBridge({
     if (closed) return;
     if (at !== moved || busy) return later(source);
     const next = { keys: new Map(Object.entries(v.keys ?? {})), files: new Map(Object.entries(v.files ?? {})) };
+    stamps = v.who ?? {};
+    stampsAt = Date.now();
     const was = known;
     known = next;
     if (!was) return;   // the first look is what later ones compare with
     const keys = changedIn(was.keys, next.keys);
     const files = changedIn(was.files, next.files).filter((f) => !ownFiles.delete(f));
-    if (keys.length || files.length) tell(source, keys, files);
+    if (!keys.length && !files.length) return;
+    const who = listening && keys.length ? await whoOf(keys) : undefined;
+    if (!closed) tell(source, keys, files, who);
   }
 
   function later(source: ChangeSource) {
@@ -286,8 +318,25 @@ export function attachBridge({
       const reply = (p: object) => post({ type: MSG.dataResult, id: msg.id, ...p });
       if (!appData) return reply({ ok: false, error: "this view has no workspace" });
       const op = msg as { op?: unknown; key?: unknown; who?: unknown };
-      // The host's own call; an app has list, get, put and delete.
+      // The host's own call; an app has list, get, put and delete, and people and who below.
       if (op.op === "versions") return reply({ ok: false, error: "unknown op" });
+      if (op.op === "people") {
+        if (!people) return reply({ ok: false, error: "this view has no workspace" });
+        try { return reply({ ok: true, result: await people() }); }
+        catch (e) { return reply({ ok: false, error: said(e).slice(0, 300) }); }
+      }
+      if (op.op === "who") {
+        if (typeof op.key !== "string" || !op.key) return reply({ ok: false, error: "a key is required" });
+        try {
+          if (Date.now() - stampsAt > 2_000) {   // fresh, without touching what the change check compares
+            stamps = (((await appData(slug, { op: "versions" })) ?? {}) as Versions).who ?? {};
+            stampsAt = Date.now();
+          }
+          return reply({ ok: true, result: await stampOf(op.key) });
+        } catch (e) {
+          return reply({ ok: false, error: said(e).slice(0, 300) });
+        }
+      }
       const shared = !op.who && typeof op.key === "string";
       const writes = shared && (op.op === "put" || op.op === "delete");
       if (writes) { busy++; moved++; }

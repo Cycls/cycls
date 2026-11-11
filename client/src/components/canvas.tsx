@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } fro
 import type { OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
+import { viewer, workspacePeople } from "../lib/people";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -169,10 +170,13 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         : undefined,
       fetchConnector: shared ? undefined : fetchConnector,
       appData: shared ? undefined : appData,
+      // Who is using it: nobody, on a shared link.
+      people: shared ? undefined : workspacePeople,
       context: {
         // Dark mode lives on document.body (lib/utils applyTheme), not <html>.
         theme: document.body.classList.contains("dark") ? "dark" : "light",
         locale: document.documentElement.lang || "en",
+        user: shared ? null : viewer(),
       },
     });
   }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData]);

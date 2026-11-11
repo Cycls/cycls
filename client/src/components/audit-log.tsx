@@ -18,7 +18,7 @@ const ACTION: Record<string, Parameters<typeof t>[0]> = {
   workspace_created: "auditWsCreated", workspace_renamed: "auditWsRenamed", workspace_deleted: "auditWsDeleted",
   member_added: "auditMemberAdded", role_changed: "auditRoleChanged", member_removed: "auditMemberRemoved",
   downloaded: "auditDownloaded", deleted_forever: "auditDeletedForever", trash_emptied: "auditTrashEmptied",
-  audit_exported: "auditExported", app_published: "auditAppPublished", files_changed: "auditFilesChanged",
+  audit_exported: "auditExported", app_published: "auditAppPublished", app_data: "auditAppData", files_changed: "auditFilesChanged",
   connector_connected: "auditConnected", connector_disconnected: "auditDisconnected", connector_allowed: "auditAllowed",
   connector_blocked: "auditBlocked", connector_permissions: "auditPermissions", connector_action: "auditConnectorAction",
 };

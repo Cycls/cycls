@@ -833,6 +833,25 @@ def _app_changed(key, said, version, deleted=False):
                                     **({"deleted": True} if deleted and not whole else {})}}
 
 
+def app_stamp(ws, agent=None):
+    """Who wrote an app's row and when, kept with the row as its metadata: the person, and the agent's name when
+    it wrote for them. The value stays exactly what was written; an open app reads this beside it (`cycls.who`)."""
+    return {"by": actor_of(ws.subject), "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **({"agent": str(agent)[:80]} if agent else {})}
+
+
+def _agent_name():
+    from . import activity   # activity imports this module
+    return activity.ORIGIN.get().get("agent") or "agent"
+
+
+async def _app_noted(ws, key, chat):
+    """The agent changed an app's data: the team's record of it (activity.app_data). Never fails the change."""
+    from . import activity
+    try: await activity.app_data(ws, key[len(APPS_ROOT):].partition("/")[0], agent=_agent_name(), chat=chat)
+    except Exception as e: log("warn", chat_id=chat, message=f"app change not recorded: {type(e).__name__}: {e}")
+
+
 async def _exec_database(inp, ws, user=None, chat=None):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
@@ -861,11 +880,13 @@ async def _exec_database(inp, ws, user=None, chat=None):
                     return _UNREAD.format(key=key, done="written")
                 seen = ""
             try:
-                version = await db.put(k, inp.get("value"), **({"create": True} if seen == "" else {"gen": seen}))
+                version = await db.put(k, inp.get("value"), meta=app_stamp(ws, _agent_name()),
+                                       **({"create": True} if seen == "" else {"gen": seen}))
             except Conflict:
                 _saw(ws, chat, key, None)
                 return _MOVED.format(key=key, done="written")
             _saw(ws, chat, key, version)   # a second put in a row needs no second get
+            await _app_noted(ws, key, chat)
             return _app_changed(key, f"Stored {key!r}", version)
         if cmd == "delete":
             db, k = _route(ws, key)
@@ -876,6 +897,8 @@ async def _exec_database(inp, ws, user=None, chat=None):
                     return (_MOVED if seen else _UNREAD).format(key=key, done="deleted")
                 _saw(ws, chat, key, None)
             await db.delete(k)
+            if key.startswith(APPS_ROOT):
+                await _app_noted(ws, key, chat)
             return _app_changed(key, f"Deleted {key!r}", None, deleted=True)
         if cmd == "scan":
             prefix = inp.get("prefix", "")

@@ -4,6 +4,9 @@
 // `cycls.users` is everyone's, which the server allows admins only.
 // `cycls.onChange` is how an app hears that its data changed under it (the agent,
 // a teammate, another tab); an app with no listener is reloaded by the host instead.
+// `cycls.ctx.user` is who is viewing, `cycls.people()` the workspace's members and
+// `cycls.who(key)` who last changed a shared key: the server stamps every write
+// from the sign-in, so what an app is told there is not the app's to make up.
 
 const SHIM = `<script>(function(){
   // A sandboxed frame has an opaque origin, so even READING window.localStorage
@@ -47,7 +50,8 @@ const SHIM = `<script>(function(){
   function receive(m){
     m = m || {};
     if (m.type === 'cycls:init' && !ctx) {
-      ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite };
+      ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite,
+              user: m.user && typeof m.user === 'object' ? m.user : null };
       api.ctx = ctx;
       applyTheme(m.theme);
       resolveReady(ctx);
@@ -169,6 +173,13 @@ const SHIM = `<script>(function(){
   }
 
   var kv = null, loading = null, flying = {}, clipped = false, stale = false;
+  // What this viewer wrote, by key: newer than any listing the host has looked at, so who() says "you"
+  // at once. A change from anyone else, told by the host, clears it.
+  var ownWho = {};
+  function wrote(k, gone){
+    if (gone || !ctx || !ctx.user) delete ownWho[k];
+    else ownWho[k] = { by: Object.assign({ you: true }, ctx.user), at: new Date().toISOString() };
+  }
 
   // Concurrent callers share one list, or a later one would clobber the
   // mutations an earlier set() already made. A stale copy (something changed
@@ -210,6 +221,7 @@ const SHIM = `<script>(function(){
   }
   function changed(m){
     var keys = Array.isArray(m.keys) ? m.keys.map(String) : null;
+    if (keys) keys.forEach(function(k){ delete ownWho[k]; }); else ownWho = {};
     var work;
     if (!kv) work = Promise.resolve();   // nothing read yet: the first get() reads it fresh
     else if (keys && keys.length <= 20) work = Promise.all(keys.map(function(k){
@@ -223,6 +235,7 @@ const SHIM = `<script>(function(){
       var ev = { source: String(m.source || 'poll') };
       if (keys) ev.keys = keys;
       if (Array.isArray(m.files)) ev.files = m.files.map(String);
+      if (m.who && typeof m.who === 'object') ev.who = m.who;
       listeners.slice().forEach(function(fn){
         try { fn(ev); } catch (e) { report((e && e.message) || e); }
       });
@@ -248,9 +261,9 @@ const SHIM = `<script>(function(){
     f.done = (async function(){
       do {
         f.again = false;
-        await (Object.prototype.hasOwnProperty.call(kv, k)
-          ? data({ op: 'put', key: k, value: kv[k] })
-          : data({ op: 'delete', key: k }));
+        var there = Object.prototype.hasOwnProperty.call(kv, k);
+        await (there ? data({ op: 'put', key: k, value: kv[k] }) : data({ op: 'delete', key: k }));
+        wrote(k, !there);
       } while (f.again);
     })().finally(function(){ delete flying[k]; });
     f.done.catch(function(){});   // a set() nobody awaits must not warn
@@ -295,6 +308,7 @@ const SHIM = `<script>(function(){
         var next = await fn(cur ? cur.value : undefined);
         try {
           await data({ op: 'put', key: String(key), value: next, version: cur ? cur.version : '' });
+          wrote(String(key));
           if (kv) kv[key] = next;
           return next;
         } catch (e) {
@@ -322,12 +336,26 @@ const SHIM = `<script>(function(){
       };
     },
     all: async function(){ return Object.assign({}, await load()); },
-    // fn({source, keys?, files?}) after the data changed under the app: "agent", "turn", "poll"
-    // or "focus"; keys are shared keys (absent: maybe any), files are paths like "data/x.json".
+    // fn({source, keys?, files?, who?}) after the data changed under the app: "agent", "turn", "poll"
+    // or "focus"; keys are shared keys (absent: maybe any), files are paths like "data/x.json", and
+    // who, when known, says for each key who changed it: {by: person, at, agent?}.
     // cycls.get already answers with the new values inside it. Returns an unsubscribe.
     onChange: onChange,
     // Read the shared data again now, without waiting to be told.
     refresh: function(){ stale = true; return load().then(function(){}); },
+    // The workspace's members: [{id, name, image, role, you}], image a data: URL. Store ids, not names:
+    // a name changes, and this resolves an id to the person as they are now.
+    people: function(){ return data({ op: 'people' }); },
+    // Who last changed a shared key, and when: {by: person, at, agent?} (agent: their agent did it for
+    // them), or null for a key written before this was kept.
+    who: async function(key){
+      key = String(key);
+      if (flying[key]) await flying[key].done.catch(function(){});
+      var mine = ownWho[key], theirs = await data({ op: 'who', key: key });
+      if (mine && theirs && theirs.by && theirs.by.id === mine.by.id) return theirs;   // the host's has the picture
+      if (mine && !(theirs && theirs.at && Date.parse(theirs.at) > Date.parse(mine.at))) return mine;
+      return theirs;
+    },
     // fn("light" | "dark") when the chat switches mode; the "dark" class on <html> is already set. Returns an
     // unsubscribe.
     onTheme: function(fn){

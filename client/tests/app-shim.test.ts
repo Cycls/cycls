@@ -521,3 +521,76 @@ describe("following the chat's light or dark mode", () => {
     expect(document.documentElement.classList.contains("dark")).toBe(false);
   });
 });
+
+
+describe("who is using it", () => {
+  function load(user: unknown) {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win,
+      { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0),
+      clearTimeout,
+    );
+    const api = win.cycls as Record<string, (...a: unknown[]) => Promise<unknown>> & {
+      ctx: { user: unknown }; onChange: (fn: (e: unknown) => void) => () => void;
+    };
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: "apps/burnup/index.html", scope: "apps/burnup", canWrite: true, user });
+    const answer = (op: string, result: unknown) => {
+      const m = posted.filter((p) => p.type === "cycls:data" && p.op === op)[0];
+      deliver({ type: "cycls:data:result", id: m.id, ok: true, result });
+    };
+    return { api, posted, deliver, answer };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("knows the viewer from the start, and nobody on a shared link", () => {
+    expect(load({ id: "u_me", name: "Me", role: "admin" }).api.ctx.user).toEqual({ id: "u_me", name: "Me", role: "admin" });
+    expect(load(undefined).api.ctx.user).toBeNull();
+    expect(load("u_me").api.ctx.user).toBeNull();   // only a person the host sends
+  });
+
+  it("asks the host for the members and for who changed a key", async () => {
+    const { api, posted, answer } = load({ id: "u_me" });
+    const people = api.people();
+    const who = api.who("tasks");
+    await tick();
+    expect(posted.filter((m) => m.type === "cycls:data").map((m) => [m.op, m.key]))
+      .toEqual([["people", undefined], ["who", "tasks"]]);
+    answer("people", [{ id: "u_me", you: true }]);
+    answer("who", { by: { id: "u_sara", name: "Sara" }, at: "T" });
+    await expect(people).resolves.toEqual([{ id: "u_me", you: true }]);
+    await expect(who).resolves.toEqual({ by: { id: "u_sara", name: "Sara" }, at: "T" });
+  });
+
+  it("says you changed a key you just wrote, before the host has looked again", async () => {
+    const { api, posted, deliver, answer } = load({ id: "u_me", name: "Me" });
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    const done = api.set("a", 2);
+    await tick();
+    const put = posted.find((m) => m.op === "put")!;
+    deliver({ type: "cycls:data:result", id: put.id, ok: true, result: { ok: true, version: "v2" } });
+    await done;
+    const who = api.who("a");
+    await tick();
+    answer("who", { by: { id: "u_sara" }, at: "2000-01-01T00:00:00+00:00" });   // the host's look predates the write
+    expect(await who).toMatchObject({ by: { id: "u_me", name: "Me", you: true } });
+  });
+
+  it("passes on who changed each key", async () => {
+    const { api, deliver } = load({ id: "u_me" });
+    const heard: unknown[] = [];
+    api.onChange((e) => heard.push(e));
+    deliver({ type: "cycls:changed", source: "poll", keys: ["a"], who: { a: { by: { id: "u_sara" }, at: "T" } } });
+    await tick(); await tick();
+    expect(heard).toEqual([{ source: "poll", keys: ["a"], who: { a: { by: { id: "u_sara" }, at: "T" } } }]);
+  });
+});

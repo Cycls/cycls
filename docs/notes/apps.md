@@ -506,6 +506,46 @@ light after the person switched to dark, and apps grew their own toggles, saved 
 sets the `dark` class on the app's `<html>` (what Tailwind's class-based dark mode and the kit read) at init and
 on every switch, and calls `cycls.onTheme` listeners. A reload gets the mode it is in now. Apps carry no toggle.
 
+## Who is using it
+
+Until 2026-11-11 an app was told nothing about the person: `cycls.me` rows were filed under their id by the
+server, but the app never learned it, so "assigned to" and "created by" were typed-in names, and an admin's
+`cycls.users.all()` was rows keyed by bare ids.
+
+**The viewer.** `cycls:init` carries `user: {id, name, role}` (`cycls.ctx.user`; `null` on a shared link). The
+chat page has them already: the Clerk user, and the role from the workspace list. The id is the one the server
+files `u/<id>/` under (`actor_of`), so it matches `users.all()`.
+
+**The members.** `cycls.people()` is answered by the host, not the server: `lib/people.ts` `listPeople`, from
+the organisation's members (Clerk, every page, already loaded for the workspace menu) and the workspace's member
+rows (`/workspaces/<id>/members`). Personal: the viewer alone. General: the organisation but whom an admin took
+out, org admins always in. Another team workspace: its rows, and the viewer even without one (an org admin
+reaches every team workspace). A name, never an email: without one set, the part before the @. Cached a minute.
+
+**Pictures.** The app's CSP allows `data:` images only, so a Clerk URL would show nothing. `face()` reads it in
+the chat page (Clerk's image host answers `Access-Control-Allow-Origin: *`), draws it 64 px square and hands the
+app a WebP data URL, a few KB. A picture that cannot be read is left out, never passed on as a link.
+
+**Who changed what.** Every write to an app's data carries `{by, at, agent?}` as the row's metadata
+(`state.app_stamp`): `PUT /apps/<slug>/data/…` from the sign-in, the agent's `database` put from the run's
+person and the agent's name (`activity.ORIGIN`). The value is untouched. `GET /apps/<slug>/versions` already
+listed every key for the change check; it now asks GCS for `metadata` in the same LIST and returns `who: {key:
+{by, at, agent?}}`. The file store keeps metadata beside the body as `<key>.json.meta` for this. The bridge keeps
+the last `who` and answers `cycls.who(key)` from it (or a fresh listing when it is over 2 s old); a `cycls:changed`
+it posts names who changed each key. An id becomes the person through `people()`, raced against 1.5 s so a change
+is never held back for a name; someone who has left is `{id}` alone. The shim remembers what this viewer wrote,
+so `who()` says "you" before the host looks again. A row written before 2026-11-11 has no stamp: `who` is `null`.
+
+**On the team's record.** A change to a team workspace's shared app data, in the app or by the agent, is an
+`app_data` change on `apps/<slug>` in `.files` (the folder's history in the Files panel) and a row in the org's
+audit log (docs/rfc-file-metadata.md): who, the agent, the app, never the value. An app writes on every click,
+so changes are grouped as a file's saves are (same person, same way, within 10 minutes), and an instance records
+one person's at most once a minute (`activity.APP_EVERY`) to keep the extra writes off the hot path. A person's
+own rows (`?who=me`) are theirs and stay out; an admin writing a member's rows goes in. Personal workspaces keep
+no record. A run that only wrote files under `apps/<slug>/data/` records those files, not "published the app".
+
+In the kit: `useMe()`, `usePeople()` (`byId`), `useWho(key, value)`. The skill says to store ids, never names.
+
 ## Known limitations
 
 Current behaviour, not aspiration. Each is a real constraint someone will hit.

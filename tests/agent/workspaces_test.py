@@ -1054,10 +1054,37 @@ def test_versions_of_an_app_with_nothing_yet_are_empty_not_an_error(tmp_path):
     client = _client(tmp_path)
     ws = _mk_team(client)
     got = client.get("/apps/fresh/versions", headers={"X-Workspace": ws})
-    assert got.status_code == 200 and got.json() == {"keys": {}, "files": {}, "truncated": False}
+    assert got.status_code == 200 and got.json() == {"keys": {}, "who": {}, "files": {}, "truncated": False}
 
 
 def test_versions_refuse_a_bad_slug(tmp_path):
     client = _client(tmp_path)
     ws = _mk_team(client)
     assert client.get("/apps/%2E%2E/versions", headers={"X-Workspace": ws}).status_code == 400
+
+
+def test_versions_say_who_last_wrote_each_shared_key_and_the_value_stays_as_written(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/standup/data/a", json=1, headers=h)
+    client.put("/apps/standup/data/b", json=2, headers={**h, "X-Test-User": "admin_1"})
+    client.put("/apps/standup/data/tab?who=me", json="x", headers=h)
+    who = client.get("/apps/standup/versions", headers=h).json()["who"]
+    assert set(who) == {"a", "b"} and (who["a"]["by"], who["b"]["by"]) == ("user_1", "admin_1") and who["a"]["at"]
+    assert client.get("/apps/standup/data/a", headers=h).json()["value"] == 1
+
+
+def test_a_teams_shared_app_data_reaches_the_audit_log_and_a_persons_own_rows_do_not(tmp_path):
+    from cycls._agent import activity
+    activity._app_seen.clear()
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/standup/data/tab?who=me", json="x", headers=h)
+    for i in range(3):
+        client.put("/apps/standup/data/a", json=i, headers=h)
+    client.delete("/apps/standup/data/a", headers=h)
+    events = client.get("/audit", headers={**h, "X-Test-User": "admin_1"}).json()["events"]
+    rows = [e for e in events if e["action"] == "app_data"]
+    assert len(rows) == 1 and rows[0]["target"] == "apps/standup" and rows[0]["by"]["id"] == "user_1"

@@ -16,9 +16,11 @@ TRASHED = ".trash/"   # a deleted file's record waits here for a restore; no wor
 RETAIN_DAYS = 180     # an audit row's life
 RUN_MOST = 100        # files a run's walk records one by one; the rest are one row
 NOISE = {"node_modules", "__pycache__", "venv", "site-packages"}   # what a build leaves, never a person's file
+APP_EVERY = 60        # one person's changes to an app's data, recorded at most once a minute per instance
 _PEOPLE_TTL = 60
 _people = {}          # org -> (when read, {id: {name, image}})
 _swept = {}           # org store -> the day its old audit rows were last cleared
+_app_seen = {}        # (workspace, app, person, agent) -> when this instance last recorded one
 
 # Where the request came from (ip, client), and for a run its agent and chat: set by the server per request.
 ORIGIN = contextvars.ContextVar("activity_origin", default={})
@@ -89,8 +91,29 @@ async def record(ws, rel, c):
 
 def _burst(last, c):
     """Saves in a row, by the same person the same way, within 10 minutes: one edit."""
-    return (last.get("action") == c["action"] == "edited" and all(last.get(k) == c.get(k) for k in ("by", "agent", "chat"))
+    return (last.get("action") == c["action"] in ("edited", "app_data")
+            and all(last.get(k) == c.get(k) for k in ("by", "agent", "chat"))
             and _ts(c["at"]) - _ts(last.get("at")) < 600)
+
+
+async def app_data(ws, slug, *, agent=None, chat=None):
+    """Someone changed an app's shared data in a team workspace, in the app or through their agent: a change in
+    the app folder's history and a row in the org's audit log, grouped like a file's saves, never the value. An
+    app writes on every click, so this instance records one person's at most once a minute."""
+    if not (ws.ws or "").startswith("t-") or not slug:
+        return
+    k, now = (ws.ws, slug, state.actor_of(ws.subject), agent), time.monotonic()
+    if k in _app_seen and now - _app_seen[k] < APP_EVERY:
+        return
+    _app_seen.pop(k, None)
+    _app_seen[k] = now
+    while len(_app_seen) > 5000:
+        _app_seen.pop(next(iter(_app_seen)))
+    title = None
+    if chat:
+        try: title = ((await state.get_meta(ws, chat)) or {}).get("title")
+        except Exception: pass
+    await record(ws, f"{state.APPS_ROOT}{slug}", change(ws, "app_data", agent=agent, chat=chat, title=title))
 
 
 async def _carry(db, src, dst):
@@ -230,6 +253,16 @@ def names(root):
     return out
 
 
+def _app_data_file(path):
+    parts = path.split("/")
+    return len(parts) > 3 and parts[0] == "apps" and parts[2] == "data"
+
+
+def _app_part(path):
+    """A file an app is made of (its source, its build, app.json): not one under its data/ folder."""
+    return path.startswith("apps/") and path.count("/") > 1 and not _app_data_file(path)
+
+
 async def after_run(ws, before, since, chat_id, agent):
     """A run that called tools changed files any way it liked, bash included: every file changed since it began,
     and not recorded by anyone else meanwhile, is its change, for its person, agent and chat."""
@@ -243,10 +276,12 @@ async def after_run(ws, before, since, chat_id, agent):
     db = files_db(ws)
     title = ((await state.get_meta(ws, chat_id)) or {}).get("title") if chat_id else None
     made = lambda action, **kw: change(ws, action, agent=agent, chat=chat_id, title=title, **kw)
-    apps = sorted({e["path"].split("/")[1] for e in changed if e["path"].startswith("apps/") and e["path"].count("/") > 1})
+    apps = sorted({e["path"].split("/")[1] for e in changed if _app_part(e["path"])})
     for slug in apps:   # an app is one thing to its team, not the files it is built from
         await audit(ws, made("app_published"), f"apps/{slug}")
-    files = [e for e in changed if not e["path"].startswith("apps/")]
+    # The files an app keeps its data in are files like any other, as they are when the app writes them: a
+    # change to them is not a new version of the app.
+    files = [e for e in changed if not e["path"].startswith("apps/") or _app_data_file(e["path"])]
     for e in files[:RUN_MOST]:
         rec = await db.get(e["path"])
         if rec and _fresh(rec, _ts(e["modified"]), e["size"]):

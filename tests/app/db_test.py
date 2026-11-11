@@ -281,3 +281,35 @@ def test_gcs_create_sends_the_precondition_and_maps_412(monkeypatch):
     seen["code"] = 412
     with pytest.raises(db.Conflict):
         _run(store.write("chat/c/000000", b"{}", create=True))
+
+
+# ---- who last wrote a row: its metadata, read with the versions in one listing ----
+
+def test_the_local_store_keeps_metadata_beside_the_body_and_clears_it(tmp_path):
+    d = DB(db.workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps"))
+    va = _run(d.put("app/a", 1, meta={"by": "u1", "at": "2026-11-11T10:00:00+00:00"}))
+    vb = _run(d.put("app/b", 2))
+    assert _run(d.versions(prefix="app/", meta=True)) == {"app/a": (va, {"by": "u1", "at": "2026-11-11T10:00:00+00:00"}),
+                                                          "app/b": (vb, {})}
+    assert _run(d.versions(prefix="app/")) == {"app/a": va, "app/b": vb}
+    assert sorted(_run(d.keys(prefix="app/"))) == ["app/a", "app/b"]   # the metadata is never a key
+    _run(d.put("app/a", 3))   # a write without any clears it, as a new object has none
+    assert _run(d.versions(prefix="app/", meta=True))["app/a"][1] == {}
+    _run(d.put("app/a", 4, meta={"by": "u2"}))
+    _run(d.delete("app/a"))
+    assert not list(Path(tmp_path).rglob("*.meta"))
+
+
+def test_gcs_versions_with_metadata_come_from_the_same_listing(monkeypatch):
+    store = db._GCSStore("gs://bucket/prefix")
+    asked = []
+
+    async def fake_list(fields, *, prefix=None, glob=None):
+        asked.append(fields)
+        return [{"name": "prefix/app/a.json", "generation": "7", "metadata": {"by": "u1"}},
+                {"name": "prefix/app/b.json", "generation": "8"}]
+
+    monkeypatch.setattr(store, "_list", fake_list)
+    assert _run(store.list_versions(prefix="app/", meta=True)) == {"app/a": ("7", {"by": "u1"}), "app/b": ("8", {})}
+    assert _run(store.list_versions(prefix="app/")) == {"app/a": "7", "app/b": "8"}
+    assert "metadata" in asked[0] and "metadata" not in asked[1]   # no metadata asked for when none is wanted

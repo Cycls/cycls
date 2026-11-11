@@ -369,3 +369,19 @@ def test_the_agents_own_memory_is_not_checked(tmp_path):
     ws = _ws_user(tmp_path)
     _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws, chat="c1"))
     assert _run(_exec_database({"command": "put", "key": "note", "value": 2}, ws, chat="c2")) == "Stored 'note'"
+
+
+def test_the_agents_write_to_an_app_carries_its_person_and_name_and_reaches_the_teams_record(tmp_path):
+    from cycls._agent import activity, state
+    activity._app_seen.clear()
+    ws = _ws_user(tmp_path)
+    activity.ORIGIN.set({"agent": "super", "chat": "c1"})
+    try:
+        _run(_exec_database({"command": "put", "key": "apps/tasks/a", "value": 1}, ws, chat="c1"))
+    finally:
+        activity.ORIGIN.set({})
+    [(_, meta)] = _run(_shelf(tmp_path).versions(prefix="tasks/", meta=True)).values()
+    assert (meta["by"], meta["agent"]) == ("alice", "super") and meta["at"]
+    assert _run(_shelf(tmp_path).get("tasks/a")) == 1   # the value is what was written, nothing added
+    [row] = _run(activity.audit_page(state.org_db("tenant", tmp_path, f"file://{tmp_path}"), ws))[0]
+    assert (row["action"], row["target"], row["agent"], row["by"]["id"]) == ("app_data", "apps/tasks", "super", "alice")

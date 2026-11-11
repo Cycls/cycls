@@ -70,7 +70,8 @@ const fromOf = (c: FileChange) => {
   return c.action === "moved" ? parts.slice(0, -1).join("/") || t("workspace") : shownName(parts.pop() || "");
 };
 
-const ACTION = { created: "didCreate", edited: "didEdit", uploaded: "didUpload", renamed: "didRename", moved: "didMove", restored: "didRestore" } as const;
+const ACTION = { created: "didCreate", edited: "didEdit", uploaded: "didUpload", renamed: "didRename", moved: "didMove", restored: "didRestore",
+                 app_data: "didChangeData" } as const;
 
 export function FileDetails({ entry, path, size, onClose, onNavigate, onOpenChat, fileInfo }: {
   entry: FileEntry;

@@ -1290,9 +1290,11 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         # the write lands only if nothing changed — "" meaning it must be new.
         cond = {} if version is None else ({"create": True} if version == "" else {"gen": version})
         try:
-            gen = await state.apps_db(ws).put(key(k), value, **cond)
+            # Who wrote it rides with the row, from the sign-in: the app cannot name anyone else.
+            gen = await state.apps_db(ws).put(key(k), value, meta=state.app_stamp(ws), **cond)
         except Conflict:
             raise HTTPException(412, "changed since it was read")
+        await _noted(ws, slug, who)
         # The new version, so an open app knows this change is its own and not someone else's.
         return {"ok": True, "version": gen}
 
@@ -1302,21 +1304,31 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
         key = await _scope(slug, who, user, ws)
         await _may_write(slug, k, who, user, ws)
         await state.apps_db(ws).delete(key(k))
+        await _noted(ws, slug, who)
         return {"ok": True}
+
+    async def _noted(ws, slug, who):
+        """The team's record of a change to shared data, or an admin's to a member's; a person's own rows stay theirs."""
+        if who != "me":
+            await _kept(activity.app_data(ws, slug))
 
     @r.get("/apps/{slug}/versions")
     async def data_versions(slug: str, ws: Workspace = ws_dep, user: Any = user_dep):
         """What an open app polls to learn that its data changed — by the agent, a teammate or
         another tab — without reading any of it: one listing of the shared shelf (no bodies), and
-        the files under its data/ folder by size and time. Members' own rows are left out."""
+        the files under its data/ folder by size and time. Members' own rows are left out.
+        `who` says, from the same listing, who last wrote each key and when (and the agent, when
+        it wrote for them); a row written before rows carried it has none."""
         key = await _scope(slug, "", user, ws)
         root = key("")
-        rows = await state.apps_db(ws).versions(prefix=root)
-        keys = {}
-        for k, v in rows.items():
+        rows = await state.apps_db(ws).versions(prefix=root, meta=True)
+        keys, who = {}, {}
+        for k, (v, meta) in rows.items():
             rel = k[len(root):]
             if rel and rel.split("/")[0] != state.USER_MARK:
                 keys[rel] = v
+                if meta.get("by"):
+                    who[rel] = {f: meta[f] for f in ("by", "at", "agent") if meta.get(f)}
         files, folder = {}, Path(ws.root) / "apps" / slug / "data"
 
         def walk():
@@ -1331,7 +1343,7 @@ def apps_router(cycls_app, ws_dep, user_dep, volume, base):
             return False
 
         cut = await asyncio.to_thread(walk) if folder.is_dir() else False
-        return {"keys": keys, "files": files, "truncated": cut}
+        return {"keys": keys, "who": who, "files": files, "truncated": cut}
 
     return r
 

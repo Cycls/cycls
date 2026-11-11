@@ -262,3 +262,39 @@ def test_where_a_request_came_from():
     assert activity.origin_of({"user-agent": "Cycls/28 CFNetwork/1568 Darwin/24.0"})["client"] == "ios"
     assert activity.origin_of({"user-agent": "okhttp/4.12.0"})["client"] == "android"
     assert activity.origin_of({"user-agent": "python-requests/2.32"})["client"] == "api"
+
+
+# ---- an app's data: who changed it, on the team's record (docs/notes/apps.md) ----
+
+def _rows(tmp_path, w):
+    return asyncio.run(activity.audit_page(state.org_db("org_1", tmp_path, f"file://{tmp_path}"), w))[0]
+
+
+def test_changes_to_an_apps_data_are_one_row_per_person_and_way(tmp_path):
+    activity._app_seen.clear()
+    w = _ws(tmp_path)
+    for _ in range(3):   # an app writes on every click
+        asyncio.run(activity.app_data(w, "tasks"))
+    activity._app_seen.clear()   # another instance, the same minute: the record groups it as a file's saves are
+    asyncio.run(activity.app_data(w, "tasks"))
+    asyncio.run(activity.app_data(w, "tasks", agent="super", chat="c1"))
+    assert [(r["action"], r["target"], r.get("agent")) for r in _rows(tmp_path, w)] == \
+        [("app_data", "apps/tasks", "super"), ("app_data", "apps/tasks", None)]
+    history = asyncio.run(activity.info(w, "apps/tasks"))["activity"]
+    assert [c.get("agent") for c in history] == ["super", None] and history[1]["by"]["id"] == "u_sara"
+
+
+def test_an_apps_data_in_a_personal_workspace_keeps_no_record(tmp_path):
+    activity._app_seen.clear()
+    w = _ws(tmp_path, subject="u_sara", ws="u-u_sara")
+    asyncio.run(activity.app_data(w, "tasks"))
+    assert asyncio.run(activity.info(w, "apps/tasks")) == {"activity": []}
+
+
+def test_a_run_that_only_wrote_an_apps_data_files_did_not_publish_it(tmp_path):
+    w = _ws(tmp_path)
+    since = activity._now()
+    time.sleep(0.01)
+    _write(w, "apps/tips/data/rows.json")
+    asyncio.run(activity.after_run(w, set(), since, None, "super"))
+    assert [(r["action"], r["target"]) for r in _rows(tmp_path, w)] == [("created", "apps/tips/data/rows.json")]

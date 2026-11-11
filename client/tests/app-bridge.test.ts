@@ -619,3 +619,85 @@ describe("the chat's light or dark mode", () => {
     expect(sent.find((m) => (m as { type?: string }).type === MSG.init)).toMatchObject({ theme: "dark" });
   });
 });
+
+
+// Who is using an app: the viewer at its start, the workspace's members, and who last changed a key, as the
+// server stamped it on the row (never what an app says about itself).
+describe("who is using it", () => {
+  let detach: () => void;
+  afterEach(() => { detach?.(); vi.useRealTimers(); });
+  const ME = { id: "u_me", name: "Me", role: "admin", you: true };
+  const SARA = { id: "u_sara", name: "Sara", image: "data:image/webp;base64,AAAA", role: "editor" };
+  type V = { keys?: Record<string, string>; who?: Record<string, unknown>; files?: Record<string, string> };
+
+  function setup(opts: { people?: () => Promise<unknown[]>; versions?: V } = {}) {
+    const { frame, sent, contentWindow } = fakeFrame();
+    let now: V = opts.versions ?? { keys: {}, who: {} };
+    const appData = vi.fn(async (_s: string, op: Record<string, unknown>) => (op.op === "versions" ? now : null));
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "", appData, reload: vi.fn(),
+                            people: opts.people as never, pollMs: 1000, visible: () => true,
+                            context: { user: { id: "u_me", name: "Me", role: "admin" } } });
+    return { sent, contentWindow, set: (v: V) => { now = v; } };
+  }
+  const answer = (sent: unknown[], id: number) =>
+    sent.find((m) => (m as { type?: string; id?: number }).type === MSG.dataResult && (m as { id?: number }).id === id);
+  const changed = (sent: unknown[]) => sent.filter((m) => (m as { type?: string }).type === MSG.changed);
+  const ticks = () => new Promise((r) => setTimeout(r, 5));
+
+  it("tells the app at its start who is viewing", async () => {
+    const t = setup();
+    send(t.contentWindow, { type: MSG.ready, doc: "d1" });
+    await settle();
+    expect(t.sent.find((m) => (m as { type?: string }).type === MSG.init))
+      .toMatchObject({ user: { id: "u_me", name: "Me", role: "admin" } });
+  });
+
+  it("answers people() with the workspace's members, and refuses where there is no workspace", async () => {
+    const t = setup({ people: async () => [ME, SARA] });
+    send(t.contentWindow, { type: MSG.data, id: 1, op: "people" });
+    await ticks();
+    expect(answer(t.sent, 1)).toEqual({ type: MSG.dataResult, id: 1, ok: true, result: [ME, SARA] });
+    detach();
+    const shared = setup();
+    send(shared.contentWindow, { type: MSG.data, id: 2, op: "people" });
+    await ticks();
+    expect(answer(shared.sent, 2)).toEqual({ type: MSG.dataResult, id: 2, ok: false, error: "this view has no workspace" });
+  });
+
+  it("answers who(key) with the person, when, and the agent that did it for them", async () => {
+    const t = setup({ people: async () => [ME, SARA], versions: {
+      keys: { a: "1", b: "2", old: "3" },
+      who: { a: { by: "u_sara", at: "2026-11-11T10:00:00+00:00" },
+             b: { by: "u_left", at: "2026-11-11T11:00:00+00:00", agent: "Super" } } } });
+    send(t.contentWindow, { type: MSG.data, id: 1, op: "who", key: "a" });
+    send(t.contentWindow, { type: MSG.data, id: 2, op: "who", key: "b" });
+    send(t.contentWindow, { type: MSG.data, id: 3, op: "who", key: "old" });
+    await ticks();
+    expect(answer(t.sent, 1)).toMatchObject({ ok: true, result: { by: SARA, at: "2026-11-11T10:00:00+00:00" } });
+    // someone no longer in the workspace is their id alone
+    expect(answer(t.sent, 2)).toMatchObject({ ok: true, result: { by: { id: "u_left" }, agent: "Super" } });
+    expect(answer(t.sent, 3)).toMatchObject({ ok: true, result: null });   // written before rows said who
+  });
+
+  it("says who changed each key when it tells a listening app", async () => {
+    vi.useFakeTimers();
+    const t = setup({ people: async () => [ME, SARA], versions: { keys: { a: "1" }, who: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    send(t.contentWindow, { type: MSG.listen });
+    t.set({ keys: { a: "2" }, who: { a: { by: "u_sara", at: "T" } } });
+    window.dispatchEvent(new Event(TURN_END_EVENT));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(changed(t.sent)).toEqual([{ type: MSG.changed, source: "turn", keys: ["a"], files: [], who: { a: { by: SARA, at: "T" } } }]);
+  });
+
+  it("never holds a change back for a name", async () => {
+    vi.useFakeTimers();
+    const t = setup({ people: () => new Promise(() => {}), versions: { keys: { a: "1" }, who: {} } });
+    await vi.advanceTimersByTimeAsync(0);
+    send(t.contentWindow, { type: MSG.listen });
+    t.set({ keys: { a: "2" }, who: { a: { by: "u_sara", at: "T" } } });
+    window.dispatchEvent(new Event(TURN_END_EVENT));
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(changed(t.sent)).toEqual([{ type: MSG.changed, source: "turn", keys: ["a"], files: [], who: { a: { by: { id: "u_sara" }, at: "T" } } }]);
+  });
+});

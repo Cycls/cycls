@@ -24,7 +24,7 @@ export interface FileChange {
   at: string;
   agent?: string;
   chat?: { id: string; title?: string };
-  action?: "created" | "edited" | "uploaded" | "renamed" | "moved" | "restored";
+  action?: "created" | "edited" | "uploaded" | "renamed" | "moved" | "restored" | "app_data";
   from?: string;
 }
 
