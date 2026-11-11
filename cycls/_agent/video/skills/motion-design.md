@@ -10,14 +10,10 @@ everything else. Copy the `at()` lines and change the ids, times and colours.
 
 ## 1. What makes a video look generated
 
-- the same ease and length on everything, every element fading and sliding up from below
-- everything entering at 0 ms of its scene, all at once
-- titles that keep breathing, floating or creeping after they land
-- every scene entering the same way; scenes that start from rest and end at rest, like slides
-- motion with no cause: things appear, nothing makes them appear
-
-Instead: vary eases and speeds on purpose, stagger by importance, land each title and hold it **dead still**
-(the world behind it or the camera keeps moving), and hand each scene to the next with a move.
+The same ease and length on everything, all fading and sliding up; everything entering at once; titles that
+breathe, float or creep after they land; every scene entering the same way, starting and ending at rest like
+slides; motion with no cause. Instead: vary eases and speeds on purpose, stagger by importance, land each title
+and hold it **dead still** (the camera or the world behind it moves), and hand each scene to the next with a move.
 
 ## 2. The look moves the text; you move the rest
 
@@ -62,8 +58,7 @@ A num counts up at 0.05–0.5 s, a brand arrives at 0.05–0.4 s, a meta comes l
   ```
   `<div id="total" class="num" data-anim="none"></div>` and `at("#total", [{ "--n": 0 }, { "--n": 68 }], 300, 1400, LAND);`
 - **at() is for everything that is not a role**: motifs, shapes, lines, bars and rings, a photo or a clip
-  pushing, a product, a cursor, a badge, a chip, spans inside a role set to none. Text you build yourself takes
-  the look's variables (`font-family: var(--look-display)`, `color: var(--look-accent)`).
+  pushing, a product, a cursor, a badge, a chip, spans inside a role set to none.
 
 ## 3. How at() behaves — read before writing
 
@@ -101,7 +96,7 @@ The roles have the look's springs. These are for what you animate:
 | drift | `cubic-bezier(0.45, 0, 0.55, 1)` | camera pushes, colour floods, slow loops |
 | leave | `cubic-bezier(0.7, 0, 0.84, 0)` | exits, zoom-throughs: it accelerates away |
 | pop | `cubic-bezier(0.34, 1.56, 0.64, 1)` | a small overshoot: icons, badges, stickers |
-| spring / soft / bounce | below | playful dots (20% overshoot) / cards, bars (5%) / a drop that lands, once |
+| spring / soft / bounce | below | playful dots (20% overshoot) / cards, panels (5%) / a drop that lands, once |
 | `steps(1, end)` | | on/off: a word appearing, a cut inside a scene |
 | `linear` | | rotation, tickers, Ken Burns, a fade beside a bouncing move |
 
@@ -114,7 +109,8 @@ const BOUNCE = "linear(0, 0.061 9%, 0.245 18%, 0.551 27%, 1 36.4%, 0.819 45%, 0.
 ```
 
 - Arrivals land on a long tail; exits accelerate; a move between two places eases both ways.
-- **Position and size may overshoot; opacity, colour and blur never do.** With a spring or pop, fade on its own
+- **Position and size may overshoot; opacity, colour, blur and anything that shows a value never do**: a bar,
+  a ring or a counted number past its value shows a false amount. With a spring or pop, fade on its own
   `linear` animation of 150–250 ms beside the move.
 - The ease is the feeling: confident = land 0.5 s; luxury = glide 0.9 s; playful = spring 0.6 s; urgent = land
   0.25 s; calm = drift 1.2 s; mechanical = steps or move 0.3 s. Match the look: glide with luxe and cinematic,
@@ -133,15 +129,18 @@ const BOUNCE = "linear(0, 0.061 9%, 0.245 18%, 0.551 27%, 1 36.4%, 0.819 45%, 0.
 - Time your moves around the look's: a motif or a picture moves first (0–0.3 s), the headline lands on it, the
   supporting pieces after. The video's very first frame shows a finished composition, not a half-entered word.
 - **Exits are 40–50% shorter than entrances.** Stagger: words 60–120 ms, list items 40–80 ms; the whole cascade
-  under 0.5 s.
+  under 0.5 s. A move that follows another starts when that one is 30–60% done: one after another looks
+  robotic, all at once cheap.
 - **Order is importance**: the hero moves first and furthest; supporting pieces move less, later, subtler.
   Everything in one group comes from one direction (Arabic: mirror it).
 - **Stillness before the payoff**: 0.3–0.75 s of nothing new just before the big number or the reveal.
-- **Nothing on screen still for more than ~0.6 s**: once the words are landed, the camera, the ground or the next
-  reveal moves. A 30 s video is about 12–15 compositions with beats of 1.4–3.5 s.
-- Render at 30 (the default): a final of 30 s or less whose moves are fast is drawn with motion blur by itself, as a camera sees fast
-  moves; never fake it with a blur on a fast move. `fps: 60` only when the person asks for it, or for a screen
-  recording or UI demo (smoother, no blur, twice the render time).
+- **Words hold, the shot never freezes**: a line being read holds dead still about 0.5 s + 0.3 s a word (Arabic:
+  0.6 s a word, a line alone 0.9 s at least); the camera, the ground or the next reveal carries the motion. Never a
+  wobble or a pulse to fill time. One treatment goes stale after ~6 s: a new one, or a cut. A 30 s video is about
+  12–15 compositions with beats of 1.4–3.5 s.
+- Render at 30 (the default): a final of 30 s or less with fast moves gets motion blur by itself; never fake it
+  with a blur on a fast move. `fps: 60` only when asked, or for a screen recording or UI demo (smoother, no blur,
+  twice the render time).
 
 ## 6. Text effects the presets don't have
 
@@ -170,14 +169,16 @@ Build these with at() on an hl or a sub set to `data-anim="none"`, or on spans i
    `at("#k1", [{ opacity: 0 }], 900, 1, "steps(1, end)");` with a SPRING scale 0.8→1 on each arrival. Hold each
    word at least 0.4 s; on music, change on the beat.
 
-Spans keep the role's type (they inherit it). Arabic is never split into letters.
+Spans keep the role's type (they inherit it). Arabic is never split into letters and never takes a gradient fill
+or a glow (its dots and thin strokes break up); a mask or a clip box around Arabic leaves 0.12 em above and 0.3 em
+below the line, or it cuts the dots and the tails.
 
 ## 7. Element and camera recipes
 
 - **Line or path drawing**: `<path … pathLength="100" stroke-dasharray="100 120" stroke-dashoffset="110" stroke-linecap="round">`,
   `[{ strokeDashoffset: 110 }, { strokeDashoffset: 0 }]`, 1.0–1.4 s on move. Underlines, routes, arrows, signatures.
 - **Bars**: `transform-origin: 50% 100%`, `[{ transform: "scaleY(0)" }, { transform: "scaleY(1)" }]`, 800 ms on
-  SOFT, 80 ms apart; the bar that matters last, in `var(--look-accent)`.
+  LAND (never past its value), 80 ms apart; the bar that matters last, in `var(--look-accent)`.
 - **Ring or donut**: an SVG `rotate(-90deg)`, a track circle and an arc `pathLength="100" stroke-dasharray="100 120"`,
   `[{ strokeDashoffset: 100 }, { strokeDashoffset: 100 - VALUE }]`, 1.3 s on land, the num inside counting with it.
 - **3D tilt-in**: the parent `perspective: 1000px`; the card `transform-origin: 50% 100%`,
@@ -212,14 +213,24 @@ Spans keep the role's type (they inherit it). Arabic is never split into letters
 - The look puts its seam (the table in §2) into every scene that starts where another ends, unless the video
   sets a data-transition anywhere: then it adds none, and each seam is yours (a scene with none cuts). In the
   looks with an exit, the text fades out in its scene's last 0.3 s, as the seam begins.
-- **Choose your own** where the story turns, 1–2 in a video: `light-leak` (warm: a launch, a memory),
+- **A GPU transition of your own** where the story turns, 1–2 in a video: `light-leak` (warm: a launch, a memory),
   `whip-pan` (energy, the next item), `cinematic-zoom` (into a detail), `flash-through-white` (a reveal),
   `sdf-iris` (a product or a logo), `glitch` and `chromatic-split` (tech, music, a twist), `domain-warp`,
   `ripple-waves`, `swirl-vortex` (a dream, a change of world: rarely).
-- **Hard cut** on a beat, in a fast list, for comic timing: bold's way, and the right one for most reels.
-- **A move that carries over the cut**: what you animate keeps going: the photo pushing into the cut and the
-  next one starting pushed the same way, the band sliding on, a shape leaving one scene where it enters the next.
-  One direction for the video: in a left-to-right video things travel left, in an Arabic one right; up for a
+- **A reel of 20 s or less**: hard cuts on the beat (bold's way). **Longer**: 3–5 kinds of seam, at most a third
+  hard cuts, each caused by something on screen: the move below; a zoom through a button (it scales 8% → 250% of
+  the frame in 0.35 s on LEAVE, its fill becomes the next ground); a colour flood (the hero stays, the ground
+  changes colour in ~0.4 s on MOVE); a card that grows past the frame into the next scene (0.65 s on MOVE).
+- **A move that carries over the cut**: the outgoing thing accelerates out, the incoming one arrives still
+  travelling the same way, at the same speed, and lands. About 12% of the frame (230 px across 1920), never off
+  the frame; the exit 0.2–0.4 s and gone by 30% of its travel, the entry at least as long:
+  ```js
+  at("#ph1", [{ translate: "-230px 0" }], -300, 300, LEAVE);   // end keyframe only: on from where it is
+  at("#ph1", [{ opacity: 0 }], -300, 90, "linear");
+  at("#ph2", [{ translate: "230px 0", opacity: 0.35 }, { translate: "0 0", opacity: 1 }], 0, 400, LAND);  // next scene
+  ```
+  Depth matches too: an exit that shrinks away is followed by an entry settling from larger (1.1 → 1), never one
+  growing from small. One direction for the video: things travel left (Arabic: right; swap the signs); up for a
   conclusion, forward (zoom) for going deeper.
 - **Dip cut**: a black layer last in the outgoing scene (`position: absolute; inset: 0; background: #000`, over
   its text) goes from opacity 0 to 0.45 in the scene's last 0.1 s before a hard cut: the cut reads as meant.
@@ -268,7 +279,9 @@ get none.
 - The hit lands on the frame it belongs to: a role's moment is its scene's start + its delay (§2 table, or your
   data-anim-delay). With music, the moment itself sits on a beat, so the effect, the cut and the music hit together.
 - One for a moment that earns it, at most one every 1.5 s; the hook and the payoff get the strongest. A montage
-  cut to music needs few: the music is the rhythm.
+  cut to music needs few: the music is the rhythm. One riser and one big impact a video (a second riser halves
+  both). The same whoosh on every cut is the commonest tell: alternate `whoosh`, `whoosh-short`, `whoosh-soft`.
+- A move that lands on a music hit starts 40–190 ms before it, so its landing meets the hit.
 - Under a voice-over's sentence only small ones, `data-volume="0.5"`. On the end card: one impact or chime as
   the logo lands, then let the music finish.
 - `<audio id="fx-slam" src="sfx:impact-bass-1" data-start="4.35"></audio>` for a slam landing at 4.45 s; the
@@ -276,22 +289,21 @@ get none.
 
 ## 11. A reel, beat by beat (14.5 s, vertical, bold)
 
-1. 0–2.4 s, the hook: an hl set to none, "Make" on screen at frame 0; "it", then "move." replace it one a beat
-   (0.48 s); "move." is the `<em>` and slams; a burst answers its landing; a ghost word drifts behind (a motif).
-2. 2.4–5.2 s: "Built for" + a slot machine rolling teams → shops → brands → "you." Hard cut on the bar line.
-3. 5.2–8.4 s, accent-bg: the tag, the num counting to 87% (the look), a ring drawing around it (yours), the sub;
-   a motif pushes 6% the whole time.
-4. 8.4–11.4 s: a quote and its by, the look's; the photo behind it pushing (G4 in `video-direction`).
-5. 11.4–14.5 s: `data-transition="whip-pan"` into the end card (the look then adds no other seam: the rest cut,
-   as bold does); rings drift at three depths, the logo stamps, brand, cta and meta from the look, 1.5 s of hold.
+1. 0–2.4 s: an hl set to none, "Make" at frame 0; "it", then "move." replace it a beat (0.48 s) apart; "move."
+   is the `<em>` and slams, a burst answers it, a ghost word drifts behind.
+2. 2.4–5.2 s: "Built for" + a slot machine rolling teams → shops → brands → "you."; hard cut on the bar line.
+3. 5.2–8.4 s, accent-bg: the tag, the num counting to 87%, a ring drawing round it (yours), the sub.
+4. 8.4–11.4 s: a quote and its by; the photo behind it pushing (G4 in `video-direction`).
+5. 11.4–14.5 s: `data-transition="whip-pan"` into the end card (the rest cut); rings drift at three depths, the
+   logo stamps, 1.5 s of hold.
 
-One accent, one spring, every beat with something moving, every title landed and still. Render at 30: fast moves get their motion blur with it.
+One accent, one spring, something moving in every beat, every title landed and still.
 
 ## 12. Never
 
 - at() on a role element without `data-anim="none"` on it; a font, a size or a colour written over a role.
 - Arabic letter by letter, or letter-spacing on Arabic.
-- Opacity, colour or blur that bounces; more than one bouncing thing at a time.
+- Opacity, colour, blur or a value that bounces; more than one bouncing thing at a time.
 - Titles that keep moving once landed; breathing, floating or pulsing loops to fill time: reveal the next thing
   or shorten the scene.
 - Motion under a line someone is reading; a move that ends after its scene does (land 0.3 s before the end).

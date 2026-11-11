@@ -19,7 +19,8 @@ footage: choosing it, cutting it, dressing it and captioning it.
   - **Hook**: the strongest line (a result, a number, a surprise, a question) goes FIRST, even when it was said
     last. Frame 0 is the thumbnail: a face mid-sentence or a bold line, never black or a logo.
   - Then context → two or three moments → the result → an end card with one ask.
-  - Cut what restates, fillers, false starts and "as you can see".
+  - Cut what restates, fillers, false starts and "as you can see". A line said in several takes: pick the best
+    take for each beat, not the last one.
 - **Where nobody speaks** (stock, b-roll) the reply names each clip's best stretch, its weak ones (a shaky
   start, a fade, a soft or dark patch) and its light. Start every piece in a best stretch, out of the weak ones;
   pick clips whose light agrees.
@@ -31,7 +32,8 @@ footage: choosing it, cutting it, dressing it and captioning it.
 - The look grades every piece and `<img class="photo">`, after the pieces from different cameras are matched to
   each other: they read as one shoot. No `filter` of your own for colour. `data-grade="none"` keeps one piece as
   shot (a screen recording); `data-match="none"` (a piece or the root) keeps it as filmed. The sheet, the previews
-  and the render all carry the grade.
+  and the render all carry the grade. The person on camera: when their skin reads wrong on the sheet, or they ask
+  for their footage as filmed, `data-grade="none"` on their pieces.
 - A title over footage is a scene with `on-footage` (and `bottom` or `top`) above the pieces; the look puts its
   scrim under the words. The first frame's headline is set to none so it is there at 0 s:
   ```html
@@ -45,10 +47,13 @@ footage: choosing it, cutting it, dressing it and captioning it.
 
 - **A piece** begins 0.15 s before its first word and ends 0.25 s after its last; between two sentences cut in
   the middle of the pause. The next piece's `data-start` = this one's `data-start + data-duration`.
+- **Where not to cut**: between words less than 0.15 s apart (mid-phrase); the pause before a number or a punch
+  line; within 0.5 s of a shot change in the clip (the reply lists them). A cut that saves under 0.4 s, or leaves a
+  piece under 0.4 s, is not worth it. Hold past a laugh; leave 0.4–0.6 s where one speaker hands to another.
 - **When a word is heard in the video** = piece `data-start` + (word time − piece `data-media-start`). Time every
   graphic and callout with it; the `write` reply's "Spoken:" line shows the sentences in video time to check.
-- **Jump zoom.** Cut to the next sentence tighter: a new piece with a static transform. Alternate wide and tight
-  every 2–3 sentences, never on two cuts in a row:
+- **Jump zoom.** Cut to the next sentence tighter: a new piece with a static transform, 1.2× at most (1.1× on a
+  clip under 1080p). Alternate wide and tight every 2–3 sentences, never on two cuts in a row:
   ```css
   #b { transform: scale(1.12); transform-origin: 50% 38%; }
   ```
@@ -64,7 +69,10 @@ footage: choosing it, cutting it, dressing it and captioning it.
   ```
   with `#cut1 { z-index: 2; }`. Stock clips come from `footage {stock: ["a few words", "a few more"], orientation:
   "portrait"}`: every search the video needs in ONE call, fetched side by side — one search per shot, then
-  write with what came back; fetch again only for a shot that is plainly wrong.
+  write with what came back; fetch again only for a shot that is plainly wrong. People in stock look like the
+  audience (for a Gulf brand "saudi man thobe", "arab woman abaya", or a shot with no faces); never alcohol, pork
+  or a religious inscription as decoration. A cutaway shows something the words do not; the speaker alone runs
+  8 s at most, and the video opens and closes on them.
 - **Montage on the music.** `music {query, length}` names a pick and its grid for the video's seconds: take it. The reply gives each track's beat (B) and good places to start on it; start
   the music there with data-start 0 and a beat falls at 0 and every B after. Cut every 2 beats for energy, 4 for
   calm, all pieces `muted`, each starting in its best stretch, the music not ducked. 100 bpm → B = 0.6 s → a cut
@@ -106,8 +114,9 @@ clear. Below y 1440 the apps draw their own caption and buttons: only picture th
 
 ## 5. Dressing a talking head
 
-The face wins: nothing covers it, one graphic at a time, each timed to the word that says it. In a vertical
-close-up the face sits about y 400–1000: look at the sheet and keep graphics above or below it.
+The face wins: nothing covers it, one graphic at a time, each timed to the word that says it, staying 0.3–0.6 s
+after its last word and leaving over 0.4 s. In a vertical close-up the face sits about y 400–1000: look at the
+sheet and keep graphics above or below it.
 
 - **Lower third** at the person's first appearance, once: `motion {name, piece: "lower-third", start: 0.3,
   vars: {name, role, duration: 2–3}}`, in the look's type and colours (and the kit's). It lands just above two
@@ -131,7 +140,8 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
   at("#chip1", [{ opacity: 0 }], -300, 250, "cubic-bezier(0.7, 0, 0.84, 0)");   // the exit: end keyframe only
   ```
 - **Punch line**: the 2–3 words that carry a sentence, big, in word blocks above the captions, each on its own
-  spoken time, the key word in the accent. Blocks keep 3:1 contrast over any footage (bare text over bright
+  spoken time, the key word in the accent: the one whose removal breaks the claim (a number, a name, the result),
+  never a filler. Blocks keep 3:1 contrast over any footage (bare text over bright
   footage fails it). Its words are spans of your own (not a role), so at() moves them:
   ```html
   <div id="k2" class="clip" data-start="11.85" data-duration="1.9" data-track-index="3">
@@ -174,8 +184,11 @@ close-up the face sits about y 400–1000: look at the sheet and keep graphics a
 - **One box per stretch of speech.** A box over pieces with a music-only stretch between them builds a line
   across the gap: it hangs over the montage with words from both sides. Split the ids at every silent stretch.
 - The `.cap-line` backing is sized to the words: readable over any shot, never a full-width bar or a grade.
-- `word` lights each word as it is said (reels, energy); `phrase` for interviews and calm talk. One family,
-  two weights, one accent. The accent on a dark backing is light (amber, yellow, mint): a mid orange-red fails 3:1.
+- `word` lights each word as it is said: the hook and reels of 20 s or less. `phrase` for talk over 20 s,
+  interviews and brand films (word by word pulls the eye and lowers what is understood). One family, two weights,
+  one accent. The accent on a dark backing is light (amber, yellow, mint): a mid orange-red fails 3:1.
+- The builder keeps each line short (two lines at most, about 42 letters a line in Arabic) and lights a word just
+  before it is said. Hide the captions while the scene writes the same sentence on screen.
 - Sizes: 60–72 px on a reel, 44–56 px on a wide video 80–120 px from the bottom. Never italic for emphasis.
 - **Arabic**: `dir="rtl"` on the box, line-height 1.5 or more; an Arabic family of your own (Cairo, IBM Plex
   Sans Arabic, Tajawal, Almarai) goes on its id.

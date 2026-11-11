@@ -19,9 +19,11 @@ needs, in what order, and how fast.
   offer or a call to action goes in a centred scene (`bottom` is for a title over footage). What you place
   yourself stays between y 220 and y 1440, 140 px clear of the right edge. Square and portrait: the 6% margin.
 - **One message, one brand.** The headline ≤ 6 words (Arabic ≤ 5), one idea a beat, held at least
-  words ÷ 3 seconds. The logo comes at the end, never first.
-- **Pace.** A new beat every 1.5–3 s; nothing sits unchanged for more than ~0.6 s except the end card. A 30 s
-  promo has 12–15 changes.
+  words ÷ 3 seconds (key information 1 s at least). The logo lock-up comes at the end, never first, but by 2 s
+  the viewer can name what is sold: the product, the shopfront, the name said or written in the hook.
+- **Pace.** A new beat every 1.5–3 s; landed words hold still while the picture keeps moving; only the end card
+  freezes. A 30 s promo has 12–15 changes: a 15 s one is one idea and one proof, a 30 s one setup, turn, proof.
+- **A reel of 15 s or less can loop**: its last frame echoes frame 0, so the replay reads as one.
 - **Only real facts.** Prices, dates, numbers, reviews, star ratings and client logos come from the person. Never
   invent a testimonial, a rating, "1,000+ customers" or a partner's logo: with no real proof, leave that beat out.
 
@@ -43,7 +45,9 @@ a hand — with type cut over them, not type on a flat ground. In this order:
 1. the person's own photos and clips (`footage {path}` for a clip; photos by their workspace path);
 2. stock footage of the subject, two to four clips in ONE call: `footage {stock: ["barista pouring latte art
    close up", "coffee beans roasting in drum", "cafe window morning light"], orientation: "portrait"}`, each
-   search words that describe a SHOT (subject, action, closeness, light), not a topic; read each sheet and keep
+   search words that describe a SHOT (subject, action, closeness, light), not a topic (people who look like the
+   audience: for a Gulf brand "saudi man thobe", "arab woman abaya", or a shot with no faces; never alcohol, pork
+   or a religious inscription as decoration); read each sheet and keep
    the shots that match one light (another clip for a search is `{stock: "…", pick: 1}`). One search per
    shot the reel needs (a 15 s reel has three to five shots, the end card on a card), then `write` with what
    came back: a clip near enough is trimmed to its best stretch, pushed or cropped into place, never replaced
@@ -69,14 +73,17 @@ The hook names the subject by its second beat. Never "Introducing…" over a log
 
 | pattern | on screen | English | Arabic |
 |---|---|---|---|
-| the number | one huge figure | "40% off everything" | «خصم ٤٠٪ على كل شيء» |
+| the number | one huge figure | "40% off everything" | «خصم 40% على كل شيء» |
 | the bold claim | 3–5 words, edge to edge | "The last coffee you'll switch to" | «آخر قهوة بتجربها» |
-| the question | a question in the viewer's words | "Still paying 30 SAR a cup?" | «للحين تدفع ٣٠ ريال للكوب؟» |
-| the result first | the finished thing at frame 0 | "Made in 10 minutes" | «سويناه في ١٠ دقايق» |
+| the question | a question in the viewer's words | "Still paying 30 SAR a cup?" | «للحين تدفع 30 ريال للكوب؟» |
+| the result first | the finished thing at frame 0 | "Made in 10 minutes" | «سويناه في 10 دقايق» |
 | before / after | a split wiped across | "Before → After" | «قبل ← بعد» |
-| the swap | one slot cycles, then the answer slams | "A gift? A treat? A habit? — Najd." | «هدية؟ دلع؟ عادة؟ — نجد.» |
-| the deadline | a date or a countdown | "48 hours only" | «٤٨ ساعة بس» |
-| the occasion | the greeting carries the offer | "Ramadan Kareem — coffee's on us" | «رمضان كريم — والقهوة علينا» |
+| the swap | one slot cycles, then the answer slams | "A gift? A treat? A habit? Najd." | «هدية؟ دلع؟ عادة؟ نجد.» |
+| the deadline | a date or a countdown (a real one) | "48 hours only" | «48 ساعة بس» |
+| the occasion | the greeting carries the offer | "Ramadan Kareem, coffee's on us" | «رمضان كريم، والقهوة علينا» |
+| the callout | the viewer named | "For every café owner" | «لكل صاحب مقهى» |
+| the choice | two real options, one tap each | "Hot or iced?" | «حار ولا بارد؟» |
+| proof first | the person's real number or review | "4.8 from 2,300 orders" | «4.8 من 2300 طلب» |
 
 ## Beat plans (cut lengths on the music's beat; 0.5 s without music)
 
@@ -190,8 +197,10 @@ city): the look sets and brings them in. Client logos only from the person's own
 **A UI demo with an oversized cursor:** the app in a phone frame (560 × 1100, radius 72) in the scene's column
 under a kicker (an ordinary block, `position: relative`, so the look keeps the text clear of it). The cursor is
 110 × 165 px (an SVG arrow, white with a dark outline, a drop shadow, z-index 30) inside the phone. It enters from
-below, glides to the button and presses, and the click causes the change: the button turns green with "✓", a
-ripple spreads, a cart badge pops. Then it leaves. Its whole life is ONE animation:
+below, glides to the button and presses, and the click causes the change: the button turns green with "✓", and
+on the press's rebound the next screen comes in slightly large and settles (a match cut). No ripple, no bounce
+on the UI: both read as generated. The screen is shown at 1.6–2× its real size (its text 26 px or more), one
+framing held while it acts. Then the cursor leaves. Its whole life is ONE animation:
 ```js
 at("#cursor", [
   { transform: "translate(260px, 900px) scale(1)", offset: 0, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
@@ -200,10 +209,8 @@ at("#cursor", [
   { transform: "translate(0, 0) scale(1)", offset: 0.403 },
   { transform: "translate(0, 0) scale(1)", offset: 0.767, easing: "cubic-bezier(0.7, 0, 0.84, 0)" },
   { transform: "translate(420px, 900px) scale(1)", offset: 1 }], 300, 3000, "linear");
-at("#btn", [{ transform: "scale(1)" }, { transform: "scale(.95)" }, { transform: "scale(1)" }], 1250, 260, "ease-in-out");
-at("#btn", [{ backgroundColor: "#231b16" }, { backgroundColor: "#2f8a4c" }], 1350, 200, "ease-out");
-at("#ripple", [{ opacity: 0, transform: "scale(.2)" }, { opacity: 1, transform: "scale(.3)", offset: 0.05 },
-               { opacity: 0, transform: "scale(2.2)" }], 1300, 600, "ease-out");
+at("#btn", [{ backgroundColor: "#231b16" }, { backgroundColor: "#2f8a4c" }], 1380, 200, "ease-out");      // the press
+at("#screen2", [{ opacity: 0, transform: "scale(1.04)" }, { opacity: 1, transform: "none" }], 1510, 350, LAND);  // the rebound
 ```
 Swap the label with two stacked spans (`#add` out, `#done` in, 150–200 ms). Never fade a cursor in where it
 stands. Use the person's real screens (screenshots as `<img>`), never an invented dashboard.
@@ -251,7 +258,8 @@ Cutting on the beat is what makes a reel feel edited rather than assembled.
   at() offsets (492, 984 ms), so the words land with the music even mid-scene.
 - **Read it back.** After a write, the sound map lists the beats and bar lines in the video's time; a scene that
   starts off them comes back as `cut_off_beat`: move it (and what is timed inside it) onto its beat. A track
-  with no steady beat: cut on the picture, scenes of 2–3 s.
+  with no steady beat: cut on the picture, scenes of 2–3 s. A calm track's grid can run at double its real
+  tempo: cut it every 4 beats, never every beat.
 - **Seams:** the look's (bold cuts hard), or one GPU transition of yours into the centrepiece (`light-leak` warm,
   `whip-pan` energetic, `flash-through-white` a launch), one more into the end card at most: once you set any
   data-transition the look adds none, and the other scenes cut.
@@ -286,7 +294,8 @@ Motifs (give the scene a z-index and each motif `position: absolute; z-index: -1
 - **Arabic copy.** `<html lang="ar">`: the look sets its Arabic type and runs right to left; `dir="rtl"` on the
   scenes. Headlines ≤ 5 words. What you animate enters from the right, a strike line grows from the right, stars
   fill from the right.
-- **Numbers.** Use Arabic-Indic (٤٠٪) or Western (40%) as the brand does; a num counts up only in Western
+- **Numbers.** Use Arabic-Indic (٤٠٪) or Western (40%) as the brand does, Western when it does not say (Gulf
+  social video reads Western digits); a num counts up only in Western
   digits, so an Arabic-Indic count is your own counter (`counter(n, arabic-indic)`, as in the price drop). Never put
   "·" next to Arabic-Indic digits: it reads as ٠ (٢٥٠ looked like ٢٥٠٠). Never put a minus before a percent in RTL
   ("-٤٠٪" scrambles): write «خصم ٤٠٪». Prices: «٥١ ر.س» or "51 SAR" (the new riyal sign is not in the fonts).
@@ -302,7 +311,7 @@ order. Check each size with `look {name, at, size: "square"}` before `render`; o
 
 ## Before render
 
-Frame 0 shows the hook and the subject · every word in the safe band · one change every 1.5–3 s · the facts are
+Frame 0 shows the hook and the subject · what is sold is clear by 2 s · every word in the safe band · one change every 1.5–3 s · the facts are
 the person's · cuts on the grid · at most two GPU transitions · no role also moved by at() · the end card's call
 to action held ≥ 1.5 s · `look` at the hook, the reveal, the offer and the last second · 30 fps (motion blur on fast moves) for moving
 type.

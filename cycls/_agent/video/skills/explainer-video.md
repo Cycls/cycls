@@ -43,7 +43,8 @@ Length comes from words: about 2 words a second in Arabic and 2.5 in English.
 | 60 s | 120 | 150 | 12–16 |
 
 - One idea a sentence, 5–12 words in Arabic, 6–15 in English. Write each sentence as cues the picture can follow
-  ("first the coin, then its profit, then the profit's profit"): each cue becomes one reveal.
+  ("first the coin, then its profit, then the profit's profit"): each cue becomes one reveal. At most about 19
+  spoken words a scene (Arabic 17): trim the script, never stretch the motion.
 - The first sentence is the hook. Pick one on purpose:
 
 | Hook | Use when | Example |
@@ -58,7 +59,10 @@ Length comes from words: about 2 words a second in Arabic and 2.5 in English.
   Never "In this video…", "مرحباً بكم", a definition, or the topic's name as the first line.
 - The thesis lands by the second or third sentence; everything after it is evidence.
 - Spoken style: short sentences, plain words. Say numbers the way a person rounds them ("about 590 thousand");
-  the screen shows the exact figure.
+  the screen shows the exact figure. Set the pace with punctuation (a comma for a breath, a full stop for a
+  stop) before reaching for `speed`; keep English words inside an Arabic sentence few, each one breaks its flow.
+- An analogy carries one step and says where it stops ("like a snowball, except…"). A claim with limits gets
+  its caveat in one line, said and shown small.
 - Arabic: Standard Arabic with the default voice unless the person wants Saudi (`voice: "saudi"`). Put vowels
   on verbs and names the voice may misread (تُصبِحُ، يُرَحِّبُ), a sukun where a breath ends (فقطْ), and a comma where
   a pause belongs. `speed: 0.9–0.95` suits a calm explainer.
@@ -76,6 +80,7 @@ Length comes from words: about 2 words a second in Arabic and 2.5 in English.
 | Timeline / history | today 3 → the stations in order, 3 s each → back to today 4 | one long world the camera pans along |
 | Data story | the number that matters 4 → where it comes from 6 → what it means 8 → takeaway 4 | one chart that builds and is annotated |
 | A report or deck in 60 s | the headline result 5 → 3–4 findings 10 each → the ask 6 | the report's own pages, moved and marked up |
+| Myth to fact | the belief 3 → why it seems right 6 → less wrong 6 → right, with the proof 8 → takeaway 3 | one picture corrected twice |
 
 Pick one structure; a how-to inside a concept is fine when you name it to yourself.
 
@@ -99,7 +104,9 @@ object?" A prop that could appear unchanged in another company's video did not c
 
 Make the hero 40–60% of the frame: a diagram big enough to read its labels, a number near full width. Labels sit
 on the part they name and appear with it; no legends, no bullet lists, no icons in circles, no three cards in a
-row, never the whole diagram at once.
+row, never the whole diagram at once. At most 6 parts active: the part being explained at full strength, the
+context dimmed to opacity 0.35, the structure behind it 0.15. Two scenes in a row never share a layout, an
+entrance and a pace.
 
 ## 5. Reveal on the word
 
@@ -117,7 +124,8 @@ data-anim); anything else, as an at() offset:
 ```
 A node of the diagram: `at("#c1", [{ opacity: 0, transform: "scale(.4)" }, { opacity: 1, transform: "none" }], 1740, 500, SPRING)`.
 A diagram in the scene's column (the svg here) is laid out with the text, clear of it. Spread reveals across the
-scene, most in its back half; at offset 0 show only what the first words say. A scene never opens on an empty
+scene, most in its back half; at offset 0 show only what the first words say. A new term holds 2 s at least; the
+key insight holds 3 s after it lands, nothing new beside it. A scene never opens on an empty
 frame while it waits for its first word: give it the stage it will build on (the axis, the empty grid, the term in
 small type), or start the scene on its first word. Hold still once everything has landed: stillness after motion
 reads as confidence.
@@ -176,8 +184,11 @@ at("#w1", win, 300, 800, "linear");   // each word: its own window; the anchor b
   axis and a reference line first, then reveal the data by `clip-path: inset(0 X% 0 0)` on its wrapper (linear in
   time, unlike a dash on a curve), then mark the point that matters with a dot and a label, last. The gap between
   two lines can be a filled shape with its own label ("your profits +350,000").
-- Highlight one series, grey the rest; one annotation per chart; a source line ("assuming 8% a year —
+- Highlight one series, grey the rest; one annotation per chart; a source line ("assuming 8% a year,
   illustrative"). No pie charts, gridlines, legends or six-number dashboards.
+- An honest chart builds in this order: the question and its unit, the axes, the marks, the highlight, the
+  source, then a still hold. Its title states the finding ("Sales doubled in 2025", not "Sales 2021–2025"). No
+  mark passes its value on the way in, and no counter shows more precision than the source gives.
 - Quick charts: the `motion` piece chart (bars or donut, in the look's type and colours by itself), `template`
   stats-reel; build your own when the chart is the story.
 
@@ -227,8 +238,10 @@ photographs, not a page's own colours:
 ## 11. Pacing, sound and the end
 
 - Scenes of 2–5 s; vary them. After the biggest number, hold 0.8–1.2 s with nothing new: let it land.
-- One kind of seam for the whole video: the look's. At most one GPU transition of your own (cinematic-zoom,
-  sdf-iris) into the centrepiece; once you set any data-transition, the look sets none and the other scenes cut.
+- Seams: the look's between scenes, and where the story turns one with a cause you build (a zoom into the part
+  being explained, the ground flooding to the next colour, a matched move: `motion-design` §8). At most one GPU
+  transition of your own (cinematic-zoom, sdf-iris) into the centrepiece; once you set any data-transition, the
+  look sets none and the other scenes cut, so give those cuts a matched move.
 - Music only when the person wants sound: calm, corporate, inspiring or minimal-piano (`music`), with
   `data-duck="vo"` so it dips under the voice. The voice sets the cuts (between sentences); the music's beat
   only times what moves between them.

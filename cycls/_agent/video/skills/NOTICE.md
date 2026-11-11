@@ -6,12 +6,21 @@ rewritten for Cycls's video format (Web Animations through `at()`, no animation 
 actions, its fonts and its Arabic-first audience, and changed throughout. No file here is a copy of
 a file from these projects.
 
-## HyperFrames — Apache License 2.0
+## Apache License 2.0
 
-HyperFrames by HeyGen, https://github.com/heygen-com/hyperframes (its skills and references, versions
-0.8.143 and 0.9.15). Licensed under the Apache License, Version 2.0; a copy is in
+Each project below is licensed under the Apache License, Version 2.0; a copy is in
 `LICENSE-Apache-2.0.txt` beside this file. The skills here are modified works: their structure, their
 examples and their wording differ from the originals.
+
+- HyperFrames by HeyGen, https://github.com/heygen-com/hyperframes: its skills and references
+  (versions 0.8.143, 0.9.15 and 0.9.26), its `.agents/skills` and its docs. Copyright 2026 HeyGen, Inc.
+- HyperFrames community skills, https://github.com/heygen-com/hyperframes-community-skills (vox-explainer).
+- Ice Motion Director, https://github.com/Omar-Tnzxo/ice-motion-director (ice-arabic, ice-audio).
+  Its NOTICE, in the part that applies here: "Ice Motion Director / Copyright 2026 Omar-Tnzxo".
+- anidoodle, https://github.com/alexgreensh/anidoodle. Its NOTICE, in the part that applies here:
+  "anidoodle / Copyright 2026 Alex Greenshpun".
+- video-shotcraft, https://github.com/vincentwei1021/video-shotcraft.
+- frontend-design, https://github.com/anthropics/skills (skills/frontend-design), by Anthropic.
 
 ## MIT-licensed skills
 
@@ -19,6 +28,20 @@ examples and their wording differ from the originals.
 - motion-video-skill, https://github.com/farhan-syah/motion-video-skill — Copyright (c) 2026 Farhan Syah
 - motion-design-skills, https://github.com/iart-ai/motion-design-skills — Copyright (c) 2026 iart.ai
 - motion-design-skill, https://github.com/lottiefiles/motion-design-skill — Copyright (c) 2025 LottieFiles
+- b-roll-skills and tiktok-video-skills, https://github.com/iart-ai — Copyright (c) 2026 iart.ai
+- marketingskills, https://github.com/coreyhaines31/marketingskills — Copyright (c) 2025 Corey Haines
+- content-skills, https://github.com/vyralcontent/content-skills — Copyright (c) 2026 Vyral
+- papercut-explainer, https://github.com/0xS4N4TG/papercut-explainer — Copyright (c) 2026 sanat
+- claude-code-video-toolkit, https://github.com/digitalsamba/claude-code-video-toolkit — Copyright (c) 2024 Digital Samba
+- hermes-agent (manim-video), https://github.com/NousResearch/hermes-agent — Copyright (c) 2025 Nous Research
+- generative-media-skills, https://github.com/calesthio/generative-media-skills — Copyright (c) 2026 generative-media-skills contributors
+- manim_skill, https://github.com/adithya-s-k/manim_skill — Copyright (c) 2026 Adithya S Kolavi
+- skills, https://github.com/vargHQ/skills — Copyright (c) 2026 vargai Inc.
+- video-editing-skill, https://github.com/social-media-skills/video-editing-skill — Copyright (c) 2026 Frank Heijdenrijk
+- video-use, https://github.com/browser-use/video-use — Copyright (c) 2026 Browser Use
+- video-ad-editor, https://github.com/majedphotos/video-ad-editor — Copyright (c) 2026 Majed Alzaabi
+- full-production-studio, https://github.com/alfaris/full-production-studio — Copyright (c) 2026 Ahmed Faris
+- hyperframes-cinematic-caption, https://github.com/audrey-560/hyperframes-cinematic-caption — Copyright (c) 2026 Audrey
 
 Each is under the MIT License:
 
@@ -36,3 +59,6 @@ Each is under the MIT License:
 > NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
 > WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 > SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Facts, not text, were also taken from Netflix's Arabic timed-text style guide and Google's ABCD guide
+for video ads.

@@ -29,10 +29,12 @@ below in your head (no message, no extra call), write the plan in §2 for yourse
 delay, so the first scene's headline carries `data-anim="none"` (on screen at 0 s; move it with at() from a
 visible state, `motion-design` §2). Open on the outcome in the viewer's words, a moment that creates the need, a
 question with the real input in it, or the result itself. Never "Introducing…", "Meet…" or the logo first. With
-the sound off, the words carry the hook.
+the sound off, the words carry the hook. Its three layers never repeat each other: the picture, the spoken line
+(5–10 words, with a voice) and the words on screen (3–7) that sharpen it. The second beat carries the hook's
+premise on, never a switch to a pitch. Keep the hook inside the centred square of frame 0: feeds crop to it.
 
 **A device and a form.** Sketch three one-line storylines (a device + a form), one bolder than your first idea,
-and build the one a stranger would follow. When the person asks for options, or an open brief matters, offer the
+and build the one a stranger would follow and no other company could have made. When the person asks for options, or an open brief matters, offer the
 three in one short message (each: its first 2 s and its look) and wait; otherwise build yours and name the other
 two in one line of the reply.
 - Devices: the result first · a moment in someone's day · before / after · one real number made physical ·
@@ -67,9 +69,11 @@ gives each text role one; when the hero's verb is another, say it with data-anim
 SLAMS `pop` · TYPES ON `type` · COUNTS UP `count` · LOCKS IN `track-in` · MARKS `highlight` · word by word
 `words`. What is not text (a photo PUSHES, a band SLIDES, a line DRAWS) is yours, with at().
 
-**Copy.** At most 6 words a headline (Arabic 5), one line read at a time, no full stop on titles. The lines alone
-tell the story; so do the pictures. Never "unlock", "seamless", "supercharge", "game-changer", "effortless".
-Arabic copy is written as Arabic, not translated.
+**Copy.** At most 6 words a headline (Arabic 5), one line read at a time, no full stop on titles, no em dash (a
+comma, a colon or a new line). The lines alone tell the story; so do the pictures. Never "unlock", "seamless",
+"supercharge", "game-changer", "effortless", nor a denial of a claim nobody made ("not just coffee"). Arabic copy
+is written as Arabic, not translated, and checked: إلى and إذا keep their hamza, ة is not ه, ى is not ي. A call to
+action invites («تعرّف أكثر»، «جرّبها اليوم»): no manufactured urgency, no competitor named.
 
 **The plan you write for yourself** (in your thinking):
 
@@ -86,7 +90,7 @@ RHYTHM: hook-PROOF-end, 7 s, silent
 ## 3. Looks: start from one
 
 Put `data-look="<id>"` on the root and write scenes (`clip scene`, plus top, bottom, left, on-footage, card or
-accent-bg) holding the text roles: kicker, hl (its stressed word in `<em>`), sub, num, tag, cta, quote with by,
+accent-bg) holding the text roles: kicker, hl (a stressed word in `<em>`, when one carries it), sub, num, tag, cta, quote with by,
 body, brand, meta. The look sets their type, sizes, colours, spacing and safe areas; brings each in at its own
 moment and takes it out; grades footage and photos; and puts its seam between scenes. Your CSS is only what a
 scene adds: a position, a picture, a motif. Never set a font, a size or a colour on a role (a font-size in its
@@ -156,26 +160,32 @@ after them):
   captions and buttons. Decoration may go there.
 - Arabic: the look mirrors its own text and entrances; what you animate, you mirror: words arrive right to left,
   a wipe opens from the right (`clip-path: inset(0 0 0 100%)` → `inset(0 0 0 0)`), a rule draws from
-  `transform-origin: 100% 50%`.
+  `transform-origin: 100% 50%`, the first item of a comparison sits on the right. Never mirrored: play and media
+  icons, clocks, check marks, logos, numbers, a chart's time axis. Arabic lines you place are centred, or stop
+  140 px from the right edge (the buttons' column).
 - Continuity: the ground and the carrier (a band, a rule, a colour plane) stay in place across scenes, so cuts
-  feel like one move; change the ground (card → accent-bg → on-footage) only to change chapter.
+  feel like one move. Two or three grounds a video, changed (card → accent-bg → on-footage) only where the story
+  turns; grounds that meet differ clearly in lightness. Spend the boldness in one place.
 
 ## 6. Type for video
 
 Sizes, weights, tracking and leading are the look's, in units of the frame, so they hold at every size; a
 headline too long for its line is made smaller, never broken in a word. The words are yours:
 - One hl a scene, 1–6 words (Arabic 5), two lines at most; a sub is one line; three roles on screen at most.
-- One idea a scene; about 0.4 s a word on screen, 2 s at least.
-- `<em>` on one word of a headline: the word that carries it, not the brand name.
+- One idea a scene; about 0.4 s a word on screen (Arabic 0.6 s), 2 s at least.
+- `<em>` on at most one word of a headline, the word that carries it (not the brand name); many headlines need
+  none, and an accent on every one reads as generated.
 - Arabic display without vowels: at large sizes a shadda or damma floats off and reads as a letter. Vowels belong
   in the voice-over script and in small text where a word may be misread.
 - `num`: one number with what goes round it (87%, 3x, +350, 640 km). It counts up when it is one whole number of
   up to six digits; 1.2M, 6:30, 590,000 or Arabic-Indic digits need your own counter (`motion-design` §2). One kind
-  of digits a video. A Latin name inside Arabic: `<span dir="ltr">`.
+  of digits a video: the brand's, Western (40%) when it does not say. A Latin run inside Arabic goes in ONE
+  `<span dir="ltr">` (two spans swap the words: «Claude Code» reads «Code Claude»).
 - Text lands, then holds: it never drifts or shrinks while it is read (the ground may move).
 - Text you set yourself (a chip, a badge, a ghost word) uses the look's variables: `font-family:
   var(--look-display)` or `var(--look-text)`, `color: var(--look-accent)`, so it belongs to the look and follows
-  the kit.
+  the kit. Read text of yours is at least 5% of the frame's height (96 px on 1920), secondary 3%; on a coloured
+  ground it takes the ground's own ink, never grey.
 
 ## 7. Motifs on a look (checked on the renderer)
 
@@ -220,7 +230,7 @@ the frame carry `data-layout-allow-overflow`.
   and `at("#ph2", [{ transform: "scale(1)" }, { transform: "scale(1.07)" }], 0, 2400, "linear");`. A photo
   inside a scene's column (`<img class="photo">` beside the text) is framed by the look.
 - **G5 Neon**: `color: #fff3fb; text-shadow: 0 0 6px #ff2e88, 0 0 22px #ff2e88, 0 0 60px rgba(255,46,136,.7)` on a
-  word of your own (not a role), lit by a flicker whose keyframes each step:
+  Latin word of your own (not a role; never Arabic), lit by a flicker whose keyframes each step:
   ```js
   const s = "steps(1, end)";
   at("#neon", [{ opacity: 0, easing: s }, { opacity: 1, offset: .1, easing: s }, { opacity: .15, offset: .18, easing: s },
@@ -241,7 +251,8 @@ particles, lens flares as decoration · purple-to-blue gradients, mesh gradients
 gradient on a dark ground also bands in the MP4) · text drifting after it lands · corner brackets, frame
 borders, HUD readouts as decoration · three cards in a row, a KPI grid, a title over a dimmed screenshot · the
 logo first or docked in a corner · fonts, sizes or colours written over the look's roles · a motif under 15%
-opacity (it vanishes in compression).
+opacity (it vanishes in compression) · an accented word and a kicker on every scene · a bouncing button, a click
+ring · a plan you would make for any similar brand.
 
 ## 9. Look at the sheet as a stranger would
 
@@ -252,11 +263,23 @@ After every `write`, before `render`:
 4. Name every default from §8 on screen and replace it from the subject, the brand or the medium.
 5. Nothing you placed sits over the look's text or in the platform zones.
 6. Every line long enough to read; nothing frozen over 3 s before the end card; the end card holds ≥1.5 s.
-7. The accent on one thing a scene.
+7. Count, don't guess: the accent on one thing a scene; at most two left edges a frame; grounds that meet differ
+   in lightness.
 8. A role missing from a frame has not come in yet (the look's delay or data-anim-delay): `look` a moment later
    before changing anything.
 9. The sheet shows footage and photos graded, as the render will: judge the light, the framing and the colour
    on it.
 
-Fix all of it in ONE `edit`, then `look` at the moments you changed. When a video feels busy, remove a third of
-the motion and keep the moves that lead the eye.
+Write each problem as one line, `t=4.2s · where · problem → exact change`, ranked: P0 breaks the read (unreadable,
+wrong, a tell in the hook), P1 weakens it (a dead stretch, a soft payoff, a seam that jumps), P2 polish. Never
+score the video: a score finds nothing to fix. Fix every P0 and the P1s in ONE `edit`, then `look` at the moments
+you changed. When the person gives feedback, make the change it names and nothing else:
+
+| they say | change |
+|---|---|
+| too fast | every zoom and pan to 0.7× its speed; nothing else |
+| speed it up | shorten the beats; the later ones move up |
+| the titles move | land them, then hold them dead still |
+| feels like slides | enter the next scene through something on screen; cut a move mid-flight |
+| too busy | remove a third of the motion; keep the moves that lead the eye |
+| hard to read | fewer words, held longer (words ÷ 3 s), bigger |
