@@ -158,7 +158,7 @@ def tidy_text(rel, info):
     """The clip tidied (tidy.py): its long pauses out, as the <video> lines to put back to back."""
     from . import tidy
 
-    p = tidy.plan(info.get("transcript"), info.get("duration"))
+    p = tidy.plan(info.get("transcript"), info.get("duration"), shots=info.get("shots"))
     if not p:
         return "It cannot be tidied: nothing said in it was made out."
     if not p["cuts"] or len(p["pieces"]) == 1 and p["of"] - p["kept"] < 0.5:
@@ -172,6 +172,10 @@ def tidy_text(rel, info):
         "this clip; shift data-start if the clip does not open the video:",
         *("  " + line for line in tidy.lines(rel, p, prefix="piece")),
         f"Captions across them: <div class=\"cap\" data-captions=\"{' '.join(ids)}\" data-cap-style=\"phrase\"></div>",
+        *([f"A beat was kept before each number ({', '.join(f'{t:g} s' for t in p['beats'][:6])}), so it lands."]
+          if p.get("beats") else []),
+        *([("Often said as fillers, left in for you to judge (cut one only where it carries nothing): "
+            + ", ".join(f"«{w}» at {t:g} s" for w, t in maybe) + ".")] if (maybe := tidy.maybe_fillers(info.get("transcript"))) else []),
         "A cut that feels abrupt is eased by lengthening that piece's data-duration (and moving the pieces after it); "
         "the clip itself is unchanged. Say to the user what was cut.",
     ])

@@ -1231,6 +1231,26 @@ def test_a_tidy_cut_takes_out_long_pauses_and_keeps_every_word():
     assert tidy.plan({"words": []}, 5) is None
 
 
+def test_a_tidy_cut_keeps_a_beat_before_a_number_cuts_at_a_camera_change_and_never_leaves_a_flash():
+    from cycls._agent.video import tidy
+    said = lambda rows: {"words": [{"text": t, "start": a, "end": b} for t, a, b in rows]}   # noqa: E731
+    # A pause before "40%" keeps 0.3 s each side (a beat), not 0.15.
+    p = tidy.plan(said([("We", 0.5, 0.8), ("grew", 0.85, 1.2), ("40%", 3.0, 3.5)]), 4.0)
+    assert p["pieces"] == [[0.35, 1.15], [2.7, 0.95]] and p["beats"] == [3.0]
+    # A camera change inside the breath kept on the far side: the next piece starts on it, no sliver of the
+    # old shot first.
+    p = tidy.plan(said([("We", 0.5, 0.8), ("left.", 0.85, 1.2), ("Then", 3.0, 3.3)]), 4.0, shots=[[0, 2.9], [2.9, 4.0]])
+    assert p["pieces"][1][0] == 2.9
+    # A pause that would save under 0.4 s is left in (0.9 s before a number, 0.6 s of it kept); a lone word
+    # between two long pauses is joined, not flashed.
+    p = tidy.plan(said([("a", 0.0, 0.3), ("5", 1.2, 1.4)]), 1.5)
+    assert len(p["pieces"]) == 1 and p["beats"] == []
+    p = tidy.plan(said([("Well", 0.2, 0.6), ("yes", 2.0, 2.05), ("so", 4.0, 4.4)]), 5.0)
+    assert all(n >= tidy.MIN_PIECE_S for _, n in p["pieces"]) and len(p["pieces"]) == 2
+    # Words often said as fillers are named with their times, never cut by the plan.
+    assert tidy.maybe_fillers(said([("يعني", 1.0, 1.2), ("كذا", 1.3, 1.5), ("umm", 2.0, 2.3)])) == [("يعني", 1.0), ("umm", 2.0)]
+
+
 def test_footage_with_tidy_gives_the_pieces_and_says_what_was_cut(monkeypatch, tmp_path):
     _on(monkeypatch)
     FakeService(monkeypatch)
