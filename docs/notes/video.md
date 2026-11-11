@@ -156,7 +156,7 @@ Two things seen on the way:
 | `skill` | `skill: [names]` | The tool's own skills as text, in one call (Skills, below); nothing made. |
 | `footage` | `path`, or `stock` (+ `pick`, `orientation`); `language?` | The clip made ready: its facts, shots, a sheet of its frames, what is said with times, the `<video>` line. |
 | `write` | `name`, `html` (or `path` to adopt a file) | Saved even with errors. Lint errors with fixes; when clean, the browser check and one sheet. Opens the composition when clean. |
-| `edit` | `name`, `changes: [{old, new, all?}]` | Every change or none; a miss names the closest line. Same report. Refreshes the canvas. |
+| `edit` | `name`, `changes: [{old, new, all?, line?}]` | Every change or none. An old text not found exactly is looked for ignoring spaces, then quotes and punctuation, then Arabic marks and letter forms (`run.apply_changes`); taken when found once (or picked by `line`, or `all`), and the report says so. A miss lists the closest lines. Same report. Refreshes the canvas. |
 | `look` | `name`, `at?: [s]`, `zoom?` | Frames at those times (up to 9); no times: the file checked again. |
 | `render` | `name`, `quality?: final \| draft` | The MP4 path, length, size; opens it. Refused while lint finds errors. |
 | `restore` | `name` | The version before the last save. |

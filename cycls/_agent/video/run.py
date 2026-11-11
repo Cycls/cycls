@@ -52,46 +52,132 @@ def _read_changes(raw):
     return out
 
 
+# An old text not found exactly is looked for again, each time more loosely, the way models miss it:
+# any run of whitespace as one space; then quotes, dashes and Arabic or Latin punctuation as one; then
+# without Arabic marks (harakat, superscript alef, tatweel) and with alef, yeh and teh marbuta in one
+# form. Each table maps a character to one character or to none, so what is found is still a span of
+# the composition's own text. Nothing looser: no fuzzy match is ever applied.
+_PUNCTUATION = {**dict.fromkeys("\"'“”„‟‘’‚‛«»′″", '"'),
+                **dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212", "-"),  # hyphens, dashes, minus
+                "،": ",", "؛": ";", "؟": "?"}
+_ARABIC = {**dict.fromkeys([chr(c) for c in range(0x064B, 0x0653)] + ["\u0670", "\u0640"], ""),
+           **dict.fromkeys("أإآٱ", "ا"), "ى": "ي", "ة": "ه"}
+_TIERS = (("", None), ("spaces", {}), ("spaces and punctuation", str.maketrans(_PUNCTUATION)),
+          ("spaces, punctuation and Arabic marks", str.maketrans({**_PUNCTUATION, **_ARABIC})))
+
+
 def apply_changes(html, changes):
-    """Every change or none. → (new html, None) or (None, why)."""
-    out = html
+    """Every change or none. → (new html, None, note) or (None, why, ""). `note` names the changes found
+    only by a looser match, with the text the file had there, so the next old text is exact."""
+    out, notes = html, []
     for i, c in enumerate(changes, 1):
-        n = out.count(c["old"])
-        if n == 0:
-            first = c["old"].strip().splitlines()[0] if c["old"].strip() else c["old"]
-            lines = out.splitlines()
-            near = difflib.get_close_matches(first.strip(), [ln.strip() for ln in lines], n=1, cutoff=0.5)
-            hint = ""
-            if near:
-                at = next(k for k, ln in enumerate(lines, 1) if ln.strip() == near[0])
-                hint = f" The closest line is {at}: {near[0][:200]!r}"
-            return None, f"change {i}: the old text is not in the composition (nothing was changed).{hint}"
-        if n > 1 and not c.get("all"):
-            at = _occurrences(out, c["old"])
+        for how, table in _TIERS:
+            spans = _spans(out, c["old"], table)
+            if spans:
+                break
+        else:
+            return None, (f"change {i}: the old text is not in the composition, even ignoring {_TIERS[-1][0]} "
+                          f"(nothing was changed).{_closest(out, c['old'])}"), ""
+        if len(spans) > 1 and not c.get("all"):
+            at = _occurrences(out, spans)
             line = c.get("line")
-            if isinstance(line, (int, float)) and not isinstance(line, bool) and at:
+            if isinstance(line, (int, float)) and not isinstance(line, bool):
                 k = min(range(len(at)), key=lambda j: (abs(at[j][0] - line), j))
                 if at[k][0] == int(line):
-                    out = out[:at[k][1]] + c["new"] + out[at[k][1] + len(c["old"]):]
-                    continue
-            where = "; ".join(f"line {ln}: {text!r}" for ln, _, text in at[:6])
-            return None, (f"change {i}: the old text occurs {n} times (nothing was changed) — {where}. Send the "
-                          "changes again with \"line\" on this one (the line where the one you mean is, as listed "
-                          "here), or more of the surrounding text so it occurs once, or all to replace every one.")
-        out = out.replace(c["old"], c["new"]) if c.get("all") else out.replace(c["old"], c["new"], 1)
-    return out, None
+                    spans = [spans[k]]
+            if len(spans) > 1:
+                where = "; ".join(f"line {ln}: {text!r}" for ln, text in at[:6])
+                seen = f"is not in the composition as written; ignoring {how} it occurs" if how else "occurs"
+                return None, (f"change {i}: the old text {seen} {len(spans)} times (nothing was changed) — {where}. "
+                              "Send the changes again with \"line\" on this one (the line where the one you mean is, "
+                              "as listed here), or more of the surrounding text so it occurs once, or all to replace "
+                              "every one."), ""
+        new = c["new"]
+        if how:
+            start, end = spans[0]
+            notes.append(f"Change {i} matched only ignoring {how} (the file had {out[start:end][:80]!r}).")
+            new = _edges_kept(c["old"], new)
+        out = _replace(out, spans, new)
+    return out, None, (" " + " ".join(notes) + " Copy old exactly from the file next time." if notes else "")
 
 
-def _occurrences(html, old):
-    """Where `old` is in the composition → [(its line, from 1; its offset; that line, trimmed)]."""
-    found, at = [], html.find(old)
+def _folded(text, table):
+    """`text` with `table` applied and each run of whitespace made one space."""
+    return re.sub(r"\s+", " ", text.translate(table) if table else text)
+
+
+def _where(text, table):
+    """For each character of `_folded(text, table)`, its offset in `text`; last, the length of `text`."""
+    where, space = [], False
+    for i, ch in enumerate(text):
+        ch = table.get(ord(ch), ch)
+        if not ch or (space and ch.isspace()):
+            continue
+        space = ch.isspace()
+        where.append(i)
+    where.append(len(text))
+    return where
+
+
+def _spans(html, old, table):
+    """Where `old` is in `html`, in order and apart → [(start, end)]. With a `table` both are folded by
+    it first and old's own edge whitespace is not looked for; the spans are still of `html`, and one
+    ends where the next character kept begins, so the marks its last letter carries are inside it."""
+    text, want = (html, old) if table is None else (_folded(html, table), _folded(old, table).strip())
+    found, at = [], text.find(want) if want else -1
     while at >= 0:
-        ln = html.count("\n", 0, at) + 1
+        found.append((at, at + len(want)))
+        at = text.find(want, at + len(want))
+    if found and table is not None:
+        where = _where(html, table)
+        found = [(where[start], where[end]) for start, end in found]
+    return found
+
+
+def _edges_kept(old, new):
+    """`new` without the whitespace `old` starts or ends with, where `new` has the same: a looser match
+    leaves the composition's own whitespace around the text it found."""
+    lead, tail = old[:len(old) - len(old.lstrip())], old[len(old.rstrip()):]
+    if lead and new.startswith(lead):
+        new = new[len(lead):]
+    if tail and new.endswith(tail):
+        new = new[:len(new) - len(tail)]
+    return new
+
+
+def _replace(html, spans, new):
+    """`html` with each span (in order, apart) made `new`."""
+    parts, last = [], 0
+    for start, end in spans:
+        parts += [html[last:start], new]
+        last = end
+    return "".join(parts) + html[last:]
+
+
+def _occurrences(html, spans):
+    """Where each span is in the composition → [(its line, from 1; that line, trimmed)]."""
+    found = []
+    for at, _ in spans:
         start = html.rfind("\n", 0, at) + 1
         end = html.find("\n", at)
-        found.append((ln, at, html[start:end if end >= 0 else len(html)].strip()[:160]))
-        at = html.find(old, at + len(old))
+        found.append((html.count("\n", 0, at) + 1, html[start:end if end >= 0 else len(html)].strip()[:160]))
     return found
+
+
+def _closest(html, old):
+    """The lines most like old's first line (compared folded), for a change that matched nothing."""
+    loosest = _TIERS[-1][1]
+    lines = {}
+    for k, ln in enumerate(html.splitlines(), 1):
+        key = _folded(ln, loosest).strip()
+        if key:
+            lines.setdefault(key, (k, ln.strip()))
+    first = next((ln for ln in old.splitlines() if ln.strip()), old)
+    near = difflib.get_close_matches(_folded(first, loosest).strip(), list(lines), n=3, cutoff=0.5)
+    if not near:
+        return ""
+    listed = "; ".join(f"line {lines[x][0]}: {lines[x][1][:160]!r}" for x in near)
+    return f" The closest lines: {listed}. Copy old exactly from the one you mean."
 
 
 def _sha(html, images_files, words=None, footage=None):
@@ -1615,7 +1701,7 @@ async def _exec_video(inp, workspace, ctx=None):
                         data = (root / rel).read_bytes()
                     except FileNotFoundError:
                         return _err(f"there is no {rel}; `write` it first.")
-                    new, why = apply_changes(data.decode("utf-8"), changes)
+                    new, why, loose = await asyncio.to_thread(apply_changes, data.decode("utf-8"), changes)
                     if why:
                         return _err(why + _hand_edited(root, rel))
                     new, said, keep = _branded(root, new)
@@ -1637,7 +1723,7 @@ async def _exec_video(inp, workspace, ctx=None):
                         f"{', '.join(f'{t:g} s' for t in times)}. The browser check runs beside the render.\n{text}")
             else:
                 text, blocks, clean = await _checks(workspace, root, rel, new)
-            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).{said}\n{text}"
+            return _result(f"Edited {rel} ({len(changes)} change{'s' if len(changes) != 1 else ''}).{loose}{said}\n{text}"
                            f"{_brand_hint(root, new)}", blocks, note, _shown(rel, name, clean, version))
 
         if action == "motion":

@@ -2084,12 +2084,106 @@ def test_an_old_text_that_occurs_twice_says_where_and_a_line_picks_one():
     from cycls._agent.video.run import apply_changes
 
     html = "<p>\n  <b>x</b>\n</p>\n<p>\n  <b>x</b>\n</p>"
-    out, why = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>"}])
+    out, why, _ = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>"}])
     assert out is None and "line 2: '<b>x</b>'" in why and "line 5: '<b>x</b>'" in why and '"line"' in why
-    out, why = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>", "line": 5}])
+    out, why, note = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>", "line": 5}])
     assert why is None and out.splitlines()[1].strip() == "<b>x</b>" and out.splitlines()[4].strip() == "<b>y</b>"
-    out, why = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>", "line": 3}])
+    assert note == "", "an exact match says nothing more"
+    out, why, _ = apply_changes(html, [{"old": "<b>x</b>", "new": "<b>y</b>", "line": 3}])
     assert out is None, "a line where none of them is changes nothing"
+
+
+# ---- an edit whose old text misses by spaces, quotes or Arabic marks ----------------------------
+
+def test_an_exact_match_comes_first_even_where_a_looser_one_would_find_more():
+    out, why, note = vrun.apply_changes("<p>Hi there</p>\n<p>Hi  there</p>", [{"old": "Hi there", "new": "Yo"}])
+    assert (out, why, note) == ("<p>Yo</p>\n<p>Hi  there</p>", None, "")
+
+
+def test_a_looser_span_is_the_composition_s_own_text_from_its_first_letter_to_its_last_mark():
+    spaces, arabic = vrun._TIERS[1][1], vrun._TIERS[3][1]
+    assert vrun._spans("a  \n b c", "a b", spaces) == [(0, 6)], "a run of whitespace is taken whole"
+    assert vrun._spans("x a\tb", " a b\n", spaces) == [(2, 5)], "old's own edge whitespace is not looked for"
+    text = "ـمَرْحَباً بكم"
+    assert vrun._spans(text, "مرحبا", arabic) == [(1, 10)] and text[1:10] == "مَرْحَباً", \
+        "the tatweel before is left out; the harakat inside and the tanween after are in"
+    text = "بكم وَنَطْمَحُ"
+    assert vrun._spans(text, "ونطمح", arabic) == [(4, len(text))], "a mark that ends the text is in"
+    assert vrun._spans("مرحـــبا", "مرحبا", arabic) == [(0, 8)], "tatweel inside"
+    assert vrun._spans("a b", " \n ", spaces) == [] and vrun._spans("بكم", "\u064e", arabic) == [], \
+        "nothing is left to look for"
+
+
+def test_an_old_text_that_misses_by_spaces_is_found_and_only_its_span_is_replaced():
+    html = '<div>\n    <p class="t">Hi   there</p>\n</div>'
+    out, why, note = vrun.apply_changes(html, [{"old": '<p class="t">Hi there</p>', "new": "<p>Yo</p>"}])
+    assert why is None and out == "<div>\n    <p>Yo</p>\n</div>"
+    assert note == (" Change 1 matched only ignoring spaces (the file had '<p class=\"t\">Hi   there</p>'). "
+                    "Copy old exactly from the file next time.")
+    # lines indented otherwise: the composition keeps its own whitespace around what was found
+    html = "<section>\n    <div>\n        <p>a</p>\n    </div>\n</section>"
+    out, why, _ = vrun.apply_changes(html, [{"old": "  <div>\n  <p>a</p>\n  </div>\n",
+                                              "new": "  <div>\n  <p>b</p>\n  </div>\n"}])
+    assert out == "<section>\n    <div>\n  <p>b</p>\n  </div>\n</section>"
+    out, _, _ = vrun.apply_changes("<b>x</b>  <i>y</i>", [{"old": "<b>x</b> <i>y</i>", "new": "z"}])
+    assert out == "z", "a span from the very start to the very end"
+
+
+def test_quotes_dashes_and_guillemets_are_one_at_the_punctuation_tier():
+    html = "<h1 class='title'>“Fresh” — daily</h1>\n<p>«مرحبا»</p>"
+    out, why, note = vrun.apply_changes(html, [{"old": '<h1 class="title">"Fresh" - daily</h1>', "new": "<h1>x</h1>"},
+                                               {"old": '"مرحبا"', "new": "«أهلا»"}])
+    assert why is None and out == "<h1>x</h1>\n<p>«أهلا»</p>"
+    assert note.count("matched only ignoring spaces and punctuation") == 2 and "Change 2" in note
+
+
+def test_arabic_that_misses_by_marks_letter_forms_or_its_comma_is_found():
+    html = "<p>وَنَطْمَحُ إلى المزيد</p>\n<p>مرحباً، بكم في مكتبة على النيل</p>"
+    for old, new, line in [
+        ("ونطمح", "ونسعى", "<p>ونسعى إلى المزيد</p>"),
+        ("الى المزيد", "للأفضل", "<p>وَنَطْمَحُ للأفضل</p>"),
+        ("مرحبا, بكم", "أهلاً بكم", "<p>أهلاً بكم في مكتبة على النيل</p>"),
+        ("مكتبه علي", "دار على", "<p>مرحباً، بكم في دار على النيل</p>"),
+    ]:
+        out, why, note = vrun.apply_changes(html, [{"old": old, "new": new}])
+        assert why is None and line in out.splitlines(), (old, out)
+        assert "ignoring spaces, punctuation and Arabic marks" in note
+    _, _, note = vrun.apply_changes(html, [{"old": "ونطمح", "new": "x"}])
+    assert "(the file had 'وَنَطْمَحُ')" in note
+
+
+def test_a_looser_match_found_twice_is_refused_unless_line_or_all_picks():
+    html = "<i>a  b</i>\n<i>a\tb</i>"
+    out, why, _ = vrun.apply_changes(html, [{"old": "<i>a b</i>", "new": "<i>c</i>"}])
+    assert out is None and "ignoring spaces it occurs 2 times" in why
+    assert "line 1: '<i>a  b</i>'" in why and "line 2: '<i>a\\tb</i>'" in why
+    out, why, note = vrun.apply_changes(html, [{"old": "<i>a b</i>", "new": "<i>c</i>", "line": 2}])
+    assert out == "<i>a  b</i>\n<i>c</i>" and "'<i>a\\tb</i>'" in note
+    out, _, _ = vrun.apply_changes(html, [{"old": "<i>a b</i>", "new": "<i>c</i>", "all": True}])
+    assert out == "<i>c</i>\n<i>c</i>"
+    out, _, _ = vrun.apply_changes(html, [{"old": "<i>a b</i>", "new": "<i>c</i>", "line": 3}])
+    assert out is None
+
+
+def test_a_miss_lists_the_closest_lines_as_written_with_their_numbers():
+    html = ('<h1 id="title">Fresh bread daily</h1>\n<p id="sub">Baked every morning</p>\n'
+            '<h2 id="t2">Fresh bread weekly</h2>\n<p>وَنَطْمَحُ إلى المزيد دائماً</p>')
+    out, why, _ = vrun.apply_changes(html, [{"old": "<h1 id='title'>Fresh loaves each day</h1>", "new": "x"}])
+    assert out is None and why.startswith("change 1: the old text is not in the composition, even ignoring spaces")
+    assert "line 1: '<h1 id=\"title\">Fresh bread daily</h1>'" in why and "line 3:" in why and "line 2:" not in why
+    _, why, _ = vrun.apply_changes(html, [{"old": "<p>ونطمح للمزيد دائما</p>", "new": "x"}])
+    assert "line 4: '<p>وَنَطْمَحُ إلى المزيد دائماً</p>'" in why, "compared without marks, shown as the file has it"
+
+
+def test_the_edit_report_says_when_the_old_text_was_found_only_loosely(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    _run({"action": "write", "name": "e", "html": COMP.replace(">Hi<", ">وَنَطْمَحُ<")}, _ws(tmp_path))
+    out = _run({"action": "edit", "name": "e", "changes": [{"old": "ونطمح", "new": "نسعى"}]}, _ws(tmp_path))
+    assert ">نسعى<" in (tmp_path / "videos" / "e.video.html").read_text(encoding="utf-8")
+    assert out["_model"][-1]["text"].startswith("Edited videos/e.video.html (1 change). Change 1 matched only "
+                                                "ignoring spaces, punctuation and Arabic marks (the file had 'وَنَطْمَحُ').")
 
 
 def test_a_stock_clip_is_read_without_listening_for_speech_and_the_report_says_so(monkeypatch, tmp_path):
