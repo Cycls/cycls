@@ -8,6 +8,7 @@ import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
 import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
+import { setViewer } from "./app-bridge";
 import { TrashView, type TrashRow } from "./trash-view";
 import { setAppTheme, normalize as normalizeAppTheme } from "../lib/app-theme";
 import { useApps, type AppInfo } from "../hooks/use-apps";
@@ -480,6 +481,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: docsCommandDetail(ev) }));
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
         track("ui_action", { action: "docs_command" });
+      } else if (ev.action === "app_data" && typeof ev.slug === "string") {
+        // The agent wrote an app's row (`database`): that app, if open, re-reads it (canvas.tsx).
+        window.dispatchEvent(new CustomEvent("cycls:app-data", { detail: { slug: ev.slug, key: ev.key } }));
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
@@ -864,6 +868,16 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, [files]);
   const wsMenu = account?.workspaces;
   const canPurge = !wsMenu || !wsMenu.active || ["owner", "admin"].includes(wsMenu.active.role || "") || !!wsMenu.isOrgAdmin;
+  // What an app opened here is told (ctx.role, ctx.user, cycls.members — canvas.tsx): never an email.
+  const me = account?.user?.id ? { id: account.user.id, name: account.user.name || "", image: account.user.imageUrl } : undefined;
+  setViewer({ role: canPurge ? "admin" : "member", user: me, members: async () => {
+    const w = wsMenu?.active;
+    if (!wsMenu || w?.type !== "team") return me ? [{ id: me.id, name: me.name, role: "owner" }] : [];   // a personal space: you
+    const rows = await wsMenu.fetchMembers(w.id);
+    const people = wsMenu.orgMembers.map((m) => ({ id: m.id, name: m.name }));
+    if (w.builtin) return people.filter((p) => !rows.some((r) => r.user_id === p.id)).map((p) => ({ ...p, role: "editor" }));   // General: rows are exclusions
+    return rows.map((r) => ({ id: r.user_id, name: people.find((p) => p.id === r.user_id)?.name || "", role: r.role }));
+  } });
   const undoRef = useRef<{ id: string; kind: string; name: string; at: number }[]>([]);
   const afterRestore = useCallback((kind: string) => {
     if (kind === "chat") { if (onListChats) onListChats().then(setChats).catch(() => {}); }
@@ -1619,6 +1633,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   onSetIcon={files ? (a, icon) => { void updateApp(a, { icon }); } : undefined}
                   onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
                   onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
+                  onBrowse={account && config?.apps_catalog ? () => openConnectors("apps_panel", undefined, "apps") : undefined}
                 />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">

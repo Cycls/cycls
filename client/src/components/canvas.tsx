@@ -27,7 +27,7 @@ import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from ".
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
 import { appThemeContext, subscribeAppTheme } from "../lib/app-theme";
-import { attachBridge, appScope } from "./app-bridge";
+import { attachBridge, appScope, viewer } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
 import type { AppInfo } from "../hooks/use-apps";
@@ -172,20 +172,34 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         : undefined,
       fetchConnector: shared ? undefined : fetchConnector,
       appData: shared ? undefined : appData,
-      context: {
+      members: shared ? undefined : () => viewer.members?.() ?? Promise.resolve([]),
+      // Everything an app is told about the host is listed here, and nothing else reaches it.
+      context: () => ({
         // Dark mode lives on document.body (lib/utils applyTheme), not <html>.
         theme: hostMode(),
         locale: document.documentElement.lang || "en",
+        role: viewer.role,      // "admin" | "member": what the viewer may do
+        user: shared ? undefined : viewer.user,   // {id, name, image}: the id their cycls.me / cycls.users rows carry
         ...appThemeContext(),   // the workspace's app theme, when one is set (lib/app-theme)
-      },
-      // A theme an admin saves, or the host flipping light/dark, re-skins the open app in place.
+      }),
+      // A theme an admin saves, the host flipping light/dark or its language, and the agent writing one of
+      // this app's rows (`app_data`, chat.tsx) reach the open app in place.
       commands: (send) => {
         const push = () => send({ type: "theme", theme: hostMode(), tokens: appThemeContext().tokens ?? null });
         const off = subscribeAppTheme(push);
-        let mode = hostMode();
+        let mode = hostMode(), lang = document.documentElement.lang;
         const watch = new MutationObserver(() => { if (hostMode() !== mode) { mode = hostMode(); push(); } });
         watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-        return () => { off(); watch.disconnect(); };
+        const langs = new MutationObserver(() => {
+          if (document.documentElement.lang !== lang) { lang = document.documentElement.lang; send({ type: "context", locale: lang || "en" }); }
+        });
+        langs.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+        const onData = (e: Event) => {
+          const d = (e as CustomEvent).detail;
+          if (d?.slug === appScope(file.path)?.split("/")[1]) send({ type: "data_changed", key: d.key });
+        };
+        window.addEventListener("cycls:app-data", onData);
+        return () => { off(); watch.disconnect(); langs.disconnect(); window.removeEventListener("cycls:app-data", onData); };
       },
     });
   }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData]);

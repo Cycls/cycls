@@ -87,8 +87,20 @@ function boot(html = "<html><head></head></html>") {
 const style = () => document.getElementById("cycls-theme")?.textContent ?? "";
 
 describe("the shim and the theme", () => {
-  afterEach(() => { document.getElementById("cycls-theme")?.remove(); document.head.innerHTML = ""; });
+  afterEach(() => {
+    document.getElementById("cycls-theme")?.remove(); document.head.innerHTML = "";
+    document.documentElement.className = ""; document.documentElement.removeAttribute("data-theme");
+  });
   const tokens = themeTokens({ base: "zinc", color: "violet", radius: 0.5 });
+
+  it("puts the host's light/dark on the app's own document, and follows it live", () => {
+    const { deliver } = boot();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "dark" });
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    deliver({ type: MSG.command, command: { type: "theme", theme: "light", tokens: null } });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
 
   it("does nothing when the host sends no tokens — every app today", () => {
     const { deliver } = boot();

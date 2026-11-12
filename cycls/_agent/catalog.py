@@ -32,6 +32,7 @@ import hashlib
 import json
 import re
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,28 +74,64 @@ def stamp_of(manifest):
     return None
 
 
+INDEX = "catalog.json"   # scan()'s result, written once when the folder is published: listing it is one read
+
+
+def scan(folder):
+    """Every bundle under `folder` with its copy and version (its index.html's hash) — opens every bundle."""
+    out, folder = {}, Path(folder)
+    if folder.is_dir():
+        for d in sorted(folder.iterdir()):
+            if not d.is_dir() or not valid_slug(d.name) or not (d / "index.html").is_file():
+                continue
+            m = _manifest(d / "app.json")
+            html = (d / "index.html").read_bytes()
+            row = {k: str(m[k])[:_CAPS[k]] for k in _FIELDS if isinstance(m.get(k), str) and m[k].strip()}
+            row.setdefault("name", d.name.replace("-", " ").replace("_", " ").title())
+            out[d.name] = {"slug": d.name, **row, "version": _version(html), "bytes": len(html),
+                           "thumb": (d / "preview.webp").is_file()}
+    return out
+
+
 class Catalog:
-    """The bundles under one folder. Read once per process: the image does not change under it."""
+    """The bundles under one folder, re-read at most every TTL seconds: a volume changes under it. Its
+    catalog.json when it has one, else every bundle opened (a folder beside the agent, in tests)."""
+    TTL = 60.0
 
     def __init__(self, folder):
         self.folder = Path(folder)
-        self._entries = None
+        self._entries, self._at = None, 0.0
 
     def entries(self):
-        if self._entries is None:
-            out = {}
-            if self.folder.is_dir():
-                for d in sorted(self.folder.iterdir()):
-                    if not d.is_dir() or not valid_slug(d.name) or not (d / "index.html").is_file():
-                        continue
-                    m = _manifest(d / "app.json")
-                    html = (d / "index.html").read_bytes()
-                    row = {k: str(m[k])[:_CAPS[k]] for k in _FIELDS if isinstance(m.get(k), str) and m[k].strip()}
-                    row.setdefault("name", d.name.replace("-", " ").replace("_", " ").title())
-                    out[d.name] = {"slug": d.name, **row, "version": _version(html), "bytes": len(html),
-                                   "thumb": (d / "preview.webp").is_file()}
-            self._entries = out
+        if self._entries is None or time.monotonic() - self._at > self.TTL:
+            self._at = time.monotonic()
+            index = _manifest(self.folder / INDEX).get("apps")
+            self._entries = ({e["slug"]: e for e in index if isinstance(e, dict) and valid_slug(e.get("slug"))}
+                             if isinstance(index, list) else scan(self.folder))
         return self._entries
+
+    def bundle(self, slug):
+        if slug not in self.entries():
+            raise KeyError(slug)
+        return self.folder / slug
+
+
+def with_copy(entry, row, origin=""):
+    """The CMS's copy for one entry (cms.cycls.ai/site/apps: title/description/category {en, ar}, icon, thumb)
+    over the bundle's own. Which apps exist, and their version, stay the code's."""
+    if not row:
+        return entry
+    out = {**entry}
+    for k, src in (("name", "title"), ("description", "description"), ("category", "category")):
+        v = row.get(src) if isinstance(row.get(src), dict) else {}
+        for lang, key in (("en", k), ("ar", f"{k}_ar")):
+            if isinstance(v.get(lang), str) and v[lang].strip():
+                out[key] = v[lang].strip()[:_CAPS[key]]
+    if isinstance(row.get("icon"), str) and row["icon"].strip():
+        out["icon"] = row["icon"].strip()[:_CAPS["icon"]]
+    if isinstance(row.get("thumb"), str) and row["thumb"].strip():   # a CMS upload is "/files/…", on the CMS's origin
+        out["thumb_url"] = (origin if row["thumb"].startswith("/") else "") + row["thumb"].strip()
+    return out
 
     def bundle(self, slug):
         if slug not in self.entries():
@@ -113,11 +150,14 @@ def state_of(root, entry):
     return "installed" if stamp.get("version") == entry["version"] else "update"
 
 
-def listing(root, catalog):
-    """The catalog as the Apps tab shows it: every entry with its state in this workspace."""
-    rows = []
+def listing(root, catalog, copy=None, origin=""):
+    """The catalog as the Apps tab shows it: every entry with its state in this workspace, and the CMS's
+    copy (`copy`: its rows by slug) over its own. One listing of apps/: an app not there is "available"."""
+    rows, apps = [], Path(root) / "apps"
+    present = {d.name for d in apps.iterdir()} if apps.is_dir() else set()
     for entry in catalog.entries().values():
-        st = state_of(root, entry)
+        entry = with_copy(entry, (copy or {}).get(entry["slug"]), origin)
+        st = state_of(root, entry) if entry["slug"] in present else "available"
         installed = _manifest(Path(root) / "apps" / entry["slug"] / "app.json") if st in ("installed", "update") else {}
         rows.append({**entry, "state": st,
                      # a renamed install keeps its name; the card shows what the Apps tab shows

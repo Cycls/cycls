@@ -122,16 +122,18 @@ class Web:
         return self._copy(_theme=name)
 
     def cms(self, *, brand: Optional[str] = None, explore: Optional[str] = None,
-            connectors: Optional[str] = None, examples: Optional[str] = None, token: Optional[str] = None):
+            connectors: Optional[str] = None, examples: Optional[str] = None, apps: Optional[str] = None,
+            token: Optional[str] = None):
         """Pull branding, the explore menu, the connector directory copy and/or the example gallery from
         any CMS: plain GET URLs returning the contract JSON (title/title_ar/description/description_ar/
         icon_svg; {"agents": [...]} for explore; {"connectors": [...]} for connectors; {"pills": [{"label":
         {"en", "ar"}, "cards": [{"share"} | {"video", "title"}]}]} for examples, what
-        cms.cycls.ai/site/examples/{agent} serves), optional bearer `token`. What the code declares wins,
-        piece by piece — `.brand()`, `.explore()`, `.examples()`, and each field a cycls.OAuth2/cycls.Key
-        sets for itself."""
+        cms.cycls.ai/site/examples/{agent} serves), {"apps": [{"slug", "title", "description", "category",
+        "icon", "thumb"}]} for the `.apps()` marketplace's copy (cms.cycls.ai/site/apps), optional bearer
+        `token`. What the code declares wins, piece by piece — `.brand()`, `.explore()`, `.examples()`, each
+        field a cycls.OAuth2/cycls.Key sets for itself, and which apps exist."""
         cms = {k: v for k, v in (("brand", brand), ("explore", explore), ("connectors", connectors),
-                                 ("examples", examples), ("token", token)) if v}
+                                 ("examples", examples), ("apps", apps), ("token", token)) if v}
         return self._copy(_cms=cms or None)
 
     def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None):
@@ -246,15 +248,17 @@ class Web:
         """An app catalog: a folder of built bundles shipped in the image, one per slug
         (`<slug>/index.html`, `app.json` with name/name_ar/icon/description/description_ar/category,
         `README.md`, `src/`). The Apps section of the connectors window lists it; a workspace admin
-        installs, updates and removes them (docs/notes/apps.md, "The catalog"). The folder is copied
-        into the image for you. `theme` is the app theme a workspace wears until an admin picks one:
+        installs, updates and removes them (docs/notes/apps.md, "The catalog"). A relative folder is
+        copied into the image for you; an absolute path is a volume mounted there, read live (one
+        app is copied from it on Install). `theme` is the app theme a workspace wears until an admin picks one:
         {"base": "zinc", "color": "blue", "radius": 0.5, "primary": "#0b6b5d"} — every key optional."""
         from cycls._agent import catalog as _catalog
         if not isinstance(catalog, str) or not catalog.strip():
             raise ValueError("apps(catalog) is the path of a folder of app bundles, e.g. \"default_apps\"")
         p = Path(catalog)
-        if p.is_absolute() or catalog.startswith(("/", "\\")) or ".." in p.parts:
-            raise ValueError(f"apps(catalog) is a folder beside the agent, relative: got {catalog!r}")
+        mounted = catalog.startswith("/")   # a volume's mount path (volumes={"/shelf": ...}): read there, not copied
+        if (not mounted and (p.is_absolute() or catalog.startswith("\\"))) or ".." in p.parts:
+            raise ValueError(f"apps(catalog) is a folder beside the agent, or a volume's mount path: got {catalog!r}")
         if theme is not None:
             theme = _catalog.clean_theme(theme)
         # a str, never a Path: the agent is pickled on the deploying machine (a WindowsPath does not unpickle on Linux)

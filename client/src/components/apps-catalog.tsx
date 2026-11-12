@@ -18,7 +18,7 @@ type Api = ChatApi["api"];
 export type CatalogApp = {
   slug: string; name: string; name_ar?: string; icon?: string;
   description?: string; description_ar?: string; category?: string; category_ar?: string; section?: string;
-  version: string; bytes: number; thumb?: boolean; state: "available" | "installed" | "update" | "conflict"; installed_name?: string;
+  version: string; bytes: number; thumb?: boolean; thumb_url?: string; state: "available" | "installed" | "update" | "conflict"; installed_name?: string;
 };
 
 const H4 = "mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground";
@@ -44,16 +44,17 @@ function Glyph({ a, className = "size-10" }: { a: CatalogApp; className?: string
 }
 
 // The card's picture, fetched with the session's headers (an <img src> would carry none).
+// The CMS's picture straight from its CDN when it has one; else the bundle's, through the agent.
 function Thumb({ api, a }: { api: Api; a: CatalogApp }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const [url, setUrl] = useState<string | null>(a.thumb_url ?? null);
   useEffect(() => {
-    if (!a.thumb) return;
+    if (!a.thumb || a.thumb_url) return;
     let u: string | null = null, live = true;
     api(`/apps/catalog/${a.slug}/thumb`, { silent: true }).then((r) => r.blob())
       .then((b) => { u = URL.createObjectURL(b); if (live) setUrl(u); }).catch(() => {});
     return () => { live = false; if (u) URL.revokeObjectURL(u); };
-  }, [a.slug, a.thumb]);   // eslint-disable-line react-hooks/exhaustive-deps
-  if (!a.thumb) return null;
+  }, [a.slug, a.thumb, a.thumb_url]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!a.thumb && !a.thumb_url) return null;
   return (
     <div className="aspect-[16/10] overflow-hidden rounded-xl border border-border bg-secondary">
       {url && <img src={url} alt="" loading="lazy" className="size-full object-cover object-top" />}
@@ -163,7 +164,7 @@ function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (e
     const admin = !!data?.admin;
     return (
       <div key={a.slug} data-app={a.slug} className="flex flex-col gap-3 rounded-2xl border border-border bg-background/40 p-4 text-start">
-        {a.thumb && <button onClick={() => setPeek(a)} aria-label={`${t("previewApp")} ${appName(a)}`} className="cursor-pointer transition hover:opacity-90"><Thumb api={api} a={a} /></button>}
+        {(a.thumb || a.thumb_url) && <button onClick={() => setPeek(a)} aria-label={`${t("previewApp")} ${appName(a)}`} className="cursor-pointer transition hover:opacity-90"><Thumb api={api} a={a} /></button>}
         <div className="flex items-center gap-3">
           <Glyph a={a} />
           <div className="min-w-0 flex-1">

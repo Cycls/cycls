@@ -1065,7 +1065,19 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return rows
 
     @r.post("/trash/{tid}/restore")
-    async def restore_trash(tid: str, ws: Workspace = ws_dep):
+    async def restore_trash(tid: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        if (row := await asyncio.to_thread(trash.take_row, ws.root, tid)) is not None:   # an app row the agent deleted
+            meta, value = row
+            db, k = state._route(ws, meta["path"])
+            try:
+                await state._may_write_app(ws, user, meta["path"])
+            except ValueError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            if await db.get(k) is not None:   # never over a newer value
+                raise HTTPException(status_code=409, detail=f"{meta['path']} has a new value; delete it first to restore this one")
+            await db.put(k, value)
+            await asyncio.to_thread(trash.purge, ws.root, tid)
+            return {"ok": True, "path": meta["path"]}
         if tid.startswith("chat:"):
             cid = tid[5:]
             meta = await state.get_meta(ws, cid)
@@ -1243,6 +1255,11 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
     folder = spec.get("catalog")
     catalog = app_catalog.Catalog(Path(folder)) if folder else None
     default_theme = spec.get("theme")
+    # The marketplace copy (names, lines, pictures) from the CMS, read as the connector directory is: `.cms(apps=)`.
+    cms = getattr(getattr(cycls_app, "config", None), "cms", None) or {}
+    cms_headers = {"Authorization": f"Bearer {cms['token']}"} if cms.get("token") else {}
+    cms_origin = "/".join((cms.get("apps") or "").split("/")[:3])   # https://cms.cycls.ai, for its "/files/…"
+    cms_copy = {"at": 0.0, "tried": 0.0, "rows": {}, "task": None}
 
     async def _gate(user, ws, what):
         if not await _admin(cycls_app, user, ws, volume, base):
@@ -1272,7 +1289,8 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
     if catalog is not None:
         @r.get("/apps/catalog")
         async def list_catalog(ws: Workspace = ws_dep, user: Any = user_dep):
-            rows = await asyncio.to_thread(app_catalog.listing, ws.root, catalog)
+            copy = await oauth.cms_rows(cms.get("apps"), cms_headers, field="apps", key="slug", copy=cms_copy)
+            rows = await asyncio.to_thread(app_catalog.listing, ws.root, catalog, copy, cms_origin)
             return {"apps": rows, "admin": await _admin(cycls_app, user, ws, volume, base)}
 
         # Seen before installing: the bundle as is, run by the client in a bare sandbox with no bridge, so

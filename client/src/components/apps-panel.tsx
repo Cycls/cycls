@@ -7,7 +7,7 @@ import { Icon } from "./icon";
 import { t } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
 
-export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUploadIcon, onDelete }: {
+export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUploadIcon, onDelete, onBrowse }: {
   apps: AppInfo[];
   loading: boolean;
   onOpen: (app: AppInfo) => void;
@@ -15,6 +15,7 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
   onSetIcon?: (app: AppInfo, icon: string) => void;
   onUploadIcon?: (app: AppInfo, file: File) => void;
   onDelete?: (app: AppInfo) => void;   // admins only — the server enforces it too
+  onBrowse?: () => void;               // the catalog (Web.apps): offered while the panel is empty
 }) {
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -39,6 +40,11 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
             <Icon name="folder" className="size-8 text-muted-foreground" strokeWidth={1.5} />
             <p className="text-sm font-medium">{t("noApps")}</p>
             <p className="text-xs text-muted-foreground">{t("noAppsSub")}</p>
+            {onBrowse && (
+              <button onClick={onBrowse} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 cursor-pointer">
+                <Icon name="search" className="size-4" />{t("browseApps")}
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">

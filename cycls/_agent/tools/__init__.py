@@ -1344,7 +1344,9 @@ def risk(name, inp):
         cmd = str(inp.get("command") or "")
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
     if name == "database":
-        return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
+        if inp.get("command") == "delete":   # an app row goes to the trash first (state._exec_database); the agent's memory does not
+            return "write" if str(inp.get("key") or "").startswith("apps/") else "destructive"
+        return {"put": "write"}.get(inp.get("command"))
     return "write" if name in ("edit", "build_app") or (name == "skill" and inp.get("action") == "publish") else None
 
 

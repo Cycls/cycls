@@ -465,7 +465,7 @@ class _Reader:
     def __init__(self, *answers):
         self.answers, self.calls = list(answers), 0
 
-    async def __call__(self, url, headers=None):
+    async def __call__(self, url, headers=None, *_):
         self.calls += 1
         ok = self.answers[min(self.calls - 1, len(self.answers) - 1)]
         c._copy["tried"] = time.time()

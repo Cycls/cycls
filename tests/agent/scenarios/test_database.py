@@ -170,6 +170,27 @@ def test_app_key_lands_in_the_apps_slot_not_the_agent_db(tmp_path):
     assert _run(shelf.get("standup/config")) == {"days": "mon"}
 
 
+def test_an_app_row_written_tells_the_open_app(tmp_path):
+    ws = _ws_user(tmp_path)
+    out = _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    assert out["_model"] == "Stored 'apps/standup/entries/1'"
+    assert out["_ui"] == {"type": "ui", "action": "app_data", "slug": "standup", "key": "entries/1"}
+    assert _run(_exec_database({"command": "delete", "key": "apps/standup/entries/1"}, ws))["_ui"]["action"] == "app_data"
+    assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws)) == "Stored 'note'"   # the agent's own: a string
+
+
+def test_an_app_row_deleted_by_the_agent_waits_in_the_trash(tmp_path):
+    from cycls._agent import trash
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": {"t": "hi"}}, ws))
+    out = _run(_exec_database({"command": "delete", "key": "apps/standup/entries/1"}, ws))
+    assert "restorable" in out["_model"]
+    (entry,) = [m for m in trash.list_trash(ws.root) if m["kind"] == "row"]
+    assert entry["path"] == "apps/standup/entries/1" and entry["by"] == "agent"
+    assert trash.take_row(ws.root, entry["id"])[1] == {"t": "hi"}
+    assert _run(_exec_database({"command": "delete", "key": "apps/standup/entries/1"}, ws)).startswith("Error:")   # gone
+
+
 def test_app_shelf_is_shared_across_members(tmp_path):
     a = workspace("tenant:alice", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
     b = workspace("tenant:bob", tmp_path, base=f"file://{tmp_path}", ws="t-eng")
@@ -195,7 +216,7 @@ def test_u_is_reserved_under_a_slug(tmp_path):
 def test_u_is_only_reserved_directly_under_the_slug(tmp_path):
     ws = _ws_user(tmp_path)
     out = _run(_exec_database({"command": "put", "key": "apps/standup/notes/u/x", "value": 1}, ws))
-    assert out.startswith("Stored")
+    assert out["_model"].startswith("Stored")
 
 
 def test_scan_hides_members_private_rows_and_reprefixes(tmp_path):
@@ -234,7 +255,7 @@ def test_an_admin_only_app_takes_the_tools_writes_from_admins_only(tmp_path):
     assert "only workspace admins" in _run(_exec_database(put, ws, alice))
     assert "only workspace admins" in _run(_exec_database({"command": "delete", "key": "apps/standup/config"}, ws, alice))
     assert "only workspace admins" in _run(_exec_database(put, ws))   # no person, no admin
-    assert _run(_exec_database(put, ws, bob)).startswith("Stored")
+    assert _run(_exec_database(put, ws, bob))["_model"].startswith("Stored")
     assert json.loads(_run(_exec_database({"command": "get", "key": "apps/standup/config"}, ws, alice))) == 1
     assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws, alice)).startswith("Stored")
 

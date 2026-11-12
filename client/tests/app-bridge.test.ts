@@ -123,6 +123,41 @@ describe("attachBridge", () => {
     expect(sent).toEqual([{ type: MSG.init, path: APP, scope, canWrite: false, theme: "dark" }]);
   });
 
+  it("answers on the port the frame kept, when it announced itself twice", async () => {
+    const ports: MessagePort[] = [];
+    const contentWindow = { postMessage: (_m: unknown, _o: string, t?: MessagePort[]) => { if (t?.[0]) ports.push(t[0]); } };
+    const frame = { contentWindow } as unknown as HTMLIFrameElement;
+    const commands: ((c: Record<string, unknown>) => void)[] = [];
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "{}", commands: (s) => { commands.push(s); return () => {}; } });
+    send(contentWindow, { type: MSG.ready });
+    send(contentWindow, { type: MSG.ready });            // a second announce before the first init was read
+    expect(ports).toHaveLength(2);
+    const got: unknown[] = [];
+    ports[0].onmessage = (ev) => got.push(ev.data);       // the shim keeps the first
+    ports[0].postMessage({ type: "cycls:linked" });
+    await new Promise((r) => setTimeout(r, 20));
+    commands[0]({ type: "theme", theme: "light" });
+    ports[0].postMessage({ type: MSG.read, id: 1, path: "apps/burnup/data.json" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(got).toEqual([{ type: MSG.command, command: { type: "theme", theme: "light" } },
+                         { type: MSG.readResult, id: 1, ok: true, content: "{}" }]);
+    ports.forEach((p) => p.close());
+  });
+
+  it("answers cycls.members with what the host gives, and refuses where it gives nothing", async () => {
+    const { frame, sent, contentWindow } = fakeFrame();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "", members: async () => [{ id: "u1", name: "Sara", role: "admin" }] });
+    send(contentWindow, { type: MSG.members, id: 1 });
+    await settle();
+    expect(sent).toEqual([{ type: MSG.membersResult, id: 1, ok: true, result: [{ id: "u1", name: "Sara", role: "admin" }] }]);
+    detach();
+    const shared = fakeFrame();
+    detach = attachBridge({ frame: shared.frame, appPath: APP, readFile: async () => "" });
+    send(shared.contentWindow, { type: MSG.members, id: 2 });
+    await settle();
+    expect(shared.sent).toEqual([{ type: MSG.membersResult, id: 2, ok: false, error: "this view has no workspace" }]);
+  });
+
   it("reads a file inside the scope", async () => {
     const { frame, sent, contentWindow } = fakeFrame();
     const readFile = vi.fn(async () => "{}");

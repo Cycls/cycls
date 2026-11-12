@@ -1240,6 +1240,9 @@ def test_a_builtin_follows_the_composer_switch_and_always_stops_for_the_destruct
             risk("bash", {"command": "git reset --hard"})) == (None, "write", "write", "destructive")
     assert (risk("database", {"command": "get"}), risk("database", {"command": "put"}),
             risk("database", {"command": "delete"})) == (None, "write", "destructive")
+    # an app row goes to the trash first, so its delete is an ordinary write; the agent's memory is not kept
+    assert (risk("database", {"command": "delete", "key": "apps/standup/x"}),
+            risk("database", {"command": "delete", "key": "note"})) == ("write", "destructive")
     assert risk("edit", {"path": "a.md"}) == "write" and risk("read", {"path": "a.md"}) is None
     assert (risk("skill", {"name": "brief"}), risk("skill", {"name": "brief", "action": "publish"})) == (None, "write")
 

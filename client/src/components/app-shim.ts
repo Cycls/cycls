@@ -48,10 +48,16 @@ const SHIM = `<script>(function(){
     for (var k in set) if (TOKEN.test(k) && typeof set[k] === 'string' && VALUE.test(set[k]) && set[k].indexOf(BS) < 0) out.push(k + ':' + set[k]);
     return out.length ? sel + '{' + out.join(';') + '}' : '';
   }
+  function own(){ var off = document.querySelector('meta[name="cycls-theme"]'); return !!off && off.getAttribute('content') === 'off'; }
+  // The host's light/dark on this document too — shadcn's .dark and the kit's data-theme — so it follows live.
+  function mode(t){
+    if ((t !== 'dark' && t !== 'light') || own()) return;
+    document.documentElement.classList.toggle('dark', t === 'dark');
+    document.documentElement.setAttribute('data-theme', t);
+  }
   function wear(tokens){
     try {
-      var off = document.querySelector('meta[name="cycls-theme"]');
-      if (off && off.getAttribute('content') === 'off') return;
+      if (own()) return;
       var el = document.getElementById('cycls-theme');
       if (!tokens || typeof tokens !== 'object') { if (el) el.remove(); return; }
       if (!el) { el = document.createElement('style'); el.id = 'cycls-theme'; (document.head || document.documentElement).appendChild(el); }
@@ -70,7 +76,11 @@ const SHIM = `<script>(function(){
     if (c.type === 'theme') {
       if (ctx) { if (c.theme) ctx.theme = c.theme; ctx.tokens = c.tokens || null; }
       wear(c.tokens);
+      mode(c.theme);
     }
+    // The host's language changed: start again in it (writes landed first); the handshake carries the new one.
+    if (c.type === 'context' && ctx && c.locale && c.locale !== ctx.locale) { flush().then(function(){ location.reload(); }); return; }
+    if (c.type === 'data_changed') kv = null;   // the agent wrote a row: the next get() reads the shelf again
     if (!commandHandlers.length) { if (commandBacklog.length < 50) commandBacklog.push(c); return; }
     commandHandlers.slice().forEach(function(fn){ try { fn(c); } catch (e) { report(e && e.message || e); } });
   }
@@ -79,21 +89,22 @@ const SHIM = `<script>(function(){
     m = m || {};
     if (m.type === 'cycls:init' && !ctx) {
       ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite,
-              tokens: m.tokens || null };
+              tokens: m.tokens || null, role: m.role, user: m.user || null };
       api.ctx = ctx;
       if (m.tokens) wear(m.tokens);
+      mode(m.theme);
       resolveReady(ctx);
       return;
     }
     if (m.type === 'cycls:command') { command(m.command); return; }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
         && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
-        && m.type !== 'cycls:data:result') return;
+        && m.type !== 'cycls:data:result' && m.type !== 'cycls:members:result') return;
     var p = waiting.get(m.id);
     if (!p) return;
     waiting.delete(m.id);
     if (!m.ok) { var err = new Error(m.error || 'failed'); err.status = m.status; return p.rej(err); }
-    p.res(m.type === 'cycls:data:result' ? m.result
+    p.res(m.type === 'cycls:data:result' || m.type === 'cycls:members:result' ? m.result
         : m.type === 'cycls:read:result' ? m.content
         : m.type === 'cycls:save:result' ? m.path
         : m.type === 'cycls:fetch:result' ? { status: m.status, body: m.body, contentType: m.contentType }
@@ -107,6 +118,7 @@ const SHIM = `<script>(function(){
     if (!link && e.ports && e.ports[0]) {
       link = e.ports[0];
       link.onmessage = function(ev){ receive(ev.data); };
+      link.postMessage({ type: 'cycls:linked' });   // the host may have minted several: this is the one kept
     }
     receive(e.data);
   });
@@ -274,6 +286,9 @@ const SHIM = `<script>(function(){
       remove: function(user, key){ return data({ op: 'delete', key: String(key), who: String(user) }); }
     },
     keys: async function(){ return Object.keys(await load()); },
+    // The workspace's people as the viewer sees them in Settings: [{id, name, role}], never an email. The id is
+    // the one cycls.users rows carry. Rejects in a shared view.
+    members: async function(){ await ready; return call('cycls:members', {}); },
     // What the host pushes: {type: "theme", theme, tokens} when the workspace's app theme or the
     // host's light/dark changes (the shim has already applied the tokens). Returns an unsubscribe.
     onCommand: function(fn){

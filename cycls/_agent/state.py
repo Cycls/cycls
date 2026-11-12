@@ -24,6 +24,7 @@ from pathlib import Path
 
 from cycls._app.db import DB, Conflict, workspace, _store
 from .logs import log
+from . import trash
 
 
 # ---- Chat metadata ----
@@ -778,10 +779,19 @@ async def _may_write_app(ws, user, key):
         raise ValueError(f"only workspace admins can write {slug}'s shared data")
 
 
+def _told(key, text):
+    """An app's row changed: the chat tells that app, if it is open, to re-read it (`app_data`, canvas.tsx)."""
+    if not key.startswith(APPS_ROOT):
+        return text
+    slug, _, rest = key[len(APPS_ROOT):].partition("/")
+    return {"_model": text, "_ui": {"type": "ui", "action": "app_data", "slug": slug, "key": rest}}
+
+
 async def _exec_database(inp, ws, user=None):
     """All returns are strings — Anthropic tool_result.content accepts
     str or content-blocks (each with a `type`); raw dicts/lists from JSON
-    values would 400. JSON-encode the data ones."""
+    values would 400. JSON-encode the data ones. An app row's write is a
+    `{_model, _ui}` pair, the string being `_model` (`_told`)."""
     cmd, key = inp.get("command"), inp.get("key", "")
     try:
         if cmd == "get":
@@ -792,12 +802,17 @@ async def _exec_database(inp, ws, user=None):
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
             await db.put(k, inp.get("value"))
-            return f"Stored {key!r}"
+            return _told(key, f"Stored {key!r}")
         if cmd == "delete":
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
+            if key.startswith(APPS_ROOT):   # an app row goes to the trash first, so the delete asks no one (tools.risk)
+                v = await db.get(k)
+                if v is None:
+                    return f"Error: key {key!r} not found"
+                trash.trash_row(ws.root, key, v)
             await db.delete(k)
-            return f"Deleted {key!r}"
+            return _told(key, f"Deleted {key!r}" + (" — it is in the trash, restorable for 30 days" if key.startswith(APPS_ROOT) else ""))
         if cmd == "scan":
             prefix = inp.get("prefix", "")
             db, p = _route(ws, prefix, prefix=True)

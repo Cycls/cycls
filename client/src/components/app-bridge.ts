@@ -16,6 +16,8 @@ export const MSG = {
   loadError: "cycls:loaderror",
   data: "cycls:data",
   dataResult: "cycls:data:result",
+  members: "cycls:members",
+  membersResult: "cycls:members:result",
   command: "cycls:command",
 } as const;
 
@@ -73,6 +75,12 @@ export function safeName(raw: unknown): string | null {
 
 export const APPS_DIR = "apps";
 
+// Who is looking, set by chat.tsx as it renders: an app's ctx.role ("admin" | "member") and ctx.user, and what
+// cycls.members() answers — the people the viewer already sees in Settings, never an email.
+export type Person = { id: string; name: string; image?: string; role?: string };
+export let viewer: { role: string; user?: Person; members?: () => Promise<Person[]> } = { role: "member" };
+export const setViewer = (v: typeof viewer) => { viewer = v; };
+
 // The folder an app may reach, or null if this file is not one. The canvas
 // renders every HTML file, but only apps/<slug>/ gets a bridge: opening a
 // document must never hand that document your workspace.
@@ -102,7 +110,8 @@ export interface BridgeOptions {
   writeFile?: (path: string, text: string) => Promise<void>;
   // Resolves to the path the person picked, or null if they cancelled.
   requestSave?: (name: string, content: string) => Promise<string | null>;
-  context?: Record<string, unknown>;
+  // Read at each handshake, so a frame that reloaded itself gets the host's state as it is now.
+  context?: Record<string, unknown> | (() => Record<string, unknown>);
   onResize?: (height: number) => void;
   onError?: (message: string) => void;
   // Calls the connector relay as the signed-in user; the app never sees a token.
@@ -112,6 +121,7 @@ export interface BridgeOptions {
   // The app's rows in the object store. `who` picks the audience; the server
   // resolves the viewer and the role, so the frame cannot name someone else.
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
+  members?: () => Promise<Person[]>;   // cycls.members(); absent in a shared view
   // Host → app pushes, over the port once the app is linked. The canvas subscribes the workspace's
   // app theme here: `subscribe(send)` returns its own unsubscribe. A command before the handshake is
   // dropped — the init that follows carries the same state.
@@ -123,7 +133,7 @@ export interface BridgeOptions {
 const said = (e: unknown) => (navigator.onLine ? String((e as Error)?.message ?? e) : "offline");
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData, commands,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData, members, commands,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
@@ -154,6 +164,13 @@ export function attachBridge({
         reply({ ok: false, error: said(e).slice(0, 300),
                 status: (e as { status?: number })?.status });
       }
+      return;
+    }
+
+    if (msg.type === MSG.members) {
+      const reply = (p: object) => post({ type: MSG.membersResult, id: msg.id, ...p });
+      if (!members) return reply({ ok: false, error: "this view has no workspace" });
+      try { reply({ ok: true, result: await members() }); } catch (e) { reply({ ok: false, error: said(e).slice(0, 300) }); }
       return;
     }
 
@@ -231,9 +248,12 @@ export function attachBridge({
     if ((e.data as { type?: string })?.type === MSG.ready) {
       const ch = new MessageChannel();
       port = ch.port1;
-      port.onmessage = (ev) => void handle(ev.data);
+      // A frame busy loading a big bundle announces itself more than once and keeps the FIRST port it is
+      // handed: the port it talks on (it says `cycls:linked` at once) is the one answered and pushed down.
+      ch.port1.onmessage = (ev) => { port = ch.port1; void handle(ev.data); };
       frame.contentWindow.postMessage(
-        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context }, "*", [ch.port2]);
+        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...(typeof context === "function" ? context() : context) },
+        "*", [ch.port2]);
       return;
     }
     void handle(e.data);   // a shim that ignored the port still works

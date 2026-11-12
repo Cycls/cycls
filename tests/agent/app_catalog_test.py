@@ -93,6 +93,19 @@ def test_the_literal_routes_do_not_shadow_app_data(tmp_path, shelf):
     assert client.get("/apps/catalog/data/k").json()["value"] == 1
 
 
+def test_an_app_row_the_agent_deleted_is_restored_from_the_trash_never_over_a_newer_one(tmp_path, shelf):
+    client, vol = _client(tmp_path, shelf)
+    root = _personal(vol, "user_1")
+    first = trash.trash_row(root, "apps/tasks/k", {"v": 1})          # what database delete does before deleting
+    assert any(r["id"] == first["id"] and r["kind"] == "row" for r in client.get("/trash").json())
+    assert client.post(f"/trash/{first['id']}/restore").json()["path"] == "apps/tasks/k"
+    assert client.get("/apps/tasks/data/k").json()["value"] == {"v": 1}
+    assert not any(r["id"] == first["id"] for r in client.get("/trash").json())   # restored: out of the trash
+    second = trash.trash_row(root, "apps/tasks/k", {"v": 0})
+    assert client.post(f"/trash/{second['id']}/restore").status_code == 409     # the key has a value again
+    assert client.get("/apps/tasks/data/k").json()["value"] == {"v": 1}
+
+
 # ---- install -------------------------------------------------------------------------------
 
 def test_install_lands_the_bundle_as_build_app_would(tmp_path, shelf):
@@ -303,15 +316,42 @@ def test_web_apps_ships_the_folder_and_turns_the_section_on(tmp_path, monkeypatc
     assert isinstance(web._apps["catalog"], str)          # never a Path: it rides the pickle
 
 
-@pytest.mark.parametrize("bad", ["", "/abs/apps", "../apps"])
-def test_web_apps_wants_a_relative_folder(bad):
+@pytest.mark.parametrize("bad", ["", "../apps", "/shelf/../etc"])
+def test_web_apps_wants_a_relative_folder_or_a_mount(bad):
     import cycls
     with pytest.raises(ValueError):
         cycls.Web().apps(bad)
 
 
-def test_catalog_module_reads_once_per_process(tmp_path, shelf):
+def test_web_apps_reads_a_mounted_volume_without_shipping_it():
+    import cycls
+    web = cycls.Web().auth(cycls.JWT(jwks_url="https://example.com/jwks")).apps("/shelf")
+    assert web._apps["catalog"] == "/shelf"
+    async def fn(context):
+        yield ""
+    agent = cycls.agent(web=web, name="t", volumes={"/workspace": cycls.Volume("t"),
+                                                   "/shelf": cycls.Volume("apps").read_only()})(fn)
+    assert "/shelf" not in agent.copy
+
+
+def test_a_published_index_is_what_is_listed_and_the_cms_copy_lies_over_it(tmp_path, shelf):
+    (shelf / catalog.INDEX).write_text(json.dumps({"apps": list(catalog.scan(shelf).values())}), encoding="utf-8")
+    _bundle(shelf, "later")                                       # on the shelf, not yet published in the index
+    entries = catalog.Catalog(shelf).entries()
+    assert set(entries) == {"tasks", "crm"} and entries["tasks"]["version"] == catalog.scan(shelf)["tasks"]["version"]
+    row = {"slug": "tasks", "title": {"en": "Team Tasks", "ar": "مهام الفريق"}, "description": {"en": "", "ar": ""},
+           "icon": "", "thumb": "/files/ab12.webp"}
+    e = catalog.with_copy(entries["tasks"], row, "https://cms.example")
+    assert (e["name"], e["name_ar"], e["description"], e["icon"]) == ("Team Tasks", "مهام الفريق", "Kanban of follow-ups", "✅")
+    assert e["thumb_url"] == "https://cms.example/files/ab12.webp" and e["version"] == entries["tasks"]["version"]
+    rows = {r["slug"]: r for r in catalog.listing(tmp_path / "ws", catalog.Catalog(shelf), {"tasks": row}, "https://cms.example")}
+    assert rows["tasks"]["name"] == "Team Tasks" and rows["tasks"]["state"] == "available" and rows["crm"]["name"] == "CRM"
+
+
+def test_catalog_module_rereads_a_changed_shelf(tmp_path, shelf, monkeypatch):
     c = catalog.Catalog(shelf)
     first = c.entries()
     _bundle(shelf, "later")
-    assert c.entries() is first and "later" not in c.entries()
+    assert c.entries() is first and "later" not in c.entries()   # within the TTL: one read
+    monkeypatch.setattr(catalog.Catalog, "TTL", -1)
+    assert "later" in c.entries()

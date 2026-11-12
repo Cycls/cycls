@@ -122,20 +122,20 @@ CMS_RETRY = 10  # how soon it tries again after a read that did not land
 _copy = {"at": 0.0, "tried": 0.0, "rows": {}, "task": None}
 
 
-async def _cms_read(url, headers):
+async def _cms_read(url, headers, copy, field, key):
     import httpx2
-    _copy["tried"] = time.time()
+    copy["tried"] = time.time()
     try:
         async with httpx2.AsyncClient(timeout=10) as h:
             r = await h.get(url, headers=headers)
         if r.status_code == 200:
-            _copy["rows"] = {c["name"]: c for c in (r.json().get("connectors") or []) if c.get("name")}
-            _copy["at"] = time.time()   # only a read that landed starts the clock
+            copy["rows"] = {c[key]: c for c in (r.json().get(field) or []) if c.get(key)}
+            copy["at"] = time.time()   # only a read that landed starts the clock
     except Exception:
         pass   # a CMS that is down leaves the page rendering what the code declares
 
 
-async def cms_rows(url, headers=None):
+async def cms_rows(url, headers=None, *, field="connectors", key="name", copy=_copy):
     """The CMS's records by connector name. The first caller waits, so the first directory is already
     right; after that a stale copy is served as it stands and re-read behind the request.
 
@@ -146,13 +146,13 @@ async def cms_rows(url, headers=None):
     if not url:
         return {}
     now = time.time()
-    if now - _copy["at"] < CMS_TTL or now - _copy["tried"] < CMS_RETRY:
-        return _copy["rows"]
-    if _copy["at"]:
-        _copy["task"] = asyncio.create_task(_cms_read(url, headers or {}))   # held: a task nobody keeps can be collected mid-flight
+    if now - copy["at"] < CMS_TTL or now - copy["tried"] < CMS_RETRY:
+        return copy["rows"]
+    if copy["at"]:
+        copy["task"] = asyncio.create_task(_cms_read(url, headers or {}, copy, field, key))   # held: a task nobody keeps can be collected mid-flight
     else:
-        await _cms_read(url, headers or {})
-    return _copy["rows"]
+        await _cms_read(url, headers or {}, copy, field, key)
+    return copy["rows"]
 
 
 def copy_of(o):

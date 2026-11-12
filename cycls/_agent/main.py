@@ -89,7 +89,7 @@ class Agent(App):
         # the cycls source tree on top.
         image = dict(image or {})
         image["copy"] = {**image.get("copy", {}), **{f: f"public/{f}" for f in self.copy_public}}
-        if self.apps:   # the catalog ships in the image, at the same relative path the server reads
+        if self.apps and not self.apps["catalog"].startswith("/"):   # in the image, at the relative path the server reads; "/…" is a volume
             image["copy"].setdefault(self.apps["catalog"], self.apps["catalog"])
 
         super().__init__(
