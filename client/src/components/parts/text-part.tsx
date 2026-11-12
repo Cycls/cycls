@@ -11,6 +11,7 @@ import { CodePart } from "./code-part";
 import { SourceChip, domainOf, urlKey } from "./sources-part";
 import { track } from "../../lib/analytics";
 import type { Source } from "../../hooks/use-chat";
+import { dirOf, blockDir } from "../../lib/bidi";
 
 function escapeCurrencyDollars(text: string): string {
   return text.replace(/\$\$|\$(?=\d)(?![^$\n]*[\\^_{}][^$\n]*\$)/g, (m) =>
@@ -49,7 +50,22 @@ const markdownComponents = {
   },
 };
 
-const rehypePlugins = [[rehypeKatex, { strict: false }]] as const;
+// Each paragraph, item and heading in one language reads its own way; a mixed one, its reply's. Code and math
+// don't count, and keep their own direction (index.css).
+type HNode = { type: string; tagName?: string; value?: string; properties?: Record<string, unknown>; children?: HNode[] };
+const BLOCKS = new Set(["p", "li", "h1", "h2", "h3", "h4", "h5", "h6"]);
+const textOf = (n: HNode): string => n.type === "text" ? n.value ?? ""
+  : n.tagName === "code" || String(n.properties?.className ?? "").includes("math") ? "" : (n.children ?? []).map(textOf).join("");
+const rehypeBlockDir = () => (tree: HNode) => {
+  const walk = (n: HNode) => {
+    const dir = n.tagName && BLOCKS.has(n.tagName) && blockDir(textOf(n));
+    if (dir) n.properties = { ...n.properties, dir };
+    n.children?.forEach(walk);
+  };
+  walk(tree);
+};
+
+const rehypePlugins = [rehypeBlockDir, [rehypeKatex, { strict: false }]] as const;
 
 // A workspace file however the model wrote it — relative, /workspace/…,
 // file://, sandbox:, or our own /files/ URL — as the path the canvas opens.
@@ -157,7 +173,7 @@ export const TextPart = memo(function TextPart({ text, onOpenFile, folder, sourc
   const blocks = useMemo(() => parseMarkdownIntoBlocks(escaped), [escaped]);
 
   return (
-    <div dir="auto" className="prose dark:prose-invert min-w-full">
+    <div dir={dirOf(escaped)} className="prose dark:prose-invert min-w-full">
       {blocks.map((block, index) => (
         <MemoizedMarkdownBlock key={index} content={block} onOpenFile={onOpenFile} folder={folder} sources={sources} resolveMedia={resolveMedia} />
       ))}

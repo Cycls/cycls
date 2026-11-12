@@ -9,6 +9,7 @@ import { StepPart } from "./parts/step-part";
 import { ApprovalReceipt } from "./approval-card";
 import { GlowStar, Star } from "./cycls-star";
 import { StepGroup } from "./parts/step-group";
+import { AgentsCard } from "./parts/agents-card";
 import { FilePart } from "./parts/file-part";
 import { Gallery, IMAGE_FILE } from "./parts/gallery";
 import { UsageNote, usedUp } from "./usage";
@@ -22,6 +23,7 @@ import { calloutText } from "../lib/errors";
 import { urlKey } from "./parts/sources-part";
 import { useMemo } from "react";
 import { localStep, t } from "../lib/i18n";
+import { dirOf } from "../lib/bidi";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void, sources?: Map<string, Source>) {
   switch (part.type) {
@@ -95,6 +97,7 @@ function groupKind(p: Part, live?: boolean) {
   if (p.type === "image" && p.src) return "media";
   if (p.type === "step" && p.picture && live) return "media";
   if (p.type === "thinking") return "step";
+  if (p.type === "step" && p.tool_name === "Agent") return "agents";
   return p.type;
 }
 
@@ -103,7 +106,7 @@ function groupParts(parts: Part[], live?: boolean) {
   for (let i = 0; i < parts.length; i++) {
     const kind = groupKind(parts[i], live);
     const last = groups[groups.length - 1];
-    if ((kind === "step" || kind === "media") && last?.kind === kind) {
+    if ((kind === "step" || kind === "media" || kind === "agents") && last?.kind === kind) {
       last.items.push(parts[i]);
     } else {
       groups.push({ kind, items: [parts[i]], startIndex: i });
@@ -152,7 +155,7 @@ export function MessageBubble({
               ))}
             </div>
           )}
-          <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
+          <div dir={dirOf(message.content)} className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
             {message.content}
           </div>
         </div>
@@ -247,6 +250,7 @@ export function MessageBubble({
             return <Gallery key={gi} items={group.items} resolve={resolveMedia} onOpenFile={onOpenFile} />;
           if (group.kind === "file")
             return <FilePart key={gi} path={group.items[0].step || ""} onOpen={onOpenFile} />;
+          if (group.kind === "agents") return <AgentsCard key={gi} items={group.items} />;
           return group.items.map((part, i) =>
             renderPart(part, group.startIndex + i,
               isStreaming && group.startIndex + i === rendered.length - 1, onRetry, onOpenFile, sourceIndex));
@@ -258,7 +262,7 @@ export function MessageBubble({
         {!isEmpty && !isStreaming && (
           <div
             className={cn(
-              "flex gap-0 -ml-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
+              "flex gap-0 -ms-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
             )}
           >
             <button

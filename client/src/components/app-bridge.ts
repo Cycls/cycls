@@ -1,5 +1,6 @@
 // Host side of the canvas <-> sandboxed-app channel. The app has an opaque
 // origin, so the host reads and writes for it, within its own folder only.
+import type { Person } from "../lib/people";
 
 export const MSG = {
   ready: "cycls:ready",
@@ -16,10 +17,24 @@ export const MSG = {
   loadError: "cycls:loaderror",
   data: "cycls:data",
   dataResult: "cycls:data:result",
-  members: "cycls:members",
-  membersResult: "cycls:members:result",
-  command: "cycls:command",
+  command: "cycls:command",   // host -> app: the workspace's app theme, the host's language (catalog)
+  connect: "cycls:connect",   // app -> host: open a connector's page, to connect it
+  listen: "cycls:listen",     // app -> host: it has a change listener, so tell it instead of reloading it
+  changed: "cycls:changed",   // host -> app: its data changed (the agent, a teammate, another tab)
+  theme: "cycls:theme",       // host -> app: the chat switched between light and dark
 } as const;
+
+// Window events the chat sends the open apps: the agent changed an app's data (the `app_data` tool
+// event), and a turn ended (anything else it wrote under data/ shows up in the check that follows).
+export const APP_DATA_EVENT = "cycls:app-data";
+export const TURN_END_EVENT = "cycls:app-turn-end";
+export const OPEN_CONNECTOR_EVENT = "cycls:open-connector";   // an app's cycls.connect(name); chat.tsx opens the page
+
+export type ChangeSource = "agent" | "turn" | "poll" | "focus";
+// Who last wrote a shared key, as the server keeps it with the row: a person's id, and the agent's name when it
+// wrote for them.
+type Stamp = { by?: string; at?: string; agent?: string };
+type Versions = { keys?: Record<string, string>; who?: Record<string, Stamp>; files?: Record<string, string> };
 
 export const RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 // The app may set these; Authorization is the server's alone.
@@ -75,12 +90,6 @@ export function safeName(raw: unknown): string | null {
 
 export const APPS_DIR = "apps";
 
-// Who is looking, set by chat.tsx as it renders: an app's ctx.role ("admin" | "member") and ctx.user, and what
-// cycls.members() answers — the people the viewer already sees in Settings, never an email.
-export type Person = { id: string; name: string; image?: string; role?: string };
-export let viewer: { role: string; user?: Person; members?: () => Promise<Person[]> } = { role: "member" };
-export const setViewer = (v: typeof viewer) => { viewer = v; };
-
 // The folder an app may reach, or null if this file is not one. The canvas
 // renders every HTML file, but only apps/<slug>/ gets a bridge: opening a
 // document must never hand that document your workspace.
@@ -120,12 +129,26 @@ export interface BridgeOptions {
                    => Promise<{ status: number; body: string; contentType: string }>;
   // The app's rows in the object store. `who` picks the audience; the server
   // resolves the viewer and the role, so the frame cannot name someone else.
+  // `{op: "versions"}` is the host's own call: what the change check compares.
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
-  members?: () => Promise<Person[]>;   // cycls.members(); absent in a shared view
   // Host → app pushes, over the port once the app is linked. The canvas subscribes the workspace's
-  // app theme here: `subscribe(send)` returns its own unsubscribe. A command before the handshake is
-  // dropped — the init that follows carries the same state.
+  // app theme and the host's language here: `subscribe(send)` returns its own unsubscribe. A command
+  // before the handshake is dropped — the init that follows carries the same state.
   commands?: (send: (command: Record<string, unknown>) => void) => () => void;
+  // The workspace's members for cycls.people(), pictures as data: URLs; none on a shared link.
+  people?: () => Promise<Person[]>;
+  // Keeping an open app in step. Each has a default; tests replace them.
+  pollMs?: number;               // how often a visible, listening app checks for changes
+  visible?: () => boolean;       // on screen: the active tab of a shown canvas in a shown page
+  reload?: () => void;           // an app with no change listener is reloaded instead
+}
+
+/** Keys or files whose version differs between two looks, either way. */
+function changedIn(was: Map<string, string>, now: Map<string, string>): string[] {
+  const out = new Set<string>();
+  for (const [k, v] of now) if (was.get(k) !== v) out.add(k);
+  for (const k of was.keys()) if (!now.has(k)) out.add(k);
+  return [...out].sort();
 }
 
 // What an app hears when a call fails. Offline, just that: the error a sign-in token throws then is a vendor's,
@@ -133,44 +156,217 @@ export interface BridgeOptions {
 const said = (e: unknown) => (navigator.onLine ? String((e as Error)?.message ?? e) : "offline");
 
 export function attachBridge({
-  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData, members, commands,
+  frame, appPath, readFile, writeFile, requestSave, context, onResize, onError, fetchConnector, appData, people, commands,
+  pollMs = 15_000, visible, reload,
 }: BridgeOptions) {
   const folder = appScope(appPath);
   if (folder === null) return () => {};
   const scope: string = folder;
+  const slug = scope.split("/")[1];
   let port: MessagePort | null = null;
+  let answered: unknown = null;   // the document the channel was opened for
+  // Once the channel is up everything goes down it. A window post needs targetOrigin
+  // "*" — an opaque origin has none to name — and a frame that navigated itself away
+  // would still receive it.
+  const post = (p: unknown) => (port ? port.postMessage(p) : frame.contentWindow?.postMessage(p, "*"));
+
+  // ---- Keeping an open app in step with its data ----
+  // An app loads its data once. Before this, a change made by the agent, a teammate or another tab
+  // showed only after the app was reopened. Now the host compares versions (one listing, no values)
+  // and tells the app what changed. An app that never asked to be told is reloaded instead, and only
+  // for the agent's changes, so a teammate's change never reloads an app someone is typing in.
+  let listening = false;
+  let known: { keys: Map<string, string>; files: Map<string, string> } | null = null;
+  let busy = 0;     // the app's own writes on their way
+  let moved = 0;    // bumps as one starts and lands: a check that overlapped one is thrown away
+  const ownFiles = new Set<string>();   // data/ files the app wrote, so the check does not report them back
+  let agentKeys = new Set<string>(), agentAll = false;
+  let agentTimer: ReturnType<typeof setTimeout> | undefined;
+  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  let laterTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastCheck = 0, shown = false, closed = false;
+  const onScreen = visible ?? (() => document.visibilityState === "visible" && frame.isConnected
+    && frame.getClientRects().length > 0 && getComputedStyle(frame).visibility !== "hidden");
+  // Setting srcdoc again, even to the same text, loads the document afresh.
+  const reloadFrame = reload ?? (() => { const doc = frame.srcdoc; frame.srcdoc = doc; });
+
+  // ---- Who changed what ----
+  // Each look at the versions also says who last wrote each shared key; an id becomes the person, by the
+  // workspace's members. One who has left is their id alone, and so is everyone if the members cannot be had
+  // within a moment: a change is never held back for a name.
+  let stamps: Record<string, Stamp> = {}, stampsAt = 0;
+  async function person(id: string): Promise<Person> {
+    if (!people) return { id };
+    const list = await Promise.race([people().catch(() => [] as Person[]),
+                                     new Promise<Person[]>((r) => setTimeout(() => r([]), 1_500))]);
+    return list.find((p) => p.id === id) ?? { id };
+  }
+  async function stampOf(key: string) {
+    const s = stamps[key];
+    if (!s?.by) return null;
+    return { by: await person(s.by), ...(s.at ? { at: s.at } : {}), ...(s.agent ? { agent: s.agent } : {}) };
+  }
+  async function whoOf(keys: string[]) {
+    const out: Record<string, unknown> = {};
+    for (const k of keys) { const s = await stampOf(k); if (s) out[k] = s; }
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  // The chat's light or dark mode, which an app follows. It used to be told once, in init, so an open app
+  // stayed in the old mode after the person switched. Dark mode is a class on the chat's <body>.
+  const themeNow = () => (document.body?.classList.contains("dark") ? "dark" : "light");
+  const first = typeof context === "function" ? context() : context;
+  let theme = typeof first?.theme === "string" ? first.theme : themeNow();
+  const themeWatch = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
+    const now = themeNow();
+    if (now === theme) return;
+    theme = now;
+    post({ type: MSG.theme, theme });
+  });
+  if (document.body) themeWatch?.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+
+  function tell(source: ChangeSource, keys?: string[], files?: string[], who?: Record<string, unknown>) {
+    if (listening) {
+      post({ type: MSG.changed, source, ...(keys ? { keys } : {}), ...(files ? { files } : {}), ...(who ? { who } : {}) });
+    } else if (source === "agent" || source === "turn") {
+      reloadSoon();
+    }
+  }
+
+  function reloadSoon() {
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      if (closed) return;
+      if (listening) return tell("agent");   // it started listening meanwhile: tell it, keep its state
+      if (busy) return reloadSoon();         // a write of its own is still on its way
+      reloadFrame();
+    }, 800);
+  }
+
+  async function check(source: ChangeSource) {
+    if (!appData || closed) return;
+    if (busy) return later(source);
+    const at = moved;
+    lastCheck = Date.now();
+    let v: Versions;
+    try {
+      v = ((await appData(slug, { op: "versions" })) ?? {}) as Versions;
+    } catch {
+      return;   // offline, or an older server: the app keeps what it shows
+    }
+    if (closed) return;
+    if (at !== moved || busy) return later(source);
+    const next = { keys: new Map(Object.entries(v.keys ?? {})), files: new Map(Object.entries(v.files ?? {})) };
+    stamps = v.who ?? {};
+    stampsAt = Date.now();
+    const was = known;
+    known = next;
+    if (!was) return;   // the first look is what later ones compare with
+    const keys = changedIn(was.keys, next.keys);
+    const files = changedIn(was.files, next.files).filter((f) => !ownFiles.delete(f));
+    if (!keys.length && !files.length) return;
+    const who = listening && keys.length ? await whoOf(keys) : undefined;
+    if (!closed) tell(source, keys, files, who);
+  }
+
+  function later(source: ChangeSource) {
+    clearTimeout(laterTimer);
+    laterTimer = setTimeout(() => void check(source), 600);
+  }
+
+  function onAgent(e: Event) {
+    const d = ((e as CustomEvent).detail ?? {}) as { slug?: unknown; key?: unknown; version?: unknown; deleted?: unknown };
+    if (d.slug !== slug || closed) return;
+    if (typeof d.key === "string") {
+      agentKeys.add(d.key);
+      // Its new version, so the next check does not report the same change a second time.
+      if (known && d.deleted) known.keys.delete(d.key);
+      else if (known && typeof d.version === "string" && d.version) known.keys.set(d.key, d.version);
+    } else {
+      agentAll = true;
+    }
+    clearTimeout(agentTimer);
+    agentTimer = setTimeout(() => {   // a burst of puts is one change
+      const keys = agentAll ? undefined : [...agentKeys];
+      agentKeys = new Set();
+      agentAll = false;
+      tell("agent", keys);
+    }, 250);
+  }
+
+  const onTurnEnd = () => void check("turn");
+  const onFocus = () => {
+    if (listening && onScreen() && Date.now() - lastCheck > 2_000) void check("focus");
+  };
+  const onVisibility = () => { if (document.visibilityState === "visible") onFocus(); };
+  // Cheap when nothing is due: no request unless the app listens, is on screen, and either just came
+  // into view or has not looked for a while.
+  const tick = setInterval(() => {
+    const seen = listening && onScreen();
+    if (seen && (!shown || Date.now() - lastCheck >= pollMs)) void check(shown ? "poll" : "focus");
+    shown = seen;
+  }, Math.min(2_500, pollMs));
 
   async function handle(raw: unknown) {
     const msg = raw as {
       type?: string; id?: unknown; path?: unknown; content?: unknown; height?: unknown;
     };
     if (typeof msg?.type !== "string") return;
-    // Once the channel is up everything goes down it. A window post needs targetOrigin
-    // "*" — an opaque origin has none to name — and a frame that navigated itself away
-    // would still receive it.
-    const post = (p: unknown) => (port ? port.postMessage(p) : frame.contentWindow?.postMessage(p, "*"));
 
     if (msg.type === MSG.loadError) {
       onError?.(String((msg as { message?: unknown }).message ?? "").slice(0, 500));
       return;
     }
 
-    if (msg.type === MSG.data) {
-      const reply = (p: object) => post({ type: MSG.dataResult, id: msg.id, ...p });
-      if (!appData) return reply({ ok: false, error: "this view has no workspace" });
-      try {
-        reply({ ok: true, result: await appData(scope.split("/")[1], msg as Record<string, unknown>) });
-      } catch (e) {
-        reply({ ok: false, error: said(e).slice(0, 300),
-                status: (e as { status?: number })?.status });
-      }
+    if (msg.type === MSG.listen) {
+      listening = true;
       return;
     }
 
-    if (msg.type === MSG.members) {
-      const reply = (p: object) => post({ type: MSG.membersResult, id: msg.id, ...p });
-      if (!members) return reply({ ok: false, error: "this view has no workspace" });
-      try { reply({ ok: true, result: await members() }); } catch (e) { reply({ ok: false, error: said(e).slice(0, 300) }); }
+    if (msg.type === MSG.data) {
+      const reply = (p: object) => post({ type: MSG.dataResult, id: msg.id, ...p });
+      if (!appData) return reply({ ok: false, error: "this view has no workspace" });
+      const op = msg as { op?: unknown; key?: unknown; who?: unknown };
+      // The host's own call; an app has list, get, put and delete, and people and who below.
+      if (op.op === "versions") return reply({ ok: false, error: "unknown op" });
+      if (op.op === "people") {
+        if (!people) return reply({ ok: false, error: "this view has no workspace" });
+        try { return reply({ ok: true, result: await people() }); }
+        catch (e) { return reply({ ok: false, error: said(e).slice(0, 300) }); }
+      }
+      if (op.op === "who") {
+        if (typeof op.key !== "string" || !op.key) return reply({ ok: false, error: "a key is required" });
+        try {
+          if (Date.now() - stampsAt > 2_000) {   // fresh, without touching what the change check compares
+            stamps = (((await appData(slug, { op: "versions" })) ?? {}) as Versions).who ?? {};
+            stampsAt = Date.now();
+          }
+          return reply({ ok: true, result: await stampOf(op.key) });
+        } catch (e) {
+          return reply({ ok: false, error: said(e).slice(0, 300) });
+        }
+      }
+      const shared = !op.who && typeof op.key === "string";
+      const writes = shared && (op.op === "put" || op.op === "delete");
+      if (writes) { busy++; moved++; }
+      try {
+        const result = await appData(slug, msg as Record<string, unknown>);
+        if (shared && known) {
+          const key = op.key as string;
+          const version = (result as { version?: unknown } | null)?.version;
+          if (op.op === "delete") known.keys.delete(key);
+          else if ((op.op === "put" || (op.op === "get" && result)) && typeof version === "string" && version) {
+            known.keys.set(key, version);   // what the app wrote, or has just read, is not news to it
+          }
+        }
+        if (writes) stampsAt = 0;   // who wrote it is now the viewer: the next who() looks again
+        reply({ ok: true, result });
+      } catch (e) {
+        reply({ ok: false, error: said(e).slice(0, 300),
+                status: (e as { status?: number })?.status });
+      } finally {
+        if (writes) { busy--; moved++; }
+      }
       return;
     }
 
@@ -191,11 +387,15 @@ export function attachBridge({
       if (!canWrite(scope, msg.path)) return fail("not a writable path for this app");
       if (typeof msg.content !== "string") return fail("content must be a string");
       if (overWriteLimit(msg.content)) return fail("too large");
+      busy++; moved++;
       try {
         await writeFile(msg.path, msg.content);
+        ownFiles.add(msg.path.slice(scope.length + 1));
         post({ type: MSG.writeResult, id: msg.id, ok: true });
       } catch (err) {
         fail(said(err));
+      } finally {
+        busy--; moved++;
       }
       return;
     }
@@ -228,12 +428,20 @@ export function attachBridge({
       if (m.body !== undefined && typeof m.body !== "string") return fail("body must be a string");
       try {
         const res = await fetchConnector(m.name, m.path, {
-          method, headers: relayHeaders(m.headers), body: m.body as string | undefined,
+          // which app: from the path this page was served at, never from the frame — the server checks its app.json
+          method, headers: { ...relayHeaders(m.headers), "x-cycls-app": scope.split("/")[1] }, body: m.body as string | undefined,
         });
         post({ type: MSG.fetchResult, id: msg.id, ok: true, ...res });
       } catch (err) {
         fail(said(err));
       }
+      return;
+    }
+
+    // cycls.connect(name): the host opens that connector's page, where the person connects it themselves.
+    if (msg.type === MSG.connect && typeof (msg as { name?: unknown }).name === "string" && fetchConnector
+        && /^[a-z0-9_-]{1,64}$/i.test((msg as { name: string }).name)) {
+      window.dispatchEvent(new CustomEvent(OPEN_CONNECTOR_EVENT, { detail: { name: (msg as { name: string }).name } }));
       return;
     }
 
@@ -246,14 +454,20 @@ export function attachBridge({
     // Sandboxed frames report origin "null", so identity is the window handle.
     if (!frame.contentWindow || e.source !== frame.contentWindow) return;
     if ((e.data as { type?: string })?.type === MSG.ready) {
+      // The same document announcing again before it heard back: it will hear the first answer.
+      // A second channel used to replace the one it took, and every reply went where nobody listened.
+      const doc = (e.data as { doc?: unknown }).doc;
+      if (doc && doc === answered && port) return;
+      answered = doc;
+      listening = false;   // a new document: it has to ask again
       const ch = new MessageChannel();
       port = ch.port1;
       // A frame busy loading a big bundle announces itself more than once and keeps the FIRST port it is
       // handed: the port it talks on (it says `cycls:linked` at once) is the one answered and pushed down.
       ch.port1.onmessage = (ev) => { port = ch.port1; void handle(ev.data); };
-      frame.contentWindow.postMessage(
-        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...(typeof context === "function" ? context() : context) },
-        "*", [ch.port2]);
+      frame.contentWindow.postMessage(   // the mode now, not when the bridge attached: a reload after a switch
+        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile,
+          ...(typeof context === "function" ? context() : context), theme }, "*", [ch.port2]);
       return;
     }
     void handle(e.data);   // a shim that ignored the port still works
@@ -261,9 +475,24 @@ export function attachBridge({
 
   window.addEventListener("message", onWindow);
   const unsubscribe = commands?.((command) => port?.postMessage({ type: MSG.command, command }));
+  window.addEventListener(APP_DATA_EVENT, onAgent);
+  window.addEventListener(TURN_END_EVENT, onTurnEnd);
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisibility);
+  if (appData) void check("turn");   // the first look: what a later change is measured against
   return () => {
+    closed = true;
+    themeWatch?.disconnect();
+    clearInterval(tick);
+    clearTimeout(agentTimer);
+    clearTimeout(reloadTimer);
+    clearTimeout(laterTimer);
     window.removeEventListener("message", onWindow);
     unsubscribe?.();
+    window.removeEventListener(APP_DATA_EVENT, onAgent);
+    window.removeEventListener(TURN_END_EVENT, onTurnEnd);
+    window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisibility);
     port?.close();
     port = null;
   };

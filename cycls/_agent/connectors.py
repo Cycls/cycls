@@ -247,6 +247,10 @@ def gated(fn, tool, label, connector, classify=None, hard=False, allowed=False, 
                else "auto" if (ctx.auto or allowed) and not hard and not risky else "asked")
         if how != "read":
             log("approval", user=ctx.user, chat_id=ctx.chat_id, tool=tool, connector=connector, how=how)
+        if how in ("approved", "auto"):
+            from . import activity
+            try: await activity.acted(ctx, tool, connector, how)
+            except Exception as e: log("warn", message=f"connector action not in the audit log: {e}")
         if how != "asked":
             return await fn(inp, ctx)
         from .tools import tool_step   # the tools module imports this one
@@ -343,6 +347,14 @@ RELAY_HEADERS = ("content-type", "accept")   # the app sets these; Authorization
 RELAY_MAX_BYTES = 5_000_000
 
 
+def reads(o, method, path):
+    """Whether an app that only reads this connector may make this call: a GET, or a POST to a path the connector's
+    code names as a read (`app_reads`, e.g. PostHog's query endpoint, which takes its HogQL in the body)."""
+    import fnmatch
+    m = str(method or "GET").upper()
+    return m == "GET" or (m == "POST" and any(fnmatch.fnmatchcase(str(path).lstrip("/"), p) for p in o.app_reads))
+
+
 async def relay(o, ws, path, *, method="GET", headers=None, body=None, timeout=30.0):
     """One call from an app to a connector's REST API. The grant is resolved here, per call, so a
     refreshed token is inherited and the page never holds one; `api` bounds the host."""
@@ -419,7 +431,7 @@ class Connector:
 
     def __init__(self, name, *, scope="user", description=None, icon=None, prompts=(), developer=None, category=None,
                  website=None, title=None, about=None, use_cases=(), skills=(), privacy=None, terms=None, docs=None,
-                 api=None, api_headers=None, relay=True, auth="bearer", auth_name=None):
+                 api=None, api_headers=None, relay=True, auth="bearer", auth_name=None, app_reads=()):
         if scope not in ("user", "workspace", "either"):
             raise ValueError(f'scope must be "user", "workspace" or "either"; got {scope!r}')
         if auth not in self.AUTH:
@@ -431,6 +443,7 @@ class Connector:
         self.relay = relay   # False for a fixed app whose console we would rather not touch — it keeps its own callback
         self.api = str(api).rstrip("/") if api else None   # REST base an app may reach through the relay
         self.api_headers = dict(api_headers or {})          # fixed headers that base requires, e.g. Notion-Version
+        self.app_reads = [str(p).lstrip("/") for p in app_reads]   # POST paths that only read (a query in a body), globs: reads()
         self.name, self.scope = name, scope
         self.description, self.icon, self.prompts = description, icon, list(prompts)   # the directory card and detail page
         self.developer, self.category, self.website = developer, category, website

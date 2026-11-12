@@ -59,6 +59,7 @@ cycls/
 └── _agent/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
+    ├── activity.py         # who made and changed each file (.files), people's faces, an org's audit log (docs/rfc-file-metadata.md)
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
@@ -79,6 +80,7 @@ cycls/
     ├── office/             # Cycls Sheets / Cycls Docs: thin client to the cycls-office service (its own repo; Univer engine), org gating (SHEETS_ORGS/DOCS_ORGS), the agent's `sheets` tool (sheets.py: read / edit / create, live replay via sheets_command) and `docs` tool (docs.py); guard.py keeps bash off their files; docs/notes/office.md
     ├── paths.py            # a path a tool was given, kept inside the workspace
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design and Video are imported from their packages; ondemand.py swaps a tool's whole form in on first use
+    │   └── agent.py        # the `agent` tool: agents a run hands work to, in the background; their reports wake the parent (docs/rfc-subagents.md)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
@@ -165,6 +167,8 @@ tests/
 │   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
+│   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once, file holds, cost
+│   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding

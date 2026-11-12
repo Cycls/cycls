@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } fro
 import type { OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { useEscape } from "../hooks/use-escape";
 import { track } from "../lib/analytics";
+import { viewer, workspacePeople } from "../lib/people";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
 import { Icon } from "./icon";
@@ -27,13 +28,13 @@ import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from ".
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
 import { appThemeContext, subscribeAppTheme } from "../lib/app-theme";
-import { attachBridge, appScope, viewer } from "./app-bridge";
+import { attachBridge, appScope } from "./app-bridge";
 import { injectShim } from "./app-shim";
 import { SaveDialog } from "./save-dialog";
 import type { AppInfo } from "../hooks/use-apps";
 import { usePaneWidth } from "../hooks/use-pane-width";
 import { slide, cn } from "../lib/utils";
-import { t, getLang } from "../lib/i18n";
+import { t, tn, getLang } from "../lib/i18n";
 
 // Renderer choice comes from the PATH, never the display name: an app's tab
 // is titled by its manifest ("Sales Portfolio"), which has no extension, and
@@ -172,34 +173,26 @@ function HtmlDoc({ file, content, shared, readFile, writeFile, listFolders, fetc
         : undefined,
       fetchConnector: shared ? undefined : fetchConnector,
       appData: shared ? undefined : appData,
-      members: shared ? undefined : () => viewer.members?.() ?? Promise.resolve([]),
-      // Everything an app is told about the host is listed here, and nothing else reaches it.
+      // Who is using it: nobody, on a shared link.
+      people: shared ? undefined : workspacePeople,
+      // Everything an app is told about the host is listed here, and nothing else reaches it; read at each handshake.
       context: () => ({
         // Dark mode lives on document.body (lib/utils applyTheme), not <html>.
         theme: hostMode(),
         locale: document.documentElement.lang || "en",
-        role: viewer.role,      // "admin" | "member": what the viewer may do
-        user: shared ? undefined : viewer.user,   // {id, name, image}: the id their cycls.me / cycls.users rows carry
+        user: shared ? null : viewer(),
         ...appThemeContext(),   // the workspace's app theme, when one is set (lib/app-theme)
       }),
-      // A theme an admin saves, the host flipping light/dark or its language, and the agent writing one of
-      // this app's rows (`app_data`, chat.tsx) reach the open app in place.
+      // The app theme an admin saves and the host's language reach the open app in place (light/dark is
+      // the bridge's own cycls:theme, a data change its cycls:changed).
       commands: (send) => {
-        const push = () => send({ type: "theme", theme: hostMode(), tokens: appThemeContext().tokens ?? null });
-        const off = subscribeAppTheme(push);
-        let mode = hostMode(), lang = document.documentElement.lang;
-        const watch = new MutationObserver(() => { if (hostMode() !== mode) { mode = hostMode(); push(); } });
-        watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        const off = subscribeAppTheme(() => send({ type: "theme", tokens: appThemeContext().tokens ?? null }));
+        let lang = document.documentElement.lang;
         const langs = new MutationObserver(() => {
           if (document.documentElement.lang !== lang) { lang = document.documentElement.lang; send({ type: "context", locale: lang || "en" }); }
         });
         langs.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
-        const onData = (e: Event) => {
-          const d = (e as CustomEvent).detail;
-          if (d?.slug === appScope(file.path)?.split("/")[1]) send({ type: "data_changed", key: d.key });
-        };
-        window.addEventListener("cycls:app-data", onData);
-        return () => { off(); watch.disconnect(); langs.disconnect(); window.removeEventListener("cycls:app-data", onData); };
+        return () => { off(); langs.disconnect(); };
       },
     });
   }, [file.path, readForApp, writeFile, shared, canSave, isApp, appData]);
@@ -293,11 +286,11 @@ const pageQuery = (page?: string) => (page ? `&page=${encodeURIComponent(page)}`
 export function designKind(manifest: string | null): { label: string; several: boolean } | null {
   const deck = manifest ? parseDeck(manifest) : null;
   if (!deck?.count) return null;
-  const n = deck.count, many = (one: "onePage" | "oneSlide", more: "nPages" | "nSlides") => (n === 1 ? t(one) : t(more).replace("{n}", String(n)));
-  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("onePage", "nPages")}`
-    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${t("nPages").replace("{n}", String(deck.pages!.length))}`
-    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("oneSlide", "nSlides")}`
-    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("oneSlide", "nSlides")}`
+  const n = deck.count, many = (what: "pages" | "slides") => tn(what, n);
+  const label = deck.kind === "document" ? `${t("kindDocument")} · ${many("pages")}`
+    : (deck.pages?.length ?? 0) > 1 ? `${t("kindDesign")} · ${tn("pages", deck.pages!.length)}`
+    : deck.kind === "carousel" || (n > 1 && deck.kind === "post") ? `${t("kindCarousel")} · ${many("slides")}`
+    : deck.kind === "deck" || n > 1 ? `${t("kindDeck")} · ${many("slides")}`
     : t("kindPost");
   return { label, several: n > 1 || deck.kind === "deck" || deck.kind === "document" };
 }
@@ -366,7 +359,7 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
   const picture = useRef<HTMLImageElement>(null);
   const names = useMemo(() => [name ?? ""], [name]);
   const stem = file.name.replace(/\.fig$/i, "") + (page ? `-${page}` : "");
-  const save = (as: "png" | "pdf") => openFile?.(`${file.path}?as=${as}${pageQuery(page)}`).then((url) => saveBlob(url, `${stem}.${as}`)).catch(() => {});
+  const save = (as: "png" | "pdf") => openFile?.(`${file.path}?as=${as}${pageQuery(page)}&download=1`).then((url) => saveBlob(url, `${stem}.${as}`)).catch(() => {});
   const pill = "cursor-pointer rounded-full border border-border bg-background/90 px-4 py-2 text-xs font-medium text-foreground shadow-lg backdrop-blur transition-colors hover:bg-secondary";
   return (
     <div className="relative flex h-full items-center justify-center overflow-auto bg-secondary/40 p-4">
@@ -379,7 +372,7 @@ function DesignPicture({ file, src, openFile, page, size, name, pages, onPage }:
         <div className="absolute bottom-4 end-4 flex gap-2">
           <button onClick={() => save("png")} className={pill}>{t("downloadImage")}</button>
           <button onClick={() => save("pdf")} className={pill}>{t("downloadPdf")}</button>
-          <button onClick={() => openFile(file.path).then((url) => saveBlob(url, `${stem}.fig`)).catch(() => {})} className={pill}>{t("downloadFig")}</button>
+          <button onClick={() => openFile(`${file.path}?download=1`).then((url) => saveBlob(url, `${stem}.fig`)).catch(() => {})} className={pill}>{t("downloadFig")}</button>
         </div>
       )}
     </div>
@@ -1143,13 +1136,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     return () => window.removeEventListener("cycls:design-command", onCommand);
   }, [previewing, file.path, loadPreview]);
 
-  const download = () => openFile(file.path).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
+  const download = () => openFile(`${file.path}?download=1`).then((url) => saveBlob(url, file.path.split('/').pop() || file.name)).catch(() => {});
   // Rendered from the saved file by the design service, so the editor flushes first.
   const downloadDesignAs = async (as: "png" | "pdf" | "pptx" | "images") => {
     await flushDesignEditor(file.path, 3000);
     track("design_exported", { format: as, files: 1 });
     const page = previewing ? previewPage.current : designPage(file.path);
-    openFile(`${file.path}?as=${as}${pageQuery(page)}`)
+    openFile(`${file.path}?as=${as}${pageQuery(page)}&download=1`)
       .then((url) => saveBlob(url, `${shownName(file.path.split("/").pop() || file.name)}${page ? `-${page}` : ""}.${as === "images" ? "zip" : as}`)).catch(() => {});
   };
   const reloadFile = useCallback(() => openFile(file.path), [openFile, file.path]);

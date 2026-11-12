@@ -14,12 +14,30 @@ export interface FileEntry {
   // Render class decided server-side, so web and mobile agree on what can be
   // previewed. Absent from servers older than the change — callers fall back.
   kind?: string;
+  created?: FileChange;
+  edited?: FileChange;
+}
+
+// A change to a file: the person it was for, and the agent and chat when an agent made it for them.
+export interface FileChange {
+  by: { id: string; name?: string; image?: string; you?: boolean };
+  at: string;
+  agent?: string;
+  chat?: { id: string; title?: string };
+  action?: "created" | "edited" | "uploaded" | "renamed" | "moved" | "restored" | "app_data";
+  from?: string;
+}
+
+export interface FileInfo {
+  created?: FileChange;
+  edited?: FileChange;
+  activity: FileChange[];
 }
 
 // Same predicate the server applies, for servers that don't apply it yet.
 // NFC because a browser-typed query and a name off the mount can differ in
 // normal form and never compare equal — routine with Arabic.
-const fold = (s: string) => s.normalize("NFC").toLowerCase();
+export const fold = (s: string) => s.normalize("NFC").toLowerCase();
 export const matchTokens = (path: string, tokens: string[]) =>
   tokens.every((t) => fold(path).includes(t));
 
@@ -233,6 +251,11 @@ export function useFiles(baseUrl: string = "") {
   // is an answer the app renders, not a toast over someone's dashboard.
   const appData = useCallback(async (slug: string, op: Record<string, unknown>) => {
     const kind = String(op.op || "get");
+    if (kind === "versions" || kind === "connectors") {   // the change check (versions, no values); what it may reach
+      const res = await fetch(`${baseUrl}/apps/${slug}/${kind}`, { headers: await authHeaders() });
+      if (!res.ok) throw Object.assign(new Error(String(res.status)), { status: res.status });
+      return res.json();
+    }
     const q = new URLSearchParams();
     if (op.who) q.set("who", String(op.who));
     if (kind === "list" && op.prefix) q.set("prefix", String(op.prefix));
@@ -440,6 +463,13 @@ export function useFiles(baseUrl: string = "") {
     }
   }, [api]);
 
+  // The signed-in person's name and picture, for the faces on what they change.
+  const putMe = useCallback((name?: string | null, image?: string) =>
+    api("/people/me", { method: "PUT", json: { name, image }, silent: true }).catch(() => {}), [api]);
+
+  const fileInfo = useCallback(async (filePath: string) =>
+    (await (await api(`/files-info/${encPath(filePath)}`, { silent: true })).json()) as FileInfo, [api]);
+
   // All folders in the workspace — backs the "Move to…" destination picker.
   const listFolders = useCallback(async () => {
     try {
@@ -473,7 +503,7 @@ export function useFiles(baseUrl: string = "") {
     makeLink: async () => voteUrl(await shareFile(deck, "public")),
   }), [api, shareFile]);
 
-  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, officeEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, shareFile, pollsFor, setGetToken };
+  return { listTrash, restoreTrash, purgeTrash, emptyTrash, entries, path, loading, list, reload, upload, uploadBatch, mkdir, rename, remove, openFile, readFile, writeFile, fetchVersioned, videoEditor, officeEditor, designLive, listVersions, versionBlob, versionPreview, restoreVersion, writeNew, newDesign, exportDesign, brand, deckOp, comments, fetchConnector, appData, searchFiles, listFolders, fileInfo, putMe, shareFile, pollsFor, setGetToken };
 }
 
 // The agent writes through its sandbox, not these routes, so nothing invalidates

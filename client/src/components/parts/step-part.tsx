@@ -138,7 +138,7 @@ export const StepPart = memo(function StepPart({
               </>
             )}
             {isStreaming && !step && args && (
-              <span data-testid="step-writing"> — {t("writingInput")}{writing && <> “{writing}”</>}</span>
+              <span data-testid="step-writing"> · {t("writingInput")}{writing && <> “{writing}”</>}</span>
             )}
           </>
         ) : (

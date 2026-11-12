@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { DocsTrackedChange } from "../hooks/use-files";
-import { t } from "../lib/i18n";
+import { t, getLang } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
 // A Word document's tracked changes, under the editor's header: how many, Accept all / Reject all, and a list to
@@ -55,7 +55,7 @@ export function DocsReviewBar({ changes, busy, failed, onTake, onReveal }: {
             <li key={c.ids.join(",")} className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-background">
               <span className="size-2 shrink-0 rounded-full" style={{ background: c.color || "currentColor" }} aria-hidden="true" />
               <button type="button" onClick={() => onReveal(c)} disabled={c.start === undefined}
-                      title={[c.author, c.date ? new Date(c.date).toLocaleString() : ""].filter(Boolean).join(" · ")}
+                      title={[c.author, c.date ? new Date(c.date).toLocaleString(getLang()) : ""].filter(Boolean).join(" · ")}
                       className={cn("min-w-0 flex-1 truncate text-start", c.start !== undefined && "cursor-pointer hover:underline")} dir="auto">
                 {changeLine(c)}
                 {c.author && <span className="text-muted-foreground"> · {c.author}</span>}

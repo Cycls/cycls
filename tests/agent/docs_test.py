@@ -230,6 +230,24 @@ def test_a_picture_is_sent_from_the_workspace_and_comments_are_signed(monkeypatc
     assert sent["author"] == "Super"
 
 
+def test_comments_and_new_documents_are_signed_with_the_agent_s_own_name(monkeypatch, tmp_path):
+    """Word shows the name the chat gives the agent (Haseef), not Super: the comments panel and the file agree."""
+    _on(monkeypatch)
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"]))
+        return _applied("Comment #1 added.")
+
+    _mock(monkeypatch, handler)
+    ctx = types.SimpleNamespace(chat_id="c1", agent="Haseef")
+    asyncio.run(docs.exec_docs({"action": "edit", "path": "q3.docx",
+                                "ops": [{"op": "comment", "para": "¶3·def", "words": "Check this"}]}, _ws(tmp_path), ctx))
+    asyncio.run(docs.exec_docs({"action": "create", "path": "memo.docx", "ops": [], "content": "# Memo"}, _ws(tmp_path), ctx))
+    assert [s["author"] for s in seen] == ["Haseef", "Haseef"]
+
+
 def test_a_picture_that_is_not_there_or_not_an_image_changes_nothing(monkeypatch, tmp_path):
     _on(monkeypatch)
     (tmp_path / "q3.docx").write_bytes(DOCX)

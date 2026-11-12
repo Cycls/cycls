@@ -818,12 +818,46 @@ def test_the_api_tool_returns_the_connect_card_when_there_is_no_key(key, tmp_pat
 # The relay function is covered above; these are the route's own gates, which an
 # app reaches and the model never does.
 
-def _relay_app(tmp_path, o, captured):
-    import sys
+def _relay_app(tmp_path, o, captured, connectors=None):
+    """An app `insights` whose app.json lists the connector it reads, calling as the host does (x-cycls-app)."""
+    import json, sys
+    from pathlib import Path
     from unittest.mock import patch as _patch
     client, ws = _app(tmp_path, o)
     asyncio.run(credentials.put(ws, o.name, {"key": "phx_live"}))
+    app = Path(ws.root) / "apps" / "insights"
+    app.mkdir(parents=True, exist_ok=True)
+    (app / "app.json").write_text(json.dumps({"name": "Insights", "connectors": connectors or {o.name: "read"}}))
+    client.headers.update({"x-cycls-app": "insights"})
     return client, ws, _patch.dict(sys.modules, {"httpx2": _fake_httpx(captured)})
+
+
+def test_an_app_reaches_only_the_connectors_its_app_json_lists(key, tmp_path):
+    got = {}
+    client, ws, fake = _relay_app(tmp_path, c.Key("posthog", api="https://us.posthog.com"), got, {"github": "read"})
+    with fake:
+        assert client.get("/connectors/posthog/fetch/api/x").status_code == 403         # not listed
+        assert client.get("/connectors/posthog/fetch/api/x", headers={"x-cycls-app": ""}).status_code == 403   # no app named
+    assert not got
+
+
+def test_an_app_that_reads_makes_no_change(key, tmp_path):
+    got = {}
+    o = c.Key("posthog", api="https://us.posthog.com", app_reads=["api/projects/*/query/"])
+    client, ws, fake = _relay_app(tmp_path, o, got)
+    with fake:
+        assert client.delete("/connectors/posthog/fetch/api/projects/1/").status_code == 403
+        assert client.post("/connectors/posthog/fetch/api/projects/1/feature_flags/", json={}).status_code == 403
+        assert not got
+        assert client.post("/connectors/posthog/fetch/api/projects/1/query/", json={"query": {}}).status_code == 200   # a query
+    assert got["url"] == "https://us.posthog.com/api/projects/1/query/"
+
+
+def test_an_app_sees_what_it_may_reach_and_whether_it_is_connected(key, tmp_path):
+    client, ws, fake = _relay_app(tmp_path, c.Key("posthog", api="https://us.posthog.com"), {},
+                                  {"posthog": "read", "nothere": "read"})
+    rows = client.get("/apps/insights/connectors").json()
+    assert rows == [{"name": "posthog", "title": "posthog", "access": "read", "connected": True}]   # an unknown one is left out
 
 
 def test_the_fetch_route_carries_an_apps_call_to_the_relay(key, tmp_path):

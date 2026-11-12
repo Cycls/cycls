@@ -1114,6 +1114,30 @@ def test_context_carries_an_attached_design_selection_capped():
         assert captured["sel"] is None, bad
 
 
+def test_context_carries_the_agent_s_name_as_the_chat_shows_it():
+    """What the agent signs a Word comment with: the brand's English name, else the agent's own; a rename by the
+    CMS is seen on the next turn."""
+    from fastapi.testclient import TestClient
+    from cycls._agent.web.server import PassMetadata
+
+    captured = {}
+    async def handler(context):
+        captured["name"] = context.agent_name
+        yield "ok"
+
+    hi = {"messages": [{"role": "user", "content": "hi"}]}
+    config = Config(public_path=THEME_PATH, auth=False, name="haseef-dev",
+                    pass_metadata={"en": PassMetadata(name="Haseef"), "ar": PassMetadata(name="حصيف")})
+    client = TestClient(web(handler, config))
+    client.post("/", json=hi)
+    assert captured["name"] == "Haseef"
+    config.pass_metadata = {"en": PassMetadata(name="Haseef  Pro ")}
+    client.post("/", json=hi)
+    assert captured["name"] == "Haseef Pro"
+    TestClient(web(handler, Config(public_path=THEME_PATH, auth=False, name="haseef-dev"))).post("/", json=hi)
+    assert captured["name"] == "haseef-dev"
+
+
 def test_an_attached_selection_shows_as_a_chip_not_a_line():
     from cycls._agent.web.routers import to_ui_messages
     sel = {"path": "designs/a.fig", "frame": None, "nodes": [{"name": "headline", "type": "TEXT"}]}

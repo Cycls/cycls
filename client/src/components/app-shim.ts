@@ -2,6 +2,11 @@
 // instead of hand-rolling postMessage. `get`/`set` are the workspace's shelf in
 // the object store, one row per key; `cycls.me` is the viewer's own and
 // `cycls.users` is everyone's, which the server allows admins only.
+// `cycls.onChange` is how an app hears that its data changed under it (the agent,
+// a teammate, another tab); an app with no listener is reloaded by the host instead.
+// `cycls.ctx.user` is who is viewing, `cycls.people()` the workspace's members and
+// `cycls.who(key)` who last changed a shared key: the server stamps every write
+// from the sign-in, so what an app is told there is not the app's to make up.
 
 const SHIM = `<script>(function(){
   // A sandboxed frame has an opaque origin, so even READING window.localStorage
@@ -26,6 +31,10 @@ const SHIM = `<script>(function(){
   }
 
   var seq = 0, waiting = new Map(), ctx = null, resolveReady, tries = 0, link = null;
+  // Names this document in every announcement, so the host answers it once. A busy frame (a big
+  // bundle running) could announce twice before it heard back; the host opened a second channel,
+  // answered on it, and this document, listening on the first, waited for its data forever.
+  var doc = Math.random().toString(36).slice(2) + Date.now().toString(36);
   var ready = new Promise(function(r){ resolveReady = r; });
 
   function send(msg){ if (link) link.postMessage(msg); else parent.postMessage(msg, '*'); }
@@ -49,12 +58,6 @@ const SHIM = `<script>(function(){
     return out.length ? sel + '{' + out.join(';') + '}' : '';
   }
   function own(){ var off = document.querySelector('meta[name="cycls-theme"]'); return !!off && off.getAttribute('content') === 'off'; }
-  // The host's light/dark on this document too — shadcn's .dark and the kit's data-theme — so it follows live.
-  function mode(t){
-    if ((t !== 'dark' && t !== 'light') || own()) return;
-    document.documentElement.classList.toggle('dark', t === 'dark');
-    document.documentElement.setAttribute('data-theme', t);
-  }
   function wear(tokens){
     try {
       if (own()) return;
@@ -67,20 +70,18 @@ const SHIM = `<script>(function(){
     } catch (e) {}
   }
 
-  // Commands the host pushes — a theme change today; the same channel and names as the extensions
-  // branch's cycls:command / onCommand. Held until the app registers a handler, so one sent while it
-  // boots isn't lost.
+  // Commands the host pushes — the workspace's app theme (tokens; light/dark is cycls:theme) and its language; the
+  // same channel and names as the extensions branch's cycls:command / onCommand. Held until the app registers a
+  // handler, so one sent while it boots isn't lost.
   var commandHandlers = [], commandBacklog = [];
   function command(c){
     if (!c || typeof c !== 'object') return;
     if (c.type === 'theme') {
       if (ctx) { if (c.theme) ctx.theme = c.theme; ctx.tokens = c.tokens || null; }
       wear(c.tokens);
-      mode(c.theme);
     }
     // The host's language changed: start again in it (writes landed first); the handshake carries the new one.
     if (c.type === 'context' && ctx && c.locale && c.locale !== ctx.locale) { flush().then(function(){ location.reload(); }); return; }
-    if (c.type === 'data_changed') kv = null;   // the agent wrote a row: the next get() reads the shelf again
     if (!commandHandlers.length) { if (commandBacklog.length < 50) commandBacklog.push(c); return; }
     commandHandlers.slice().forEach(function(fn){ try { fn(c); } catch (e) { report(e && e.message || e); } });
   }
@@ -89,22 +90,32 @@ const SHIM = `<script>(function(){
     m = m || {};
     if (m.type === 'cycls:init' && !ctx) {
       ctx = { path: m.path, scope: m.scope, theme: m.theme, locale: m.locale, canWrite: !!m.canWrite,
-              tokens: m.tokens || null, role: m.role, user: m.user || null };
+              tokens: m.tokens || null, user: m.user && typeof m.user === 'object' ? m.user : null };
       api.ctx = ctx;
       if (m.tokens) wear(m.tokens);
-      mode(m.theme);
+      applyTheme(m.theme);
       resolveReady(ctx);
       return;
     }
     if (m.type === 'cycls:command') { command(m.command); return; }
+    if (m.type === 'cycls:changed') { changed(m); return; }
+    if (m.type === 'cycls:theme') {
+      if (m.theme !== 'dark' && m.theme !== 'light') return;
+      if (ctx) ctx.theme = m.theme;
+      applyTheme(m.theme);
+      themeListeners.slice().forEach(function(fn){
+        try { fn(m.theme); } catch (e) { report((e && e.message) || e); }
+      });
+      return;
+    }
     if (m.type !== 'cycls:read:result' && m.type !== 'cycls:write:result'
         && m.type !== 'cycls:save:result' && m.type !== 'cycls:fetch:result'
-        && m.type !== 'cycls:data:result' && m.type !== 'cycls:members:result') return;
+        && m.type !== 'cycls:data:result') return;
     var p = waiting.get(m.id);
     if (!p) return;
     waiting.delete(m.id);
     if (!m.ok) { var err = new Error(m.error || 'failed'); err.status = m.status; return p.rej(err); }
-    p.res(m.type === 'cycls:data:result' || m.type === 'cycls:members:result' ? m.result
+    p.res(m.type === 'cycls:data:result' ? m.result
         : m.type === 'cycls:read:result' ? m.content
         : m.type === 'cycls:save:result' ? m.path
         : m.type === 'cycls:fetch:result' ? { status: m.status, body: m.body, contentType: m.contentType }
@@ -134,8 +145,46 @@ const SHIM = `<script>(function(){
   // guarantees it.
   (function announce(){
     if (ctx || tries++ > 40) return;
-    parent.postMessage({ type: 'cycls:ready' }, '*');
+    parent.postMessage({ type: 'cycls:ready', doc: doc }, '*');
     setTimeout(announce, 50);
+  })();
+
+  // The frame is sandboxed without allow-forms, so the browser blocks a form's submission before
+  // the submit event fires: every <form onSubmit> (react-hook-form, each shadcn form) did nothing.
+  // A submit button's click, Enter in a field and requestSubmit() fire the submit event here instead,
+  // after the form's own validation; the blocked native submission is cancelled.
+  if (window.HTMLFormElement && window.document) (function(){
+    function fire(form, submitter){
+      if (!form.noValidate && !(submitter && submitter.formNoValidate) && form.reportValidity && !form.reportValidity()) return;
+      var ev;
+      try { ev = new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: submitter || null }); }
+      catch (e) { ev = new Event('submit', { bubbles: true, cancelable: true }); }
+      form.dispatchEvent(ev);
+    }
+    function submitter(t){
+      var b = t && t.closest ? t.closest('button, input[type=submit], input[type=image]') : null;
+      if (!b || !b.form || b.disabled) return null;
+      return (b.tagName === 'BUTTON' && b.type !== 'submit') ? null : b;
+    }
+    var NOT_TEXT = ['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'color', 'range'];
+    // Bubble phase on the window: after the app's own handlers, so one that prevented it wins.
+    addEventListener('click', function(e){
+      if (e.defaultPrevented) return;
+      var b = submitter(e.target);
+      if (!b) return;
+      e.preventDefault();
+      fire(b.form, b);
+    });
+    addEventListener('keydown', function(e){
+      var t = e.target;
+      if (e.defaultPrevented || e.key !== 'Enter' || e.isComposing || !t || t.tagName !== 'INPUT' || !t.form) return;
+      if (NOT_TEXT.indexOf(String(t.type || 'text').toLowerCase()) >= 0) return;
+      e.preventDefault();
+      var b = t.form.querySelector('button:not([type]), button[type=submit], input[type=submit], input[type=image]');
+      if (b && b.disabled) return;
+      fire(t.form, b);
+    });
+    window.HTMLFormElement.prototype.requestSubmit = function(by){ fire(this, by || null); };
   })();
 
   function resolve(p){
@@ -165,24 +214,83 @@ const SHIM = `<script>(function(){
     };
   }
 
-  var kv = null, loading = null, flying = {}, clipped = false;
+  var kv = null, loading = null, flying = {}, clipped = false, stale = false;
+  function text(v){ try { return JSON.stringify(v); } catch (e) { return undefined; } }
+  // What this viewer wrote, by key: newer than any listing the host has looked at, so who() says "you"
+  // at once. A change from anyone else, told by the host, clears it.
+  var ownWho = {};
+  function wrote(k, gone){
+    if (gone || !ctx || !ctx.user) delete ownWho[k];
+    else ownWho[k] = { by: Object.assign({ you: true }, ctx.user), at: new Date().toISOString() };
+  }
 
   // Concurrent callers share one list, or a later one would clobber the
-  // mutations an earlier set() already made.
+  // mutations an earlier set() already made. A stale copy (something changed
+  // and it was not one key) is listed again on the next read.
   function load(){
-    if (kv) return Promise.resolve(kv);
+    if (kv && !stale) return Promise.resolve(kv);
     if (!loading) loading = (async function(){
-      var next = {};
+      var next = {}, sending = Object.keys(flying);
       try {
         var page = await data({ op: 'list' }) || {};
         (page.rows || []).forEach(function(r){ next[r.key] = r.value; });
         clipped = !!page.truncated;
-      } catch (e) {}
+      } catch (e) {
+        if (kv) { stale = false; loading = null; return kv; }   // a failed refresh keeps what it had
+      }
+      // A value of its own still on its way is newer than what the list saw.
+      if (kv) sending.concat(Object.keys(flying)).forEach(function(k){
+        if (Object.prototype.hasOwnProperty.call(kv, k)) next[k] = kv[k]; else delete next[k];
+      });
       kv = next;
+      stale = false;
       loading = null;
       return kv;
     })();
     return loading;
+  }
+
+  // The host says the data changed. Named keys are read again one by one (a value of
+  // the app's own on its way wins); anything wider re-lists. Then the listeners hear.
+  var listeners = [], listened = false;
+
+  // The app follows the chat's light or dark mode: the "dark" class on <html>, which is what Tailwind's
+  // class-based dark mode and the kit's theme read, set at init and on every switch. An app that needs the
+  // mode in code (a chart's colours) also gets cycls.onTheme.
+  var themeListeners = [];
+  function applyTheme(t){
+    if (t !== 'dark' && t !== 'light') return;
+    try { document.documentElement.classList.toggle('dark', t === 'dark'); } catch (e) {}
+  }
+  function changed(m){
+    var keys = Array.isArray(m.keys) ? m.keys.map(String) : null;
+    if (keys) keys.forEach(function(k){ delete ownWho[k]; }); else ownWho = {};
+    var work;
+    if (!kv) work = Promise.resolve();   // nothing read yet: the first get() reads it fresh
+    else if (keys && keys.length <= 20) work = Promise.all(keys.map(function(k){
+      return data({ op: 'get', key: k }).then(function(r){
+        if (flying[k]) return;
+        if (r) kv[k] = r.value; else delete kv[k];
+      });
+    })).catch(function(){ stale = true; });
+    else { stale = true; work = load(); }
+    return work.then(function(){
+      var ev = { source: String(m.source || 'poll') };
+      if (keys) ev.keys = keys;
+      if (Array.isArray(m.files)) ev.files = m.files.map(String);
+      if (m.who && typeof m.who === 'object') ev.who = m.who;
+      listeners.slice().forEach(function(fn){
+        try { fn(ev); } catch (e) { report((e && e.message) || e); }
+      });
+    });
+  }
+
+  function onChange(fn){
+    if (typeof fn !== 'function') throw new Error('cycls.onChange needs a function');
+    listeners.push(fn);
+    // Once per document, after the handshake so it rides the private port.
+    if (!listened) { listened = true; ready.then(function(){ send({ type: 'cycls:listen' }); }); }
+    return function(){ var i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); };
   }
 
   // A set() leaves at once. A WebView that closes or goes to the background runs no timer, and a frame
@@ -196,9 +304,9 @@ const SHIM = `<script>(function(){
     f.done = (async function(){
       do {
         f.again = false;
-        await (Object.prototype.hasOwnProperty.call(kv, k)
-          ? data({ op: 'put', key: k, value: kv[k] })
-          : data({ op: 'delete', key: k }));
+        var there = Object.prototype.hasOwnProperty.call(kv, k);
+        await (there ? data({ op: 'put', key: k, value: kv[k] }) : data({ op: 'delete', key: k }));
+        wrote(k, !there);
       } while (f.again);
     })().finally(function(){ delete flying[k]; });
     f.done.catch(function(){});   // a set() nobody awaits must not warn
@@ -240,9 +348,16 @@ const SHIM = `<script>(function(){
     update: async function(key, fn){
       for (var i = 0; i < 5; i++) {
         var cur = await data({ op: 'get', key: String(key) });
+        // Taken before fn runs: an app often changes the value it is handed in place and returns it.
+        var before = cur ? text(cur.value) : null;
         var next = await fn(cur ? cur.value : undefined);
+        // Nothing changed, nothing written. A write that changes nothing still moves the version: every open
+        // copy would read it again, and who changed it last would become this viewer (an app that fills in
+        // missing seed rows on every open did exactly that).
+        if (before !== null && before === text(next)) { if (kv) kv[key] = next; return next; }
         try {
           await data({ op: 'put', key: String(key), value: next, version: cur ? cur.version : '' });
+          wrote(String(key));
           if (kv) kv[key] = next;
           return next;
         } catch (e) {
@@ -251,6 +366,11 @@ const SHIM = `<script>(function(){
       }
       throw new Error('cycls.update: gave up after 5 tries on ' + key);
     },
+    // The connectors this app may read — what its app.json lists ("connectors": {"posthog": "read"}) — and
+    // whether each is connected for this viewer: [{name, title, access, connected}]. connect(name) opens that
+    // connector's page in the host, where the person connects it; nothing about the grant comes back.
+    connectors: function(){ return data({ op: 'connectors' }); },
+    connect: function(name){ send({ type: 'cycls:connect', name: String(name) }); },
     // A connector's own API, live. The app never holds a token: the host resolves the
     // workspace's grant per call, so a refreshed one is inherited with no change here.
     connector: function(name){
@@ -270,6 +390,37 @@ const SHIM = `<script>(function(){
       };
     },
     all: async function(){ return Object.assign({}, await load()); },
+    // fn({source, keys?, files?, who?}) after the data changed under the app: "agent", "turn", "poll"
+    // or "focus"; keys are shared keys (absent: maybe any), files are paths like "data/x.json", and
+    // who, when known, says for each key who changed it: {by: person, at, agent?}.
+    // cycls.get already answers with the new values inside it. Returns an unsubscribe.
+    onChange: onChange,
+    // Read the shared data again now, without waiting to be told.
+    refresh: function(){ stale = true; return load().then(function(){}); },
+    // The workspace's members: [{id, name, image, role, you}], image a data: URL. Store ids, not names:
+    // a name changes, and this resolves an id to the person as they are now.
+    people: function(){ return data({ op: 'people' }); },
+    // Who last changed a shared key, and when: {by: person, at, agent?} (agent: their agent did it for
+    // them), or null for a key written before this was kept.
+    who: async function(key){
+      key = String(key);
+      if (flying[key]) await flying[key].done.catch(function(){});
+      var mine = ownWho[key], theirs = await data({ op: 'who', key: key });
+      if (!mine) return theirs;
+      // Someone wrote after this viewer (their change also clears what this viewer wrote when the host tells it).
+      if (theirs && theirs.at && Date.parse(theirs.at) > Date.parse(mine.at) + 1000) return theirs;
+      // The host's look may predate this write, an earlier one of the viewer's own included: the time is mine,
+      // the person the host's when it is the same one, since it has the picture.
+      var same = theirs && theirs.by && theirs.by.id === mine.by.id;
+      return { by: same ? Object.assign({}, theirs.by, { you: true }) : mine.by, at: mine.at };
+    },
+    // fn("light" | "dark") when the chat switches mode; the "dark" class on <html> is already set. Returns an
+    // unsubscribe.
+    onTheme: function(fn){
+      if (typeof fn !== 'function') throw new Error('cycls.onTheme needs a function');
+      themeListeners.push(fn);
+      return function(){ var i = themeListeners.indexOf(fn); if (i >= 0) themeListeners.splice(i, 1); };
+    },
     // This viewer's own rows — nobody else's, and no id to get wrong.
     me: shelf('me'),
     // Every member's, for an admin. It rejects for anyone else, which is both the
@@ -286,11 +437,8 @@ const SHIM = `<script>(function(){
       remove: function(user, key){ return data({ op: 'delete', key: String(key), who: String(user) }); }
     },
     keys: async function(){ return Object.keys(await load()); },
-    // The workspace's people as the viewer sees them in Settings: [{id, name, role}], never an email. The id is
-    // the one cycls.users rows carry. Rejects in a shared view.
-    members: async function(){ await ready; return call('cycls:members', {}); },
-    // What the host pushes: {type: "theme", theme, tokens} when the workspace's app theme or the
-    // host's light/dark changes (the shim has already applied the tokens). Returns an unsubscribe.
+    // What the host pushes: {type: "theme", tokens} when the workspace's app theme changes (the shim has
+    // already applied the tokens), {type: "context", locale} before a reload in a new language. Returns an unsubscribe.
     onCommand: function(fn){
       if (typeof fn !== 'function') throw new Error('cycls.onCommand needs a function');
       commandHandlers.push(fn);

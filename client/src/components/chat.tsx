@@ -1,16 +1,18 @@
 import type { PollApi } from "../lib/polls";
+import { setAgentLabel } from "./file-details";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
-import { useState, useRef, useEffect, useCallback, useMemo, useId } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
+import { APP_DATA_EVENT, OPEN_CONNECTOR_EVENT, TURN_END_EVENT, appScope } from "./app-bridge";
 import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
-import { setViewer } from "./app-bridge";
 import { TrashView, type TrashRow } from "./trash-view";
 import { setAppTheme, normalize as normalizeAppTheme } from "../lib/app-theme";
+import { SearchDialog } from "./search-dialog";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, Spinner, type IconName } from "./icon";
@@ -30,7 +32,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
 import type { Attachment, ChatApi, AppConfig, SendExtra, Part, Connection } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
-import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
@@ -120,6 +122,8 @@ export interface FilesPanelProps {
   appData?: (slug: string, op: Record<string, unknown>) => Promise<unknown>;
   searchFiles: (query: string) => Promise<{ name: string; path: string }[]>;
   listFolders: () => Promise<{ name: string; path: string }[]>;
+  fileInfo?: (path: string) => Promise<FileInfo>;
+  onOpenChat?: (id: string) => void;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   shareLinks?: ShareLinks;   // what's already shared, for the Share popover
   onOpenInCanvas?: (path: string, name: string) => void;
@@ -161,6 +165,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const meta = _active
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
+  setAgentLabel((id) => (id === name && meta?.name) || id.charAt(0).toUpperCase() + id.slice(1));
   const inputPlaceholder = meta
     ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
     : undefined;
@@ -246,8 +251,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { setConnect(null); loadConnectors(); }
     };
     window.addEventListener("message", done);
-    return () => window.removeEventListener("message", done);
-  }, [loadConnectors]);
+    // An app's cycls.connect(name) (app-bridge): its page, where the person connects it themselves.
+    const fromApp = (e: Event) => openConnectors("app", (e as CustomEvent<{ name: string }>).detail?.name);
+    window.addEventListener(OPEN_CONNECTOR_EVENT, fromApp);
+    return () => { window.removeEventListener("message", done); window.removeEventListener(OPEN_CONNECTOR_EVENT, fromApp); };
+  }, [loadConnectors]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Typing takes over: the moment the user starts composing, the agent's
   // chip and card yield — their own words beat our prompts.
   const prevInputRef = useRef(input);
@@ -380,9 +388,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       icon: app.icon, iconSrc: app.iconSrc, letter: app.letter,
     });
   }, [openFileInCanvas]);
-  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, 240, 80, 0,
+  // Never narrower than its tabs and collapse, in either language: the tabs' width + collapse (32), the bar's padding (16), the border
+  const [tabsWidth, setTabsWidth] = useState(0);
+  const { width: panelWidth, startResize, resizing: railResizing } = usePaneWidth("cycls_rail_width", 320, Math.max(240, tabsWidth + 50), 80, 0,
     () => canvasShowing && setRailIcons(true), 0.5);
   const [shareOpen, setShareOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   // Survives the ChatApp remount on org/workspace switch (App keys by org), so
   // changing context inside the settings dialog doesn't close it.
   const [settingsOpen, _setSettingsOpen] = useState(() => sessionStorage.getItem("cycls_settings") === "1");
@@ -482,8 +493,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
         track("ui_action", { action: "docs_command" });
       } else if (ev.action === "app_data" && typeof ev.slug === "string") {
-        // The agent wrote an app's row (`database`): that app, if open, re-reads it (canvas.tsx).
-        window.dispatchEvent(new CustomEvent("cycls:app-data", { detail: { slug: ev.slug, key: ev.key } }));
+        // The agent changed an app's data: an app open on it reads it again now, not when it is reopened.
+        window.dispatchEvent(new CustomEvent(APP_DATA_EVENT, { detail: ev }));
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
@@ -644,6 +655,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const selection = attachedSel;
     if (selection) { extra = { ...extra, selection }; setAttachedSel(null); }
     if (files?.path) extra = { ...extra, folder: files.path };   // where a design named without a folder is saved
+    // The app open beside the chat, so "this" in the message points at it and the agent reads its data first.
+    const app = activeDesign ? appScope(activeDesign)?.split("/")[1] : undefined;
+    if (app) extra = { ...extra, app };
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -665,7 +679,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
     if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, activeDesign]);
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -711,7 +725,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       const name = path.split("/").pop() || path;
       const design = isDesignEditor(name);
       track("file_downloaded", { source: "card", ext: ext(name) });
-      openFileLoud(design ? `${path}?as=pdf` : path)
+      openFileLoud(design ? `${path}?as=pdf&download=1` : `${path}?download=1`)
         .then((url) => saveBlob(url, design ? `${shownName(name)}.pdf` : name)).catch(() => {});
     },
     share: shareFileFn ? (path: string) => setSharingFile(path) : undefined,
@@ -868,16 +882,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, [files]);
   const wsMenu = account?.workspaces;
   const canPurge = !wsMenu || !wsMenu.active || ["owner", "admin"].includes(wsMenu.active.role || "") || !!wsMenu.isOrgAdmin;
-  // What an app opened here is told (ctx.role, ctx.user, cycls.members — canvas.tsx): never an email.
-  const me = account?.user?.id ? { id: account.user.id, name: account.user.name || "", image: account.user.imageUrl } : undefined;
-  setViewer({ role: canPurge ? "admin" : "member", user: me, members: async () => {
-    const w = wsMenu?.active;
-    if (!wsMenu || w?.type !== "team") return me ? [{ id: me.id, name: me.name, role: "owner" }] : [];   // a personal space: you
-    const rows = await wsMenu.fetchMembers(w.id);
-    const people = wsMenu.orgMembers.map((m) => ({ id: m.id, name: m.name }));
-    if (w.builtin) return people.filter((p) => !rows.some((r) => r.user_id === p.id)).map((p) => ({ ...p, role: "editor" }));   // General: rows are exclusions
-    return rows.map((r) => ({ id: r.user_id, name: people.find((p) => p.id === r.user_id)?.name || "", role: r.role }));
-  } });
   const undoRef = useRef<{ id: string; kind: string; name: string; at: number }[]>([]);
   const afterRestore = useCallback((kind: string) => {
     if (kind === "chat") { if (onListChats) onListChats().then(setChats).catch(() => {}); }
@@ -981,6 +985,21 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [undoLast]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      setSearchOpen((o) => !o);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // Search finds what the sidebar lists, fresh each time it opens
+  useEffect(() => {
+    if (!searchOpen) return;
+    if (account && onListChats) onListChats().then(setChats).catch(() => {});
+    if (files) void refreshApps();
+  }, [searchOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // App identity lives in its manifest; the slug (folder) stays immutable.
   const updateApp = useCallback(async (app: AppInfo, patch: { name?: string; icon?: string }) => {
@@ -1021,9 +1040,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useEffect(() => {
     if (isStreaming) return;
     setReloadKey((k) => k + 1);
+    window.dispatchEvent(new Event(TURN_END_EVENT));   // an open app checks what the turn changed in its data
     void refreshVideoEditors();              // an open video editor, if a file tool changed its video
   }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (tabsRef.current) setTabsWidth(tabsRef.current.scrollWidth); }, [lang, filesOpen, railIconsOnly]);
   const railPx = !isDesktop || !filesOpen ? 0 : railIconsOnly ? RAIL_ICON_W : panelWidth;
   const collapseRail = () => (canvasShowing ? setRailIcons(true) : setFilesOpen(false));
   const closeRight = () => {
@@ -1188,6 +1210,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </button>
               </>
             )}
+            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} />}
             {(files || account) && (
               <button
                 onClick={() => rightOpen ? closeRight() : openRight()}
@@ -1468,6 +1491,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           </div>
         </Popover>
       )}
+      {searchOpen && (files || account) && (
+        <SearchDialog
+          chats={account ? chats : undefined}
+          apps={files ? apps : undefined}
+          searchFiles={files?.searchFiles}
+          onOpenChat={(id) => onLoadChat?.(id)}
+          onOpenFile={(path, name) => openFileInCanvas(path, name)}
+          onOpenApp={openApp}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
       {settingsOpen && account && (
         <SettingsDialog account={account} workspace={settingsWs} onClose={() => setSettingsOpen(false)}
                         onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined}
@@ -1520,7 +1554,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         />
         </CommentsContext.Provider>
       )}
-      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone */}
+      {/* Chats / Files / Apps / Shares — docked on desktop, overlay on a phone; laid out as in English in every language */}
       <AnimatePresence initial={false}>
         {filesOpen && (
           <>
@@ -1541,6 +1575,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 : { width: railIconsOnly ? RAIL_ICON_W : panelWidth }}
               exit={!isDesktop ? { x: "100%" } : { width: 0 }}
               transition={railResizing ? { duration: 0 } : slide}
+              dir="ltr"
               className={cn(
                 "flex flex-col overflow-hidden",
                 isDesktop
@@ -1577,42 +1612,44 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               ) : (files || account) && (
                 <div className="flex h-11 shrink-0 items-center border-b border-border px-2">
-                  {account && (
-                    <button
-                      onClick={() => selectTab("chats")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("chats")}
-                    </button>
-                  )}
-                  {files && (
-                    <button
-                      onClick={() => selectTab("files")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("files")}
-                    </button>
-                  )}
-                  {files && (
-                    <button
-                      onClick={() => { selectTab("apps"); void refreshApps(); }}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("apps")}
-                    </button>
-                  )}
-                  {account && (
-                    <button
-                      onClick={() => selectTab("shares")}
-                      className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                    >
-                      {t("shares")}
-                    </button>
-                  )}
+                  <div ref={tabsRef} className="flex h-full min-w-0 overflow-hidden">
+                    {account && (
+                      <button
+                        onClick={() => selectTab("chats")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "chats" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("chats")}
+                      </button>
+                    )}
+                    {files && (
+                      <button
+                        onClick={() => selectTab("files")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "files" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("files")}
+                      </button>
+                    )}
+                    {files && (
+                      <button
+                        onClick={() => { selectTab("apps"); void refreshApps(); }}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "apps" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("apps")}
+                      </button>
+                    )}
+                    {account && (
+                      <button
+                        onClick={() => selectTab("shares")}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("shares")}
+                      </button>
+                    )}
+                  </div>
                   <div className="flex-1" />
                   <button
                     onClick={collapseRail}
-                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
                     aria-label={t("collapse")}
                     title={t("collapse")}
                   >
@@ -1621,7 +1658,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles}
+                <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
                        onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
@@ -1658,16 +1695,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                             onClick={() => window.open(s.url, "_blank")}
                           >
                             <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                              <svg className="size-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                {isChat ? (
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                                ) : (
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                )}
-                              </svg>
+                              <span className="text-muted-foreground"><Icon name={isChat ? "chat" : "doc"} strokeWidth={1.5} /></span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <span dir="auto" className="text-sm text-foreground truncate block">{s.title || t("untitled")}</span>
+                              <span dir="auto" className="text-sm text-foreground truncate block text-left">{s.title || t("untitled")}</span>
                               <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
                             </div>
                             <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -1765,7 +1796,7 @@ function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: s
 }
 
 function formatShortDate(iso: string) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
 function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
@@ -1837,7 +1868,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span dir="auto" className={`text-sm text-foreground truncate block ${activeId === s.id ? "font-medium" : ""}`}
+                  <span dir="auto" className={`text-sm text-foreground truncate block text-left ${activeId === s.id ? "font-medium" : ""}`}
                         onDoubleClick={(e) => { e.stopPropagation(); setRenaming(s.id); }}>
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}

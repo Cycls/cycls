@@ -262,6 +262,11 @@ async def exec_docs(inp, workspace, ctx=None):
     if path.suffix.lower() != ".docx":
         return _err(f"{raw_path} is not a .docx file (Docs edits .docx; convert a .doc first).")
     rel = path.relative_to(root).as_posix()
+    # Who the agent's comments and new documents are by in Word: its name as the chat shows it (Haseef, Super…),
+    # the name the comments panel gives its badge.
+    from ..design import comments as _comments
+    me = _comments.author("agent", getattr(ctx, "agent", None), agent=True)
+    author = me["name"]
 
     try:
         if action == "read":
@@ -283,7 +288,7 @@ async def exec_docs(inp, workspace, ctx=None):
             create = {"content": content}
             if isinstance(inp.get("rtl"), bool):
                 create["rtl"] = inp["rtl"]
-            result = await client.docs_apply(None, path.name, ops, create=create)
+            result = await client.docs_apply(None, path.name, ops, create=create, author=author)
             await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
             try:
                 await write_fig(root, rel, result["bytes"], base="", by="agent", reason="agent", intent=inp.get("intent"))
@@ -299,8 +304,6 @@ async def exec_docs(inp, workspace, ctx=None):
             ops = await asyncio.to_thread(_with_pictures, ops, root)
         except ValueError as e:
             return _err(f"{e}. Nothing was changed.")
-        from ..design import comments as _comments
-        author = _comments.author("agent", agent=True)["name"]
         async with lock(path):   # one change at a time per file: the model calls tools in parallel
             for attempt in (1, 2):
                 data, base = await load_fig(root, rel)   # as write_fig checks it: the bucket in production
@@ -329,7 +332,7 @@ async def exec_docs(inp, workspace, ctx=None):
         try:
             read = await client.read_docx(result["bytes"], name=path.stem)
             await docs_comments.mirror_file(workspace, rel, read.get("document"), docs_comments.written_at(path),
-                                            agent=_comments.author("agent", agent=True), chat_id=getattr(ctx, "chat_id", None))
+                                            agent=me, chat_id=getattr(ctx, "chat_id", None))
         except (client.Refused, client.Unavailable) as e:
             log("warn", chat_id=getattr(ctx, "chat_id", None), message=f"docs comments not mirrored: {e}"[:300])
 

@@ -1,6 +1,6 @@
 import { LoadingBar } from "./loading-bar";
 import { Icon } from "./icon";
-import { t } from "../lib/i18n";
+import { t, timeAgo } from "../lib/i18n";
 import { tintTile, tintLabel } from "./canvas-utils";
 import { FolderIcon } from "./files";
 
@@ -17,7 +17,7 @@ export interface TrashRow {
 
 function ago(iso: string) {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  return days <= 0 ? t("today") : t("daysAgo").replace("{n}", String(days));
+  return days <= 0 ? t("today") : timeAgo(iso);
 }
 
 function Tile({ row, name }: { row: TrashRow; name: string }) {
@@ -56,7 +56,7 @@ export function TrashView({ rows, loading, canPurge, filter, onBack, onRestore, 
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
         <button onClick={onBack} className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer" aria-label={t("back")}>
-          <Icon name="chevron-left" className="size-4 rtl:rotate-180" />
+          <Icon name="chevron-left" className="size-4" />
         </button>
         <span className="text-sm font-medium">{filter === "chat" ? t("recentlyDeleted") : t("trash")}</span>
         <div className="flex-1" />
@@ -84,7 +84,7 @@ export function TrashView({ rows, loading, canPurge, filter, onBack, onRestore, 
                 <li key={r.id} className="group flex items-center gap-3 px-4 py-2.5">
                   <Tile row={r} name={name} />
                   <span className="min-w-0 flex-1">
-                    <span dir="auto" className="block truncate text-sm">{name}</span>
+                    <span dir="auto" className="block truncate text-left text-sm">{name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {ago(r.deleted_at)} · {r.by === "agent" ? t("byAgent") : t("byYou")}
                       {r.reason === "overwrite" ? ` · ${t("overwritten")}` : ""}

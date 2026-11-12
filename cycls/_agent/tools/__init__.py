@@ -2,12 +2,13 @@
 API shape (`type` / `name` / `description` / `input_schema`) and registered in
 `_BUILTINS`; `build_tools` emits them as-is. User-supplied custom tools come
 through `_normalize_tool` (accepts the camelCase `inputSchema` form too)."""
-import asyncio, base64, inspect, ipaddress, json, os, pathlib, re, socket, time, uuid
-from dataclasses import dataclass, field
+import asyncio, base64, inspect, ipaddress, json, os, pathlib, posixpath, re, socket, time, uuid
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import NamedTuple
 from . import pdf, skills
+from .agent import TOOL as _AGENT_TOOL
 from ..connectors import approval_key
 from ..logs import log
 from ..state import _exec_database, app_shelf, apps_db
@@ -130,7 +131,9 @@ _DATABASE_TOOL = {
         "file or an app's data, not your memory.\n\n"
         "Commands:\n"
         "- get:    read a value at `key`. Returns the stored JSON or 'not found'.\n"
-        "- put:    write `value` (any JSON-serializable type) at `key`.\n"
+        "- put:    write `value` (any JSON-serializable type) at `key`. On an app's key, put only what you "
+        "read with `get` (or `scan`) in this conversation, changed: it is refused if you never read the value, or "
+        "if someone changed it in the app since — then `get` it again and apply your change to what is there.\n"
         "- delete: remove `key`. Trailing slash wipes a namespace (`notes/` removes everything under it).\n"
         "- scan:   list {key, value} pairs whose key starts with `prefix`. "
         "Truncates at `limit` (default 100) so a huge prefix won't blow the context.\n\n"
@@ -139,7 +142,8 @@ _DATABASE_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "enum": ["get", "put", "delete", "scan"]},
         "key": {"type": "string", "description": "Key to operate on (get, put, delete)."},
-        "value": {"description": "Value to store (put only). Any JSON-serializable type."},
+        "value": {"description": "Value to store (put only): the JSON value itself — a list or object as it "
+                                 "is, never a string holding JSON."},
         "prefix": {"type": "string", "description": "Key prefix (scan only). Empty = all keys."},
         "limit": {"type": "integer", "description": "Max results returned by scan (default 100)."},
     }, "required": ["command"]}
@@ -262,7 +266,7 @@ _BROWSER_TOOL = {
         "page stays OPEN between calls this turn — work step by step:\n"
         "- open {url}        go to a page; or a workspace .html file by its path (e.g. deck.html), to see a page you "
         "wrote. The browser runs on another machine and gets only that file, so its images must be inlined, and "
-        "file:// or localhost addresses never reach it\n"
+        "file:// or localhost addresses never reach it. Not an app (apps/<slug>/): it runs only beside the chat\n"
         "- read              get the page text + a NUMBERED list of the "
         "clickable/typable elements\n"
         "- click {ref}       click element number `ref` from the last read\n"
@@ -311,10 +315,16 @@ _BUILD_APP_TOOL = {
         "Nothing else — you cannot add a dependency.\n"
         "In the app: `cycls.read`/`write` reach files in `data/` in its own folder, `cycls.get`/`set` "
         "a key-value store the workspace shares (you read and write it with `database` at "
-        "`apps/<slug>/<key>`), `cycls.save(name, content)` asks where to put a file anywhere, and "
+        "`apps/<slug>/<key>`), `cycls.onChange(fn)` runs when that data or those files changed under "
+        "the app (you, a teammate) so it can read them again, `cycls.ctx.user` is who is viewing "
+        "({id, name, role}), `await cycls.people()` the workspace's members with their pictures, "
+        "`await cycls.who(key)` who last changed a shared key and when (store people's ids, never their "
+        "names), `cycls.save(name, content)` asks where to put a file anywhere, and "
         "`await cycls.connector(name).json(path, init)` calls a connected connector's REST API with "
-        "the credential attached server-side — so a dashboard stays live and holds no key. Never put "
-        "an API key in app source.\n"
+        "the credential attached server-side — so a dashboard stays live and holds no key. The app's app.json "
+        "must list it, `\"connectors\": {\"<name>\": \"read\"}` (reads only), or every call is refused. Never put "
+        "an API key in app source. The app follows the chat's light or dark mode by itself (the `dark` class "
+        "on <html>, and `cycls.onTheme(fn)`): give it no theme toggle and store no theme.\n"
         "On failure the build log comes back."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -387,6 +397,7 @@ _BUILTINS = {
     "Apps":     [_BUILD_APP_TOOL],
     "Suggest":  [_SUGGEST_TOOL],
     "Ask":      [_ASK_TOOL],
+    "Agent":    [_AGENT_TOOL],
 }
 
 
@@ -639,6 +650,17 @@ async def _parsed(path, workspace, chat_id):
             f"in {kept.relative_to(workspace)}: continue with read at offset={lines + 1}, or search it with rg.]")
 
 
+async def _read_noted(inp, ws, ctx):
+    """A file read in a team workspace starts with who last edited it (activity.note)."""
+    out = await _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None))
+    if isinstance(out, str) and not out.startswith("Error") and getattr(ws, "subject", None):
+        from .. import activity
+        try: rel = _resolve_path(str(inp.get("path") or ""), ws.root).relative_to(pathlib.Path(ws.root).resolve()).as_posix()
+        except ValueError: return out
+        return await activity.note(ws, rel) + out
+    return out
+
+
 async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
@@ -809,6 +831,84 @@ def _collect_source(src_dir):
     return files
 
 
+# Fonts and images an app's source refers to. The builder takes text only, and `_collect_source` skips
+# binaries, so a font in src/ never reached the bundle: the CSS kept url(./Inter.woff2), the sandbox could not
+# load it, and every app fell back to the system font, its Arabic too. They are written into the text that
+# refers to them as data: URLs, which the CSP allows (font-src data:, img-src data:).
+_ASSET_TYPES = {".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".otf": "font/otf",
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+                ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
+                ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+                ".mp4": "video/mp4", ".webm": "video/webm"}
+_ASSET_MAX = 3_000_000   # one such file, before base64
+_SCRIPT_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+_CSS_URL = re.compile(r"""url\(\s*(['"]?)([^'")\s]+)\1\s*\)""")
+_JS_IMPORT = re.compile(r"""import\s+([A-Za-z_$][\w$]*)\s+from\s+(['"])([^'"\n]+)\2\s*;?""")
+_JS_NEW_URL = re.compile(r"""new\s+URL\(\s*(['"])([^'"\n]+)\1\s*,\s*import\.meta\.url\s*\)""")
+_HTML_ATTR = re.compile(r"""(\s(?:src|href|poster)\s*=\s*)(['"])([^'"\n]+)\2""")
+_LEFT_REF = re.compile(r"""url\(\s*['"]?((?:\.{1,2}/|/)?[\w./-]+\.(?:woff2?|ttf|otf|png|jpe?g|gif|webp|avif|ico))['"]?\s*\)""",
+                       re.IGNORECASE)
+
+
+def _inline_binaries(src_dir, files):
+    """`files` ({path: text} from `_collect_source`) with each font, image or sound in `src_dir` that a text file
+    refers to written in as a data: URL: CSS url(), `import x from "./a.png"`, `new URL("./a.png", import.meta.url)`
+    and src/href in HTML. Raises ValueError naming what is too big."""
+    src_dir = pathlib.Path(src_dir)
+    cache = {}
+
+    def data_url(ref, base):
+        if ref.startswith(("data:", "http:", "https:", "//", "#", "blob:")):
+            return None
+        clean = ref.split("?", 1)[0].split("#", 1)[0]
+        rel = posixpath.normpath(clean.lstrip("/") if clean.startswith("/")
+                                 else posixpath.join(posixpath.dirname(base), clean))
+        mime = _ASSET_TYPES.get(posixpath.splitext(rel)[1].lower())
+        if not mime or rel.startswith("../") or rel in files:
+            return None
+        if rel not in cache:
+            p = src_dir / rel
+            if not p.is_file():
+                return None
+            data = p.read_bytes()
+            if len(data) > _ASSET_MAX:
+                raise ValueError(f"{rel} is {len(data) // 1000} KB; an app can carry a file of at most "
+                                 f"{_ASSET_MAX // 1_000_000} MB")
+            cache[rel] = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+        return cache[rel]
+
+    def swap(group, render):
+        def fn(m):
+            url = data_url(m.group(group), path)
+            return render(m, url) if url else m.group(0)
+        return fn
+
+    out = {}
+    for path, text in files.items():
+        ext = posixpath.splitext(path)[1].lower()
+        if ext in (".css", ".scss", ".sass", ".less", ".html") or ext in _SCRIPT_EXTS:
+            text = _CSS_URL.sub(swap(2, lambda m, u: f'url("{u}")'), text)
+        if ext in _SCRIPT_EXTS:
+            text = _JS_IMPORT.sub(swap(3, lambda m, u: f"const {m.group(1)} = {json.dumps(u)};"), text)
+            text = _JS_NEW_URL.sub(swap(2, lambda m, u: f"new URL({json.dumps(u)})"), text)
+        if ext == ".html":
+            text = _HTML_ATTR.sub(swap(3, lambda m, u: f"{m.group(1)}{m.group(2)}{u}{m.group(2)}"), text)
+        size = len(text.encode())
+        if cache and size > _APP_SRC_MAX_FILE:
+            raise ValueError(f"{path} is {size // 1000} KB with its fonts and images written in; the limit is "
+                             f"{_APP_SRC_MAX_FILE // 1_000_000} MB per file — keep fewer font weights (woff2), "
+                             "or smaller images")
+        out[path] = text
+    if sum(len(t.encode()) for t in out.values()) > _APP_SRC_MAX_BYTES:
+        raise ValueError("source folder is too large to build with its fonts and images written in")
+    return out
+
+
+def _unresolved_assets(html):
+    """Font or image files the built page still names by path: in the sandbox they never load."""
+    return sorted({m.group(1) for m in _LEFT_REF.finditer(html)})
+
+
 _APPS_TTL = 30.0
 _apps_cache = {}   # root -> (deadline, text)
 
@@ -833,7 +933,8 @@ def app_catalog(root):
     text = ("## Apps in this workspace\n"
             "Read apps/<slug>/README.md before changing one. What an app keeps with `cycls.get`/`set` "
             "is reached only with `database` at `apps/<slug>/<key>` (scan `apps/<slug>/`); "
-            "its files are in apps/<slug>/data/.\n"
+            "its files are in apps/<slug>/data/. An app open beside the chat picks up what you change there "
+            "by itself. A message sent while one is open says so on an \"[Open beside the chat: …]\" line.\n"
             + "\n".join(lines)) if lines else ""
     _apps_cache[root] = (time.monotonic() + _APPS_TTL, text)
     return text
@@ -856,7 +957,7 @@ async def _exec_build_app(inp, ws):
         return f"Error: {inp.get('source')} is not a folder"
 
     try:
-        files = _collect_source(src_dir)
+        files = _inline_binaries(src_dir, _collect_source(src_dir))
     except ValueError as e:
         return f"Error: {e}"
     if "index.html" not in files:
@@ -908,7 +1009,9 @@ async def _exec_build_app(inp, ws):
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     kb = (result.get("bytes") or len(result["html"].encode())) / 1024
-    out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab.\n"
+    out = (f"Installed apps/{slug}/index.html ({kb:.0f} KB). It is in the Apps tab; open it for the person with "
+           f"`canvas apps/{slug}/index.html`. This result is the check that it built: don't open it in the browser "
+           f"or screenshot it.\n"
            f"Now write apps/{slug}/README.md describing each `cycls.get`/`set` key (reached with "
            f"`database` at apps/{slug}/<key>) and each file under apps/{slug}/data/, and their shape. "
            f"A later session updates that data without you — and without it, the only way to learn "
@@ -916,6 +1019,10 @@ async def _exec_build_app(inp, ws):
     if result.get("stray"):
         out += ("\nWARNING: these assets could not be inlined and will be blocked "
                 f"when the app runs: {', '.join(result['stray'])}")
+    if missing := _unresolved_assets(result["html"]):
+        out += ("\nWARNING: the app names these files but they are not in it, so they never load (a font falls "
+                f"back to the system one): {', '.join(missing)}. Put each file in the source folder, next to "
+                "what refers to it, and build again.")
     return out
 
 
@@ -1052,6 +1159,15 @@ def _workspace_page(url, workspace):
         return f"Error: {raw} is not a file in the workspace" if named else None
     if path.suffix.lower() not in _PAGE_EXTS:
         return f"Error: only an .html or .svg page opens in the browser; use read for {path.name}"
+    root = pathlib.Path(workspace.root).resolve()
+    parts = path.resolve().relative_to(root).parts if path.resolve().is_relative_to(root) else ()
+    if len(parts) >= 3 and parts[0] == "apps":
+        # A model checking its work screenshotted the app it had just built: the person got a picture in their
+        # files and on the canvas, in front of the app, and the picture was of an app with no data.
+        return (f"Error: apps/{parts[1]}/ is an app. It runs only beside the chat, where the host connects it to "
+                "its data; in this browser it would be an empty page. Don't check an app by opening or "
+                "screenshotting it: build_app's result says whether it built, and the person sees it with "
+                f"`canvas apps/{parts[1]}/index.html`.")
     return path
 
 
@@ -1146,7 +1262,7 @@ def _browser_step(inp):
 
 
 _TOOLS = {
-    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "chat_id", None)), _browser_step,
+    "browser":    Tool(lambda inp, ws, ctx=None, **_: _exec_browser(inp, ws, getattr(ctx, "me", None) or getattr(ctx, "chat_id", None)), _browser_step,
                        interrupted="The page is still open but may have moved; re-read it "
                                    "before acting on any element ref."),
     "design":     Tool(lambda inp, ws, **_: _exec_design(inp, ws), _design_step),
@@ -1164,11 +1280,12 @@ _TOOLS = {
                                    "before changing it again."),
     "bash":       Tool(_run_bash,
                        lambda inp: {"tool_name": "Bash", "step": inp.get("description") or inp.get("command", "")}),
-    "read":       Tool(lambda inp, ws, ctx=None, **_: _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None)),
+    "read":       Tool(lambda inp, ws, ctx=None, **_: _read_noted(inp, ws, ctx),
                        lambda inp: {"tool_name": "Reading", "step": inp.get("path", "")}),
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
-    "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None)),
+    "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None),
+                                                                     getattr(ctx, "chat_id", None)),
                        lambda inp: {"tool_name": "Database",
                                     "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
     "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),
@@ -1186,6 +1303,9 @@ _TOOLS = {
                        lambda inp: {"tool_name": "Web Search", "step": inp.get("query", "")}),
     "web_fetch":  Tool(lambda inp, ws, **_: _exec_web_fetch(inp),
                        lambda inp: {"tool_name": "Fetching", "step": inp.get("url", "")}),
+    "agent":      Tool(lambda inp, ws, ctx=None, **_: ctx.team.start(inp, ctx) if getattr(ctx, "team", None)
+                       else asyncio.sleep(0, result="Error: agents aren't available here."),
+                       lambda inp: {"tool_name": "Agent", "step": inp.get("description", "")}),
 }
 
 
@@ -1344,8 +1464,9 @@ def risk(name, inp):
         cmd = str(inp.get("command") or "")
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
     if name == "database":
-        if inp.get("command") == "delete":   # an app row goes to the trash first (state._exec_database); the agent's memory does not
-            return "write" if str(inp.get("key") or "").startswith("apps/") else "destructive"
+        if inp.get("command") == "delete":   # one app row goes to the trash first (state._exec_database); a subtree or the agent's memory does not
+            key = str(inp.get("key") or "")
+            return "write" if key.startswith("apps/") and not key.endswith("/") else "destructive"
         return {"put": "write"}.get(inp.get("command"))
     return "write" if name in ("edit", "build_app") or (name == "skill" and inp.get("action") == "publish") else None
 
@@ -1382,6 +1503,10 @@ class ToolContext:
     skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
     office: frozenset = frozenset()      # "docs" / "sheets" when on this turn: bash keeps off their files (office/guard.py)
     built: set = field(default_factory=set)   # Word / Excel files a bash command made this turn (they may be opened)
+    team: object = None                  # the run's agents (tools/agent.py)
+    me: str | None = None                # the agent this run is, by the call that started it; None for the parent
+    call: str | None = None              # the tool_use id being run
+    agent: str = ""                      # the agent's name as people see it (its brand): what it signs comments with
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)
@@ -1402,6 +1527,8 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
     to handlers that take one."""
     bid, name, inp = block["id"], block["name"], block.get("input") or {}
     entry = _TOOLS.get(name)
+    if ctx is not None and ctx.team and (refused := ctx.team.refuse(name, inp, ctx.me)):
+        return {"type": "step", "id": bid, **tool_step(name, inp), "ok": False}, asyncio.sleep(0, result=refused)
     if entry and entry.once and seen is not None:
         if name in seen:
             # Refused, but still a step and a tool_result — every tool_use keeps its pair.
@@ -1420,7 +1547,7 @@ def dispatch(block, workspace, timeout, handlers=None, network=False, seen=None,
                 return {**step, "ok": False}, asyncio.sleep(0, result=refused)
         if card := _gate(name, inp, ctx, step):
             return step, asyncio.sleep(0, result=card)
-        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx)
+        return step, entry.run(inp, workspace, timeout=timeout, network=network, ctx=ctx and replace(ctx, call=bid))
     if handlers and name in handlers:
         fn = handlers[name]
         return {"type": "step", "id": bid, **tool_step(name, inp)}, fn(inp, ctx) if _takes_ctx(fn) else fn(inp)

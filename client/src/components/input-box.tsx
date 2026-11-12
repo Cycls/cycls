@@ -14,6 +14,7 @@ import type { Attachment } from "../hooks/use-chat";
 import type { DesignSelection } from "./design-editor-view";
 import { SelectionChip } from "./selection-chip";
 import { AppIcon, type AppIconSource } from "./app-icon";
+import { dirOf } from "../lib/bidi";
 
 const MENTION_DEBOUNCE_MS = 150;
 
@@ -370,14 +371,14 @@ export function InputBox({
         <div
           ref={backdropRef}
           aria-hidden
-          dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
+          dir={input ? dirOf(input) : getLang() === "ar" ? "rtl" : "ltr"}
           className="pointer-events-none absolute inset-0 z-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2.5 leading-6 text-transparent"
         >
           {highlightMentions(input, mentions, pills)}
         </div>
         <textarea
           ref={textareaRef}
-          dir={input ? "auto" : getLang() === "ar" ? "rtl" : "ltr"}
+          dir={input ? dirOf(input) : getLang() === "ar" ? "rtl" : "ltr"}
           value={input}
           onChange={onChange}
           onSelect={onSelect}

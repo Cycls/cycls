@@ -158,6 +158,28 @@ def _with_mention(content, line):
 
 
 SELECTED = "[Selected in "
+OPEN_APP = "[Open beside the chat: "
+
+
+def _open_app_line(root, slug):
+    """The app the person has open beside the chat, so "this" in their message points somewhere and the
+    agent reads its data before it answers: they may have changed it in the app since it last looked.
+    None when there is no such app."""
+    folder = Path(root) / "apps" / slug
+    if not (folder / "index.html").is_file():
+        return None
+    try: m = json.loads((folder / "app.json").read_text(encoding="utf-8"))
+    except Exception: m = {}
+    name = m.get("name") if isinstance(m, dict) and isinstance(m.get("name"), str) and m["name"].strip() else slug
+    return (f'{OPEN_APP}the app {json.dumps(name.strip()[:60], ensure_ascii=False)} at apps/{slug}/. '
+            f"They may have changed its data there since you last read it: `database` scan apps/{slug}/ "
+            "before you answer about it or change it.]")
+
+
+def _with_line(content, line):
+    """One more text block after what was typed, as a selection is added."""
+    blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
+    return [*blocks, {"type": "text", "text": line}]
 
 
 def _with_selection(content, sel):
@@ -441,7 +463,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
-               extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=()):
+               extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=(),
+               team=None, me=None):
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
@@ -465,7 +488,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # And Docs, for the organisations on DOCS_ORGS.
     if "Docs" in allowed_tools and not office_offered(workspace, "docs"):
         allowed_tools = [t for t in allowed_tools if t != "Docs"]
-    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes)
+    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes, team=team, me=me,
+                      agent=str(getattr(context, "agent_name", "") or ""))
+    lead = team if me is None else None   # the parent follows its agents; an agent has none of its own
+    billed = session.chat_id or getattr(context, "bill", None)   # an agent's turns are its parent chat's cost
     if not session.replay:   # a replay runs the saved turn again, as it was
         incoming = context.messages.raw[-1]
         content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
@@ -477,6 +503,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
+        app = getattr(context, "app", "")
+        if app and isinstance(app, str) and (line := await asyncio.to_thread(_open_app_line, workspace.root, app)):
+            content = _with_line(content, line)
         await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
     messages = session.messages
@@ -509,11 +538,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             skill_catalog = await skills_mod.available(workspace)
         except Exception as e:
             skill_catalog = {}
-            log("warn", user=user, chat_id=session.chat_id, message=f"skills unavailable this turn: {e}")
+            log("warn", user=user, chat_id=billed, message=f"skills unavailable this turn: {e}")
         if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
         ctx = replace(ctx, skills=skill_catalog)
     for _ in vendor_skips(allowed_tools, vendor, web_search):
-        log("warn", user=user, chat_id=session.chat_id,
+        log("warn", user=user, chat_id=billed,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
     # With Docs / Sheets on, bash keeps off the files they look after (office/guard.py).
@@ -632,7 +661,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                                 **{o.name: o for o in api_connectors or ()}}.values()
                     if o.api and o.name not in hidden]:
             system_text += ("\n\nInside an app, `await cycls.connector(name).json(path, init)` calls these "
-                            "live, with the credential attached server-side:\n"
+                            "live, with the credential attached server-side, once the app's app.json lists them "
+                            "(`\"connectors\": {\"<name>\": \"read\"}`):\n"
                             + "\n".join(f"- {o.name}: {o.api}" for o in apis))
 
     for guidance in tool_prompts(tools_list):
@@ -660,7 +690,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     def compacted(tier, reason, tokens, ok=True):
         """The analytics record of one compaction: a log row, and a `ui` event the client tracks."""
-        log("compaction", user=user, chat_id=session.chat_id, model=bare_model,
+        log("compaction", user=user, chat_id=billed, model=bare_model,
             tier=tier, reason=reason, tokens=tokens, ok=ok)
         return {"type": "ui", "action": "compacted", "tier": tier, "reason": reason, "tokens": tokens, "ok": ok}
 
@@ -683,12 +713,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # The summarizer call is a real billed turn — track it too.
             if u := getattr(provider, "last_usage", None):
                 c = _cost(price, *u)
-                log("usage", user=user, chat_id=session.chat_id, model=bare_model,
+                log("usage", user=user, chat_id=billed, model=bare_model,
                     input=u[0], output=u[1], cached=u[2], cache_create=u[3],
-                    cost=round(c, 6), ms=0, compact=True)
-                if session.chat_id and c:
-                    try: await state.add_cost(workspace, session.chat_id, c)
-                    except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
+                    cost=round(c, 6), ms=0, compact=True, **({"agent": me} if me else {}))
+                if billed and c:
+                    try: await state.add_cost(workspace, billed, c)
+                    except Exception as e: log("warn", user=user, chat_id=billed, message=f"add_cost failed: {e}")
         except Exception as ce:
             # degrades the loop until the context hard-overflows — never silent
             yield compacted(2, reason, tokens_since_compact, False)
@@ -703,8 +733,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         yield compacted(1, "cold", last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0))
 
     repeats = {}   # (tool, input, result) → times this run
+    idle = False   # the turn ended with agents still working
     while True:
         try:
+            if idle:
+                async for ev in lead.idle(): yield ev
+                messages.append(lead.take())
+                await session.checkpoint()
+                idle = False
             async for ev in fold(): yield ev
 
             turn = None
@@ -719,6 +755,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                         elif isinstance(ev, dict) and ev.get("type") == "step" and ev.get("tool_name"):
                             ondemand.begun(demand, ev["tool_name"], ctx)   # Video warms its GPU here
                         yield ev
+                        if lead:
+                            for e in lead.drain(): yield e
             except (GeneratorExit, asyncio.CancelledError):
                 if partial_text:
                     messages.append({"role": "assistant", "content": [
@@ -740,15 +778,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 "ms": turn_ms,
                 "at": now,
             }})
-            log("usage", user=user, chat_id=session.chat_id,
+            log("usage", user=user, chat_id=billed,
                 model=bare_model,
                 input=turn.input, output=turn.output,
                 cached=turn.cached, cache_create=turn.cache_create,
                 cost=round(turn_cost, 6), ms=turn_ms, stop=turn.stop_reason,
-                **({"host": turn.host} if turn.host else {}))
-            if session.chat_id:
-                try: await state.add_cost(workspace, session.chat_id, turn_cost)
-                except Exception as e: log("warn", user=user, chat_id=session.chat_id, message=f"add_cost failed: {e}")
+                **({"host": turn.host} if turn.host else {}), **({"agent": me} if me else {}))
+            if billed:
+                try: await state.add_cost(workspace, billed, turn_cost)
+                except Exception as e: log("warn", user=user, chat_id=billed, message=f"add_cost failed: {e}")
 
             # max_tokens with zero output means the input filled the window —
             # an overflow in disguise, not a truncation.
@@ -789,7 +827,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 # The web chat shows its "Stopped before it finished" line with Continue in its place.
                 yield events.callout("Stopped before it finished.", "info", code="cut_off")
             if turn.stop_reason != "tool_use":
-                await session.checkpoint(); break
+                await session.checkpoint()
+                if lead and lead.busy():
+                    idle = True; continue
+                break
 
             # On disk before the tools run — and after the pops above, which
             # would strand `_saved` past the list.
@@ -809,9 +850,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             tasks = [asyncio.create_task(_timed(c)) for _, c in pairs]
             try:
                 while True:
-                    _, pending = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.ALL_COMPLETED)
+                    _, pending = await asyncio.wait(tasks, timeout=1.0 if lead and lead.working() else 15.0,
+                                                    return_when=asyncio.ALL_COMPLETED)
                     if not pending: break
                     yield {"type": "ping"}
+                    if lead:
+                        for e in lead.drain(): yield e
                 timed = [t.result() for t in tasks]
             except (GeneratorExit, asyncio.CancelledError):
                 # Why it stopped is the run record's job (§3); the model only
@@ -826,7 +870,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 ok = not isinstance(out, BaseException)
                 good = ok and not (isinstance(out, str) and out.startswith(_FAILED))
                 o = owners.get(block["name"])
-                log("tool_call", user=user, chat_id=session.chat_id,
+                log("tool_call", user=user, chat_id=billed,
                     model=bare_model, tool=block["name"], tool_use_id=block["id"], ms=ms, ok=good,
                     connector=o.name if o else None, credential_scope=o.scope if o else None,
                     output_bytes=len(out) if isinstance(out, (str, bytes)) else None,
@@ -846,7 +890,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 streak = 0 if good else streak + 1
                 note = _REPEATED.get(n, "").format(n=n)
                 if note:
-                    log("repeat", user=user, chat_id=session.chat_id, model=bare_model, tool=block["name"], times=n)
+                    log("repeat", user=user, chat_id=billed, model=bare_model, tool=block["name"], times=n)
                     if n == max(_REPEATED):
                         terminal = True
                         yield events.callout("Stopped: the same step kept giving the same result.", "warning")
@@ -867,15 +911,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             # approve. Ride it on the message the batch already writes.
             messages.append({"role": "user", "content": results, **({"cards": cards} if cards else {}),
                              **({"ui": kept} if kept else {})})
+            if lead and lead.reports:   # in by the next step, not at the turn's end
+                messages.append(lead.take())
             await session.checkpoint()
+            if lead and lead.busy() and all(b["name"] == "agent" for b in blocks):
+                idle = True   # nothing to say before a report: anything said now would be a guess
             if stuck and not terminal:   # a repeat's stop has said so already
-                log("warn", user=user, chat_id=session.chat_id, model=bare_model,
+                log("warn", user=user, chat_id=billed, model=bare_model,
                     message=f"turn stopped: tool calls kept failing ({streak} in a row)")
                 yield events.callout("Stopped: the same step kept failing. Reply to go on, or say what to try instead.", "warning")
                 break
             if waiting:
                 terminal = True
             if terminal:
+                if lead and lead.busy():
+                    idle = True; continue
                 break
 
         except Conflict:
@@ -900,6 +950,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             session.rollback()
             raise
 
+    if me:   # an agent's last words are its report
+        last = next((m["content"] for m in reversed(messages) if m["role"] == "assistant"), [])
+        yield {"type": "report", "text": "".join(b.get("text", "") for b in last if isinstance(b, dict)
+                                                 and b.get("type") == "text").strip()}
     async for ev in fold(): yield ev   # now, while the answer is read — not when the next message waits on it
 
     # Written last, when nothing else writes the chat's meta; a rename made meanwhile wins.

@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Icon } from "../icon";
 import { t } from "../../lib/i18n";
 import { StepDot } from "./step-part";
+import { dirOf } from "../../lib/bidi";
 
 // Thinking reads as one more step of the work: the same Cycls star as a tool's row (its colours sweeping through
 // while the model thinks, grey once it has), the same row, and what it thought under it on tap.
@@ -39,7 +40,7 @@ export const ThinkingPart = memo(function ThinkingPart({
             exit={{ height: 0, opacity: 0 }}
             transition={{ type: "spring", duration: 0.2, bounce: 0 }}
           >
-            <div className="text-muted-foreground border-l border-muted-foreground/20 pl-4 text-sm whitespace-pre-wrap">
+            <div dir={dirOf(thinking)} className="text-muted-foreground border-s border-muted-foreground/20 ps-4 text-sm whitespace-pre-wrap">
               {thinking}
             </div>
           </motion.div>

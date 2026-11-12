@@ -37,7 +37,7 @@ import { ALL, complete, useAllPages } from "./hooks/use-all-pages";
 import { usePostHogIdentify } from "./hooks/use-posthog-identify";
 import { initAnalytics, setAgentDomain, track, register } from "./lib/analytics";
 import { initAffiliate } from "./lib/affiliate";
-import { setPeople } from "./lib/people";
+import { setPeople, setRoster } from "./lib/people";
 
 function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org?: { id: string; name: string } | null,
                          author?: Record<string, string | undefined>): FilesPanelProps {
@@ -72,6 +72,7 @@ function filesPanelProps(f: ReturnType<typeof useFiles>, withShare: boolean, org
     appData: f.appData,
     searchFiles: f.searchFiles,
     listFolders: f.listFolders,
+    fileInfo: f.fileInfo,
     onShareFile: withShare ? (p: string, audience: string) => f.shareFile(p, audience, author) : undefined,
     onListTrash: f.listTrash,
     onRestoreTrash: f.restoreTrash,
@@ -138,6 +139,8 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
   } : undefined;
 
   useSignupDetect(user);
+  useEffect(() => { if (user) void files.putMe(user.fullName, user.imageUrl); },
+            [user?.id, user?.fullName, user?.imageUrl, organization?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   usePostHogIdentify(
     !!config?.analytics?.length,
     user,
@@ -209,9 +212,23 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
         || m.publicUserData?.identifier || m.publicUserData?.userId || "",
       email: m.publicUserData?.identifier,
+      image: m.publicUserData?.imageUrl,
+      admin: m.role === "org:admin",
     }))
     .filter((m) => m.id);
   setPeople(orgMembers);
+  // Who an open app is used by (cycls.ctx.user, cycls.people()). A name, never an email: without one set,
+  // the part of the address before the @.
+  const shortName = (full?: string, email?: string) => full || email?.split("@")[0] || undefined;
+  const activeWs = workspace ? ws.workspaces.find((w) => w.id === workspace.id) || null : null;
+  setRoster(user?.id ? {
+    me: { id: user.id, name: shortName(user.fullName || user.firstName || "", user.primaryEmailAddress?.emailAddress),
+          image: user.imageUrl },
+    workspace: activeWs,
+    org: orgMembers.map((m) => ({ id: m.id, image: m.image, admin: m.admin,
+                                  name: shortName(m.name !== m.email ? m.name : "", m.email) || "" })),
+    members: ws.members,
+  } : null);
 
   const account: AccountInfo = {
     user: {

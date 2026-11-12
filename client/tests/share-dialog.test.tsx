@@ -62,9 +62,9 @@ describe("a design where there's no editor to open it in (a shared page)", () =>
     expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,S1");
     expect(screen.queryByText(/Preview isn't available/)).toBeNull();
     await act(async () => { fireEvent.click(screen.getByText("Download image")); });
-    expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=png");
+    expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=png&download=1");
     await act(async () => { fireEvent.click(screen.getByText("Download PDF")); });
-    expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=pdf");
+    expect(openFile).toHaveBeenCalledWith("designs/launch.fig?as=pdf&download=1");
   });
 
   it("a design of several pages shows a page at a time, each with its own downloads", async () => {
@@ -75,12 +75,12 @@ describe("a design where there's no editor to open it in (a shared page)", () =>
     render(<CanvasDoc file={fig} content={of("Post")} error={false} shared openFile={openFile} readFile={readFile} />);
     expect(screen.getAllByRole("tab").map((el) => el.textContent)).toEqual(["Post", "Story"]);
     await act(async () => { fireEvent.click(screen.getByText("Download image")); });
-    expect(openFile).toHaveBeenLastCalledWith("designs/launch.fig?as=png&page=Post");
+    expect(openFile).toHaveBeenLastCalledWith("designs/launch.fig?as=png&page=Post&download=1");
     await act(async () => { fireEvent.click(screen.getByRole("tab", { name: "Story" })); });
     expect(readFile).toHaveBeenCalledWith("designs/launch.fig?as=slides&page=Story", true);
     expect((screen.getByTestId("design-picture") as HTMLImageElement).src).toBe("data:image/jpeg;base64,Story");
     await act(async () => { fireEvent.click(screen.getByText("Download PDF")); });
-    expect(openFile).toHaveBeenLastCalledWith("designs/launch.fig?as=pdf&page=Story");
+    expect(openFile).toHaveBeenLastCalledWith("designs/launch.fig?as=pdf&page=Story&download=1");
   });
 
   it("with several frames, shows as a read-only deck", () => {

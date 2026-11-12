@@ -49,7 +49,7 @@ describe("a stretch of work", () => {
     render(<MessageBubble message={said([think("x"), sql("t1", "Checking prices for 2222", "أراجع الأسعار لـ 2222"),
                                          sql("t2", "Checking prices for 1120", "أراجع الأسعار لـ 1120")])} />);
     expect(screen.getByText(/راجعت بيانات السوق/)).toBeTruthy();
-    fireEvent.click(screen.getByText(/2 خطوات/));
+    fireEvent.click(screen.getByText(/خطوتان/));   // two, in its own form
     expect(screen.getByText("أراجع الأسعار لـ 1120")).toBeTruthy();
   });
 

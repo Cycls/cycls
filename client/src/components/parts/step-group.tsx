@@ -2,7 +2,7 @@ import { memo, useContext, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
-import { localStep, t } from "../../lib/i18n";
+import { localStep, t, tn, getLang } from "../../lib/i18n";
 import type { Part } from "../../hooks/use-chat";
 import { StepDot, StepPart, clock, useNow } from "./step-part";
 import { ThinkingPart } from "./thinking-part";
@@ -55,7 +55,7 @@ function useSpan(items: Part[], end: number | undefined, live: boolean | undefin
 }
 
 // Consecutive tool steps, and the thinking between them, fold into one summary
-// line ("7 steps — searched the web · edited files"), expandable on tap: a long
+// line ("7 steps · searched the web · edited files"), expandable on tap: a long
 // turn reads as one line of work, not a ladder of "Thinking" and calls. While
 // streaming, the current step or thought stays visible below the summary so
 // there's always a live signal.
@@ -79,9 +79,10 @@ export const StepGroup = memo(function StepGroup({ items, live, end }: { items: 
         className="flex items-center gap-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
       >
         <StepDot live={live} />
-        <span className="text-[13px]">
+        {/* on the left in either language; in Arabic its words still read right to left */}
+        <span className="text-[13px]" dir={getLang() === "ar" ? "rtl" : undefined}>
           {named ? <span className="font-medium text-foreground">{t("usedConnectors").replace("{names}", gist)}</span> : (
-            <><span className="font-medium text-foreground">{steps.length} {t(steps.length === 1 ? "step" : "steps")}</span>{gist && <span> — {gist}</span>}</>
+            <><span className="font-medium text-foreground">{tn("steps", steps.length)}</span>{gist && <span> · {gist}</span>}</>
           )}
           {span && <span data-testid="steps-span" className="tabular-nums text-muted-foreground/70"> · {span}</span>}
         </span>
