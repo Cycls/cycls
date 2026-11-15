@@ -239,9 +239,10 @@ below the line, or it cuts the dots and the tails.
 
 - A Lottie accent is a reaction: start it on the frame it reacts to, with `data-delay` = that moment in the scene
   (circle the number as the count lands, a check as the item lands, confetti on the payoff). One a beat.
-- `motion` pieces (lower-third, logo-reveal, chart, kinetic-title) take the look's type and colours (and the
-  kit's) by themselves: a lower third 0.5–1 s after a person starts talking, a logo-reveal as the last 2–3 s;
-  `edit` their timing to sit on your beats.
+- `motion` pieces (lower-third, logo-reveal, chart, kinetic-title, end-card) take the look's type and colours (and
+  the kit's) by themselves: a lower third 0.5–1 s after a person starts talking; the end card after the last scene
+  (`end-card`, its `line` the call to action), which times its own roles and holds to the last frame; `edit` the
+  others' timing to sit on your beats.
 
 ## 10. Sound on the picture
 

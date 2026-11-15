@@ -532,10 +532,12 @@ async def _keep_brand_look(root, look):
 
 
 def _brand_hint(root, html):
-    """A save that leaves the workspace's brand kit out is told so (brand.hint)."""
+    """A save that leaves the workspace's brand kit out is told so (brand.hint); one of a brand whose videos end
+    on its end card, with none, is told how to add it (brand.end_hint)."""
     from . import brand
 
-    line = brand.hint(root, html, _catalogue()[0])
+    fonts = _catalogue()[0]
+    line = brand.hint(root, html, fonts) or brand.end_hint(root, html, fonts)
     return f"\n{line}" if line else ""
 
 
@@ -1632,14 +1634,17 @@ def _lottie(query):
     return "\n".join(lines)
 
 
+PIECES = ("lower-third", "logo-reveal", "chart", "kinetic-title", "end-card")
+
+
 async def _motion(workspace, root, chat, name, rel, inp, note):
     """A motion piece put into the saved video by the service (motion pieces, protocol 5), then the checks."""
     from cycls._agent import video
     from . import brand as brand_mod
 
     piece = str(inp.get("piece") or "").strip()
-    if piece not in ("lower-third", "logo-reveal", "chart", "kinetic-title"):
-        return _err("motion needs piece: lower-third, logo-reveal, chart or kinetic-title.")
+    if piece not in PIECES:
+        return _err("motion needs piece: lower-third, logo-reveal, chart, kinetic-title or end-card.")
     if not (root / rel).exists():
         return _err(f"there is no {rel}; `write` it first.")
     variables = dict(inp.get("vars") or {}) if isinstance(inp.get("vars"), dict) else {}
@@ -1655,8 +1660,20 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
         heading = kit.get("heading") or kit.get("body")
         if heading and (heading[1] or heading[2]):
             variables.setdefault("font", heading[0])
-        if piece == "logo-reveal" and kit.get("logo"):
+        if piece in ("logo-reveal", "end-card") and kit.get("logo"):
             variables.setdefault("logo", kit["logo"])
+    if piece == "end-card":
+        # the brand's name (in Arabic for an Arabic video, when the kit has it) and its website, from brand.yaml
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""
+        arabic = bool(re.search(r"<html[^>]*\slang=[\"']?ar", text, re.I))
+        for key, value in brand_mod.identity(root, arabic=arabic).items():
+            variables.setdefault(key, value)
+        if not variables.get("logo") and not variables.get("name"):
+            return _err("end-card needs the brand's logo or name: the workspace has no brand kit with either. Give "
+                        "vars.name (and vars.logo, a workspace image), or set up the brand kit first.")
     variables = {k: v for k, v in variables.items() if v is not None}
     start = inp.get("start", inp.get("at"))
     start = start[0] if isinstance(start, list) and start else start
@@ -1677,6 +1694,17 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
                     return _err(f"{rel} changed while the piece was being added (the person is editing it); try again.")
     files.remember(root, chat, name)
     text, blocks, clean = await _checks(workspace, root, rel, made["html"])
+    if piece == "end-card":
+        s0, length = made.get("start"), made.get("length")
+        said = [f"Added the end card to {rel}: its id is {made.get('id')}, from {s0:g} s for {length:g} s"
+                if isinstance(s0, (int, float)) and isinstance(length, (int, float)) else f"Added the end card to {rel}"]
+        if isinstance(made.get("duration"), (int, float)):
+            said.append(f"the video is now {made['duration']:g} s long, the card after the last scene (music that ran to "
+                        "the end runs on under it)")
+        if made.get("sting"):
+            said.append(f"a soft {made['sting']} as the logo lands, so the video does not end on silence")
+        said.append("its words come in as the look times them and hold to the last frame")
+        return _result("; ".join(said) + f".\n{text}", blocks, note, _shown(rel, name, clean, version))
     where = {"up": " It sits higher than usual, above the scene's own text.",
              "down": " It sits lower than usual, below the scene's own text."}.get(made.get("moved"), "")
     own = made.get("colours") if isinstance(made.get("colours"), dict) else {}

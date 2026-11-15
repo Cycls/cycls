@@ -787,7 +787,7 @@ def test_the_brands_own_voice_is_kept_only_with_consent_and_read_in_its_voice(mo
     # The guide names the kit; music with no query starts from the brand's.
     from cycls._agent.video import brand
     note = brand.video_note(tmp_path)
-    assert 'voice {voice: "brand"}' in note and "oud, calm" in note and "ends on its logo" in note
+    assert 'voice {voice: "brand"}' in note and "oud, calm" in note and "ends on its end card" in note
     assert "Not a mood" not in _run({"action": "music"}, ws)
     removed = _run({"action": "kit", "sample": "none"}, ws)
     assert "removed" in removed and "video_voice" not in (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
@@ -1783,6 +1783,10 @@ def test_a_video_that_leaves_the_brand_out_is_told_so(monkeypatch, tmp_path):
     assert "Brand: this video uses none of the workspace brand kit's" in _text(out)
     out = _run({"action": "write", "name": "on-brand", "html": COMP.replace("Hi", '<i style="color:#0c2340">Hi</i>')},
                _ws(tmp_path))
+    assert "uses none of the workspace brand kit" not in _text(out)
+    assert "has none yet: motion {name, piece: \"end-card\"" in _text(out), "on brand, but not ending on it"
+    out = _run({"action": "write", "name": "signed", "html": COMP.replace("Hi", '<i style="color:#0c2340">Hi</i><img src="brand/logo.png">')},
+               _ws(tmp_path))
     assert "Brand:" not in _text(out)
 
 
@@ -2335,3 +2339,45 @@ def test_a_stock_clip_is_read_without_listening_for_speech_and_the_report_says_s
     quiet = {k: v for k, v in INFO.items() if k != "transcript"} | {"listened": False}
     text = report.footage_text("videos/footage/sea-1.mp4", quiet)
     assert "not listened to for speech" in text and "Nobody is heard" not in text
+
+
+def test_the_end_card_says_the_brand_from_its_kit_and_a_video_without_one_is_told(monkeypatch, tmp_path):
+    from cycls._agent.video import brand
+    _kit(tmp_path)
+    yaml = tmp_path / "brand" / "brand.yaml"
+    yaml.write_text(yaml.read_text(encoding="utf-8") + 'entity_name: "Najd Coffee"\nentity_name_ar: "قهوة نجد"\n'
+                    'source_url: "https://www.najd.sa/"\n', encoding="utf-8")
+    assert brand.identity(tmp_path) == {"name": "Najd Coffee", "link": "najd.sa"}
+    assert brand.identity(tmp_path, arabic=True)["name"] == "قهوة نجد"
+    assert "piece: \"end-card\"" in brand.end_hint(tmp_path, COMP)
+    assert brand.end_hint(tmp_path, COMP.replace("Hi", '<img src="brand/logo.png">')) == ""      # it ends on the logo
+    assert brand.end_hint(tmp_path, COMP.replace("Hi", '<div class="clip scene card end-card"></div>')) == ""
+    yaml.write_text(yaml.read_text(encoding="utf-8") + 'video_outro: "none"\n', encoding="utf-8")
+    assert brand.end_hint(tmp_path, COMP) == ""                                                   # the brand asked for none
+    assert "end card" not in brand.video_note(tmp_path)
+
+    # motion end-card: the kit fills the logo, the Arabic name of an Arabic video and the website
+    yaml.write_text(yaml.read_text(encoding="utf-8").replace('video_outro: "none"\n', ""), encoding="utf-8")
+    assert "every video ends on its end card" in brand.video_note(tmp_path)
+    _on(monkeypatch)
+    FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    import cycls._agent.video as video_pkg
+    sent = []
+
+    async def piece(workspace, html, piece_name, at, variables):
+        sent.append((piece_name, variables))
+        return {"html": html.replace("</div>\n</body>", '<div id="end" class="clip scene card end-card"></div></div>\n</body>'),
+                "id": "end", "start": 6, "length": 3.6, "duration": 9.6, "sting": "chime", "look": "editorial"}
+    monkeypatch.setattr(video_pkg, "piece", piece)
+    arabic = COMP.replace('<html lang="en">', '<html lang="ar">') if '<html lang="en">' in COMP else COMP.replace("<html", '<html lang="ar"', 1)
+    assert "Saved" in _text(_run({"action": "write", "name": "promo", "html": arabic}, _ws(tmp_path)))
+    out = _text(_run({"action": "motion", "name": "promo", "piece": "end-card", "vars": {"line": "اطلب الآن"}}, _ws(tmp_path)))
+    assert sent and sent[0][0] == "end-card"
+    assert sent[0][1]["logo"] == "brand/logo.png" and sent[0][1]["name"] == "قهوة نجد" and sent[0][1]["link"] == "najd.sa"
+    assert sent[0][1]["line"] == "اطلب الآن"
+    assert "Added the end card" in out and "the video is now 9.6 s long" in out and "a soft chime" in out
+    # the name left out on purpose (the logo says it) stays out
+    sent.clear()
+    _run({"action": "motion", "name": "promo", "piece": "end-card", "vars": {"name": ""}}, _ws(tmp_path))
+    assert sent[0][1]["name"] == ""

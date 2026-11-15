@@ -314,6 +314,33 @@ def _value(text, key):
     return v if v and v.lower() not in ("null", "none", "~") or key in ("video_intro", "video_outro") else None
 
 
+def identity(root, arabic=False):
+    """What an end card says of the brand (brand/brand.yaml, as the brand-kit skill writes it): {"name", "link"},
+    the Arabic name for an Arabic video when the kit has one, the website without its scheme or www. Empty without."""
+    try:
+        text = (Path(root) / "brand" / "brand.yaml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    name = (_value(text, "entity_name_ar") if arabic else None) or _value(text, "entity_name")
+    url = _value(text, "source_url") or _value(text, "website")
+    link = re.sub(r"^(https?://)?(www\.)?", "", url or "", flags=re.I).rstrip("/") if url else ""
+    return {k: v for k, v in (("name", name), ("link", link)) if v}
+
+
+def end_hint(root, html, fonts=()):
+    """A save of a branded video that does not end on the brand (no end card, and the logo nowhere in it), when the
+    kit's outro is the logo (its default): the line that says how to add one, or ''."""
+    k = kit(root, fonts)
+    if not k or (video_kit(root).get("outro") or "logo").lower() != "logo":
+        return ""
+    who = identity(root)
+    if not (k.get("logo") or who.get("name")) or "end-card" in html or (k.get("logo") and k["logo"].lower() in html.lower()):
+        return ""
+    return ("Brand: this brand's videos end on its end card, and this one has none yet: motion {name, piece: \"end-card\", "
+            "vars: {line: \"<the call to action>\"}} adds it after the last scene, from the kit (its logo, name and "
+            "website), in the look's own card, and makes the video that much longer.")
+
+
 def video_kit(root):
     """The brand's video settings (VIDEO_KEYS without "video_"), {} without any."""
     try:
@@ -395,7 +422,8 @@ def video_note(root):
     if k.get("music"):
         parts.append(f"its music: {k['music']} (music with no query starts from it)")
     if (k.get("outro") or "logo").lower() == "logo":
-        parts.append("every video ends on its logo, carried in (or motion logo-reveal)")
+        parts.append("every video ends on its end card: motion {piece: \"end-card\", vars: {line}} after the last scene "
+                     "(the kit's logo, name and website)")
     if (k.get("intro") or "").lower() == "logo":
         parts.append("every video opens on its logo for its first second (the brand asked for it), then the hook")
     if clips:

@@ -215,22 +215,11 @@ at("#screen2", [{ opacity: 0, transform: "scale(1.04)" }, { opacity: 1, transfor
 Swap the label with two stacked spans (`#add` out, `#done` in, 150–200 ms). Never fade a cursor in where it
 stands. Use the person's real screens (screenshots as `<img>`), never an invented dashboard.
 
-**The end card:** a card scene; the look sets and brings in the name, the call to action and the address, and
-you carry the logo in:
-```html
-<div id="end" class="clip scene card" data-start="12" data-duration="3" data-track-index="2">
-  <img id="logo" class="logo" src="brand/logo.png" alt=""><div class="cta">اطلب الآن</div><p class="meta" dir="ltr">najd.sa</p>
-</div>
-```
-`.logo { height: 220px; }` and
-```js
-at("#logo", [{ transform: "scale(.6)" }, { transform: "none" }], 100, 600, POP);
-at("#logo", [{ opacity: 0 }, { opacity: 1 }], 100, 200, "linear");
-```
-A `brand` line only when the logo does not say the name. The call to action settles at least 1.5 s before the
-end (in luxe and cinematic it lands about 2.3 s in: give the card 4 s). A look with an exit fades the card's text
-in its last 0.3 s; to end on it still, give each role its own entrance (`data-anim="fade-up"
-data-anim-delay="0.8"`): a role with its own data-anim has no exit. The logo over a burst instead: `motion {name,
+**The end card:** write the video to end on its last scene, then ONE call: `motion {name, piece: "end-card", vars:
+{line: "اطلب الآن"}}`. It puts the kit's logo, name and website in the look's own card after the last scene (the
+video gets 3–4 s longer and the music runs on under it), each role brought in as the look times it and held still to
+the last frame. `name: ""` leaves the name out when the logo already says it; `link` sets the address (an @handle, a
+number); `extend: false` lays the card over the last seconds instead. The logo over a burst instead: `motion {name,
 piece: "logo-reveal", start, vars: {logo, title}}`, in the look's type and colours.
 
 ## The trap: one element, one animation per property

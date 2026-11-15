@@ -143,7 +143,7 @@ after them):
 - A dark or pale brand accent: also set `--look-on-accent` (the text on an accent-bg scene) and
   `--look-footage-accent` (the stressed word over footage) so both still read.
 - The brand's video kit (the guide names it) goes in every video: its own voice (`voice: "brand"`), its music
-  (`music` with no query), its own clips before stock, the logo where its intro and outro say. When the person
+  (`music` with no query), its own clips before stock, the logo where its intro and outro say (the end card: `motion` piece `end-card`). When the person
   wants their voice, music or logo in every video, keep it with `kit` (their consent first, for a voice).
 - The composition and the motion stay the look's. The logo lands once, with weight, usually on the end card,
   carried in (wiped, stamped, a line drawing into it): never docked in a corner the whole video, never the first

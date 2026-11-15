@@ -341,6 +341,19 @@ again the next time `footage` asks for it (the store says "none" for facts witho
 Checked on the dev service: an off-centre speaker in a wide clip, in a vertical video — reframed he
 fills the frame, the centre crop showed the camera behind him and half his face.
 
+**Words off faces** (2026-11-15, `faces.py` version 3): every head a clip shows is kept too (`heads`), and prepare
+writes where they are in each piece's box on the `<video>` (`data-cycls-faces`, never in the saved file). A look's
+runtime moves a scene whose words would cover a face to the top, middle or bottom, whichever is clear, in the frames,
+the editor's preview and the render alike; `data-face="keep"` keeps a scene where it was put. Nothing to do in the
+SDK: clips made ready before are sent again on the next `footage` call (the store says "none" for faces 2).
+
+**The brand's end card** (2026-11-15): `motion {name, piece: "end-card", vars: {line}}` — the service's piece (the
+look's own card: logo, `.brand`, `.cta`, `.meta`) after the last scene, the video made that much longer, held to the
+last frame. `_motion` fills the logo from the kit and the name and website from `brand.yaml` (`entity_name`, or
+`entity_name_ar` for an Arabic video; `source_url` without its scheme) through `brand.identity`; `name: ""` leaves
+the name out. A save of a branded video with no end card and no logo, when the kit's outro is the logo (its default),
+says how to add one (`brand.end_hint`, after `brand.hint`).
+
 **Whoever is talking** (2026-10-22, `faces.py` version 2): when two or more faces of similar size share a
 shot of a clip with words, the crop follows the one speaking — their mouths read again 8 times a second over
 the speech, each against their own stillness — and cuts (never pans) to the other when they take a turn of a
