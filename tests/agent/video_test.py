@@ -2397,3 +2397,50 @@ def test_a_scene_the_look_moved_off_a_face_is_a_note_not_an_issue():
     assert both.startswith("Browser check: 0 errors, 1 warning.") and "contrast_aa_failure" in both
     assert both.index("contrast_aa_failure") < both.index("Done on purpose") and "kept_off_face" not in both
     assert report.findings_text([], title="Browser check") == ""
+
+
+def test_music_follows_the_pace_asked_for(monkeypatch):
+    from cycls._agent.video import contract as cm
+    tracks = [
+        {"id": "slow-up", "title": "A", "mood": ["upbeat"], "bpm": 78, "beat": {"every": 0.769, "first": 0}, "duration": 120},
+        {"id": "quick-up", "title": "B", "mood": ["upbeat"], "bpm": 128, "beat": {"every": 0.469, "first": 0}, "duration": 120},
+        {"id": "calm-slow", "title": "C", "mood": ["calm"], "bpm": 72, "beat": {"every": 0.833, "first": 0}, "duration": 120},
+        {"id": "calm-quick", "title": "D", "mood": ["calm"], "bpm": 124, "beat": {"every": 0.484, "first": 0}, "duration": 120},
+        {"id": "biz-120", "title": "E", "mood": ["corporate"], "bpm": 120, "beat": {"every": 0.5, "first": 0}, "duration": 120},
+        {"id": "biz-90", "title": "F corporate cue", "mood": ["corporate"], "bpm": 90, "beat": {"every": 0.667, "first": 0},
+         "duration": 120, "desc": "corporate cue"},
+    ]
+    monkeypatch.setattr(cm, "cached", lambda: {"data": {"music": tracks}})
+    first = lambda q: vrun._music(q, 10).split("\n- ", 2)[1].split(":", 1)[0]   # noqa: E731
+    assert first("energetic") == "quick-up"            # upbeat both; the quick one first for the pace
+    assert first("calm") == "calm-slow"
+    out = vrun._music("energetic", 10)
+    assert "a tempo of 112-150 bpm first for the pace asked" in out
+    assert first("120 bpm corporate") == "biz-120"     # a tempo named outright beats a word more in the description
+    assert first("corporate") == "biz-90"               # no pace asked: the words decide, as before
+    assert "tempo of" not in vrun._music("corporate", 10)
+
+
+def test_the_editor_gets_the_brands_name_and_website_for_its_end_card(tmp_path):
+    from cycls._agent.video import editor
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "brand.yaml").write_text(
+        'entity_name: "Cycls Clinic"\nentity_name_ar: "عيادة سايكلز"\nsource_url: "https://www.cycls.ai/"\n', encoding="utf-8")
+    en = editor._brand(tmp_path, '<html lang="en"><body>Hello</body></html>')
+    assert en["name"] == "Cycls Clinic" and en["link"] == "cycls.ai"
+    ar = editor._brand(tmp_path, '<html lang="ar" dir="rtl"><body>مرحبا</body></html>')
+    assert ar["name"] == "عيادة سايكلز"
+    assert editor._brand(tmp_path / "nowhere", "") is None
+
+
+def test_words_burned_into_a_clip_are_said_with_it():
+    from cycls._agent.video import report
+    caps = {"v": 1, "kind": "captions", "y0": 0.78, "y1": 0.84, "from": 0, "to": 8, "share": 0.94, "changes": 3}
+    [line] = report.burned_lines(caps)
+    assert line.startswith("Captions are already burned into this clip, near the bottom (78–84% down the frame, 0–8 s)")
+    assert "Don't lay captions of your own over this stretch" in line
+    [fixed] = report.burned_lines({**caps, "kind": "text", "y0": 0.05, "y1": 0.1})
+    assert fixed.startswith("A fixed line of text is burned into this clip, near the top")
+    assert report.burned_lines(None) == [] and report.burned_lines({"kind": "other"}) == []
+    info = {"duration": 8, "width": 1080, "height": 1920, "burned": caps}
+    assert "Captions are already burned into this clip" in report.footage_text("uploads/a.mp4", info)

@@ -131,7 +131,7 @@ def _gather(html, root, rel):
     problems += animations
     meta = {"images": images, "audio": audio, "footage": {p: f["sha"] for p, f in footage.items()},
             "words": words, **({"fonts": fonts} if fonts else {}), **({"lotties": lotties} if lotties else {})}
-    brand = _brand(root)
+    brand = _brand(root, html)
     if brand:
         meta["brand"] = brand
         # The logo goes with the session, so Media's "Brand logo" and the Motion menu's logo reveal can use it.
@@ -148,23 +148,28 @@ def _gather(html, root, rel):
     return meta, {**image_files, **audio_files, **font_files, **lottie_files}, problems
 
 
-def _brand(root):
-    """The brand kit as the editor's buttons use it: its colours (the word being said, in a caption) and
-    the font a caption or a text can take — the heading's, else the body's, when the video can draw it."""
+def _brand(root, html=""):
+    """The brand kit as the editor's buttons use it: its colours (the word being said, in a caption), the
+    font a caption or a text can take — the heading's, else the body's, when the video can draw it — and
+    what its end card says: the name (the Arabic one for an Arabic video) and the website."""
+    import re
+
     from . import brand
     from .run import _catalogue
 
+    arabic = bool(re.search(r'<html[^>]*\blang="ar', html or "", re.I) or re.search(r"[؀-ۿ]", html or ""))
     try:
-        k = brand.kit(root, _catalogue()[0])
+        k = brand.kit(root, _catalogue()[0]) or {}
+        who = brand.identity(root, arabic)
     except Exception:  # noqa: BLE001 - a kit that cannot be read is no kit
-        return None
-    if not k:
         return None
     font = next((f[0] for f in (k.get("heading"), k.get("body")) if f and (f[1] or f[2])), None)
     colours = {role: v for role, v in (k.get("colours") or {}).items() if isinstance(v, str)}
     logo = k.get("logo")
-    return ({"colours": colours, "font": font, **({"logo": logo} if logo else {})}
-            if colours or font or logo else None)
+    if not (colours or font or logo or who):
+        return None
+    return {"colours": colours, "font": font, **({"logo": logo} if logo else {}),
+            **{key: who[key][:80] for key in ("name", "link") if who.get(key)}}
 
 
 async def open(workspace, root, rel, host_origin):

@@ -641,7 +641,9 @@ async def _render_once(workspace, root, chat, name, quality, fps=30):
     shapes, problems = sizes.declared(html)
     if problems:
         return _err(" ".join(problems))
+    t0 = time.monotonic()
     images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
+    t_media = time.monotonic()
     if problems:
         return _err("the images, sound and clips could not all be sent:\n" + "\n".join(f"- {p}" for p in problems))
     jobs = []      # {shape, slot, sha, token, sound, collected}
@@ -668,6 +670,7 @@ async def _render_once(workspace, root, chat, name, quality, fps=30):
         jobs.append({"shape": shape, "slot": slot, "sha": sha, "token": job["token"], "sound": job.get("sound"),
                      "collected": False})
     results = await asyncio.gather(*(video.wait(workspace, j["token"], BUDGET["render"]) for j in jobs))
+    t_wait = time.monotonic()
     for j, r in zip(jobs, results):
         if r.get("state") in ("gone", "expired") and j["collected"]:
             files.render_done(root, chat, j["slot"], None)   # that job is lost; start it again
@@ -708,6 +711,12 @@ async def _render_once(workspace, root, chat, name, quality, fps=30):
     if target != name:
         files.render_done(root, chat, target, jobs[0]["sha"])
     rel_mp4, v, size = made[0]
+    # where a render's time goes, beside the call's own total (tool_call): sending, the service (its queue, its
+    # renderer, its encode), and the MP4 brought back, for the next round of making videos faster
+    _log_render(chat, sizes=len(jobs), collected=sum(1 for j in jobs if j["collected"]), quality=asked,
+                media_ms=round((t_media - t0) * 1000), wait_ms=round((t_wait - t_media) * 1000),
+                fetch_ms=round((time.monotonic() - t_wait) * 1000), render_s=v.get("render_s"),
+                duration=v.get("duration"), bytes=sum(n for _, _, n in made))
     stream = v.get("stream") or {}
     facts = [f"{v['duration']:.1f} s" if v.get("duration") else "",
              f"{stream.get('width')}x{stream.get('height')}" if stream.get("width") else "",
@@ -1494,7 +1503,7 @@ def _fetched(chat, rels):
 
 # Words a person or a model uses for a mood, as the library tags it (a word that is a tag counts as itself).
 MUSIC_WORDS = {
-    "energetic": "upbeat", "energy": "upbeat", "happy": "playful", "fun": "playful", "fast": "upbeat", "dance": "upbeat",
+    "energetic": "upbeat", "energy": "upbeat", "festive": "upbeat", "celebration": "upbeat", "party": "upbeat", "happy": "playful", "fun": "playful", "fast": "upbeat", "dance": "upbeat",
     "chill": "calm", "relaxed": "calm", "soft": "calm", "ambient": "calm", "luxury": "minimal-piano", "elegant": "minimal-piano",
     "piano": "minimal-piano", "acoustic": "warm-acoustic", "guitar": "warm-acoustic", "folk": "warm-acoustic",
     "arabic": "middle-eastern", "oud": "middle-eastern", "ramadan": "middle-eastern", "eid": "middle-eastern",
@@ -1503,6 +1512,16 @@ MUSIC_WORDS = {
     "epic": "inspiring", "cinematic": "inspiring", "hopeful": "inspiring", "uplifting": "inspiring", "emotional": "inspiring",
 }
 MUSIC_SHOWN = 4
+# A pace asked for in words, and the tempo band (bpm) a track at that pace sits in. The library's tempo is its steady
+# grid's (beats.py keeps it within 70-140 bpm), so a brief that says "energetic" gets a quick track before a slow one
+# that is merely tagged upbeat. "120 bpm" asks for that tempo itself.
+PACE_WORDS = {
+    "slow": {"slow", "calm", "chill", "relaxed", "soft", "gentle", "ambient", "peaceful", "dreamy", "lofi", "lo-fi",
+             "unhurried", "spiritual", "emotional", "luxury", "elegant", "sentimental", "reflective"},
+    "fast": {"fast", "energetic", "energy", "upbeat", "hype", "dance", "party", "sport", "sports", "action", "festive",
+             "celebration", "punchy", "quick", "dynamic", "exciting", "workout", "drive", "driving"},
+}
+PACE_BPM = {"slow": (60, 96), "fast": (112, 150)}
 
 
 def _music(query, length=None, chat=None):
@@ -1519,6 +1538,19 @@ def _music(query, length=None, chat=None):
     words = [w for w in str(query or "").lower().replace(",", " ").replace("/", " ").split() if w]
     tagged = {MUSIC_WORDS.get(w, w) for w in words} | {"-".join(words)} if words else set()
     length = float(length) if isinstance(length, (int, float)) and 1 <= length <= 600 else None
+    asked = re.search(r"(\d{2,3})\s*bpm", str(query or "").lower())
+    paces = {p for p, ws in PACE_WORDS.items() if ws & set(words)}
+    band = ((int(asked.group(1)) - 8, int(asked.group(1)) + 8) if asked
+            else PACE_BPM[next(iter(paces))] if len(paces) == 1 else None)
+
+    def tempo(t):
+        """0: in the pace asked for, 1: tempo unknown (no steady beat), 2: off it."""
+        if not band:
+            return 0
+        bpm = t.get("bpm") if (t.get("beat") or {}).get("every") else None
+        if not isinstance(bpm, (int, float)) or bpm <= 0:
+            return 1
+        return 0 if band[0] <= bpm <= band[1] else 2
 
     def score(t):
         tags = [m.lower() for m in t.get("mood") or []]
@@ -1526,7 +1558,9 @@ def _music(query, length=None, chat=None):
         return 3 * sum(1 for m in tags if m in tagged) + sum(1 for w in words if w in hay)
 
     steady = lambda t: bool((t.get("beat") or {}).get("every"))  # noqa: E731
-    ranked = sorted(tracks, key=lambda t: (-score(t), not steady(t)))
+    # a tempo named outright ("120 bpm") comes before how many words match; a pace in words breaks ties
+    ranked = sorted(tracks, key=(lambda t: (score(t) == 0, tempo(t), -score(t), not steady(t))) if asked
+                    else (lambda t: (-score(t), tempo(t), not steady(t))))
     found = bool(words) and score(ranked[0]) > 0
     if words and not found:
         # one track for each of the first moods, steady beats first: something to start from
@@ -1553,7 +1587,8 @@ def _music(query, length=None, chat=None):
                  "of the first moods, to start from (or ask again with one of those moods):"]
     else:
         lines = [f"Library tracks{' for ' + repr(query) if words else ''}, the best fit first (use one as src=\"music:<id>\"; "
-                 "music only when the person wants it):"]
+                 "music only when the person wants it)"
+                 + (f", a tempo of {band[0]}-{band[1]} bpm first for the pace asked" if band else "") + ":"]
     for t in shown:
         beat = t.get("beat") or {}
         every = beat.get("every")
@@ -1592,6 +1627,11 @@ def _music(query, length=None, chat=None):
         lines.append("Once written, the sound map lists the beats and bars in the video's time, and a cut off the beat is "
                      "pointed out.")
     return "\n".join(lines)
+
+
+def _log_render(chat, **facts):
+    from ..logs import log
+    log("video_render", chat_id=chat, **facts)
 
 
 def _log_music(query, found, length, chat=None):

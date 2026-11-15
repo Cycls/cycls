@@ -225,6 +225,24 @@ def quality_lines(q):
     return lines
 
 
+def burned_lines(b):
+    """Words already burned into the clip (cycls-video burned.py): captions someone added before it was sent, or a
+    fixed line of text. Said with the clip, so the video's own captions do not go over them and its text keeps
+    clear of that strip."""
+    if not isinstance(b, dict) or b.get("kind") not in ("captions", "text"):
+        return []
+    y0, y1 = float(b.get("y0", 0)), float(b.get("y1", 0))
+    mid = (y0 + y1) / 2
+    where = "near the top" if mid < 0.35 else "near the bottom" if mid > 0.65 else "across the middle"
+    strip = f"{where} ({round(y0 * 100)}–{round(y1 * 100)}% down the frame, {_t(b.get('from'))}–{_t(b.get('to'))} s)"
+    if b["kind"] == "captions":
+        return [f"Captions are already burned into this clip, {strip}. Don't lay captions of your own over this "
+                "stretch: two sets of words at once read as a mistake. Leave the video's captions off where it plays "
+                "(or use another stretch, or a crop that leaves them out), and keep your own text out of that strip."]
+    return [f"A fixed line of text is burned into this clip, {strip} (a title, a name, a watermark): keep your own "
+            "text and captions out of that strip, or use a crop that leaves it out."]
+
+
 def matched_text(matched):
     """The footage the service evened out (cycls-video match.mjs), as the check's reply says it, or ''."""
     if not isinstance(matched, list) or not matched:
@@ -282,6 +300,7 @@ def footage_text(rel, info, *, words_rel=None, reused=False, credit=None):
     else:
         lines.append("One shot, with no cut in it.")
     lines += quality_lines(info.get("quality"))
+    lines += burned_lines(info.get("burned"))
     said = info.get("transcript") or {}
     sentences = said.get("sentences") or []
     first = None

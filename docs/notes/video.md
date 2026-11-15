@@ -970,3 +970,13 @@ The rerun of the perfume brief on production (7.9 min) showed three avoidable st
 - The grade arithmetic is unchanged, so matching and the floor under dark footage hold as they were. The
   service's notes (docs/quirks.md, "HyperFrames 0.9.26") have the rest: the players renamed `*.min.js` for 0.9's
   lint, `check --no-craft --no-cache`, the editor's rewritten edits.
+
+**2026-11-15, the evening round.** Music follows the pace asked for: `PACE_WORDS` (energetic, festive, fast … / calm,
+chill, slow …) set a tempo band (112-150 / 60-96 bpm) that breaks ties between tracks of the same mood, and "120 bpm"
+asks for a tempo outright (±8, ahead of the words). "festive", "celebration", "party" read as upbeat. The editor is
+sent the brand's name and website (`editor._brand`, brand.identity; the Arabic name for an Arabic video) for its new
+End card in the Motion menu. Words burned into a clip (the service's burned.py) are said in the footage reply
+(`report.burned_lines`). A render logs where its time went (`video_render`: media_ms, wait_ms, fetch_ms, render_s,
+duration, sizes). Measured on super-dev over 14 days (349 Video calls, 8,775 s): edit 34% (median 25 s, p90 91 s),
+footage 23% (26 s), render 21% (75 s), write 10%; a review's GPU part is ~9 s (frames 8.6 s beside a 4 s check) of a
+20 s median wait.
