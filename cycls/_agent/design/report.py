@@ -64,6 +64,9 @@ def _edit_names(r):
         out += f" Changed: {', '.join(r['changed'][:30])}."
     if r.get("added"):
         out += f" Added: {', '.join(r['added'][:30])}."
+    if r.get("deleted"):
+        # (Said, or a deletion reads as one that didn't happen: an agent told only "Changed: Title 1" tried again.)
+        out += f" Taken out: {', '.join(r['deleted'][:30])}."
     for asked, name in (r.get("resolved") or [])[:10]:
         out += f" {json.dumps(asked, ensure_ascii=False)} is named {name} — use that name."
     return out

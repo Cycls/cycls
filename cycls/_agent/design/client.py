@@ -247,6 +247,7 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             # resolved: [what was asked, the part it was] for a name that wasn't one
             "changed": [str(n) for n in data.get("changed") or [] if isinstance(n, str)],
             "added": [str(n) for n in data.get("added") or [] if isinstance(n, str)],
+            "deleted": [str(n) for n in data.get("deleted") or [] if isinstance(n, str)],
             "resolved": [[str(p[0]), str(p[1])] for p in data.get("resolved") or []
                          if isinstance(p, list) and len(p) == 2],
             "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)],

@@ -315,3 +315,20 @@ def test_the_canvas_download_of_an_imported_deck_is_the_persons_own_file(tmp_pat
     assert pathlib.Path(path).read_bytes() == b"PPTX-BACK" and name == "Q3 pitch.pptx"
     path, _ = asyncio.run(_design_export(str(tmp_path), str(tmp_path / "Q3 pitch.fig"), "pdf", "u"))
     assert pathlib.Path(path).read_bytes() == b"PPTX-ANEW"                     # a PDF is made as before
+
+
+def test_an_edit_says_what_it_took_out(monkeypatch):
+    """Told only "Changed: Title 1", an agent took its deletion for one that hadn't happened and tried again."""
+    from cycls._agent.design.report import _edit_names
+    assert _edit_names({"changed": ["Title 1"], "deleted": ["Content Placeholder 2 para 5"]}) == \
+        " Changed: Title 1. Taken out: Content Placeholder 2 para 5."
+
+    async def _post(path, body, user_id=None):
+        return {"ok": True, "fig_base64": base64.b64encode(b"F").decode(), "deleted": ["x para 2"], "changed": []}
+    monkeypatch.setattr(client, "_post", _post)
+    assert asyncio.run(client.apply(b"F", ops=[{"op": "delete", "node": "x para 2"}]))["deleted"] == ["x para 2"]
+
+
+def test_script_says_it_makes_a_new_design():
+    from cycls._agent.design import tool
+    assert "MAKES A NEW design" in tool._DESIGN_TOOL["description"] and "to look at a design use `inspect`" in tool._DESIGN_TOOL["description"]
