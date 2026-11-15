@@ -214,7 +214,7 @@ def test_the_tool_offers_import_whole_and_short():
     whole, short = tool._DESIGN_TOOL, tool._DESIGN_TOOL_SHORT
     assert "import" in whole["input_schema"]["properties"]["action"]["enum"]
     assert "import" in short["input_schema"]["properties"]["action"]["enum"]
-    assert "- import {path, name?}" in whole["description"] and "never edit the .pptx with a script" in whole["description"]
+    assert "- import {path, name?}" in whole["description"] and "a script over the .pptx only" in whole["description"]
     assert "PowerPoint deck the person brought" in short["description"]
     assert "import" in short["input_schema"]["properties"]["action"]["description"]
     assert tool_step("design", {"action": "import", "path": "attachments/pitch.pptx"})["step"] == "import attachments/pitch.pptx"

@@ -53,7 +53,7 @@ def _how_to_change(fig_rel, name):
             f"its slides with add_slide (laid out in the deck's own colours and fonts) / move_slide / duplicate_slide / "
             f"delete_slide / update_slide {{number, notes|title}}. update_slide with a `slide` replaces that slide with "
             f"one of Design's layouts: only when they want it redesigned. {fig_rel} is the deck from now on — don't "
-            f"import the file again, and don't edit the .pptx with a script.")
+            f"import the file again.")
 
 
 async def _import_deck(inp, workspace, name):

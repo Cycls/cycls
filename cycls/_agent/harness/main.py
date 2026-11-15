@@ -288,7 +288,8 @@ def _deck_note(fname, read):
     said = "its text is below" if read else "its text couldn't be read here"
     return (f"[Attached: {fname}, a PowerPoint deck; {said}. To change it (its words, colours, pictures or slides), "
             f"bring it in with the Design tool first: {{\"action\": \"import\", \"path\": {json.dumps(fname, ensure_ascii=False)}}} "
-            "opens it as a design with every shape named, to edit — not a script over the .pptx.]")
+            "opens it as a design with every shape named, to edit (a script over the .pptx only when they need "
+            "their own file kept exactly).]")
 
 
 async def _ingest(content, workspace, vision=True, video=False, transcribe=False, chat_id=None, design=False):
@@ -301,7 +302,7 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
     pointed at its `footage` action rather than at extracting it by hand; with
     `transcribe=True`, an attached recording at the Transcribe tool; with
     `design=True`, an attached PowerPoint deck at Design's `import`, the way it
-    is changed (not a script over the .pptx)."""
+    is changed."""
     if not isinstance(content, list): return content
     out = []
     for block in content:
