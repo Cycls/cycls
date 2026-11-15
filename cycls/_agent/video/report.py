@@ -32,8 +32,9 @@ NOTES = {"kept_off_face"}
 
 
 def _note(f):
-    where = f" (on {f['selector']})" if f.get("selector") else ""
-    text = f"- {str(f.get('message') or '').strip()}{where}"
+    said = str(f.get("message") or "").strip()
+    where = f" (on {f['selector']})" if f.get("selector") and f["selector"] not in said else ""
+    text = f"- {said}{where}"
     if f.get("fixHint"):
         text += f" {str(f['fixHint']).strip()}"
     return text[:900]
