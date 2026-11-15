@@ -53,6 +53,36 @@ def _get_base_url():
     import cycls
     return cycls.base_url or os.getenv("CYCLS_BASE_URL")
 
+
+# The deploy's status stream: one long response, silent for minutes while the image builds. A router, VPN or NAT
+# that drops a silent connection does it without a word, and the client waited out its whole timeout (2.5 h) for a
+# status line already sent into the void, while the deploy itself finished (seen 2026-11-15, three times). TCP
+# keepalive sends a probe every 15 s while the stream is quiet, which keeps such a path open, and, when the path is
+# gone anyway, ends the wait in about a minute instead.
+KEEPALIVE_S = 15
+KEEPALIVE_PROBES = 4
+STATUS_SILENCE_S = 1800      # the longest a build may go without a status line before the wait is given up
+
+
+def _keepalive_options() -> list:
+    import socket
+    opts = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]
+    for name, value in (("TCP_KEEPIDLE", KEEPALIVE_S), ("TCP_KEEPALIVE", KEEPALIVE_S),   # Linux and Windows; macOS
+                        ("TCP_KEEPINTVL", KEEPALIVE_S), ("TCP_KEEPCNT", KEEPALIVE_PROBES)):
+        if hasattr(socket, name):
+            opts.append((socket.IPPROTO_TCP, getattr(socket, name), value))
+    return opts
+
+
+@contextlib.contextmanager
+def _deploy_request(url: str, **kwargs):
+    """POST the deploy and yield the streaming response, over a connection kept alive while it is quiet."""
+    import httpx
+    timeout = httpx.Timeout(30, read=STATUS_SILENCE_S, write=600)
+    with httpx.Client(transport=httpx.HTTPTransport(socket_options=_keepalive_options()), timeout=timeout) as client:
+        with client.stream("POST", url, **kwargs) as response:
+            yield response
+
 def _hash_path(path_str: str) -> str:
     h = hashlib.sha256()
     p = Path(path_str)
@@ -504,45 +534,57 @@ CMD ["python", "entrypoint.py"]
                         tar.add(f, arcname=f.relative_to(workdir))
 
             url = None
-            with open(archive_path, 'rb') as f, httpx.stream(
-                "POST",
-                f"{base_url}/v1/deploy",
-                data={
-                    "function_name": self.name,
-                    "port": port,
-                    "memory": "1Gi",
-                    "timeout": 1200,
-                    "use_http2": "true",
-                    "session_affinity": "true",
-                    **self.spec,
-                },
-                files={"source_archive": (archive_name, f, "application/gzip")},
-                headers={"X-API-Key": self.api_key},
-                timeout=9000,
-            ) as response:
-                if response.is_error:
-                    response.read()
-                    print(f"Deploy failed: {response.status_code}")
-                    try:
-                        print(f"  {response.json()['detail']}")
-                    except (json.JSONDecodeError, KeyError):
-                        print(f"  {response.text}")
-                    return None
+            heard = False      # a status line came back: Cycls Cloud has the archive and is building it
+            try:
+                with open(archive_path, 'rb') as f, _deploy_request(
+                    f"{base_url}/v1/deploy",
+                    data={
+                        "function_name": self.name,
+                        "port": port,
+                        "memory": "1Gi",
+                        "timeout": 1200,
+                        "use_http2": "true",
+                        "session_affinity": "true",
+                        **self.spec,
+                    },
+                    files={"source_archive": (archive_name, f, "application/gzip")},
+                    headers={"X-API-Key": self.api_key},
+                ) as response:
+                    if response.is_error:
+                        response.read()
+                        print(f"Deploy failed: {response.status_code}")
+                        try:
+                            print(f"  {response.json()['detail']}")
+                        except (json.JSONDecodeError, KeyError):
+                            print(f"  {response.text}")
+                        return None
 
-                for line in response.iter_lines():
-                    if line:
-                        event = json.loads(line)
-                        status = event.get("status", "")
-                        msg = event.get("message", "")
-                        print(f"  [{status}] {msg}")
-                        if status == "DONE":
-                            url = event.get("url")
-                            print(f"Deployed: {url}")
-                            if remote is True and not self.name.startswith("exec-"):
-                                print(f'Call it: cycls.remote("{self.name}")(...)')
-                            break
-                        elif status == "ERROR":
-                            return None
+                    for line in response.iter_lines():
+                        if line:
+                            heard = True
+                            event = json.loads(line)
+                            status = event.get("status", "")
+                            msg = event.get("message", "")
+                            print(f"  [{status}] {msg}")
+                            if status == "DONE":
+                                url = event.get("url")
+                                print(f"Deployed: {url}")
+                                if remote is True and not self.name.startswith("exec-"):
+                                    print(f'Call it: cycls.remote("{self.name}")(...)')
+                                break
+                            elif status == "ERROR":
+                                return None
+            except httpx.TransportError as e:
+                # The line to Cycls Cloud went, not the deploy: once it is building, it finishes on its own.
+                if heard:
+                    print(f"Lost the connection to Cycls Cloud while it was building '{self.name}' "
+                          f"({type(e).__name__}). The deploy itself goes on: in a few minutes "
+                          f"`cycls logs {self.name} --since 10m` shows a new \"Running on\" line once it is live.")
+                else:
+                    print(f"Lost the connection to Cycls Cloud before it answered ({type(e).__name__}: {e}). "
+                          f"It may or may not have started building '{self.name}': check `cycls logs {self.name} "
+                          f"--since 10m` in a few minutes, or deploy again.")
+                return None
             return url
 
     def _image_config(self):
