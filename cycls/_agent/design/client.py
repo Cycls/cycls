@@ -278,6 +278,16 @@ async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False,
     return base64.b64decode(data["image_base64"])
 
 
+async def export_back(fig, original, scale=2, user_id=None):
+    """An imported design as PowerPoint, written back into the file it came from (`original`, its bytes) →
+    (bytes, written): {kept, changed, copies, removed} — slide numbers — or {rebuilt: True, why: […]} when a
+    change couldn't be written back and the deck was written anew from the design ({} from an older service)."""
+    body = {"fig": base64.b64encode(fig).decode(), "format": "pptx", "scale": scale,
+            "original": base64.b64encode(original).decode()}
+    data = await _post("/export", body, user_id)
+    return base64.b64decode(data["image_base64"]), dict(data.get("written") or {})
+
+
 async def export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
     """One page as `fmt` → (bytes, pages, its name); a missing page raises RuntimeError naming the rest."""
     data = await _export(fig, fmt, scale, width, user_id, False, page)

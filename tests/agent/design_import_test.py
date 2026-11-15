@@ -3,6 +3,7 @@ the service's /import asked for part by part, the deck written once whole, the s
 once, what can't be brought in said once — and an attached deck pointed at `import`. No service is
 contacted (the client's wire and the import call are faked)."""
 import asyncio
+import pathlib
 import base64
 import hashlib
 import types
@@ -106,7 +107,7 @@ def test_an_uploaded_deck_is_imported_as_one_design_open_on_the_canvas(tmp_path,
     assert "brought in as a deck (3 slides)" in text and "ONE file, Q3 pitch.fig" in text
     assert "named after its PowerPoint shape" in text and "`edit`" in text and "don't import the file again" in text
     assert "Calibri isn't an open font" in text and "animations aren't kept" in text and "tell the person once" in text
-    assert "isn't their original file" in text                     # what the PowerPoint download is, said plainly
+    assert "their own file with your changes written into it" in text and "`export` says" in text   # what the download is
     assert "not yours to QA" in text
 
 
@@ -241,3 +242,73 @@ def test_an_attached_deck_is_pointed_at_import_when_design_is_offered(tmp_path, 
     monkeypatch.setattr(main, "_exec_read", _unread)
     out = asyncio.run(main._ingest(block, str(tmp_path), design=True))
     assert len(out) == 1 and "its text couldn't be read here" in out[0]["text"] and '"action": "import"' in out[0]["text"]
+
+
+# ---- the deck back into the person's own file ----
+
+def _imported_deck(tmp_path, monkeypatch, data=b"PK\x03\x04 a deck"):
+    """A deck imported (its file kept), the service's `inspect` answering with its record."""
+    _fake_import(monkeypatch)
+    _run(tmp_path, path=_pptx(tmp_path, data=data))
+    sha = hashlib.sha256(data).hexdigest()
+
+    async def _outline(fig, user_id=None, page=None, full=False, sheets=False):
+        return {"frames": [], "pages": [], "page": "", "keep": {"kind": "deck", "imported": {"sha256": sha}}}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    return sha
+
+
+def test_the_file_a_deck_came_from_is_kept_and_found_for_its_design(tmp_path, monkeypatch):
+    sha = _imported_deck(tmp_path, monkeypatch)
+    assert (tmp_path / ".cache" / "design" / "decks" / f"{sha}.pptx").read_bytes() == b"PK\x03\x04 a deck"
+    # Found by the design's own record — wherever the design is now, whatever it is called.
+    (tmp_path / "Q3 pitch.fig").rename(tmp_path / "renamed.fig")
+    assert asyncio.run(powerpoint.original_for(str(tmp_path), b"FIG", "u")) == b"PK\x03\x04 a deck"
+    # Not when the record names another file, or there's no record, or the two wouldn't fit one request.
+    async def _other(fig, **kw):
+        return {"keep": {"kind": "deck"}}
+    monkeypatch.setattr("cycls._agent.design.outline", _other)
+    assert asyncio.run(powerpoint.original_for(str(tmp_path), b"FIG")) is None
+    _imported_deck(tmp_path, monkeypatch)
+    monkeypatch.setattr(powerpoint, "_SERVICE_BODY", 10)
+    assert asyncio.run(powerpoint.original_for(str(tmp_path), b"FIG")) is None
+
+
+def test_a_workspace_that_never_imported_a_deck_asks_the_service_nothing(tmp_path, monkeypatch):
+    async def _outline(*a, **k):
+        raise AssertionError("asked")
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    assert asyncio.run(powerpoint.original_for(str(tmp_path), b"FIG")) is None
+
+
+def test_exporting_an_imported_deck_writes_into_the_persons_own_file_and_says_so(tmp_path, monkeypatch):
+    _imported_deck(tmp_path, monkeypatch)
+    sent = {}
+
+    async def _back(fig, original, scale=2, user_id=None):
+        sent.update(fig=fig, original=original)
+        return b"PPTX-BACK", sent.get("written", {"kept": [2, 3], "changed": [1], "copies": [], "removed": 0})
+    monkeypatch.setattr("cycls._agent.design.export_back", _back)
+    out = asyncio.run(_exec_design({"action": "export", "name": "Q3 pitch", "format": "pptx"}, _ws(tmp_path)))
+    assert sent["original"] == b"PK\x03\x04 a deck" and (tmp_path / "Q3 pitch.pptx").read_bytes() == b"PPTX-BACK"
+    assert "person's own file with the changes written in (slides 1 changed)" in _text(out)
+    sent["written"] = {"rebuilt": True, "why": ['slide 2: "Title 1" was restyled']}
+    out = asyncio.run(_exec_design({"action": "export", "name": "Q3 pitch", "format": "pptx"}, _ws(tmp_path)))
+    assert "written anew from the design" in _text(out) and "restyled" in _text(out)
+
+
+def test_the_canvas_download_of_an_imported_deck_is_the_persons_own_file(tmp_path, monkeypatch):
+    from cycls._agent.web.design_routes import _design_export
+    _imported_deck(tmp_path, monkeypatch)
+
+    async def _back(fig, original, scale=2, user_id=None):
+        return b"PPTX-BACK", {"kept": [1]}
+
+    async def _plain(*a, **k):
+        return b"PPTX-ANEW"
+    monkeypatch.setattr("cycls._agent.design.export_back", _back)
+    monkeypatch.setattr("cycls._agent.design.export", _plain)
+    path, name = asyncio.run(_design_export(str(tmp_path), str(tmp_path / "Q3 pitch.fig"), "pptx", "u"))
+    assert pathlib.Path(path).read_bytes() == b"PPTX-BACK" and name == "Q3 pitch.pptx"
+    path, _ = asyncio.run(_design_export(str(tmp_path), str(tmp_path / "Q3 pitch.fig"), "pdf", "u"))
+    assert pathlib.Path(path).read_bytes() == b"PPTX-ANEW"                     # a PDF is made as before

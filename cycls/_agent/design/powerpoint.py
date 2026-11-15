@@ -42,6 +42,59 @@ def _remember(root, sha, fig_rel, src):
     tmp.replace(path)
 
 
+_ORIGINALS = (".cache", "design", "decks")   # each deck brought in, as it came: <sha256>.pptx
+
+
+def _keep_original(root, sha, data):
+    """The file as it came in, kept where the person's moving or deleting their upload doesn't reach it: a
+    PowerPoint export of its design is that file with the changes written in (cycls-design writeback)."""
+    path = pathlib.Path(root, *_ORIGINALS, f"{sha}.pptx")
+    if path.is_file():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.part")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
+async def original_for(root, fig, user_id=None):
+    """The file an imported design came from (its record names its sha256), to export it back into; None for a
+    design that wasn't imported, whose file isn't kept, or that with it would be over what one request carries.
+    A workspace that never imported a deck asks the service nothing."""
+    from cycls._agent import design
+    store = pathlib.Path(root, *_ORIGINALS)
+    if not await asyncio.to_thread(lambda: store.is_dir() and any(store.glob("*.pptx"))):
+        return None
+    try:
+        sha = ((await design.outline(fig, user_id=user_id)).get("keep") or {}).get("imported", {}).get("sha256")
+    except Exception:            # (the export that follows says what is wrong with the service, if anything is)
+        return None
+    path = store / f"{sha}.pptx" if isinstance(sha, str) and sha.isalnum() else None
+    if not path or not await asyncio.to_thread(path.is_file):
+        return None
+    data = await asyncio.to_thread(path.read_bytes)
+    return data if (len(data) + len(fig)) * 4 // 3 + (1 << 20) <= _SERVICE_BODY else None
+
+
+def written_said(written, fmt="pptx"):
+    """What the service said of a PowerPoint export (`written`), for the model: the person's own file with the
+    changes written in, or the deck written anew and why."""
+    if not written:
+        return ""
+    if written.get("rebuilt"):
+        why = "; ".join(str(w) for w in (written.get("why") or [])[:6])
+        return (f" It was written anew from the design, not into the person's own file, because {why or 'of a change'} "
+                f"— what came in from their file and what was changed are in it, but its masters, animations and "
+                f"fonts are the design's. Say so if they need their own file.")
+    nums = lambda key: ", ".join(map(str, written.get(key) or []))
+    bits = [f"slides {nums('changed')} changed" if written.get("changed") else "",
+            f"slides {nums('copies')} copies" if written.get("copies") else "",
+            f"{written['removed']} slide{'s' if written.get('removed') != 1 else ''} deleted" if written.get("removed") else ""]
+    done = "; ".join(b for b in bits if b) or "nothing changed"
+    return (f" It is the person's own file with the changes written in ({done}); every other slide, its masters, "
+            f"animations and fonts are exactly as they brought them.")
+
+
 def _mb(n):
     return f"{n / 1048576:.1f}".rstrip("0").rstrip(".")
 
@@ -130,6 +183,7 @@ async def _import_deck(inp, workspace, name):
             await asyncio.to_thread((root / fig_rel).parent.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread((root / fig_rel).write_bytes, fig)
         await asyncio.to_thread(_remember, root, sha, fig_rel, src)
+        await asyncio.to_thread(_keep_original, root, sha, data)
     from cycls._agent.design import refresh
     refresh.schedule(workspace.root, fig_rel, subject)        # its preview, made ready
     count = r["count"] or len(r["slides"]) or len(first["slides"])
@@ -142,9 +196,11 @@ async def _import_deck(inp, workspace, name):
     if report:
         ack += (" What changed on the way in — tell the person once, in a line, what matters to them (not a list "
                 "of it all): " + "; ".join(report) + ".")
-    ack += (" When they download it as PowerPoint, the file is written again from this design: it isn't their "
-            "original file, and what is listed above stays out. If they need their own file kept exactly as it is, "
-            "say so before they rely on the download.")
+    ack += (" Downloaded as PowerPoint, it is their own file with your changes written into it — new words, "
+            "paragraphs or shapes taken out, speaker notes, slides moved, copied or deleted — and every other slide "
+            "exactly as they brought it. A change it can't write back yet (a node restyled, moved or added; a slide "
+            "made with Design's layouts) makes that download written anew from the design instead; `export` says "
+            "which it was.")
     # The model looks at the deck it was given: its first slides, the rest small on contact sheets.
     blocks, total = [], 0
     for n, jpg in enumerate(first["previews"][:_DESIGN_QA_SLIDES], 1):

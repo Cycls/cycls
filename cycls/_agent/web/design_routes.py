@@ -170,7 +170,12 @@ async def _design_export(root, src, fmt, user_id, page=None):
     if dst.exists():
         return dst, name
     data = await asyncio.to_thread(fig.read_bytes)
-    if fmt == "images":
+    # A deck imported from PowerPoint downloads as the person's own file, the changes written into it.
+    from cycls._agent.design.powerpoint import original_for
+    original = await original_for(root, data, user_id) if fmt == "pptx" and not page else None
+    if original:
+        data, _ = await design.export_back(data, original, user_id=user_id)
+    elif fmt == "images":
         data = _zip_slides(base, await design.export(data, fmt="png", user_id=user_id, every=True, page=page))
     else:
         data = await design.export(data, fmt=fmt, user_id=user_id, page=page)

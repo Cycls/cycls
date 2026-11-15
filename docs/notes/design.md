@@ -616,11 +616,21 @@ each shape named after its PowerPoint shape); `import {path, name?}` is the tool
   in the deck's own colours and fonts — the service keeps them as the deck's `look`); a
   slide is rebuilt with `update_slide {slide}` only when the person wants it redesigned. What
   didn't come in (the service's `report`: animations, some effects, a font that isn't open)
-  is said once, in a line. Downloaded as PowerPoint the deck is written again from the
-  design — it is not their original file — and the model says so when that matters. Its
-  slides come back to look at (the first twelve whole, or four and the rest on contact
-  sheets), not to be checked against our layout rules: the service's layout check leaves
-  an imported slide alone.
+  is said once, in a line. Its slides come back to look at (the first twelve whole, or four
+  and the rest on contact sheets), not to be checked against our layout rules: the service's
+  layout check leaves an imported slide alone.
+- **Back into their own file.** The file as it came in is kept at
+  `.cache/design/decks/<sha256>.pptx`, out of reach of the person moving or deleting their
+  upload. A PowerPoint export of the design — the `export` action, the canvas's download —
+  sends it along (`powerpoint.original_for`: found by the sha256 the design's own record
+  keeps, so a renamed or copied design finds it too; a workspace that never imported a deck
+  asks the service nothing), and gets back that file with the changes written in: new words,
+  paragraphs or shapes taken out, speaker notes, slides moved, copied, deleted; every other
+  slide byte for byte (cycls-design README, "Back into the person's own file"). A change the
+  service can't write back yet — a node restyled, moved or added, a slide made in Design —
+  makes the deck written anew instead; the service's `written` says which, and `export` tells
+  the model (`written_said`). The original and the design over one request's 30 MB: written
+  anew, as before.
 - **A refusal is final.** Every error says that nothing was saved and, where it is so, that
   importing again won't change it — a .ppt (asked to be saved as .pptx), a file the service
   can't read, a deck too large (a copy with compressed pictures comes in).
