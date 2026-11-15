@@ -1,5 +1,5 @@
 """The Design tool's executor: render, script, edit, inspect and extract here; slide, section,
-file and comment actions in actions.py."""
+file and comment actions in actions.py; a PowerPoint deck brought in (`import`) in powerpoint.py."""
 import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from . import skill
@@ -8,6 +8,7 @@ from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
 from .extract import _pdf_parts
+from .powerpoint import _import_deck
 from .report import _edit_names, _fixed_line, _layout_check, _outline_text
 from .files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _find_design, _free_design, _opened, _render_again,
     _replacing, _save_pages, _stem_of)
@@ -143,7 +144,9 @@ async def _design_call(inp, workspace):
     folder = DESIGN_FOLDER.get()
     if action == "extract" and not inp.get("name") and isinstance(inp.get("path"), str):
         name = _stem_of(inp["path"].rsplit(".", 1)[0])                     # its parts beside the PDF
-    elif action in ("render", "script", "extract"):
+    elif action == "import" and not inp.get("name") and isinstance(inp.get("path"), str):
+        name = _stem_of(inp["path"].replace("\\", "/").rsplit("/", 1)[-1], folder)   # the deck's own name, where the person is
+    elif action in ("render", "script", "extract", "import"):
         name = _stem_of(inp.get("name") or "design", folder)
     else:
         name = _find_design(workspace.root, inp.get("name") or "design", folder)
@@ -158,6 +161,8 @@ async def _design_call(inp, workspace):
         return await _exec_document(action, inp, workspace, name)
     if action == "extract":
         return await _pdf_parts(inp, workspace, name)
+    if action == "import":                                  # a PowerPoint deck, opened as a design to change
+        return await _import_deck(inp, workspace, name)
     if action in _FILE_ACTIONS:
         return await _exec_design_file(action, inp, workspace, name)
     if action == "comments":
@@ -412,4 +417,5 @@ async def _design_call(inp, workspace):
 
 
 def _design_step(inp):
-    return {"tool_name": "Design", "step": f"{inp.get('action', 'render')} {inp.get('name', '')}".strip()}
+    what = inp.get("name") or (inp.get("path") if inp.get("action") == "import" else "") or ""
+    return {"tool_name": "Design", "step": f"{inp.get('action', 'render')} {what}".strip()}

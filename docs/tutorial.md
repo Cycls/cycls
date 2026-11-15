@@ -423,6 +423,11 @@ The model calls one `design` tool:
   false` makes a one-page CV, letter, invoice or brief, headed by its title. Pages the
   user edited by hand are never laid out again without a word: the agent is told what
   they changed first.
+- **`import {path}`** — a PowerPoint deck the person uploaded (.pptx), opened as a design
+  to change: every slide as PowerPoint draws it, every shape named after its PowerPoint
+  shape, so `edit` and the slide actions work on it as on any deck. The reply says what
+  didn't come through (animations, some effects, fonts that aren't open). The same file
+  imported again points at its design.
 
 Every render comes back to the model as an image (a deck: every slide) with a layout
 check — overlapping text, text off an edge, too small, low contrast — to fix before it

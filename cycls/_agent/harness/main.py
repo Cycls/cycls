@@ -26,6 +26,7 @@ from ..tools import ondemand
 from ..video.client import offered as video_offered
 from ..office.client import offered as office_offered
 from ..transcribe.client import configured as transcribe_configured
+from ..design.client import configured as design_configured
 from ..tools import skills as skills_mod
 
 
@@ -279,9 +280,18 @@ CLIP_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm")   # what the Video tool's `foo
 # What the Transcribe tool hears beyond those (cycls/_agent/transcribe/tool.py's AUDIO_TYPES).
 AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".amr", ".caf", ".aif",
                   ".aiff", ".3gp")
+DECK_SUFFIXES = (".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm")   # what the Design tool's `import` opens
 
 
-async def _ingest(content, workspace, vision=True, video=False, transcribe=False, chat_id=None):
+def _deck_note(fname, read):
+    """What the model is told of an attached PowerPoint deck when Design is offered: change it by importing it."""
+    said = "its text is below" if read else "its text couldn't be read here"
+    return (f"[Attached: {fname}, a PowerPoint deck; {said}. To change it (its words, colours, pictures or slides), "
+            f"bring it in with the Design tool first: {{\"action\": \"import\", \"path\": {json.dumps(fname, ensure_ascii=False)}}} "
+            "opens it as a design with every shape named, to edit — not a script over the .pptx.]")
+
+
+async def _ingest(content, workspace, vision=True, video=False, transcribe=False, chat_id=None, design=False):
     """Resolve attachment refs in an incoming user message to inline blocks,
     framed with the filename so the model knows what the user attached.
     Reuses `_exec_read` as the single source of truth for path → content.
@@ -289,7 +299,9 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
     stays out of history — the model gets a note naming the file instead.
     With `video=True` (the Video tool is offered), an attached video clip is
     pointed at its `footage` action rather than at extracting it by hand; with
-    `transcribe=True`, an attached recording at the Transcribe tool."""
+    `transcribe=True`, an attached recording at the Transcribe tool; with
+    `design=True`, an attached PowerPoint deck at Design's `import`, the way it
+    is changed (not a script over the .pptx)."""
     if not isinstance(content, list): return content
     out = []
     for block in content:
@@ -310,7 +322,11 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
                         "with this path first." + (" If only what is said in it is wanted (a transcript, a "
                         "summary), the Transcribe tool writes it down." if transcribe else "") + "]"})
                     continue
+                deck = design and low.endswith(DECK_SUFFIXES) and (Path(workspace) / fname).is_file()
                 result = await _exec_read({"path": fname}, workspace, chat_id=chat_id)
+                if deck and isinstance(result, str) and result.startswith("Error:"):
+                    out.append({"type": "text", "text": _deck_note(fname, False)})
+                    continue
                 if isinstance(result, str) and result.startswith("Error:"):
                     out.append({"type": "text", "text":
                         f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
@@ -322,7 +338,7 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
                         f'[The user attached "{fname}" but this model can\'t view it directly (no vision). '
                         "It's saved in the workspace — propose a way to extract its content.]"})
                     continue
-                out.append({"type": "text", "text": f"[Attached: {fname}]"})
+                out.append({"type": "text", "text": _deck_note(fname, True) if deck else f"[Attached: {fname}]"})
                 if isinstance(result, list): out.extend(result); continue
                 if isinstance(result, str): out.append({"type": "text", "text": result}); continue
         out.append(block)
@@ -474,7 +490,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         incoming = context.messages.raw[-1]
         content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
                                 transcribe="Transcribe" in allowed_tools and transcribe_configured(),
-                                chat_id=session.chat_id)
+                                chat_id=session.chat_id, design="Design" in allowed_tools and design_configured())
         if mentions:
             titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                       for s in mcp_servers or [] if s._connector}

@@ -319,6 +319,29 @@ async def asset(name, kind=None, pick=0, user_id=None):
     return dict(data.get("asset") or {}), base64.b64decode(data["data_base64"])
 
 
+async def import_deck(pptx, start=0, fig=None, keep=None, preview=True, user_id=None):
+    """A PowerPoint file's bytes → one part of it as a design: up to 60 slides from `start` (0-based), fewer when
+    they hold many shapes. A later part goes with the design so far (`fig`) and is added after its slides; `keep`
+    (our record of the design) is given with the first. → {fig, slides, count (the deck's slides), next (where the
+    rest start, None at the end), report, fonts ({stand-in: the deck's own}), previews, sheets, sheet_pages}."""
+    body = {"pptx": base64.b64encode(pptx).decode(), "from": int(start), "preview": bool(preview)}
+    if fig is not None:
+        body["fig"] = base64.b64encode(fig).decode()
+    if keep:
+        body["keep"] = keep
+    data = await _post("/import", body, user_id)
+    nxt = data.get("next")
+    return {"fig": base64.b64decode(data["fig_base64"]),
+            "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)],
+            "count": int(data.get("count") or (data.get("deck") or {}).get("slides") or 0),
+            "next": int(nxt) if isinstance(nxt, int) and not isinstance(nxt, bool) else None,
+            "report": [str(n) for n in data.get("report") or [] if isinstance(n, str)],
+            "fonts": {str(k): str(v) for k, v in (data.get("fonts") or {}).items()},
+            "previews": _b64s(data.get("previews_base64")),
+            "sheets": _b64s(data.get("sheets_base64")),
+            "sheet_pages": [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2]}
+
+
 async def evaluate(script, fmt="png", scale=2, user_id=None, keep=None):
     """Escape hatch: run a raw plugin-API script (it must log `__FRAME__<id>`) → a Rendered."""
     return _decode(await _post("/eval", {"script": script, "format": fmt, "scale": scale, "preview": True,

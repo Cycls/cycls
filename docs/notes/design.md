@@ -584,6 +584,50 @@ the pages make themselves.
   KB a text page, an outline of the sections, a contents page whose rows are links.
   `?as=pdf` writes it from the `.fig`, so it is what was last saved.
 
+## A PowerPoint deck brought in
+
+Asked to change a deck someone uploaded, the agent had no way to: `read` gives a .pptx's
+text, the Design tool opened none, and the pptx skill's python-pptx scripts could not be
+checked by eye — the `render_file` tool they look with was never built — so a turn wrote a
+script, ran it, could not see the result and wrote another, each a little different and so
+past the harness's repeated-call guard. The service has read a .pptx into a design since
+2026-10-27 (cycls-design `POST /import`: every slide a frame, drawn as PowerPoint draws it,
+each shape named after its PowerPoint shape); `import {path, name?}` is the tool's door to it
+(`design/powerpoint.py`).
+
+- **One design, written whole.** The service brings in up to 60 slides a call, fewer when
+  they hold many shapes, and says where the rest start (`next`). The parts are asked for
+  in `_import_deck`, never by the model: each later one goes with the design so far, without
+  previews, and the `.fig` is written only once the whole deck is in — a deck that fails
+  half-way leaves nothing to be mistaken for it. A deck still unfinished after eight parts,
+  or whose pictures would fill a request (the service takes 30 MB, the .pptx and the design
+  so far both base64 in it), is refused, and so is one over 22 MB to begin with.
+- **Where.** Named after the file (`attachments/Q3 pitch.pptx` → `Q3 pitch.fig`), in the
+  folder the person has open, like a render — not beside the upload; `name` says otherwise.
+  A name taken gets a fresh one (`-2`).
+- **Once.** The file's sha256 goes in the design's record (`keep.imported: {source, sha256}`,
+  beside what the service adds: its slide count, its size in EMU, which open font stands
+  for which of its own) and in the workspace's `.cache/design/imports.json`. The same file
+  imported again points at its design and makes nothing; two imports of it at once (the
+  model calls tools in parallel) are one, under the file's lock. `replace: true` brings it in
+  again over its design, the earlier version kept in its history.
+- **What the model is told.** That the design is the deck from now on: change it with `edit`
+  by the names `inspect` lists and with the slide actions (`add_slide` lays a new slide out
+  in the deck's own colours and fonts — the service keeps them as the deck's `look`); a
+  slide is rebuilt with `update_slide {slide}` only when the person wants it redesigned. What
+  didn't come in (the service's `report`: animations, some effects, a font that isn't open)
+  is said once, in a line. Downloaded as PowerPoint the deck is written again from the
+  design — it is not their original file — and the model says so when that matters. Its
+  slides come back to look at (the first twelve whole, or four and the rest on contact
+  sheets), not to be checked against our layout rules: the service's layout check leaves
+  an imported slide alone.
+- **A refusal is final.** Every error says that nothing was saved and, where it is so, that
+  importing again won't change it — a .ppt (asked to be saved as .pptx), a file the service
+  can't read, a deck too large (a copy with compressed pictures comes in).
+- **The attachment says so.** With Design offered, an attached deck is introduced as one
+  (`harness/main.py` `_ingest`): its text below, and the `import` call that changes it — also
+  when its text couldn't be read.
+
 ## Two smaller things
 
 - **A renamed design is its file moved.** `PATCH /files/<x>.fig` moves the `.fig`, its
@@ -1165,10 +1209,11 @@ every name is still importable from where it used to be.
 |---|---|
 | `tool.py` | The tool as the model is given it — its definition, and the short form a chat carries until it designs. |
 | `skill.py` · `skills/` | The tool's own skills (markdown, one a file) and the `skill` action that loads them. |
-| `run.py` | The executor, `_exec_design`: render, script, edit, inspect, extract. Registered in `tools/` as the `design` tool. |
+| `run.py` | The executor, `_exec_design`: render, script, edit, inspect, extract, import. Registered in `tools/` as the `design` tool. |
 | `actions.py` | Slide actions, a document's section actions, the file actions (export, rename, copy, delete, versions), and a document rendered. |
 | `prepare.py` | What the model wrote, made ready for the service: a spec and its pages, a deck of layouts, a document, a slide, an edit's ops. With `brand.py` (colours, the brand kit) and `images.py` (a workspace image placed; the bounds on what is sent and shown). |
 | `extract.py` | A PDF taken apart to be made again as a document. |
+| `powerpoint.py` | A PowerPoint deck the person brought, opened as a design to change (`import`): the service asked part by part, the deck written once whole, the same file brought in once. |
 | `report.py` · `files.py` | What the model is told (the outline, what an edit touched, the layout check) · a design's file (its name as a path, a free one, the canvas opening it). |
 | `client.py` | The HTTP client to the service — what `from cycls._agent import design` gives. |
 | `deck.py` · `store.py` · `refresh.py` · `live.py` · `stock.py` · `assets.py` | Slide ops on a saved deck (its settings read from the file) · versions and the base a save names · a design's preview made ready after a save · rooms and passes · stock photos · the media library (a named asset fetched and placed; the `assets` listing). |
