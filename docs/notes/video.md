@@ -346,6 +346,10 @@ writes where they are in each piece's box on the `<video>` (`data-cycls-faces`, 
 runtime moves a scene whose words would cover a face to the top, middle or bottom, whichever is clear, in the frames,
 the editor's preview and the render alike; `data-face="keep"` keeps a scene where it was put. Nothing to do in the
 SDK: clips made ready before are sent again on the next `footage` call (the store says "none" for faces 2).
+A move is said: the browser check carries `kept_off_face` (severity info), and `report.findings_text` lists it
+under "Done on purpose by the look, not issues", never as a warning: on super-dev a model that saw its `top`
+headline in the middle with no word of why rewrote it back over the face, and the render reply asks for a fix
+whenever the check lists any finding.
 
 **The brand's end card** (2026-11-15): `motion {name, piece: "end-card", vars: {line}}` — the service's piece (the
 look's own card: logo, `.brand`, `.cta`, `.meta`) after the last scene, the video made that much longer, held to the
@@ -353,6 +357,8 @@ last frame. `_motion` fills the logo from the kit and the name and website from 
 `entity_name_ar` for an Arabic video; `source_url` without its scheme) through `brand.identity`; `name: ""` leaves
 the name out. A save of a branded video with no end card and no logo, when the kit's outro is the logo (its default),
 says how to add one (`brand.end_hint`, after `brand.hint`).
+The tool's text says a video of a set length keeps it with `extend: false`: the first real chat ("a 6-second
+reel … end it on an end card") built a card by hand to stay at 6 s, believing the piece always made it longer.
 
 **Whoever is talking** (2026-10-22, `faces.py` version 2): when two or more faces of similar size share a
 shot of a clip with words, the crop follows the one speaking — their mouths read again 8 times a second over

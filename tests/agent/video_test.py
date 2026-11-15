@@ -2381,3 +2381,19 @@ def test_the_end_card_says_the_brand_from_its_kit_and_a_video_without_one_is_tol
     sent.clear()
     _run({"action": "motion", "name": "promo", "piece": "end-card", "vars": {"name": ""}}, _ws(tmp_path))
     assert sent[0][1]["name"] == ""
+
+
+def test_a_scene_the_look_moved_off_a_face_is_a_note_not_an_issue():
+    from cycls._agent.video import report
+    note = {"code": "kept_off_face", "severity": "info", "selector": "#s1", "time": 0,
+            "message": "#s1 is shown in the middle, not at the top as written: there its words would cover a face.",
+            "fixHint": 'Nothing to fix: the look keeps faces clear. Add data-face="keep" to keep it.'}
+    warn = {"code": "contrast_aa_failure", "severity": "warning", "message": "Contrast is 2.7:1."}
+    alone = report.findings_text([note], title="Browser check")
+    # the render reply asks for a fix unless it reads "no issues": a note alone keeps it at that
+    assert alone.startswith("Browser check: no issues.") and "Done on purpose by the look" in alone
+    assert "#s1 is shown in the middle" in alone and 'data-face="keep"' in alone and "Fix:" not in alone
+    both = report.findings_text([note, warn], title="Browser check")
+    assert both.startswith("Browser check: 0 errors, 1 warning.") and "contrast_aa_failure" in both
+    assert both.index("contrast_aa_failure") < both.index("Done on purpose") and "kept_off_face" not in both
+    assert report.findings_text([], title="Browser check") == ""

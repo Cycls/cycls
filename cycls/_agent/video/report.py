@@ -26,17 +26,37 @@ def _finding(f):
     return text[:900]
 
 
+# What the look did on purpose, said by the service as a finding of severity info (cycls-video quirks.FACE_NOTE): told
+# apart from the findings, so nothing reads it as a fault to fix (the render reply asks for a fix when there are any).
+NOTES = {"kept_off_face"}
+
+
+def _note(f):
+    where = f" (on {f['selector']})" if f.get("selector") else ""
+    text = f"- {str(f.get('message') or '').strip()}{where}"
+    if f.get("fixHint"):
+        text += f" {str(f['fixHint']).strip()}"
+    return text[:900]
+
+
 def findings_text(findings, *, title):
+    notes = [f for f in findings if f.get("code") in NOTES]
+    findings = [f for f in findings if f.get("code") not in NOTES]
     errors = [f for f in findings if f.get("severity") == "error"]
     rest = [f for f in findings if f.get("severity") != "error"]
     shown = (errors + rest)[:MAX_FINDINGS]
-    if not shown:
-        return ""
-    lines = [f"{title}: {len(errors)} error{'s' if len(errors) != 1 else ''}, "
-             f"{len(rest)} warning{'s' if len(rest) != 1 else ''}."]
-    lines += [_finding(f) for f in shown]
-    if len(findings) > len(shown):
-        lines.append(f"(and {len(findings) - len(shown)} more)")
+    lines = []
+    if shown:
+        lines = [f"{title}: {len(errors)} error{'s' if len(errors) != 1 else ''}, "
+                 f"{len(rest)} warning{'s' if len(rest) != 1 else ''}."]
+        lines += [_finding(f) for f in shown]
+        if len(findings) > len(shown):
+            lines.append(f"(and {len(findings) - len(shown)} more)")
+    elif notes:
+        lines = [f"{title}: no issues."]
+    if notes:
+        lines.append("Done on purpose by the look, not issues:")
+        lines += [_note(f) for f in notes[:6]]
     return "\n".join(lines)
 
 
