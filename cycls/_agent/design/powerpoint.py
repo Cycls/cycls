@@ -81,18 +81,21 @@ def written_said(written, fmt="pptx"):
     changes written in, or the deck written anew and why."""
     if not written:
         return ""
+    why = "; ".join(str(w) for w in (written.get("why") or [])[:6])
     if written.get("rebuilt"):
-        why = "; ".join(str(w) for w in (written.get("why") or [])[:6])
         return (f" It was written anew from the design, not into the person's own file, because {why or 'of a change'} "
-                f"— what came in from their file and what was changed are in it, but its masters, animations and "
-                f"fonts are the design's. Say so if they need their own file.")
+                f"— what came in from their file and what was changed are in it, but its masters and animations are "
+                f"the design's. Say so if they need their own file.")
     nums = lambda key: ", ".join(map(str, written.get(key) or []))
     bits = [f"slides {nums('changed')} changed" if written.get("changed") else "",
             f"slides {nums('copies')} copies" if written.get("copies") else "",
             f"{written['removed']} slide{'s' if written.get('removed') != 1 else ''} deleted" if written.get("removed") else ""]
     done = "; ".join(b for b in bits if b) or "nothing changed"
+    remade = (f" Slides {nums('remade')} are made anew from the design inside it ({why}): their own drawing, laid on "
+              f"their layout with the background graphics hidden, its shapes partly pictures and their animations gone "
+              f"— tell the person which, in a line." if written.get("remade") else "")
     return (f" It is the person's own file with the changes written in ({done}); every other slide, its masters, "
-            f"animations and fonts are exactly as they brought them.")
+            f"animations and fonts are exactly as they brought them.{remade}")
 
 
 def _mb(n):
@@ -198,9 +201,9 @@ async def _import_deck(inp, workspace, name):
                 "of it all): " + "; ".join(report) + ".")
     ack += (" Downloaded as PowerPoint, it is their own file with your changes written into it — new words, "
             "paragraphs or shapes taken out, speaker notes, slides moved, copied or deleted — and every other slide "
-            "exactly as they brought it. A change it can't write back yet (a node restyled, moved or added; a slide "
-            "made with Design's layouts) makes that download written anew from the design instead; `export` says "
-            "which it was.")
+            "exactly as they brought it. A slide whose change can't be written into it (a node restyled, moved or "
+            "added; a slide made with Design's layouts) is made anew from the design inside their file, the rest "
+            "still theirs; `export` says which slides.")
     # The model looks at the deck it was given: its first slides, the rest small on contact sheets.
     blocks, total = [], 0
     for n, jpg in enumerate(first["previews"][:_DESIGN_QA_SLIDES], 1):

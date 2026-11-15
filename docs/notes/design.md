@@ -626,11 +626,13 @@ each shape named after its PowerPoint shape); `import {path, name?}` is the tool
   keeps, so a renamed or copied design finds it too; a workspace that never imported a deck
   asks the service nothing), and gets back that file with the changes written in: new words,
   paragraphs or shapes taken out, speaker notes, slides moved, copied, deleted; every other
-  slide byte for byte (cycls-design README, "Back into the person's own file"). A change the
-  service can't write back yet — a node restyled, moved or added, a slide made in Design —
-  makes the deck written anew instead; the service's `written` says which, and `export` tells
-  the model (`written_said`). The original and the design over one request's 30 MB: written
-  anew, as before.
+  slide byte for byte (cycls-design README, "Back into the person's own file"). A slide whose
+  change can't be written into its own XML — a node restyled, moved or added, a slide made in
+  Design — is made anew from the design inside their file, the rest still theirs; what is made
+  anew names the deck's own fonts. The service's `written` says which slides (`remade`, and
+  why), and `export` tells the model (`written_said`). What no slide made anew helps (slides
+  moved in a deck with sections, a deck of another size) writes the whole deck anew, as before;
+  so does the original with the design over one request's 30 MB.
 - **A refusal is final.** Every error says that nothing was saved and, where it is so, that
   importing again won't change it — a .ppt (asked to be saved as .pptx), a file the service
   can't read, a deck too large (a copy with compressed pictures comes in).

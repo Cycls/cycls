@@ -292,9 +292,12 @@ def test_exporting_an_imported_deck_writes_into_the_persons_own_file_and_says_so
     out = asyncio.run(_exec_design({"action": "export", "name": "Q3 pitch", "format": "pptx"}, _ws(tmp_path)))
     assert sent["original"] == b"PK\x03\x04 a deck" and (tmp_path / "Q3 pitch.pptx").read_bytes() == b"PPTX-BACK"
     assert "person's own file with the changes written in (slides 1 changed)" in _text(out)
-    sent["written"] = {"rebuilt": True, "why": ['slide 2: "Title 1" was restyled']}
+    sent["written"] = {"kept": [1, 3], "changed": [], "copies": [], "removed": 0, "remade": [2], "why": ['slide 2: "Title 1" was restyled']}
     out = asyncio.run(_exec_design({"action": "export", "name": "Q3 pitch", "format": "pptx"}, _ws(tmp_path)))
-    assert "written anew from the design" in _text(out) and "restyled" in _text(out)
+    assert "Slides 2 are made anew from the design inside it" in _text(out) and "restyled" in _text(out)
+    sent["written"] = {"rebuilt": True, "why": ["the deck is a size a slide made anew isn't laid out for"]}
+    out = asyncio.run(_exec_design({"action": "export", "name": "Q3 pitch", "format": "pptx"}, _ws(tmp_path)))
+    assert "written anew from the design, not into the person's own file" in _text(out) and "size" in _text(out)
 
 
 def test_the_canvas_download_of_an_imported_deck_is_the_persons_own_file(tmp_path, monkeypatch):
