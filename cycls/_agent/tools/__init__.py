@@ -86,8 +86,8 @@ _BASH_TOOL = {
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "description": "The shell command to execute."},
         "timeout": {"type": "integer", "description": "Timeout in milliseconds (default: 600000, max: 600000)."},
-        "description": {"type": "string", "description": "Short 5-10 word active-voice summary of what this command does (shown in the UI). Example: 'List files in current directory', 'Run pytest suite'."},
-    }, "required": ["command"]}
+        "description": {"type": "string", "description": "What this command does in 5 to 10 plain words, in the language of the person's latest message. They see it, so no code. Example: 'Convert the report to PDF', 'Count the rows in the sheet'."},
+    }, "required": ["command", "description"]}
 }
 
 _READ_TOOL = {
@@ -1182,8 +1182,7 @@ _TOOLS = {
     "edit":       Tool(lambda inp, ws, **_: asyncio.to_thread(_exec_edit, inp, ws.root),
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
     "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None)),
-                       lambda inp: {"tool_name": "Database",
-                                    "step": f"{inp.get('command', '')} {inp.get('key') or inp.get('prefix', '')}".strip()}),
+                       lambda inp: {"tool_name": "Database", "step": inp.get("key") or inp.get("prefix") or ""}),
     "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),
                        lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
     "suggest":    Tool(lambda inp, ws, **_: _exec_suggest(inp),

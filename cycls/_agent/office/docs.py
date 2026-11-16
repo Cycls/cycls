@@ -161,9 +161,7 @@ DOCS_PROMPT = (
 
 
 def docs_step(inp):
-    action = str(inp.get("action") or "").lower()
-    detail = inp.get("intent") or inp.get("path") or ""
-    return {"tool_name": "Docs", "step": f"{action} {detail}".strip()}
+    return {"tool_name": "Docs", "step": inp.get("intent") or inp.get("path") or ""}
 
 
 def _err(message):

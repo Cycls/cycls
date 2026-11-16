@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils";
 import { Icon } from "../icon";
 import { localStep, t, tn, getLang } from "../../lib/i18n";
 import type { Part } from "../../hooks/use-chat";
-import { StepDot, StepPart, clock, useNow } from "./step-part";
+import { StepDot, StepPart, appData, clock, useNow } from "./step-part";
 import { ThinkingPart } from "./thinking-part";
 import { ToolCall, ConnectorsContext, isCall } from "./tool-call";
 import { connectorLabel, type Connector } from "../connectors-dialog";
@@ -22,13 +22,22 @@ const VERB_KEYS = {
   Skill: "verbSkill",
   Suggest: "verbSuggest",
   Ask: "verbAsk",
+  Design: "verbDesign",
+  Video: "verbVideo",
+  Sheets: "verbSheets",
+  Docs: "verbDocs",
+  Transcribing: "verbTranscribe",
+  Browser: "verbBrowser",
+  Agent: "verbAgent",
+  "Building app": "verbApp",
+  "Finding tools": "verbFindTools",
 } as const;
 
 function summarize(items: Part[], connectors: Connector[]) {
   const verbs: string[] = [];
   for (const p of items) {
     const c = connectors.find((x) => x.name === p.connector);
-    const key = VERB_KEYS[p.tool_name as keyof typeof VERB_KEYS];
+    const key = p.tool_name === "Database" && appData(p.step) ? "verbAppData" : VERB_KEYS[p.tool_name as keyof typeof VERB_KEYS];
     const v = c ? connectorLabel(c) : key ? t(key) : p.plain ? localStep(p).tool_name : p.tool_name?.toLowerCase();
     if (v && !verbs.includes(v)) verbs.push(v);
   }

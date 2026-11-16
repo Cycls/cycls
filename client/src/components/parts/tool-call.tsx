@@ -5,7 +5,7 @@ import { t, tn } from "../../lib/i18n";
 import { track } from "../../lib/analytics";
 import type { Part, Source } from "../../hooks/use-chat";
 import { ConnectorIcon, PLATE, type Connector } from "../connectors-dialog";
-import { StepDot } from "./step-part";
+import { StepDot, stepWords } from "./step-part";
 import { Favicon, domainOf } from "./sources-part";
 
 // The connectors the chat knows, for the logo on a call's step. Empty where nobody is signed in (a share).
@@ -23,7 +23,7 @@ export const ToolCall = memo(function ToolCall({ p, live }: { p: Part; live?: bo
   const [open, setOpen] = useState(false);
   const c = useContext(ConnectorsContext).find((x) => x.name === p.connector);
   const sources = p.sources ?? [];
-  const name = humanize(p.tool_name?.split(" · ").pop() ?? "");
+  const [name, detail] = c || p.icon ? [humanize(p.tool_name?.split(" · ").pop() ?? ""), p.step] : stepWords(p.tool_name, p.step);
   return (
     <div>
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full cursor-pointer items-center gap-2 py-1 text-start text-sm text-muted-foreground">
@@ -38,13 +38,9 @@ export const ToolCall = memo(function ToolCall({ p, live }: { p: Part; live?: bo
             {live && <span className="logo-shimmer absolute inset-y-0 -inset-x-full" />}
           </span>
         ) : <StepDot live={live} toolName={p.tool_name} step={p.step} ok={p.ok} />}
-        <span dir="auto" className="min-w-0 flex-1 truncate font-mono text-[13px]">
-          {sources.length ? <span className="text-foreground">{p.step}</span> : (
-            <>
-              <span className="font-semibold text-foreground">{name}</span>
-              {p.step && <><span className="text-foreground">(</span>{p.step}<span className="text-foreground">)</span></>}
-            </>
-          )}
+        <span dir="auto" className="min-w-0 flex-1 truncate text-[13px]">
+          <span className="font-medium text-foreground">{name}</span>
+          {detail && <><span className="mx-1.5 text-muted-foreground/60">·</span><bdi>{detail}</bdi></>}
         </span>
         {p.ok === false
           ? <span className="shrink-0 text-xs text-destructive">{t("failed")}</span>

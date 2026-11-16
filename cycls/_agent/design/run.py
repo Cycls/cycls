@@ -412,4 +412,4 @@ async def _design_call(inp, workspace):
 
 
 def _design_step(inp):
-    return {"tool_name": "Design", "step": f"{inp.get('action', 'render')} {inp.get('name', '')}".strip()}
+    return {"tool_name": "Design", "step": inp.get("name") or ""}

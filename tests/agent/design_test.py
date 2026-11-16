@@ -534,7 +534,7 @@ def test_build_tools_gates_on_configured(monkeypatch):
 
 
 def test_design_step_label():
-    assert tool_step("design", {"action": "render", "name": "launch"})["step"] == "render launch"
+    assert tool_step("design", {"action": "render", "name": "launch"})["step"] == "launch"
 
 
 # ---- self-QA: the render comes back to the model as an image ----

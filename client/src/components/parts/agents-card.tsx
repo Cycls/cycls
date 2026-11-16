@@ -4,7 +4,7 @@ import type { AgentState, Part } from "../../hooks/use-chat";
 import { useEscape } from "../../hooks/use-escape";
 import { GlowStar } from "../cycls-star";
 import { Icon } from "../icon";
-import { StepPart, clock, useNow } from "./step-part";
+import { StepPart, clock, stepWords, useNow } from "./step-part";
 import { TextPart } from "./text-part";
 import { localStep, t, tn } from "../../lib/i18n";
 
@@ -26,7 +26,7 @@ function line(a: AgentState) {
   const last = a.steps[a.steps.length - 1];
   if (!last) return "";
   const { tool_name, step } = localStep({ type: "step", ...last });
-  return [tool_name, step].filter(Boolean).join(" · ");
+  return stepWords(tool_name, step).filter(Boolean).join(" · ");
 }
 
 // The agents a turn started, in one card: the working ones first, a row opens that agent's work.

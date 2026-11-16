@@ -23,7 +23,7 @@ it("shows one card, the working agents first, and opens one's brief, steps and r
   expect(screen.getByText("2 agents")).toBeTruthy();
   const labels = screen.getAllByText(/Draft the sheet|Research prices/).map((e) => e.textContent);
   expect(labels).toEqual(["Research prices", "Draft the sheet"]);
-  expect(screen.getByText("Web Search · Jahez fee")).toBeTruthy();
+  expect(screen.getByText("Searching the web · Jahez fee")).toBeTruthy();   // a built-in tool in plain words
   fireEvent.click(screen.getByText("Draft the sheet"));
   expect(screen.getByText("Create pricing.xlsx")).toBeTruthy();
   expect(screen.getByText("Report")).toBeTruthy();

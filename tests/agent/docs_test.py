@@ -84,10 +84,9 @@ def test_offered_only_with_the_service_and_the_organisation(monkeypatch, tmp_pat
     assert out.startswith("Error:") and "not switched on" in out
 
 
-def test_the_step_names_the_action_and_what_it_does():
-    assert docs.docs_step({"action": "edit", "path": "q3.docx", "intent": "Tighten the summary"}) == \
-        {"tool_name": "Docs", "step": "edit Tighten the summary"}
-    assert docs.docs_step({"action": "read", "path": "q3.docx"})["step"] == "read q3.docx"
+def test_the_step_says_what_it_does_in_plain_words():
+    assert docs.docs_step({"action": "edit", "path": "q3.docx", "intent": "Tighten the summary"}) == {"tool_name": "Docs", "step": "Tighten the summary"}
+    assert docs.docs_step({"action": "read", "path": "q3.docx"})["step"] == "q3.docx"
 
 
 # ---- the wire --------------------------------------------------------------------------------

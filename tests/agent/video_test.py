@@ -536,7 +536,7 @@ def test_the_service_being_away_is_one_sentence(monkeypatch, tmp_path):
 
 
 def test_step_label():
-    assert vrun._video_step({"action": "render", "name": "reel"}) == {"tool_name": "Video", "step": "render reel"}
+    assert vrun._video_step({"action": "render", "name": "reel"}) == {"tool_name": "Video", "step": "reel"}
     assert vrun._video_step({}) == {"tool_name": "Video", "step": ""}
 
 
