@@ -206,6 +206,9 @@ async def _supervise(run, stream, runs, key, on_run):
                 run.taken_back = await state.truncate_last_exchange(
                     run.workspace, run.chat_id, run.take_back, alone=True) is not None
             except Exception as e: log("warn", chat_id=run.chat_id, message=f"take back failed: {e}")
+        if run.workspace is not None and state.is_team(run.chat_id):   # what the team said meanwhile, after the reply
+            try: await state.flush_held(run.workspace, run.chat_id)
+            except Exception as e: log("warn", chat_id=run.chat_id, message=f"held messages not saved: {e}")
         # Shielded: this is the only place that knows the run ended, and it runs
         # while the process may already be shutting down.
         await asyncio.shield(asyncio.ensure_future(_finish(run, status, on_run)))
@@ -408,6 +411,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         folder: str = ""           # the folder open in Files: where a design named without one is saved
         replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
         agent_name: str = ""       # the agent's name as the chat shows it: what it signs a Word comment with
+        by: Optional[dict] = None  # in a team chat, who wrote this turn: {id, name}
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -419,7 +423,12 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
 
         @property
         def workspace(self) -> Workspace:
-            return workspace(self.user, volume, base=config.storage, ws=self.workspace_id)
+            return state.chats_of(workspace(self.user, volume, base=config.storage, ws=self.workspace_id), self.chat_id)
+
+    async def _author(user, ws):
+        """Who writes in a team chat, as the model reads it: the sign-in's name, else the one they last had here."""
+        pid = state.actor_of(ws.subject)
+        return {"id": pid, "name": user.name or (await activity.people(ws)).get(pid, {}).get("name") or "A teammate"}
 
     def _agent_name():
         """The agent's name as the chat shows it (the brand's English name, else the agent's own), read at each turn
@@ -459,7 +468,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         data = await request.json()
         messages = data.get("messages")
         given = request.query_params.get("id")
-        chat_id = given or str(uuid.uuid4())
+        chat_id = given or f"{state.TEAM if data.get('team') is True else ''}{uuid.uuid4()}"
         api = request.url.path == "/chat/completions"   # read off the request while it exists
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
@@ -468,7 +477,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         # activation tick fires once per user (a browser flag re-fires on
         # every new device; a per-workspace check re-fires per workspace).
         first = False
-        if user is not None and not given:
+        if user is not None and not given and data.get("post") is not True:
             try:
                 first = await state.mark_first_use(user, volume, config.storage, config.workspaces)
             except Exception:
@@ -482,6 +491,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
                           selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")),
                           agent_name=_agent_name())
+        try: context.workspace
+        except LookupError: raise HTTPException(404, "Chat not found")
+        if state.is_team(chat_id) and user is not None:   # its id is the client's, which shows it before it is saved
+            said = (messages or [{}])[-1]
+            turn = said.get("id")
+            context.by = {**await _author(user, context.workspace),
+                          "turn": turn if isinstance(turn, str) and re.fullmatch(r"[\w-]{6,40}", turn) else None,
+                          "mentions": activity.mentioned(state.user_text(said), await activity.people(context.workspace))}
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
         # counts it, and shutdown drains it. A fresh id simply never collides.
@@ -495,6 +512,14 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         busy = JSONResponse(status_code=409, headers={"Retry-After": "2"},
                             content={"error": "run_in_progress", "chat_id": chat_id,
                                      "detail": "This chat is still working on your last message."})
+        if data.get("post") is True and context.by:   # to the team alone, no run: held while one has the chat
+            said, mine = (messages or [{}])[-1], _claim(runs, key, run)
+            try:
+                running = not mine or state.run_status(await state.get_run(run.workspace, chat_id)) == "running"
+                await (state.hold if running else state.post)(run.workspace, chat_id, said, context.by)
+            finally:
+                if mine: runs.pop(key, None)
+            return JSONResponse({"chat_id": chat_id, "posted": True})
         if not _claim(runs, key, run):
             return busy
         try:
@@ -505,6 +530,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 if status == "running":
                     runs.pop(key, None)
                     return busy
+                if state.is_team(chat_id):   # anything held from the last run goes before this one
+                    await state.flush_held(run.workspace, chat_id)
                 # A replay runs the saved turn again, not the request's copy of it, and drops only
                 # what came after it, here, where this run holds the chat. `regenerate` names a turn
                 # on screen, so it must match. `retry` names one that may never have arrived, and one
@@ -542,7 +569,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         answers once it has, with `taken_back`."""
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
-        ws = workspace(user, volume, base=config.storage, ws=ws_id)
+        try: ws = state.chats_of(workspace(user, volume, base=config.storage, ws=ws_id), chat_id)
+        except LookupError: return JSONResponse(status_code=404, content={"error": "no_run"})
         try: take = (json.loads(await request.body() or b"{}") or {}).get("take_back")
         except (ValueError, AttributeError): take = None
         take = take if isinstance(take, str) and take else None

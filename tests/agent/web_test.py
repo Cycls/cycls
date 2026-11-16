@@ -741,7 +741,7 @@ def test_examples_resolves_cards(tmp_path):
 
     url = client.post("/share", json={"path": "chat/c1", "author_name": "Alice"}).json()["url"]
     svc.config = SimpleNamespace(examples=[
-        {"label": "Sites", "label_ar": "مواقع", "urls": [url, "/shared/user_test/dead_token"]}])
+        {"label": "Sites", "label_ar": "مواقع", "urls": [{"share": url, "thumbnail": "/public/site.png"}, "/shared/user_test/dead_token"]}])
 
     data = client.get("/examples").json()
     assert [c["label"] for c in data["categories"]] == ["Sites"]
@@ -753,6 +753,7 @@ def test_examples_resolves_cards(tmp_path):
     assert item["file"]["path"] == "site.html"
     assert "author_name" not in item
     assert item["share"].endswith("example=1")
+    assert item["thumbnail"] == "/public/site.png"   # shown instead of the file
     # The card's pieces are live: the file URL serves and the share resolves.
     assert client.get(item["file"]["url"]).status_code == 200
     assert client.get(item["share"].replace("/shared/", "/share/").split("?")[0] + "/data").status_code == 200
@@ -804,7 +805,8 @@ def test_examples_come_from_the_cms(tmp_path, monkeypatch):
 
     assert cycls.Web().cms(examples="https://cms.test/x")._cms == {"examples": "https://cms.test/x"}
     svc, user, client = _share_test_app(tmp_path)
-    pills = [{"label": {"en": "Tutorials", "ar": "دروس"}, "cards": [{"video": "https://cdn.test/v.mp4", "title": "Start"}]}]
+    pills = [{"label": {"en": "Tutorials", "ar": "دروس"},
+              "cards": [{"video": "https://cdn.test/v.mp4", "title": "Start", "thumbnail": "/files/start.png"}]}]
     reads = []
 
     async def cms(url, token=None):
@@ -816,8 +818,8 @@ def test_examples_come_from_the_cms(tmp_path, monkeypatch):
     monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)   # every request reads again
     svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/examples/a", "token": "t"})
 
-    gallery = {"categories": [{"label": "Tutorials", "label_ar": "دروس",
-                               "items": [{"video": "https://cdn.test/v.mp4", "title": "Start"}]}]}
+    gallery = {"categories": [{"label": "Tutorials", "label_ar": "دروس",   # an upload, at the CMS's address
+                               "items": [{"video": "https://cdn.test/v.mp4", "title": "Start", "thumbnail": "https://cms.test/files/start.png"}]}]}
     assert client.get("/examples").json() == gallery
     assert client.get("/examples").json() == gallery   # the CMS is down: the last good copy stands
     assert reads == [("https://cms.test/site/examples/a", "t")] * 2
@@ -841,6 +843,9 @@ def test_examples_builder_normalizes_labels():
     w = cycls.Web().examples({"A": [{"video": "/public/tour.mp4", "title": "Getting started"}]})
     assert w._examples == [{"label": "A", "label_ar": None,
                             "urls": [{"video": "/public/tour.mp4", "title": "Getting started"}]}]
+    # Either kind may show a picture of its own instead: its thumbnail.
+    assert cycls.Web().examples([{"share": "u1", "thumbnail": "/public/deck.png"}])._examples[0]["urls"] == \
+        [{"share": "u1", "thumbnail": "/public/deck.png"}]
     import pytest
     with pytest.raises(TypeError):
         cycls.Web().examples({"A": [{"share": "u1", "video": "clip.mp4"}]})

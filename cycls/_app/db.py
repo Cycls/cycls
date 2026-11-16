@@ -5,7 +5,7 @@ listing path: object storage uses LIST + custom-meta; FS uses `pathlib.glob`
 + body reads (no metadata channel locally). `meta=` on `db.put` is an
 object-storage-only perf hint — body is canonical on FS.
 """
-import asyncio, hashlib, json, os, re
+import asyncio, hashlib, json, os, re, threading
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -99,6 +99,9 @@ class Conflict(Exception):
         self.key, self.written, self.stale = key, written, stale
 
 
+_SWAP = threading.Lock()   # the file store's compare-and-swap, whole within one process
+
+
 class _FileStore:
     def __init__(self, url):
         self.root = Path(url[7:])
@@ -119,8 +122,8 @@ class _FileStore:
         def _do():
             p = self._path(key)
             if gen is not None:
-                # Compare-then-replace, not atomic — this store is dev and test,
-                # where there is one writer. GCS does it properly.
+                # Compare-then-replace under `_SWAP`: whole for one process (dev and
+                # test), not across several. GCS does it properly.
                 try: current = p.read_bytes()
                 except FileNotFoundError: current = None
                 if _gen_of(current) != gen: raise Conflict(key, stale=True)
@@ -152,7 +155,9 @@ class _FileStore:
                         f.write(data)
             finally:
                 tmp.unlink(missing_ok=True)
-        await asyncio.to_thread(_do)
+        def _swap():
+            with _SWAP: _do()
+        await asyncio.to_thread(_do if gen is None else _swap)
 
     async def remove(self, key):
         await asyncio.to_thread(lambda: self._path(key).unlink(missing_ok=True))

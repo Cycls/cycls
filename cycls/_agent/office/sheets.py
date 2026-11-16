@@ -124,9 +124,7 @@ def _arabic(text):
 
 
 def sheets_step(inp):
-    action = str(inp.get("action") or "").lower()
-    detail = inp.get("intent") or inp.get("path") or ""
-    return {"tool_name": "Sheets", "step": f"{action} {detail}".strip()}
+    return {"tool_name": "Sheets", "step": inp.get("intent") or inp.get("path") or ""}
 
 
 def _err(message):

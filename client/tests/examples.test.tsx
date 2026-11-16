@@ -61,9 +61,14 @@ describe("example cards", () => {
   const item = (n: number, file: { path: string; name: string; url: string } | null = null) => ({
     share: `/shared/u/t${n}?example=1`, title: `T${n}`, prompt: `أبغى ميزانية شهرية رقم ${n}`, file,
   });
-  const gallery = async (items: ReturnType<typeof item>[]) => {
+  // `near`: the cards are on screen, so they load what they show.
+  const gallery = async (items: (ReturnType<typeof item> & { thumbnail?: string })[], near = false) => {
     vi.resetModules();   // the gallery keeps what it fetched for the visit: a fresh one each test
-    vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(private cb: IntersectionObserverCallback) {}
+      observe() { if (near) this.cb([{ isIntersecting: true } as IntersectionObserverEntry], this as never); }
+      disconnect() {}
+    });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ categories: [{ label: "Sheets", items }] }) }));
     const { ExamplesGallery } = await import("../src/components/examples");
     const onUsePrompt = vi.fn();
@@ -88,6 +93,13 @@ describe("example cards", () => {
     expect(screen.getByText("PDF")).toBeTruthy();
     expect(screen.getByText("أبغى ميزانية شهرية رقم 1")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  test("a card with a thumbnail shows that picture, and its file is never fetched", async () => {
+    const deck = { path: "q3.pptx", name: "q3.pptx", url: "/share/u/t1/file/q3.pptx" };
+    await gallery([{ ...item(1, deck), thumbnail: "https://cms.cycls.ai/files/q3-cover.png" }], true);
+    await waitFor(() => expect(document.querySelector("img")?.getAttribute("src")).toBe("https://cms.cycls.ai/files/q3-cover.png"));
+    expect(vi.mocked(fetch).mock.calls.map(([u]) => String(u))).toEqual(["/examples"]);
   });
 
   test("a new order each visit", async () => {

@@ -168,7 +168,8 @@ tests/
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once, file holds, cost
-│   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes
+│   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes, a chat's files
+│   ├── team_chats_test.py       # a team workspace's chats: who sees them, a message to the team alone, moving a chat there, reactions, edits, typing, unread, paging, writes at the same moment, a look that finds nothing new
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding

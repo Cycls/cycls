@@ -127,6 +127,8 @@ export type SendExtra = {
   approvals?: string[]; declined?: string[]; connectors?: string[]; selection?: DesignSelection;
   folder?: string;   // the folder open in Files: where the agent saves a design named without one
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
+  team?: boolean;   // a new chat is the team's
+  post?: boolean;   // to the team alone: kept, and nothing runs
 };
 // What was sent: what retry sends again, and what Stop gives back to the composer.
 export type Sent = { text: string; attachments?: Attachment[]; origin?: string; extra?: SendExtra };
@@ -147,7 +149,21 @@ export interface Message {
   parts?: Part[];
   attachments?: Attachment[];
   selection?: DesignSelection;   // a user message's attached design selection (shown as a chip)
+  by?: { id: string; name?: string; image?: string; you?: boolean };   // in a team chat, who wrote it
+  id?: string;   // a team chat's: what a reaction or an edit names (a reply's is its question's, `.re`)
+  at?: string;
+  edited?: string;
+  deleted?: string;
 }
+
+// A team chat's live side, read with each look at it: reactions (message id → emoji → who), who is typing, what
+// the team said while a run has the chat (`held`, saved after it), and whose request that run is.
+type Person = { id: string; name?: string; image?: string; you?: boolean };
+export type Live = { reactions: Record<string, Record<string, string[]>>; typing: Person[]; held: Message[]; asker?: Person };
+type LiveIn = Partial<Live> & { edits?: Record<string, { content?: string; edited?: string; deleted?: string }> };
+const PAGE = 60;   // turns a chat opens on; scrolling up reads the ones before, as many again
+
+export const isTeamChat = (id?: string | null) => !!id?.startsWith("team-");
 
 export interface PassMetadata {
   name: string;
@@ -191,6 +207,16 @@ async function sha256Hex(text: string): Promise<string | null> {
   } catch {
     return null;   // no WebCrypto (an insecure origin)
   }
+}
+
+// A user message as the server takes it: its files by where they were uploaded.
+function wire(m: Message) {
+  const withPaths = m.attachments?.filter((a) => a.path);
+  const id = m.id ? { id: m.id } : {};
+  if (!withPaths?.length) return { role: m.role, content: m.content as string | Record<string, string>[], attachments: m.attachments, ...id };
+  const parts: Record<string, string>[] = m.content ? [{ type: "text", text: m.content }] : [];   // a file sent on its own has no words
+  for (const att of withPaths) parts.push(att.type.startsWith("image/") ? { type: "image", image: att.path! } : { type: "file", file: att.path! });
+  return { role: m.role, content: parts, attachments: m.attachments, ...id };
 }
 
 // A confirm card's parts, changed where they stand.
@@ -248,6 +274,10 @@ export function useChat(baseUrl: string = "") {
   // run can learn its id after the user has already moved on.
   const viewRef = useRef(0);
   const cursorRef = useRef<number | null>(null);   // server-reported turn index, never messages.length
+  const startRef = useRef(0);                         // the first turn on screen: older ones are read as it is scrolled up
+  const markRef = useRef("");                         // what the last look found: unchanged, the next one lists no turns
+  const [older, setOlder] = useState(false);
+  const [live, setLive] = useState<Live>({ reactions: {}, typing: [], held: [] });
   const openRef = useRef<string | null>(null);     // role of the last rendered message
   const pollingRef = useRef(false);
   const uiHandlerRef = useRef<UIHandler | null>(null);
@@ -261,6 +291,15 @@ export function useChat(baseUrl: string = "") {
   }, []);
   const { api, authHeaders, setGetToken } = useApi(baseUrl);
   const { error: toastError } = useToast();
+
+  // The chat this view now shows, in the address bar too so it can be bookmarked and shared.
+  const adopt = useCallback((id: string) => {
+    chatIdRef.current = id;
+    setChatId(id);
+    const u = new URL(window.location.href);
+    u.searchParams.set("id", id);
+    window.history.replaceState({}, "", u.toString());
+  }, []);
 
   const uploadFile = useCallback(
     async (file: File): Promise<Attachment> => {
@@ -303,24 +342,59 @@ export function useChat(baseUrl: string = "") {
     const tail = data.messages || [];
     if (data.reset || (replace && tail.length)) setMessages(tail);
     else if (tail.length) setMessages((prev) => {
+      const have = new Set(prev.flatMap((m) => (m.id ? [m.id] : [])));
+      const fresh = tail.filter((m) => !m.id || !have.has(m.id));   // a team chat's message sent here, read back before its send returned
+      if (!fresh.length) return prev;
       const out = [...prev];
       const last = out[out.length - 1];
       let i = 0;
-      if (openRef.current === "assistant" && tail[0].role === "assistant" && last?.role === "assistant") {
-        out[out.length - 1] = { ...last, content: last.content + tail[0].content,
-                                parts: [...(last.parts || []), ...(tail[0].parts || [])] };
+      if (openRef.current === "assistant" && fresh[0].role === "assistant" && last?.role === "assistant") {
+        out[out.length - 1] = { ...last, content: last.content + fresh[0].content,
+                                parts: [...(last.parts || []), ...(fresh[0].parts || [])] };
         i = 1;
       }
-      return [...out, ...tail.slice(i)];
+      return [...out, ...fresh.slice(i)];
     });
     if (typeof data.next === "number") cursorRef.current = data.next;
     if (tail.length && data.open !== undefined) openRef.current = data.open;
   }, [setMessages]);
 
+  // Edits patch the messages they name; the rest is kept as it came, unchanged when nothing changed.
+  const applyLive = useCallback((l?: LiveIn) => {
+    const next = { reactions: l?.reactions || {}, typing: l?.typing || [], held: l?.held || [], asker: l?.asker };
+    setLive((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    const edits = l?.edits || {};
+    if (Object.keys(edits).length) setMessages((ms) => {
+      const out = ms.map((m) => {
+        const e = m.id ? edits[m.id] : undefined;
+        if (!e || (e.deleted ? m.deleted : m.edited === e.edited)) return m;
+        return e.deleted ? { ...m, content: "", deleted: e.deleted, attachments: undefined } : { ...m, content: e.content ?? m.content, edited: e.edited };
+      });
+      return out.some((m, i) => m !== ms[i]) ? out : ms;
+    });
+  }, [setMessages]);
+
+  // Auth on /files/{path} is header-only, so an attached picture is fetched with it and shown from a blob, once
+  // per chat: the address it was sent with is the sender's own tab's.
+  const pictures = useRef(new Map<string, string>());
+  const withPictures = useCallback(async (msgs: Message[]) => {
+    const refs = msgs.flatMap((m) => (m.attachments || []).filter((a) => a.path && a.type.startsWith("image/")));
+    await Promise.all(refs.map(async (att) => {
+      const known = pictures.current.get(att.path!);
+      if (known) { att.url = known; return; }
+      try {
+        att.url = URL.createObjectURL(await (await api(`/files/${encPath(att.path!)}`)).blob());
+        pictures.current.set(att.path!, att.url);
+      } catch (e) { console.warn(`attachment fetch failed: ${att.path}`, e); }
+    }));
+    return refs.length > 0;
+  }, [api]);
+
   // Watch a run we are not streaming. The run outlives its request, so a stream
   // that ended is not a turn that ended — only the record says that.
   // `dropped`: this tab's stream for the run ended early, so its ending is this tab's to report.
-  const pollRun = useCallback(async (id: string, dropped = false) => {
+  // `watch`: a team chat open here, read for what the others write; their runs are not this tab's to report.
+  const pollRun = useCallback(async (id: string, dropped = false, watch = false) => {
     if (pollingRef.current) return;
     pollingRef.current = true;
     const view = viewRef.current;
@@ -332,15 +406,21 @@ export function useChat(baseUrl: string = "") {
       for (;;) {
         if (viewRef.current !== view) return;
         if (!navigator.onLine) throw new TypeError("offline");   // not a sign-in that waits out its own retries first
-        const full = cursorRef.current == null;
-        const q = full ? "" : `?since=${cursorRef.current}`;
+        const asked = cursorRef.current;
+        const full = asked == null;
+        const q = full ? `?last=${PAGE}` : `?since=${asked}&v=${encodeURIComponent(markRef.current)}`;
         const res = await api(`/chats/${encodeURIComponent(id)}${q}`);
         back("run");
         if (res.status === 204) return;
         const data = await res.json();
         heard = true;
+        await withPictures([...(data.messages || []), ...(data.live?.held || [])]);
         if (viewRef.current !== view) return;
+        if (cursorRef.current !== asked) return;   // a send moved it meanwhile: this answer is already behind
         applyTail(data, full);
+        markRef.current = data.v ?? "";
+        if (full) { startRef.current = data.start ?? 0; setOlder(startRef.current > 0); }
+        applyLive(data.live);
         if (data.agents) setMessages((ms) => withAgents(ms, data.agents));
         setRunStatus(data.run ?? null);
         setRunStartedAt(data.run_started ?? null);
@@ -352,7 +432,7 @@ export function useChat(baseUrl: string = "") {
           }
           return;
         }
-        ours = true;
+        ours = !watch;
         await new Promise((r) => setTimeout(r, 2000));
       }
     } catch (e) {
@@ -363,7 +443,7 @@ export function useChat(baseUrl: string = "") {
       // A run only assumed alive (its stream dropped, the server never answered) is not left on running.
       if (dropped && !heard && viewRef.current === view) setRunStatus((s) => (s === "running" ? null : s));
     }
-  }, [api, applyTail, back, lost]);
+  }, [api, applyTail, applyLive, withPictures, back, lost]);
 
   // Edge does not sleep a tab holding a Web Lock and Chrome does not freeze one,
   // and a locked screen is where most mobile-web drops come from. This is the only
@@ -387,19 +467,37 @@ export function useChat(baseUrl: string = "") {
 
   const send = useCallback(
     async (text: string, attachments?: Attachment[], origin: string = "keyboard", extra?: SendExtra) => {
-      if (isStreaming) return;
+      if (isStreaming && !(extra?.post && !attached)) return;   // to the team, during someone else's run, it goes
 
-      const userMessage: Message = { role: "user", content: text, attachments, ...(extra?.selection ? { selection: extra.selection } : {}) };
+      const team = isTeamChat(chatIdRef.current) || !!extra?.team;   // its messages carry an id and a time from the start
+      const userMessage: Message = { role: "user", content: text, attachments, ...(extra?.selection ? { selection: extra.selection } : {}),
+                                     ...(team ? { id: crypto.randomUUID().slice(0, 13), at: new Date().toISOString() } : {}) };
+      const view = viewRef.current;
+      if (extra?.post) {   // nothing runs: the message is kept, and the next look at the chat reads it back
+        setMessages((prev) => [...prev, userMessage]);
+        try {
+          const id = chatIdRef.current;
+          const res = await api(id ? `/chat?id=${encodeURIComponent(id)}` : "/chat",
+                                { method: "POST", json: { messages: [wire(userMessage)], post: true, team: true } });
+          const { chat_id } = await res.json();
+          if (viewRef.current === view) { if (!id) adopt(chat_id); cursorRef.current = null; }
+          track("team_message_posted", { chat_id, message_length: text.length });
+        } catch {
+          if (viewRef.current === view) setMessages((prev) => prev.filter((m) => m !== userMessage));
+          restoreRef.current?.({ text, attachments, origin, extra });
+        }
+        return;
+      }
       const assistantMessage: Message = {
         role: "assistant",
         content: "",
         parts: [],
+        ...(team ? { at: new Date().toISOString() } : {}),
       };
 
       // An approval carried back from a confirm card is machinery, not something the person typed —
       // it goes to the model and the server stores it `internal`, so the chat shows no bubble for it.
       const silent = origin === "confirm";
-      const view = viewRef.current;
       const mine = () => viewRef.current === view;
       setMessages((prev) => [...(silent ? prev : skipWaiting(prev)), ...(silent ? [] : [userMessage]), assistantMessage]);
       setAttached(true);
@@ -435,22 +533,7 @@ export function useChat(baseUrl: string = "") {
         // catches up when React runs the updater, so a send right after a
         // rewind (retry, regenerate) could otherwise read past the end of the
         // rewound list and throw before ever reaching fetch.
-        const newUserMsg = userMessage;
-        const withPaths = newUserMsg.attachments?.filter((a) => a.path);
-        let content: string | Record<string, string>[] = newUserMsg.content;
-        if (withPaths && withPaths.length > 0) {
-          const parts: Record<string, string>[] = [{ type: "text", text: newUserMsg.content }];
-          for (const att of withPaths) {
-            if (att.type.startsWith("image/")) {
-              parts.push({ type: "image", image: att.path! });
-            } else {
-              parts.push({ type: "file", file: att.path! });
-            }
-          }
-          content = parts;
-        }
-        const requestMessage = { role: newUserMsg.role, content, parts: newUserMsg.parts,
-                                 attachments: newUserMsg.attachments };
+        const requestMessage = { ...wire(userMessage), parts: userMessage.parts };
 
         const url = chatIdRef.current
           ? `${baseUrl}/chat?id=${encodeURIComponent(chatIdRef.current)}`
@@ -469,6 +552,7 @@ export function useChat(baseUrl: string = "") {
                                  ...(extra?.connectors?.length ? { connectors: extra.connectors } : {}),
                                  ...(extra?.selection ? { selection: extra.selection } : {}),
                                  ...(extra?.folder ? { folder: extra.folder } : {}),
+                                 ...(extra?.team ? { team: true } : {}),
                                  ...replay }),
           signal: controller.signal,
         });
@@ -521,12 +605,7 @@ export function useChat(baseUrl: string = "") {
                 // a browser flag can't (existing users on a new device).
                 if (item.first) track("first_agent_use", {});
                 if (!mine()) continue;   // the view moved on before the id arrived
-                chatIdRef.current = item.chat_id;
-                setChatId(item.chat_id);
-                // Reflect in browser URL so the chat is bookmarkable/shareable
-                const u = new URL(window.location.href);
-                u.searchParams.set("id", item.chat_id);
-                window.history.replaceState({}, "", u.toString());
+                adopt(item.chat_id);
                 continue;
               }
 
@@ -737,8 +816,17 @@ export function useChat(baseUrl: string = "") {
     // `messages` is read via messagesRef inside; keeping it out of deps
     // means `send`'s identity doesn't change on every streamed token
     // (and downstream `useEffect([send])` callers don't re-fire).
-    [isStreaming, baseUrl, authHeaders, back, lost],
+    [isStreaming, baseUrl, authHeaders, back, lost, api],
   );
+
+  // A team chat open here: what the others write comes in on its own.
+  useEffect(() => {
+    if (!isTeamChat(chatId) || attached) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible" && connRef.current.phase === "online") void pollRun(chatId!, false, true);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [chatId, attached, pollRun]);
 
   // What was last sent: the request itself while this tab holds it, else the last message on
   // screen (a server-side failure ends the stream cleanly and clears the stored request).
@@ -877,6 +965,9 @@ export function useChat(baseUrl: string = "") {
     viewRef.current += 1;
     setConnection(unheld);
     cursorRef.current = openRef.current = null;
+    startRef.current = 0;
+    setOlder(false);
+    applyLive();
     setRunStatus(null);
     setRunStartedAt(null);
     setMessages([]);
@@ -944,16 +1035,22 @@ export function useChat(baseUrl: string = "") {
     viewRef.current += 1;   // whatever is streaming stops writing here
     setConnection(unheld);
     setChatLoading(true);
+    let loaded: Message[] = [];
     try {
-      const chat = await (await api(`/chats/${id}`)).json();
-      const loaded: Message[] = withAgents(chat.messages || [], chat.agents);
+      const chat = await (await api(`/chats/${id}?last=${PAGE}`)).json();
+      loaded = withAgents(chat.messages || [], chat.agents);
+      startRef.current = chat.start ?? 0;
+      setOlder(startRef.current > 0);
+      applyLive(chat.live);
 
       setMessages(loaded);
       setChatId(id);
       chatIdRef.current = id;
+      pictures.current.clear();
       // Seed the poll's cursor from the server, never from the array length:
       // the projection merges assistant turns and hides tool batches.
       cursorRef.current = typeof chat.next === "number" ? chat.next : null;
+      markRef.current = chat.v ?? "";
       openRef.current = chat.open ?? (loaded.length ? loaded[loaded.length - 1].role : null);
       setRunStatus(chat.run ?? null);
       setRunStartedAt(chat.run_started ?? null);
@@ -963,24 +1060,56 @@ export function useChat(baseUrl: string = "") {
       window.history.replaceState({}, "", u.toString());
 
       track("chat_loaded", { chat_id: id, message_count: loaded.length });
-
-      // Auth on /files/{path} is header-only by design (no ?token= URL
-      // fallback — JWTs in URLs leak through history/logs/Referer). So
-      // <img src> can't load directly. Fetch each attachment with the
-      // bearer header and turn it into a blob URL the browser can render.
-      const refs = loaded.flatMap((m) => (m.attachments || []).filter((a) => a.path));
-      if (refs.length) {
-        await Promise.all(refs.map(async (att) => {
-          try {
-            att.url = URL.createObjectURL(await (await api(`/files/${encPath(att.path ?? "")}`)).blob());
-          } catch (e) { console.warn(`attachment fetch failed: ${att.path}`, e); }
-        }));
-        setMessages([...loaded]);
-      }
     } finally {
       setChatLoading(false);
     }
-  }, [api, pollRun, setMessages, setConnection]);
+    // Auth on /files/{path} is header-only by design (no ?token= URL
+    // fallback — JWTs in URLs leak through history/logs/Referer). So
+    // <img src> can't load directly. Fetch each attachment with the
+    // bearer header and turn it into a blob URL the browser can render.
+    // The chat shows first; its pictures fill in as they arrive.
+    if (await withPictures(loaded) && chatIdRef.current === id) setMessages((ms) => [...ms]);
+  }, [api, pollRun, setMessages, setConnection, applyLive, withPictures]);
+
+  // The page before the first one on screen, put above it.
+  const loadingOlderRef = useRef(false);
+  const loadOlder = useCallback(async () => {
+    const id = chatIdRef.current, view = viewRef.current;
+    if (!id || !startRef.current || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    try {
+      const page = await (await api(`/chats/${encodeURIComponent(id)}?last=${PAGE}&before=${startRef.current}`)).json();
+      await withPictures(page.messages || []);
+      if (viewRef.current !== view) return;
+      startRef.current = page.start ?? 0;
+      setOlder(startRef.current > 0);
+      setMessages((ms) => [...(page.messages || []), ...ms]);
+    } finally {
+      loadingOlderRef.current = false;
+    }
+  }, [api, setMessages]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A team chat's message: a reaction put on or taken off, your own said again or taken back, and the ping that
+  // tells the others you are typing.
+  const react = useCallback(async (mid: string, emoji: string) => {
+    const id = chatIdRef.current;
+    if (!id) return;
+    const reactions = await (await api(`/chats/${encodeURIComponent(id)}/reactions`, { method: "POST", json: { id: mid, emoji } })).json();
+    if (chatIdRef.current === id) setLive((l) => ({ ...l, reactions }));
+    track("team_message_reacted", { chat_id: id, emoji });
+  }, [api]);
+  const rewrite = useCallback(async (mid: string, text?: string) => {
+    const id = chatIdRef.current;
+    if (!id) return;
+    await api(`/chats/${encodeURIComponent(id)}/messages/${encodeURIComponent(mid)}`, text === undefined ? { method: "DELETE" } : { method: "PUT", json: { content: text } });
+    const at = new Date().toISOString();
+    applyLive({ ...live, edits: { [mid]: text === undefined ? { deleted: at } : { content: text, edited: at } } });
+    track(text === undefined ? "team_message_deleted" : "team_message_edited", { chat_id: id });
+  }, [api, applyLive, live]);
+  const typing = useCallback(() => {
+    const id = chatIdRef.current;
+    if (isTeamChat(id)) api(`/chats/${encodeURIComponent(id!)}/typing`, { method: "POST", silent: true }).catch(() => {});
+  }, [api]);
 
   const deleteChat = useCallback(async (id: string) => {
     // Stop first: a detached run would otherwise keep working, and keep
@@ -1003,6 +1132,13 @@ export function useChat(baseUrl: string = "") {
       window.history.replaceState({}, "", u.toString());
     }
   }, [api, setConnection]);
+
+  // A chat of yours, moved to the team workspace's chats: it comes back under its new id.
+  const moveToTeam = useCallback(async (id: string) => {
+    const { id: moved } = await (await api(`/chats/${encodeURIComponent(id)}/team`, { method: "POST" })).json();
+    track("chat_moved_to_team", { chat_id: id });
+    return moved as string;
+  }, [api]);
 
   const renameChat = useCallback(async (id: string, title: string) => {
     await api(`/chats/${id}`, { method: "PUT", json: { title } });
@@ -1043,6 +1179,13 @@ export function useChat(baseUrl: string = "") {
     listChats,
     loadChat,
     deleteChat,
+    moveToTeam,
+    older,       // there are messages above the first one on screen
+    loadOlder,
+    live,
+    react,
+    rewrite,
+    typing,
     renameChat,
     setFavorite,
     setGetToken,

@@ -24,6 +24,7 @@ export interface ExampleItem {
   prompt?: string;
   file?: { path: string; name: string; url: string } | null;
   video?: string | null;   // tutorial card: direct mp4/webm or a YouTube URL
+  thumbnail?: string | null;   // the picture the card shows instead, for a file that doesn't preview well
 }
 
 // YouTube in any of its shapes → the video id; null means not YouTube.
@@ -273,8 +274,15 @@ function ExamplePreview({ item, load }: { item: ExampleItem; load: boolean }) {
   }, [file?.url]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // A PDF where the browser can't show one in the page (Chrome on Android) can't be drawn in a card either.
-  const renderable = !!file && isRenderable(file.path) && !(isPdf(file.path) && !embedsPdf());
+  const renderable = !item.thumbnail && !!file && isRenderable(file.path) && !(isPdf(file.path) && !embedsPdf());
   const { content, error } = useFileContent(load && renderable ? file! : null, readFile, openFile, 0, true);
+  if (item.thumbnail) {   // a picture chosen for it: the file isn't fetched at all
+    return (
+      <div className="pointer-events-none h-full w-full bg-secondary/30">
+        {load && <img src={item.thumbnail} alt="" className="h-full w-full object-cover" />}
+      </div>
+    );
+  }
   if (!renderable || error) return <PreviewFallback item={item} />;
 
   // A PDF fills the card's width, its page and nothing of the viewer (no toolbar, page list or scrollbar), the
@@ -358,8 +366,8 @@ function VideoCard({ item, category, onWatch }: { item: ExampleItem; category: s
       className="group relative w-[78vw] max-w-[420px] shrink-0 snap-center overflow-hidden rounded-xl border border-border bg-card sm:w-auto sm:max-w-none sm:shrink sm:snap-align-none"
     >
       <div className="pointer-events-none flex aspect-video w-full items-center justify-center bg-secondary/30">
-        {visible && (yt ? (
-          <img src={`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" className="h-full w-full object-cover" />
+        {visible && (item.thumbnail || yt ? (
+          <img src={item.thumbnail || `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" className="h-full w-full object-cover" />
         ) : isFile ? (
           <video src={item.video || undefined} muted loop autoPlay playsInline preload="metadata" className="h-full w-full object-cover" />
         ) : (

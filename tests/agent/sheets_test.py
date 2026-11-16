@@ -78,10 +78,9 @@ def test_offered_only_with_the_service_and_the_organisation(monkeypatch, tmp_pat
     assert out.startswith("Error:") and "not switched on" in out
 
 
-def test_the_step_names_the_action_and_what_it_does():
-    assert sheets.sheets_step({"action": "edit", "path": "b.xlsx", "intent": "Totals"}) == \
-        {"tool_name": "Sheets", "step": "edit Totals"}
-    assert sheets.sheets_step({"action": "read", "path": "b.xlsx"})["step"] == "read b.xlsx"
+def test_the_step_says_what_it_does_in_plain_words():
+    assert sheets.sheets_step({"action": "edit", "path": "b.xlsx", "intent": "Totals"}) == {"tool_name": "Sheets", "step": "Totals"}
+    assert sheets.sheets_step({"action": "read", "path": "b.xlsx"})["step"] == "b.xlsx"
 
 
 # ---- the wire --------------------------------------------------------------------------------

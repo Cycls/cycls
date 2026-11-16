@@ -2,6 +2,7 @@ import { useState } from "react";
 import { t } from "../lib/i18n";
 import { Icon } from "./icon";
 import { EmojiPicker } from "./emoji-picker";
+import { AgentMark, Face } from "./file-details";
 import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
 
 export interface WorkspacesMenu {
@@ -21,7 +22,7 @@ export interface WorkspacesMenu {
   onRemoveMember: (id: string, userId: string) => Promise<void>;
 }
 
-export type OrgMember = { id: string; name: string; email?: string };
+export type OrgMember = { id: string; name: string; email?: string; image?: string };
 
 // A workspace member's name: the org's record of them, "Former member" once they've left it, "…" until the list is in.
 export const nameIn = (ws: WorkspacesMenu, id: string) =>
@@ -167,6 +168,77 @@ export function WorkspaceMenu({ workspaces }: { workspaces: WorkspacesMenu }) {
           <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
           <div className="absolute top-full z-[80] mt-1 w-56 ltr:right-0 rtl:left-0 rounded-lg border border-border bg-background shadow-lg">
             <WorkspacePanel workspaces={workspaces} onClose={() => setOpen(false)} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// A team chat's people: top right on a computer (`TeamPeople`), under the workspace in the menu on a phone.
+export type People = {
+  members: { id: string; name: string; image?: string; you?: boolean }[];
+  agent: string; logo?: string; ws: WorkspaceInfo; onManage?: () => void;
+};
+
+export function Faces({ members, size = 22 }: { members: People["members"]; size?: number }) {
+  const others = members.filter((m) => !m.you);
+  return (
+    <span className="flex shrink-0">
+      {(others.length ? others : members).slice(0, 3).map((m, i) => (
+        <span key={m.id} className="rounded-full ring-2 ring-background" style={{ marginInlineStart: i ? -6 : 0 }}><Face c={{ by: m, at: "" }} size={size} /></span>
+      ))}
+    </span>
+  );
+}
+
+// The agent first, then you, then the rest; Manage people for the workspace's admins.
+export function PeopleList({ members, agent, logo, ws, onManage, onClose }: People & { onClose: () => void }) {
+  return (
+    <>
+      <div className="flex items-baseline justify-between gap-2 px-3 pb-1.5 pt-3">
+        <span className="truncate text-sm font-medium text-foreground">{ws.name}</span>
+        <span className="text-xs text-muted-foreground">{members.length}</span>
+      </div>
+      {ws.builtin && <div className="-mt-1 px-3 pb-1.5 text-xs text-muted-foreground">{t("everyoneInOrg")}</div>}
+      <div className="max-h-80 overflow-y-auto py-1">
+        <div className="flex items-center gap-2.5 px-3 py-1.5">
+          <AgentMark logo={logo} name={agent} size={26} />
+          <span className="flex-1 truncate text-sm text-foreground">{agent}</span>
+          <span className="text-xs text-muted-foreground">@{agent.toLowerCase()}</span>
+        </div>
+        {[...members.filter((m) => m.you), ...members.filter((m) => !m.you)].map((m) => (
+          <div key={m.id} className="flex items-center gap-2.5 px-3 py-1.5">
+            <Face c={{ by: m, at: "" }} size={26} />
+            <span className="flex-1 truncate text-sm text-foreground">{m.name}</span>
+            {m.you && <span className="text-xs text-muted-foreground">{t("you")}</span>}
+          </div>
+        ))}
+      </div>
+      {onManage && (
+        <button onClick={() => { onClose(); onManage(); }}
+                className="w-full border-t border-border px-3 py-2 text-start text-xs font-medium text-foreground hover:bg-secondary/60 cursor-pointer">
+          {t("managePeople")}
+        </button>
+      )}
+    </>
+  );
+}
+
+export function TeamPeople(people: People) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} aria-label={t("members")}
+              className={`flex h-8 items-center gap-1.5 rounded-lg ps-1 pe-2 text-xs transition-colors hover:bg-secondary/80 cursor-pointer ${open ? "bg-secondary text-foreground" : "text-muted-foreground"}`}>
+        <Faces members={people.members} />
+        <span className="text-foreground">{people.members.length}</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
+          <div className="absolute top-full z-[80] mt-1 w-72 overflow-hidden rounded-xl border border-border bg-background shadow-lg ltr:right-0 rtl:left-0">
+            <PeopleList {...people} onClose={() => setOpen(false)} />
           </div>
         </>
       )}

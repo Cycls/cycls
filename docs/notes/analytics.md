@@ -143,6 +143,8 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `run_busy` | send refused with 409 — the chat already has a run, or a regenerate named a turn that is no longer the chat's last | a second tab, or a run whose disconnect the server hasn't noticed. Not `message_failed`: it would trip that event's alert |
 | `message_queued` / `queued_message_sent` / `queued_message_edited` / `queued_message_dropped` | composing while the agent works | does queueing get used? |
 | `chat_loaded` / `chat_cleared` / `chat_renamed` / `chat_favorited` / `chat_deleted` | sidebar chat ops | retention behavior |
+| `team_message_reacted` / `team_message_edited` / `team_message_deleted` | a reaction put on or taken off a team chat's message (`chat_id`, `emoji`); your own message there said again, or taken back (`chat_id`) | whether a team chat is talked in, past asking the agent |
+| `team_message_posted` / `chat_moved_to_team` | a message to a team chat's people alone, no run (`chat_id`, `message_length`); a chat of yours moved to the team's | whether teams talk in team chats, or only ask the agent there |
 | `chat_title_generated` | a new chat named by the agent's model as its first reply ends (`source`, `length`, `language`) | whether named chats are renamed less: `chat_renamed` against `chat_loaded` |
 
 ### Deliverables

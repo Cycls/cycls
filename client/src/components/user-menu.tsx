@@ -3,7 +3,7 @@ import { t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
 import { Popover } from "./popover";
 import { Icon } from "./icon";
-import { WorkspacePanel, WsIcon, type WorkspacesMenu } from "./workspace-switcher";
+import { Faces, PeopleList, WorkspacePanel, WsIcon, type People, type WorkspacesMenu } from "./workspace-switcher";
 
 export interface UserInfo {
   id?: string;      // who is signed in — the name on their cursor when a design is edited together
@@ -21,7 +21,7 @@ export interface PlanInfo {
   planPeriod: string;
 }
 
-export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans, workspaces }: {
+export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans, workspaces, people }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
@@ -34,15 +34,17 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
   plan?: PlanInfo;
   onOpenPlans?: () => void;
   workspaces?: WorkspacesMenu;
+  people?: People;   // a team chat's, on a phone: under the workspace
 }) {
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
   const [showWs, setShowWs] = useState(false);
+  const [showPeople, setShowPeople] = useState(false);
 
   return (
     <div className="relative">
       <button
-        onClick={() => { setOpen(!open); setShowOrgs(false); setShowWs(false); }}
+        onClick={() => { setOpen(!open); setShowOrgs(false); setShowWs(false); setShowPeople(false); }}
         className="flex items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer px-1 h-8"
         aria-label="Profile"
       >
@@ -61,9 +63,19 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
           </div>
         </div>
       </button>
-      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); setShowWs(false); }} className="right-2 top-12 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
+      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); setShowWs(false); setShowPeople(false); }} className="right-2 top-12 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
         <div>
-            {showWs && workspaces ? (
+            {showPeople && people ? (
+              <>
+                <button onClick={() => setShowPeople(false)}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
+                  <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
+                  {t("back")}
+                </button>
+                <div className="border-t border-border" />
+                <PeopleList {...people} onClose={() => { setOpen(false); setShowPeople(false); }} />
+              </>
+            ) : showWs && workspaces ? (
               <WorkspacePanel
                 workspaces={workspaces}
                 onBack={() => setShowWs(false)}
@@ -183,6 +195,13 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
                     </span>
                     <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
                   </button>
+                  {people && (
+                    <button onClick={() => setShowPeople(true)} aria-label={t("members")}
+                            className="flex w-full items-center justify-between px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer">
+                      <span className="flex items-center gap-2"><Faces members={people.members} size={20} />{people.members.length}</span>
+                      <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
+                    </button>
+                  )}
                   </>
                 )}
                 {onSignOut && (

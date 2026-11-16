@@ -38,6 +38,15 @@ export function Face({ c, size = 20 }: { c: FileChange; size?: number }) {
   );
 }
 
+// The agent's own face, its logo (SVG markup or a picture's address), round like a person's.
+export function AgentMark({ logo, name = "", size = 20 }: { logo?: string; name?: string; size?: number }) {
+  const box = { width: size, height: size };
+  if (!logo) return <Face c={{ by: { id: name, name }, at: "" }} size={size} />;
+  return logo.startsWith("<")
+    ? <span style={box} className="shrink-0 overflow-hidden rounded-full [&>svg]:size-full" dangerouslySetInnerHTML={{ __html: logo }} />
+    : <img src={logo} alt="" style={box} className="shrink-0 rounded-full object-cover" />;
+}
+
 // "via Super in “Café plan”", the chat a link back to it.
 function Via({ c, onOpenChat }: { c: FileChange; onOpenChat?: (id: string) => void }) {
   if (!c.agent) return null;

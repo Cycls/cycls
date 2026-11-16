@@ -3,7 +3,7 @@ import { cn } from "../../lib/utils";
 import { Icon, type IconName } from "../icon";
 import { Favicon } from "./sources-part";
 import { GlowStar, Star } from "../cycls-star";
-import { ext, tintTile, tintLabel } from "../canvas-utils";
+import { tileExt, tintTile, tintLabel } from "../canvas-utils";
 import { stepText, t } from "../../lib/i18n";
 
 // A built-in tool wears its own glyph, the way a connector wears its logo: the shimmer stopping is what
@@ -13,10 +13,36 @@ export const GLYPHS: Record<string, IconName> = {
   Fetching: "link",
   Reading: "doc",
   Editing: "pencil",
-  Bash: "terminal",
   Database: "database",
+  Transcribing: "audio",
+  Browser: "pointer",
   "Finding tools": "search",
+  Ask: "question",
+  Suggest: "bulb",
 };
+
+// A built-in tool's row in plain words and the UI's language: the server names the tool, the row says what it does.
+const NAMES = {
+  Bash: "stepTask", Reading: "stepReading", Editing: "stepEditing", "Web Search": "stepWebSearch", Fetching: "stepPage",
+  Canvas: "stepShowing", Design: "stepDesigning", Video: "stepVideo", Sheets: "stepSheet", Docs: "stepDoc",
+  Transcribing: "stepTranscribing", Browser: "stepBrowsing", Agent: "stepBackground", Skill: "stepSkill",
+  "Building app": "stepApp", "Finding tools": "stepFindTool", Ask: "stepQuestion", Suggest: "stepSuggestion",
+} as const;
+
+// The database keeps an app's data under apps/<app>/, and its own memory everywhere else.
+export const appData = (key = "") => /^apps\/([^/]+)\/?(.*)$/.exec(key);
+
+export function stepWords(toolName = "", step = ""): [string, string] {
+  if (toolName === "Database") {
+    const app = appData(step);
+    return app ? [t("stepAppData"), app[2] ? `${app[1]}: ${app[2]}` : app[1]] : [t("stepMemory"), step];
+  }
+  const key = NAMES[toolName as keyof typeof NAMES];
+  return [key ? t(key) : toolName, step];
+}
+
+// The kind of document a tool makes wears that document's tile.
+const KINDS: Record<string, string> = { Design: "a.fig", Video: "a.video.html", Sheets: "a.xlsx", Docs: "a.docx" };
 
 const pageUrl = (s?: string) => {
   const first = s?.trim().split(/\s/)[0] ?? "";
@@ -29,15 +55,19 @@ const fileName = (s?: string) => {
 };
 
 // Reading or writing a file wears the tinted extension tile the canvas and the file cards give it.
-const FileTile = ({ name, live }: { name: string; live?: boolean }) => (
-  <span className="relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-[6px] bg-secondary" style={tintTile(name)}>
-    <span className="text-[7px] font-semibold uppercase leading-none tracking-tighter text-muted-foreground" style={tintLabel(name)}>{ext(name).slice(0, 3)}</span>
-    {live && <span className="logo-shimmer absolute inset-y-0 -inset-x-full" />}
-  </span>
-);
+const FileTile = ({ name, live }: { name: string; live?: boolean }) => {
+  const kind = tileExt(name), word = kind.length > 4;   // "design", "video": the whole word, smaller
+  return (
+    <span className="relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-[6px] bg-secondary" style={tintTile(name)}>
+      <span className="text-[7px] font-semibold uppercase leading-none tracking-tighter text-muted-foreground"
+            style={{ ...tintLabel(name), ...(word && { fontSize: 26 / kind.length }) }}>{word ? kind : kind.slice(0, 3)}</span>
+      {live && <span className="logo-shimmer absolute inset-y-0 -inset-x-full" />}
+    </span>
+  );
+};
 
 export const StepDot = ({ live, toolName, step, ok }: { live?: boolean; toolName?: string; step?: string; ok?: boolean }) => {
-  const file = toolName === "Reading" || toolName === "Editing" ? fileName(step) : null;
+  const file = ["Reading", "Editing", "Canvas"].includes(toolName ?? "") ? fileName(step) : KINDS[toolName ?? ""] ?? null;
   if (file) return <FileTile name={file} live={live} />;
   const page = toolName === "Fetching" ? pageUrl(step) : null;   // a fetched page shows its own favicon
   if (page) {
@@ -121,22 +151,17 @@ export const StepPart = memo(function StepPart({
 }) {
   const elapsed = useElapsed(at, isStreaming);
   const writing = isStreaming && toolName && !step && !plain ? writingNow(args) : "";
+  const [name, detail] = stepWords(toolName, step);
   return (
     <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
       <StepDot live={isStreaming} toolName={toolName} step={step} ok={ok} />
-      <span className={cn("text-[13px] truncate", !plain && "font-mono")} dir="auto">
+      <span className="text-[13px] truncate" dir="auto">
         {plain ? (
           step || toolName
         ) : toolName ? (
           <>
-            <span className="font-semibold text-foreground">{toolName}</span>
-            {step && (
-              <>
-                <span className="text-foreground">(</span>
-                {step}
-                <span className="text-foreground">)</span>
-              </>
-            )}
+            <span className="font-medium text-foreground">{name}</span>
+            {detail && <><span className="mx-1.5 text-muted-foreground/60">·</span><bdi>{detail}</bdi></>}
             {isStreaming && !step && args && (
               <span data-testid="step-writing"> · {t("writingInput")}{writing && <> “{writing}”</>}</span>
             )}

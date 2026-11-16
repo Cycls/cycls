@@ -1187,4 +1187,4 @@ async def _exec_video(inp, workspace, ctx=None):
 
 def _video_step(inp):
     inp = inp or {}
-    return {"tool_name": "Video", "step": f"{inp.get('action', '')} {inp.get('name', '')}".strip()}
+    return {"tool_name": "Video", "step": inp.get("name") or ""}

@@ -183,6 +183,9 @@ html, body {
   font-size: 0.8125rem; white-space: pre-wrap; direction: ltr; text-align: left;
 }
 
+/* A team chat's typing dots */
+@keyframes typing { 0%, 60%, 100% { transform: none; opacity: .4; } 30% { transform: translateY(-3px); opacity: 1; } }
+
 /* Loading bar */
 @keyframes slide {
   0% { transform: translateX(-100%); }

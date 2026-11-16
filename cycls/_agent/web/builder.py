@@ -217,16 +217,18 @@ class Web:
             # Two kinds of card: a share URL (artifact card — Use prompt /
             # View), or {"video": url, "title": ...} (tutorial card — a muted
             # looping preview with one Watch action playing it in-page). The
-            # video is a direct mp4/webm URL, e.g. /public/... or a CDN.
+            # video is a direct mp4/webm URL, e.g. /public/... or a CDN. Either
+            # may name a `thumbnail`: the picture the card shows instead.
             if isinstance(e, str):
                 return {"share": e}
+            pic = {"thumbnail": e["thumbnail"]} if isinstance(e, dict) and isinstance(e.get("thumbnail"), str) else {}
             if isinstance(e, dict) and isinstance(e.get("video"), str) and "share" not in e:
-                out = {"video": e["video"]}
+                out = {"video": e["video"], **pic}
                 if isinstance(e.get("title"), str):
                     out["title"] = e["title"]
                 return out
             if isinstance(e, dict) and isinstance(e.get("share"), str) and "video" not in e:
-                return {"share": e["share"]}
+                return {"share": e["share"], **pic}
             raise TypeError(
                 "an example entry is a share URL (artifact card) or "
                 f"{{'video': url, 'title': ...}} (tutorial card), not both; got {e!r}")

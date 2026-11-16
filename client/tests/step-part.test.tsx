@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, screen, act } from "@testing-library/react";
 import { StepPart, writingNow } from "../src/components/parts/step-part";
+import { setLang } from "../src/lib/i18n";
 
 // A deck's tool input streams for minutes. The row showed only the tool's name and a
 // pulse — which read as stuck, and got Stop pressed. It now says what is being written
@@ -57,5 +58,26 @@ describe("a live tool row", () => {
   it("a finished row has no timer", () => {
     render(<StepPart step="pitch" toolName="Design" at={Date.now() - 60_000} />);
     expect(screen.queryByTestId("step-elapsed")).toBeNull();
+  });
+});
+
+describe("a built-in tool's row says what it does in plain words, in the person's language", () => {
+  afterEach(() => setLang("en"));
+
+  it("names the tool plainly, never its code name", () => {
+    render(<StepPart toolName="Bash" step="Convert the report to PDF" />);
+    expect(screen.getByText("Task")).toBeTruthy();
+    expect(screen.queryByText(/Bash/)).toBeNull();
+    cleanup();
+    render(<StepPart toolName="Database" step="apps/expense-tracker/orders" />);   // an app's data, not memory
+    expect(screen.getByText("App data")).toBeTruthy();
+    expect(screen.getByText("expense-tracker: orders")).toBeTruthy();
+  });
+
+  it("in Arabic too, Design included, with its document's tile", () => {
+    setLang("ar");
+    const { container } = render(<StepPart toolName="Design" step="launch-poster" />);
+    expect(screen.getByText("تصميم")).toBeTruthy();
+    expect(container.textContent).toContain("design");   // the design's own tile
   });
 });
