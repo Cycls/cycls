@@ -31,9 +31,8 @@ const SHIM = `<script>(function(){
   }
 
   var seq = 0, waiting = new Map(), ctx = null, resolveReady, tries = 0, link = null;
-  // Names this document in every announcement, so the host answers it once. A busy frame (a big
-  // bundle running) could announce twice before it heard back; the host opened a second channel,
-  // answered on it, and this document, listening on the first, waited for its data forever.
+  // Names this document in every announcement, so the host answers it once: a busy frame that announced twice
+  // got a second channel, answered there, and waited on the first forever.
   var doc = Math.random().toString(36).slice(2) + Date.now().toString(36);
   var ready = new Promise(function(r){ resolveReady = r; });
 
@@ -107,10 +106,8 @@ const SHIM = `<script>(function(){
     setTimeout(announce, 50);
   })();
 
-  // The frame is sandboxed without allow-forms, so the browser blocks a form's submission before
-  // the submit event fires: every <form onSubmit> (react-hook-form, each shadcn form) did nothing.
-  // A submit button's click, Enter in a field and requestSubmit() fire the submit event here instead,
-  // after the form's own validation; the blocked native submission is cancelled.
+  // Sandboxed without allow-forms, a form's submission is blocked before submit fires (every <form onSubmit> did
+  // nothing): a submit click, Enter or requestSubmit() fire it here instead, after the form's own validation.
   if (window.HTMLFormElement && window.document) (function(){
     function fire(form, submitter){
       if (!form.noValidate && !(submitter && submitter.formNoValidate) && form.reportValidity && !form.reportValidity()) return;
@@ -212,9 +209,8 @@ const SHIM = `<script>(function(){
   // the app's own on its way wins); anything wider re-lists. Then the listeners hear.
   var listeners = [], listened = false;
 
-  // The app follows the chat's light or dark mode: the "dark" class on <html>, which is what Tailwind's
-  // class-based dark mode and the kit's theme read, set at init and on every switch. An app that needs the
-  // mode in code (a chart's colours) also gets cycls.onTheme.
+  // The chat's light or dark mode: "dark" on <html> (what Tailwind and the kit read), at init and on every
+  // switch; cycls.onTheme for an app that needs it in code.
   var themeListeners = [];
   function applyTheme(t){
     if (t !== 'dark' && t !== 'light') return;
@@ -309,9 +305,8 @@ const SHIM = `<script>(function(){
         // Taken before fn runs: an app often changes the value it is handed in place and returns it.
         var before = cur ? text(cur.value) : null;
         var next = await fn(cur ? cur.value : undefined);
-        // Nothing changed, nothing written. A write that changes nothing still moves the version: every open
-        // copy would read it again, and who changed it last would become this viewer (an app that fills in
-        // missing seed rows on every open did exactly that).
+        // Nothing changed, nothing written: the write would still move the version and make this viewer its last
+        // author (an app filling in seed rows on every open did).
         if (before !== null && before === text(next)) { if (kv) kv[key] = next; return next; }
         try {
           await data({ op: 'put', key: String(key), value: next, version: cur ? cur.version : '' });
@@ -343,10 +338,8 @@ const SHIM = `<script>(function(){
       };
     },
     all: async function(){ return Object.assign({}, await load()); },
-    // fn({source, keys?, files?, who?}) after the data changed under the app: "agent", "turn", "poll"
-    // or "focus"; keys are shared keys (absent: maybe any), files are paths like "data/x.json", and
-    // who, when known, says for each key who changed it: {by: person, at, agent?}.
-    // cycls.get already answers with the new values inside it. Returns an unsubscribe.
+    // fn({source: "agent"|"turn"|"poll"|"focus", keys? (absent: maybe any), files?, who?: {key: {by, at, agent?}}})
+    // when the data changed under the app; cycls.get already has the new values. Returns an unsubscribe.
     onChange: onChange,
     // Read the shared data again now, without waiting to be told.
     refresh: function(){ stale = true; return load().then(function(){}); },

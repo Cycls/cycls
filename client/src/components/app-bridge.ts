@@ -157,16 +157,13 @@ export function attachBridge({
   const slug = scope.split("/")[1];
   let port: MessagePort | null = null;
   let answered: unknown = null;   // the document the channel was opened for
-  // Once the channel is up everything goes down it. A window post needs targetOrigin
-  // "*" — an opaque origin has none to name — and a frame that navigated itself away
-  // would still receive it.
+  // Down the channel once it is up: a window post must go to "*" (an opaque origin has no name),
+  // which a frame that navigated itself away would still receive.
   const post = (p: unknown) => (port ? port.postMessage(p) : frame.contentWindow?.postMessage(p, "*"));
 
   // ---- Keeping an open app in step with its data ----
-  // An app loads its data once. Before this, a change made by the agent, a teammate or another tab
-  // showed only after the app was reopened. Now the host compares versions (one listing, no values)
-  // and tells the app what changed. An app that never asked to be told is reloaded instead, and only
-  // for the agent's changes, so a teammate's change never reloads an app someone is typing in.
+  // The host compares versions (one listing, no values) and tells the app what changed. One that never asked is
+  // reloaded instead, for the agent's changes only: a teammate's never reloads an app someone is typing in.
   let listening = false;
   let known: { keys: Map<string, string>; files: Map<string, string> } | null = null;
   let busy = 0;     // the app's own writes on their way
@@ -183,9 +180,8 @@ export function attachBridge({
   const reloadFrame = reload ?? (() => { const doc = frame.srcdoc; frame.srcdoc = doc; });
 
   // ---- Who changed what ----
-  // Each look at the versions also says who last wrote each shared key; an id becomes the person, by the
-  // workspace's members. One who has left is their id alone, and so is everyone if the members cannot be had
-  // within a moment: a change is never held back for a name.
+  // Each look at the versions says who last wrote each shared key, an id made a person by the members; one who left,
+  // or anyone while the members can't be had, stays an id: a change is never held back for a name.
   let stamps: Record<string, Stamp> = {}, stampsAt = 0;
   async function person(id: string): Promise<Person> {
     if (!people) return { id };
