@@ -93,6 +93,15 @@ describe("the shim and the theme", () => {
   });
   const tokens = themeTokens({ base: "zinc", color: "violet", radius: 0.5 });
 
+  it("moves an app's own data-theme with the chat's mode, so a kit app opened dark goes light", () => {
+    const { deliver } = boot();
+    document.documentElement.setAttribute("data-theme", "dark");   // what the default apps' kit sets at boot
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "dark" });
+    deliver({ type: "cycls:theme", theme: "light" });
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+  });
+
   it("does nothing when the host sends no tokens — every app today", () => {
     const { deliver } = boot();
     deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "light" });

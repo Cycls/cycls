@@ -260,7 +260,11 @@ const SHIM = `<script>(function(){
   var themeListeners = [];
   function applyTheme(t){
     if (t !== 'dark' && t !== 'light') return;
-    try { document.documentElement.classList.toggle('dark', t === 'dark'); } catch (e) {}
+    try {
+      document.documentElement.classList.toggle('dark', t === 'dark');
+      // An app that marks its mode as data-theme (the default apps' kit) follows too, or it stays dark
+      if (document.documentElement.hasAttribute('data-theme')) document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
   }
   function changed(m){
     var keys = Array.isArray(m.keys) ? m.keys.map(String) : null;
