@@ -70,10 +70,11 @@ cycls/
     ├── design/             # cycls Design tool, over a thin HTTP client to a shared design service (posts, carousels, decks, documents); docs/notes/design.md
     │   ├── tool.py         # the tool as the model is given it (and the short form a chat carries until it designs)
     │   ├── skill.py        # the tool's own skills (skills/*.md: design-direction, graphic-design, deck-design, document-design), loaded by `skill`
-    │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract
+    │   ├── run.py          # the executor (_exec_design): render, script, edit, inspect, extract, import
     │   ├── actions.py      # slide, section and file actions; a document rendered
     │   ├── prepare.py      # what the model wrote, made ready: spec, pages, deck, document, slide, ops (brand.py, images.py)
     │   ├── extract.py      # a PDF taken apart to be made again; report.py — what the model is told; files.py — a design's files
+    │   ├── powerpoint.py   # `import`: a PowerPoint deck the person brought, opened as a design to change (docs/notes/design.md "A PowerPoint deck brought in")
     │   ├── client.py       # the service client; deck.py slide ops, store.py versions + bases, refresh.py a design's preview made ready, live.py rooms, stock.py photos, assets.py the media library
     │   └── comments.py     # what people pin on a design — threads kept by the workspace (`.comments`), where a pin is now; docs/notes/design.md "Comments"
     ├── transcribe/         # cycls Transcribe tool + the mic, two engines: ElevenLabs Scribe (elevenlabs.py) and the cycls-transcribe service on Modal GPUs (client.py: Cohere Transcribe Arabic, Whisper); TRANSCRIBE_ENGINE picks the first; usage.py the daily allowance; docs/notes/transcribe.md
@@ -163,6 +164,7 @@ tests/
 │   ├── browser_test.py          # Browser tool: client config/providers, steel session parse, executor dispatch, gating
 │   ├── design_test.py           # Design tool: client, spec/deck prep (images, brand theme), decks + carousels, slide actions, refresh, gating, its skills (every example goes through)
 │   ├── design_comments_test.py  # comments on a design: the workspace's record, the routes, rename/trash, the agent's `comments`
+│   ├── design_import_test.py    # a PowerPoint deck brought in: part by part, written once whole, the same file once, refusals, the attachment hint
 │   ├── video_test.py            # Video tool: client, signed contract, short/whole forms + the ondemand seam, executor, ?as=player
 │   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback

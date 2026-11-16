@@ -1023,7 +1023,7 @@ def test_apply_posts_fig_and_script(monkeypatch):
     _mock(monkeypatch, _FakeResp(200, {"ok": True, "fig_base64": base64.b64encode(b"EDITED").decode()}))
     assert asyncio.run(design.apply(b"FIG", "t.characters='x'", user_id="u")) == \
         {"fig": b"EDITED", "lint": [], "script": None, "preview": None, "previews": [], "touched": [], "slides": [],
-         "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": [], "keep": {},
+         "pages": [], "page": "", "started": "", "changed": [], "added": [], "deleted": [], "resolved": [], "notes": [], "keep": {},
          "fixed": [], "sheets": [], "sheet_frames": []}
     assert _FakeClient.last["url"] == "https://d/apply"
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "script": "t.characters='x'"}
@@ -1190,7 +1190,7 @@ def test_the_client_inspects_and_applies_ops(monkeypatch):
                                        "preview_base64": base64.b64encode(b"J").decode(), "lint": []}))
     r = asyncio.run(design.apply(b"FIG", ops=[{"op": "delete", "node": "x"}], preview=True))
     assert r == {"fig": b"E", "lint": [], "script": "S", "preview": b"J", "previews": [], "touched": [], "slides": [],
-                 "pages": [], "page": "", "started": "", "changed": [], "added": [], "resolved": [], "notes": [], "keep": {},
+                 "pages": [], "page": "", "started": "", "changed": [], "added": [], "deleted": [], "resolved": [], "notes": [], "keep": {},
              "fixed": [], "sheets": [], "sheet_frames": []}
     assert _FakeClient.last["json"] == {"fig": base64.b64encode(b"FIG").decode(), "ops": [{"op": "delete", "node": "x"}], "preview": True}
     # What the edit changed and made, by name, and which part a name that wasn't one turned out to be.

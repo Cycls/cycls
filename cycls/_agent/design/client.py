@@ -247,6 +247,7 @@ async def apply(fig, script=None, user_id=None, ops=None, preview=False, page=No
             # resolved: [what was asked, the part it was] for a name that wasn't one
             "changed": [str(n) for n in data.get("changed") or [] if isinstance(n, str)],
             "added": [str(n) for n in data.get("added") or [] if isinstance(n, str)],
+            "deleted": [str(n) for n in data.get("deleted") or [] if isinstance(n, str)],
             "resolved": [[str(p[0]), str(p[1])] for p in data.get("resolved") or []
                          if isinstance(p, list) and len(p) == 2],
             "notes": [str(n) for n in data.get("notes") or [] if isinstance(n, str)],
@@ -276,6 +277,16 @@ async def export(fig, fmt="png", scale=2, width=None, user_id=None, every=False,
     if every:
         return _b64s(data.get("images_base64"))
     return base64.b64decode(data["image_base64"])
+
+
+async def export_back(fig, original, scale=2, user_id=None):
+    """An imported design as PowerPoint, written back into the file it came from (`original`, its bytes) →
+    (bytes, written): {kept, changed, copies, removed} — slide numbers — or {rebuilt: True, why: […]} when a
+    change couldn't be written back and the deck was written anew from the design ({} from an older service)."""
+    body = {"fig": base64.b64encode(fig).decode(), "format": "pptx", "scale": scale,
+            "original": base64.b64encode(original).decode()}
+    data = await _post("/export", body, user_id)
+    return base64.b64decode(data["image_base64"]), dict(data.get("written") or {})
 
 
 async def export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
@@ -317,6 +328,29 @@ async def asset(name, kind=None, pick=0, user_id=None):
         body["kind"] = kind
     data = await _post("/assets", body, user_id)
     return dict(data.get("asset") or {}), base64.b64decode(data["data_base64"])
+
+
+async def import_deck(pptx, start=0, fig=None, keep=None, preview=True, user_id=None):
+    """A PowerPoint file's bytes → one part of it as a design: up to 60 slides from `start` (0-based), fewer when
+    they hold many shapes. A later part goes with the design so far (`fig`) and is added after its slides; `keep`
+    (our record of the design) is given with the first. → {fig, slides, count (the deck's slides), next (where the
+    rest start, None at the end), report, fonts ({stand-in: the deck's own}), previews, sheets, sheet_pages}."""
+    body = {"pptx": base64.b64encode(pptx).decode(), "from": int(start), "preview": bool(preview)}
+    if fig is not None:
+        body["fig"] = base64.b64encode(fig).decode()
+    if keep:
+        body["keep"] = keep
+    data = await _post("/import", body, user_id)
+    nxt = data.get("next")
+    return {"fig": base64.b64decode(data["fig_base64"]),
+            "slides": [dict(s) for s in data.get("slides") or [] if isinstance(s, dict)],
+            "count": int(data.get("count") or (data.get("deck") or {}).get("slides") or 0),
+            "next": int(nxt) if isinstance(nxt, int) and not isinstance(nxt, bool) else None,
+            "report": [str(n) for n in data.get("report") or [] if isinstance(n, str)],
+            "fonts": {str(k): str(v) for k, v in (data.get("fonts") or {}).items()},
+            "previews": _b64s(data.get("previews_base64")),
+            "sheets": _b64s(data.get("sheets_base64")),
+            "sheet_pages": [[int(p[0]), int(p[1])] for p in data.get("sheet_pages") or [] if isinstance(p, list) and len(p) == 2]}
 
 
 async def evaluate(script, fmt="png", scale=2, user_id=None, keep=None):

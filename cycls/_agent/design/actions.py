@@ -327,9 +327,15 @@ async def _exec_design_file(action, inp, workspace, name):
             return "Error: `export` needs `format` — pdf, pptx, png, jpg, webp or svg."
         fig = await asyncio.to_thread(fig_path.read_bytes)
         scale, page = inp.get("scale") or 2, str(inp.get("page") or "").strip() or None
-        where = ""
+        where, said = "", ""
         try:
-            if page:
+            # A deck imported from PowerPoint goes back into the file it came from (powerpoint.py).
+            from cycls._agent.design.powerpoint import original_for, written_said
+            original = await original_for(root, fig, subject) if fmt == "pptx" and not page else None
+            if original:
+                data, written = await design.export_back(fig, original, scale=scale, user_id=subject)
+                outs, said = [(f"{name}.{fmt}", data)], written_said(written)
+            elif page:
                 data, pages, page_name = await design.export_page(fig, page, fmt=fmt, scale=scale, user_id=subject)
                 outs = [(f"{name}-{page_name}.{fmt}", data)]
                 where = f" (page {json.dumps(page_name, ensure_ascii=False)})"
@@ -356,7 +362,7 @@ async def _exec_design_file(action, inp, workspace, name):
         what = (f"{outs[0][0]}{where}" if len(outs) == 1 else f"{len(outs)} images, {outs[0][0]} … {outs[-1][0]}")
         old = (f" The earlier {'copy' if len(replaced) == 1 else f'{len(replaced)} files'} of that name went to the trash." if replaced else "")
         return {"_model": (f"Exported {what} ({kb} KB) from the saved design {rel} — as it is now, with everything changed "
-                           f"since it was made. It is a copy: a later change to the design doesn't change it.{old}"),
+                           f"since it was made. It is a copy: a later change to the design doesn't change it.{said}{old}"),
                 "_ui": shown(outs[0][0])}
 
     if action in ("rename", "duplicate"):
