@@ -1,18 +1,18 @@
 import { createContext, memo, useContext } from "react";
-import { isDesignEditor, shownName, tintTile, tintLabel, tileExt } from "../canvas-utils";
+import { shownName, tintTile, tintLabel, tileExt } from "../canvas-utils";
 import { Icon } from "../icon";
 import { t } from "../../lib/i18n";
 
 // What a file's card does besides open: given by the chat that owns the file, so a shared view has none.
 export const FileActions = createContext<{ download: (path: string) => void; share?: (path: string) => void } | null>(null);
 
-// A file's tile, the same in the chat and the Files panel: its tint, a design's grid, else its kind ("pdf", "video").
+// A file's tile, the same in the chat, the Files panel and on cycls.ai: its tint and its kind ("pdf", "design",
+// "video"), a longer word set smaller to fit.
 export function FileTile({ name, className }: { name: string; className: string }) {
+  const kind = tileExt(name);
   return (
     <div className={`bg-secondary flex shrink-0 items-center justify-center rounded-lg ${className}`} style={tintTile(name)}>
-      {isDesignEditor(name)
-        ? <span style={tintLabel(name)}><Icon name="grid" className="size-4" /></span>
-        : <span className="text-[10px] font-medium uppercase text-muted-foreground" style={tintLabel(name)}>{tileExt(name)}</span>}
+      <span className="font-medium uppercase text-muted-foreground" style={{ ...tintLabel(name), fontSize: 40 / Math.max(4, kind.length) }}>{kind}</span>
     </div>
   );
 }

@@ -15,11 +15,14 @@ Keys:
     chat/{id}/{turn:06d}      — turns (append-only; the full transcript)
     chat/{id}/compaction      — compaction marker (summary, first_kept, cleared)
     chat/{id}/agents          — the agents its runs started, by the call that started each (tools/agent.py)
+
+A team chat (`team-…`) keeps the same layout in its team workspace's `.team` slot, read and written by every member.
     share/{token}             — opaque share tokens (RFC003)
     <.database/ slot>         — agent-controlled KV exposed to the LLM
     <.org/ slot>              — workspaces registry + ACL (docs/workspaces.md)
 """
-import asyncio, hashlib, json, os, re, secrets, shutil
+import asyncio, hashlib, json, os, re, secrets, shutil, time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +40,28 @@ _CHAT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 def _validate(chat_id):
     if not _CHAT_ID.match(chat_id or ""):
         raise ValueError(f"Invalid chat id: {chat_id!r}")
+
+
+TEAM = "team-"
+
+
+def is_team(chat_id):
+    return (chat_id or "").startswith(TEAM)
+
+
+def chats_of(ws, chat_id):
+    """Where *chat_id* is kept. A team chat is its team workspace's, shared by the members; a run in it keeps the
+    asker's files, keys and memory, which come from `subject`, not `path`. LookupError outside a team workspace."""
+    if not is_team(chat_id):
+        return ws
+    if not (ws.ws or "").startswith("t-"):
+        raise LookupError(chat_id)
+    return replace(ws, path=workspace(ws.subject.partition(":")[0], ws.volume, base=ws.base, slot=".team", ws=ws.ws).path)
+
+
+def team_chats(ws):
+    """The team workspace's chats, or None in a personal one."""
+    return chats_of(ws, TEAM) if (ws.ws or "").startswith("t-") else None
 
 
 async def get_meta(workspace, chat_id):
@@ -61,6 +86,15 @@ RUN_STALE = 30   # a heartbeat older than this means the container is gone
 async def get_run(workspace, chat_id):
     _validate(chat_id)
     return await DB(workspace).get(f"chat/{chat_id}/run")
+
+
+async def marked(workspace, chat_id):
+    """(meta, run, their versions). Every turn but a run's own is followed by a write to one of them, so a look that
+    finds the versions it left with, and no run, has no new turns to list."""
+    _validate(chat_id)
+    db = DB(workspace)
+    (meta, a), (row, b) = await asyncio.gather(db.get_gen(f"chat/{chat_id}/index"), db.get_gen(f"chat/{chat_id}/run"))
+    return meta, row, f"{a}.{b}"
 
 
 async def put_run(workspace, chat_id, row):
@@ -153,7 +187,16 @@ def _first_line(text, most=80):
     return (text[:most].rsplit(" ", 1)[0] or text[:most]) + "…"
 
 
-async def touch_meta(workspace, chat_id, content):
+def pairs(s):
+    """`id=value id=value`, as a chat's index keeps a value per person (it holds strings only)."""
+    return dict(x.split("=", 1) for x in (s or "").split())
+
+
+def unpair(d):
+    return " ".join(f"{k}={v}" for k, v in d.items() if v) or None
+
+
+async def touch_meta(workspace, chat_id, content, mentions=()):
     """Stamp `updatedAt` for chat-list ordering; on the first turn also derive
     title from the user message and set createdAt. Sole writer of chat meta —
     the FE shouldn't PUT this back. A new chat's title is its first line until the
@@ -161,13 +204,13 @@ async def touch_meta(workspace, chat_id, content):
     existing = (await get_meta(workspace, chat_id)) or {}
     now = datetime.now(timezone.utc).isoformat()
     meta = {**existing, "id": chat_id, "updatedAt": now}
+    if mentions:   # a team chat's: who was named last when, `all` for everyone
+        meta["mentions"] = unpair({**pairs(existing.get("mentions")), **dict.fromkeys(mentions, now)})
     if "createdAt" not in meta:
         meta["createdAt"] = now
         meta["titleSource"] = "first"
     if not meta.get("title"):
-        text = content if isinstance(content, str) else next(
-            (b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"), "")
-        if (title := _first_line(text)):
+        if (title := _first_line(user_text({"content": content}))):
             meta["title"] = title
     await put_meta(workspace, chat_id, meta)
 
@@ -313,6 +356,20 @@ async def load_tail(workspace, chat_id, since):
     return [m for m in await asyncio.gather(*[db.get(k) for k in want]) if m is not None], end
 
 
+async def load_window(workspace, chat_id, last, before=None):
+    """The last *last* turns, or the *last* before index *before*: (turns, first index, end). A long team chat
+    opens on its newest and reads back as it is scrolled up. A window starts on a person's turn where it has one,
+    so no reply is split between two."""
+    _validate(chat_id)
+    db = DB(workspace)
+    idx = sorted(int(k.rsplit("/", 1)[1]) for k in await db.keys(glob=f"chat/{chat_id}/[0-9]*"))
+    want = [i for i in idx if before is None or i < before][-last:]
+    got = list(zip(want, await asyncio.gather(*[db.get(f"chat/{chat_id}/{i:06d}") for i in want])))
+    if want and want[0] != idx[0]:
+        got = got[next((n for n, (_, m) in enumerate(got) if m and _is_plain_user(m)), 0):]
+    return [m for _, m in got if m is not None], (got[0][0] if got else 0), (idx[-1] + 1 if idx else 0)
+
+
 async def append_messages(workspace, chat_id, messages, start_idx, *, create=True):
     """Append *messages* starting at turn index *start_idx*; returns how many
     landed.
@@ -365,8 +422,8 @@ def _is_plain_user(msg):
 
 # What the harness adds to what was typed (`_ingest`, `_with_mention`, `_with_selection`): an
 # attached file's name with its contents after it, and a line each for an @-mention and a selection.
-_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ")
-_MENTION = re.compile(r"(?:\n\n)?\[Using: [^\n]*\]\Z")   # on a turn sent as a string
+_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ", "[From: ")
+_MENTION = re.compile(r"(?:(?:\n\n)?\[(?:Using|From): [^\n]*\])+\Z")   # on a turn sent as a string
 
 
 def user_text(msg):
@@ -381,6 +438,165 @@ def user_text(msg):
             typed.append(t)
         c = "".join(typed)
     return _MENTION.sub("", c) if isinstance(c, str) else ""
+
+
+def _signed(content, by):
+    """A team chat's turn with who wrote it, one line the model reads (the chat shows a face)."""
+    line = f"[From: {by['name']}]"
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": line}]
+    return f"{content}\n\n{line}" if content else line
+
+
+def _joined(messages):
+    """People in a team chat write several turns in a row: a provider is given them as one."""
+    blocks = lambda c: c if isinstance(c, list) else [{"type": "text", "text": c}]
+    out = []
+    for m in messages:
+        if out and _is_plain_user(m) and _is_plain_user(out[-1]):
+            out[-1] = {**out[-1], "content": [*blocks(out[-1]["content"]), *blocks(m["content"])]}
+        else:
+            out.append(m)
+    return out
+
+
+def _stamp(msg, by, turn=None):
+    """A team chat's turn: who wrote it, its own id (what a reaction or an edit names) and when."""
+    return {**msg, "by": by["id"], "id": turn or secrets.token_hex(6), "at": datetime.now(timezone.utc).isoformat()}
+
+
+def _to_team(incoming, by):
+    """A message to the team alone as a turn. Its files go as where they are kept, which the model can open."""
+    content = incoming.get("content") or ""
+    if isinstance(content, list):
+        content = [b if b.get("type") == "text" else {"type": "text", "text": f"[Attached: {b.get('image') or b.get('file')}]"}
+                   for b in content if isinstance(b, dict)]
+    return _stamp({"role": "user", "content": _signed(content, by),
+                   **({"attachments": incoming["attachments"]} if incoming.get("attachments") else {})}, by, by.get("turn"))
+
+
+async def _change(db, key, fn, default):
+    """Read, change, write: done again on the newer value when someone else wrote first. Returns (was, now)."""
+    for attempt in range(8):
+        was, gen = await db.get_gen(key, default)
+        now = fn(was)
+        try:
+            await db.put(key, now, **({"gen": gen} if gen else {"create": True}))
+            return was, now
+        except Conflict:
+            if attempt == 7: raise
+
+
+async def _append(workspace, chat_id, messages):
+    """Turns added after whatever is there now: two people writing at once each get their own."""
+    for attempt in range(5):
+        try:
+            return await append_messages(workspace, chat_id, messages, await turn_end(workspace, chat_id))
+        except Conflict as e:
+            messages = messages[e.written:]
+            if attempt == 4: raise
+
+
+async def post(workspace, chat_id, incoming, by):
+    """A message to the team alone, with no run: the next turn that asks the agent reads it."""
+    msg = _to_team(incoming, by)
+    await flush_held(workspace, chat_id)
+    await _append(workspace, chat_id, [msg])
+    await asyncio.gather(touch_meta(workspace, chat_id, msg["content"], by.get("mentions")), typed(workspace, chat_id, by["id"]))
+
+
+async def held(workspace, chat_id):
+    return await DB(workspace).get(f"chat/{chat_id}/held") or []
+
+
+async def hold(workspace, chat_id, incoming, by):
+    """A message to the team while a run has the chat: kept beside it, read by everyone with the chat, and saved
+    into it when the run ends. Written between the run's own turns it would split a tool call from its result."""
+    msg = _to_team(incoming, by)
+    await _change(DB(workspace), f"chat/{chat_id}/held", lambda waiting: [*waiting, msg], [])
+    await asyncio.gather(touch_meta(workspace, chat_id, msg["content"], by.get("mentions")), typed(workspace, chat_id, by["id"]))
+
+
+async def flush_held(workspace, chat_id):
+    """What was held saved into the chat after the run, in the order it was sent. One writer takes it, so two
+    flushes at once save it once."""
+    db, key = DB(workspace), f"chat/{chat_id}/held"
+    if await db.get(key):   # most often nothing is held: one read
+        waiting, _ = await _change(db, key, lambda _: [], [])
+        if waiting:
+            await _append(workspace, chat_id, waiting)
+
+
+# ---- A team chat's live side: reactions and the last edit (`live`), who is typing, what each member has read ----
+
+async def get_live(workspace, chat_id):
+    return await DB(workspace).get(f"chat/{chat_id}/live") or {}
+
+
+async def react(workspace, chat_id, mid, emoji, me):
+    """Your reaction to a message, put on or taken off. Returns every message's reactions."""
+    def toggle(live):
+        on = dict(live.get("reactions", {}).get(mid, {}))
+        who = on.get(emoji, [])
+        on[emoji] = [p for p in who if p != me] if me in who else [*who, me]
+        return {**live, "reactions": {**live.get("reactions", {}), mid: {e: ps for e, ps in on.items() if ps}}}
+    _, live = await _change(DB(workspace), f"chat/{chat_id}/live", toggle, {})
+    return live["reactions"]
+
+
+EDITS = 50   # the latest edits `live` carries to chats already showing the old text; a chat opened reads its turns
+
+
+async def rewrite(workspace, chat_id, mid, by, text=None):
+    """A member's own message said again (`text`), or taken back. The model reads it as it now is from the next
+    run; the others' chats patch it from `live`. Returns the message as it was, None when it is not theirs."""
+    db, now = DB(workspace), datetime.now(timezone.utc).isoformat()
+    for key in sorted(await db.keys(glob=f"chat/{chat_id}/[0-9]*"), reverse=True):   # newest first: what is edited is recent
+        if (msg := await db.get(key)) is None or msg.get("id") != mid:
+            continue
+        if msg.get("by") != by["id"]:
+            return None
+        was, c = msg, msg.get("content")
+        if text is None:
+            msg, change = {**{k: v for k, v in msg.items() if k != "attachments"}, "content": _signed("(deleted)", by), "deleted": now}, {"deleted": now}
+        else:   # its files stay
+            kept = [b for b in c if not (b.get("type") == "text" and not b.get("text", "").startswith(_ATTACHED))] if isinstance(c, list) else []
+            msg, change = {**msg, "content": _signed([{"type": "text", "text": text}, *kept] if kept else text, by), "edited": now}, {"content": text, "edited": now}
+        await db.put(key, msg)
+        await _change(db, f"chat/{chat_id}/live", lambda live: {**live, "edits": dict(
+            [*((k, v) for k, v in live.get("edits", {}).items() if k != mid), (mid, change)][-EDITS:])}, {})
+        return was
+    return None
+
+
+TYPING = 6   # seconds a keystroke's ping says someone is typing
+
+
+async def typing(workspace, chat_id, me=None):
+    """Who is typing in a team chat. With `me`, a ping from their keystrokes; without, the ones still fresh."""
+    db, now = DB(workspace), time.time()
+    fresh = {k: v for k, v in (await db.get(f"chat/{chat_id}/typing") or {}).items() if now - v < TYPING}
+    if me:
+        await db.put(f"chat/{chat_id}/typing", {**fresh, me: now})
+    return fresh
+
+
+async def typed(workspace, chat_id, me):
+    """Their message is in: they are no longer typing."""
+    db, key = DB(workspace), f"chat/{chat_id}/typing"
+    if me in (now := await db.get(key) or {}):
+        await db.put(key, {k: v for k, v in now.items() if k != me})
+
+
+async def seen(workspace):
+    """{team chat: when its member last read it}, kept in their own store."""
+    return await DB(workspace).get("chat-seen") or {}
+
+
+async def see(workspace, chat_id, updated):
+    """A member has read a team chat to now."""
+    if (was := await seen(workspace)).get(chat_id, "") < updated:
+        await DB(workspace).put("chat-seen", {**was, chat_id: datetime.now(timezone.utc).isoformat()})
 
 
 async def truncate_last_exchange(workspace, chat_id, expect=None, keep=False, alone=False):
@@ -463,11 +679,12 @@ class Session:
                    summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
                    cleared=int(marker.get("cleared", 0)),
                    next_idx=await turn_end(context.workspace, context.chat_id),
-                   replay=bool(getattr(context, "replay", False)))
+                   replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None))
 
     def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0,
-                 replay=False):
+                 replay=False, by=None):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
+        self.by = by   # a team chat's: who writes the turns added here
         self.replay = replay   # `regenerate` / `retry`: the person's turn is the last one saved, and runs again
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
         self.cleared = min(cleared, len(messages))
@@ -484,8 +701,9 @@ class Session:
         pictures only, the rest verbatim."""
         from .harness.compact import prefix, clear, recent
         k = max(self.first_kept, self.cleared)
-        return recent([*(prefix(self.summary) if self.summary is not None else []),
+        view = recent([*(prefix(self.summary) if self.summary is not None else []),
                        *clear(self.messages[self.first_kept:k]), *self.messages[k:]])
+        return _joined(view) if is_team(self.chat_id) else view
 
     async def clear(self, keep, enough):
         """Stub tool results older than the recent `keep` tokens — the cheap tier.
@@ -527,8 +745,10 @@ class Session:
         if self.replay:
             self.replay = False
             return
-        msg = {"role": "user", "content": content}
         internal = internal or bool(approvals or declined)
+        msg = {"role": "user", "content": _signed(content, self.by) if self.by and not internal else content}
+        if self.by:
+            msg = _stamp(msg, self.by, None if internal else self.by.get("turn"))
         if internal:
             msg["internal"] = True
         if approvals:
@@ -547,7 +767,9 @@ class Session:
         # write one), an index with no turn is the loss we are closing.
         await asyncio.shield(self.checkpoint())
         if self.chat_id and not internal:
-            try: await touch_meta(self.workspace, self.chat_id, content)
+            try:
+                await touch_meta(self.workspace, self.chat_id, msg["content"], (self.by or {}).get("mentions"))
+                if self.by: await typed(self.workspace, self.chat_id, self.by["id"])
             except Exception as e: print(f"[WARN] meta touch failed: {e}")
 
     async def checkpoint(self):

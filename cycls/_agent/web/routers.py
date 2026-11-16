@@ -133,8 +133,12 @@ def to_ui_messages(raw):
             elif not isinstance(c, str):
                 continue
             ui = {"role": "user", "content": state.user_text(msg)}
+            if msg.get("by"):   # a team chat's: the face beside it, and what a reaction or an edit names
+                ui.update({k: msg[k] for k in ("by", "id", "at", "edited", "deleted") if msg.get(k)})
+                if msg.get("deleted"): ui["content"] = ""
             if msg.get("attachments"):
-                ui["attachments"] = msg["attachments"]
+                # with no address: the one it was sent with is the sender's tab's own, gone for anyone else
+                ui["attachments"] = [{**a, "url": ""} for a in msg["attachments"]]
             if msg.get("selection"):   # the model read it as a line; the person sees a chip
                 ui["selection"] = msg["selection"]
             out.append(ui)
@@ -178,7 +182,8 @@ def to_ui_messages(raw):
             if out and out[-1]["role"] == "assistant":
                 out[-1]["content"] += "".join(texts); out[-1]["parts"] += parts
             else:
-                out.append({"role": "assistant", "content": "".join(texts), "parts": parts})
+                out.append({"role": "assistant", "content": "".join(texts), "parts": parts,
+                            **({"id": f"{out[-1]['id']}.re"} if out and out[-1].get("id") else {})})
     for m in out:   # what a tool showed (a chart, a file) appeared when its results came back: as the next call began
         after = None
         for p in reversed(m.get("parts") or []):
@@ -263,51 +268,87 @@ def _is_emoji(s):
 
 # ---- Chats ----
 
+def _chats(ws, chat_id):
+    """The store *chat_id* is kept in; a team chat named outside its team workspace is not found."""
+    try: return state.chats_of(ws, chat_id)
+    except LookupError: raise HTTPException(status_code=404, detail="Chat not found")
+
+
 def chats_router(ws_dep):
     r = APIRouter()
 
     @r.get("/chats")
     async def list_chats(ws: Workspace = ws_dep):
-        items = []
-        runs = await state.list_runs(ws)   # one listing for the whole workspace
-        async for cid, data in state.list_chats(ws):
-            if data.get("deletedAt"):   # in the trash
-                continue
-            items.append({
-                "id": data.get("id", cid),
-                "title": data.get("title", ""),
-                "updatedAt": data.get("updatedAt", ""),
-                "favoritedAt": data.get("favoritedAt", ""),
-                "cost": data.get("cost", "0"),
-                "run": state.run_status(runs.get(cid)),
-            })
+        """Yours, then in a team workspace its team chats, marked `team`, each with your own favorite, and
+        `unread` and `mention` since you last read it."""
+        items, me = [], state.actor_of(ws.subject)
+        read = await state.seen(ws) if state.team_chats(ws) else {}
+        for w in filter(None, (ws, state.team_chats(ws))):
+            runs = await state.list_runs(w)   # one listing for the whole workspace
+            async for cid, data in state.list_chats(w):
+                if data.get("deletedAt"):   # in the trash
+                    continue
+                items.append({
+                    "id": data.get("id", cid),
+                    "title": data.get("title", ""),
+                    "updatedAt": data.get("updatedAt", ""),
+                    "favoritedAt": state.pairs(data.get("favoritedBy")).get(me, "") if w is not ws else data.get("favoritedAt", ""),
+                    "cost": data.get("cost", "0"),
+                    "run": state.run_status(runs.get(cid)),
+                    **({"team": True, "unread": data.get("updatedAt", "") > read.get(cid, ""),
+                        "mention": max((m := state.pairs(data.get("mentions"))).get(me, ""), m.get("all", "")) > read.get(cid, "")}
+                       if w is not ws else {}),
+                })
         items.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
         return items
 
     @r.get("/chats/{chat_id}")
-    async def get_chat(chat_id: str, since: Optional[int] = None, ws: Workspace = ws_dep):
-        """`since` returns only the turns after that index — the poll runs every
+    async def get_chat(chat_id: str, since: Optional[int] = None, last: Optional[int] = None, before: Optional[int] = None,
+                       v: Optional[str] = None, ws: Workspace = ws_dep):
+        """`last` opens a chat on its newest turns, and with `before` (the `start` it gave) reads the ones before them.
+        A team chat's turns carry who wrote each (`by`, a face), and `live`: reactions, edits since, who is typing.
+        `since` returns only the turns after that index — the poll runs every
         2s and a whole chat is one object read per turn. `next` is the cursor to
         come back with; `open` is the role of the last projected message, which is
         how a client knows whether to fold the window into its trailing bubble
-        (consecutive assistant turns collapse into one)."""
-        meta = await state.get_meta(ws, chat_id)
+        (consecutive assistant turns collapse into one). `v` is the mark the last look returned: with it unchanged and
+        no run, there are no new turns, and none are listed."""
+        me, mine, ws = state.actor_of(ws.subject), ws, _chats(ws, chat_id)
+        meta, row, mark = await state.marked(ws, chat_id)
         # 204 (not 404) for a missing chat: the FE auto-restores `?id=` on
         # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
             return Response(status_code=204)
         # `run` tells the client whether to keep polling: a run outlives the
         # request that started it, so a finished stream is not a finished run.
-        row = await state.get_run(ws, chat_id)
         run = state.run_status(row)
-        turns, end = (None, None) if since is None else await state.load_tail(ws, chat_id, max(since, 0))
+        mark = f"{mark}.{run}"
+        quiet = since is not None and v == mark and run != "running"   # nothing written since the last look
+        turns, end, start = None, None, None
+        if since is not None:
+            turns, end = ([], since) if quiet else await state.load_tail(ws, chat_id, max(since, 0))
+        if since is None and last:
+            turns, start, end = await state.load_window(ws, chat_id, min(max(last, 1), 200), before)
         reset = since is not None and turns is None
         if turns is None:   # full load, or the client is ahead of us
             turns = await state.load_messages(ws, chat_id)
             end = end if end is not None else await state.turn_end(ws, chat_id)
-        ui = to_ui_messages(turns)
-        agents = await state.get_agents(ws, chat_id)
-        return {**meta, "messages": ui, "run": run, "next": end, **({"agents": agents} if agents else {}),
+        ui, live = to_ui_messages(turns), None
+        if state.is_team(chat_id):
+            faces = await activity.people(ws)
+            for m in ui:
+                if m.get("by"): m["by"] = activity._who(m["by"], faces, me)
+            side, typing, held, _ = await asyncio.gather(state.get_live(ws, chat_id), state.typing(ws, chat_id),
+                                                         state.held(ws, chat_id), state.see(mine, chat_id, meta.get("updatedAt", "")))
+            held = to_ui_messages(held)
+            for m in held:
+                m["by"] = activity._who(m["by"], faces, me)
+            # `held`: what the team said while a run has the chat, saved after it; `asker`: whose request that run is
+            live = {**side, "typing": [activity._who(p, faces, me) for p in typing if p != me], "held": held,
+                    **({"asker": activity._who(row["user"], faces, me)} if run == "running" and row and row.get("user") else {})}
+        agents = None if quiet else await state.get_agents(ws, chat_id)
+        return {**meta, "messages": ui, "run": run, "next": end, "v": mark, **({"agents": agents} if agents else {}),
+                **({"start": start} if start is not None else {}), **({"live": live} if live else {}),
                 **({"run_started": row.get("started")} if run == "running" and row else {}),
                 # Why a run didn't finish: its reason, or "lost" when its heartbeat stopped (the container died).
                 **({"run_reason": row.get("reason") or ("lost" if row.get("status") == "running" else None),
@@ -320,10 +361,13 @@ def chats_router(ws_dep):
         """Partial update — merges into existing meta. Send `field: null` to remove a key.
         `updatedAt` is NOT bumped on metadata edits (rename, favorite, …) — it tracks
         message activity only, owned by `touch_meta` on new messages."""
+        ws, me = _chats(ws, chat_id), state.actor_of(ws.subject)
         patch = await request.json()
         patch.pop("messages", None)
         patch.pop("run", None)   # the run record is its own object, not chat meta
         existing = (await state.get_meta(ws, chat_id)) or {}
+        if state.is_team(chat_id) and "favoritedAt" in patch:   # a team chat's favorite is each member's own
+            patch["favoritedBy"] = state.unpair({**state.pairs(existing.get("favoritedBy")), me: patch.pop("favoritedAt")})
         merged = {**existing}
         for k, v in patch.items():
             if v is None: merged.pop(k, None)
@@ -343,6 +387,7 @@ def chats_router(ws_dep):
         stopped before its reply began; the mobile app regenerates by re-sending after it
         (the web replays instead, `/chat` with `regenerate`). `?expect=<sha256 of what was
         typed>` drops only that turn, and not one that ended well; else `{ok: false}`."""
+        ws = _chats(ws, chat_id)
         if (await state.get_meta(ws, chat_id)) is None:
             raise HTTPException(status_code=404, detail="Chat not found")
         # Under a live run this would delete the turns it is appending
@@ -359,12 +404,92 @@ def chats_router(ws_dep):
     async def delete_chat(chat_id: str, ws: Workspace = ws_dep):
         """A tombstone, not a wipe — the chat lives on in the trash for
         TTL_DAYS (see files_router's /trash routes for restore and purge)."""
+        ws = _chats(ws, chat_id)
         meta = await state.get_meta(ws, chat_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Chat not found")
         meta["deletedAt"] = datetime.now(timezone.utc).isoformat()
         await state.put_meta(ws, chat_id, meta)
         return {"ok": True, "trash_id": f"chat:{chat_id}"}
+
+    async def _team(ws, chat_id):
+        if not state.is_team(chat_id) or await state.get_meta(team := _chats(ws, chat_id), chat_id) is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        return team
+
+    @r.get("/chats/{chat_id}/files")
+    async def chat_files(chat_id: str, ws: Workspace = ws_dep):
+        """The files a chat is about, newest first: made or changed in it (their records say), sent in it, or named in
+        it. Only those still in the workspace, each with who and when, as a folder's listing has them."""
+        chats, me = _chats(ws, chat_id), state.actor_of(ws.subject)
+        if await state.get_meta(chats, chat_id) is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        (entries, _), found, turns, faces = await asyncio.gather(
+            _catalog_get(ws.root), activity.of_chat(ws, chat_id), state.load_messages(chats, chat_id), activity.people(ws))
+        there = {e["path"]: e.get("modified") or "" for e in entries if e["type"] == "file"}
+        for t in filter(state._is_plain_user, turns):
+            said = {"by": t.get("by") or me, **({"at": t["at"]} if t.get("at") else {})}
+            for a in t.get("attachments") or []:
+                found.setdefault(a.get("path"), {**said, "action": "uploaded"})
+            for word in state.user_text(t).split():   # a file named with @ is its path in the line
+                found.setdefault(word.strip(".,;:!?()\"'"), said)
+        out = [{"path": p, **activity._out({"at": there[p], **c}, faces, me)} for p, c in found.items() if p in there]
+        return sorted(out, key=lambda f: f["at"], reverse=True)
+
+    @r.post("/chats/{chat_id}/reactions")
+    async def react(chat_id: str, request: Request, ws: Workspace = ws_dep):
+        """Your reaction to a team chat's message, on or off (`{id, emoji}`): every message's reactions back."""
+        body = await request.json()
+        mid, emoji = body.get("id"), body.get("emoji")
+        if not (isinstance(mid, str) and 0 < len(mid) <= 64 and isinstance(emoji, str) and _is_emoji(emoji)):
+            raise HTTPException(status_code=400, detail="A message id and one emoji")
+        return await state.react(await _team(ws, chat_id), chat_id, mid, emoji, state.actor_of(ws.subject))
+
+    @r.api_route("/chats/{chat_id}/messages/{mid}", methods=["PUT", "DELETE"])
+    async def rewrite(chat_id: str, mid: str, request: Request, ws: Workspace = ws_dep):
+        """Your own message in a team chat, said again (`{content}`) or deleted, the files uploaded with it to the trash."""
+        text = (await request.json()).get("content") if request.method == "PUT" else None
+        if request.method == "PUT" and not (isinstance(text, str) and text.strip()):
+            raise HTTPException(status_code=400, detail="Nothing to say")
+        team, me = await _team(ws, chat_id), state.actor_of(ws.subject)
+        by = {"id": me, "name": (await activity.people(team)).get(me, {}).get("name") or "A teammate"}
+        if not (was := await state.rewrite(team, chat_id, mid, by, text and text.strip())):
+            raise HTTPException(status_code=404, detail="Message not found")
+        for att in was.get("attachments") or [] if text is None else []:
+            rel = att.get("path") or ""
+            if rel.startswith("attachments/") and _safe_path(ws.root, rel).is_file():   # an upload, never a file the workspace had
+                meta = await asyncio.to_thread(trash.trash_path, ws.root, rel, "user")
+                await _kept(activity.trashed(ws, rel, meta["id"], activity.change(ws, "deleted")))
+                _catalog_drop(ws.root)
+        return Response(status_code=204)
+
+    @r.post("/chats/{chat_id}/typing")
+    async def typing(chat_id: str, ws: Workspace = ws_dep):
+        """A keystroke's ping: you are typing in this team chat, for a few seconds."""
+        await state.typing(await _team(ws, chat_id), chat_id, state.actor_of(ws.subject))
+        return Response(status_code=204)
+
+    @r.post("/chats/{chat_id}/team")
+    async def to_team(chat_id: str, ws: Workspace = ws_dep):
+        """A chat of yours, moved to the team workspace's chats under a new id, its turns signed as yours."""
+        team = state.team_chats(ws)
+        if team is None or state.is_team(chat_id) or (meta := await state.get_meta(ws, chat_id)) is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        if state.run_status(await state.get_run(ws, chat_id)) == "running":
+            raise HTTPException(status_code=409, detail="This chat is still working on your last message.")
+        new = f"{state.TEAM}{uuid.uuid4()}"
+        me, src = state.actor_of(ws.subject), DB(ws)
+        async for key, value in src.items(prefix=f"chat/{chat_id}/"):
+            name = key.rsplit("/", 1)[1]
+            if name == "index" or name == "run":
+                continue
+            if name.isdigit() and state._is_plain_user(value):
+                value = {**value, "by": me, "id": value.get("id") or secrets.token_hex(6)}
+            await DB(team).put(f"chat/{new}/{name}", value)
+        fav = meta.pop("favoritedAt", None)
+        await state.put_meta(team, new, {**meta, "id": new, **({"favoritedBy": f"{me}={fav}"} if fav else {})})
+        await state.delete_chat(ws, chat_id)
+        return {"id": new}
 
     return r
 
@@ -1068,10 +1193,11 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
 
     async def _trashed_chats(ws):
         rows = []
-        async for cid, data in state.list_chats(ws):
-            if at := data.get("deletedAt"):
-                rows.append({"id": f"chat:{cid}", "path": data.get("title") or cid, "kind": "chat",
-                             "by": "user", "deleted_at": at, "chat_id": cid})
+        for w in filter(None, (ws, state.team_chats(ws))):
+            async for cid, data in state.list_chats(w):
+                if at := data.get("deletedAt"):
+                    rows.append({"id": f"chat:{cid}", "path": data.get("title") or cid, "kind": "chat",
+                                 "by": "user", "deleted_at": at, "chat_id": cid})
         return rows
 
     @r.get("/trash")
@@ -1086,7 +1212,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             except Exception:
                 expired = True
             if expired:
-                await state.delete_chat(ws, c["chat_id"])
+                await state.delete_chat(state.chats_of(ws, c["chat_id"]), c["chat_id"])
             else:
                 rows.append(c)
         rows.sort(key=lambda m: m["deleted_at"], reverse=True)
@@ -1096,11 +1222,12 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
     async def restore_trash(tid: str, ws: Workspace = ws_dep):
         if tid.startswith("chat:"):
             cid = tid[5:]
-            meta = await state.get_meta(ws, cid)
+            w = _chats(ws, cid)
+            meta = await state.get_meta(w, cid)
             if meta is None:
                 raise HTTPException(status_code=404, detail="Not found")
             meta.pop("deletedAt", None)
-            await state.put_meta(ws, cid, meta)
+            await state.put_meta(w, cid, meta)
             return {"ok": True, "path": cid}
         try:
             path = await asyncio.to_thread(trash.restore, ws.root, tid)
@@ -1117,7 +1244,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can delete forever")
         if tid.startswith("chat:"):
-            await state.delete_chat(ws, tid[5:])
+            await state.delete_chat(_chats(ws, tid[5:]), tid[5:])
             spill.purge(ws.root, tid[5:])
             return {"ok": True}
         try:
@@ -1138,7 +1265,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         await _drop_app_data(ws, gone)
         await _comments(ws, "drop", [m["id"] for m in gone if m.get("id")])
         for c in await _trashed_chats(ws):
-            await state.delete_chat(ws, c["chat_id"])
+            await state.delete_chat(state.chats_of(ws, c["chat_id"]), c["chat_id"])
         await _kept(activity.purged(ws))
         await _kept(activity.audit(ws, activity.change(ws, "trash_emptied", count=len(gone)), ""))
         return {"ok": True}

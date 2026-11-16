@@ -1,6 +1,7 @@
-import { useState } from "react";
-import type { Part, Message, Source } from "../hooks/use-chat";
+import { useRef, useState } from "react";
+import type { Attachment, Part, Message, Source } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
+import { AgentMark, Face } from "./file-details";
 import { ThinkingPart } from "./parts/thinking-part";
 import { CodePart } from "./parts/code-part";
 import { TablePart } from "./parts/table-part";
@@ -17,12 +18,13 @@ import { SelectionChip } from "./selection-chip";
 import { SourcesPart } from "./parts/sources-part";
 import { ChartPart } from "./parts/chart-part";
 import { AttachmentBody } from "./attachment-body";
+import { EmojiPicker } from "./emoji-picker";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
 import { calloutText } from "../lib/errors";
 import { urlKey } from "./parts/sources-part";
 import { useMemo } from "react";
-import { localStep, t } from "../lib/i18n";
+import { getLang, localStep, t } from "../lib/i18n";
 import { dirOf } from "../lib/bidi";
 
 function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: () => void, onOpenFile?: (path: string) => void, sources?: Map<string, Source>) {
@@ -115,15 +117,24 @@ function groupParts(parts: Part[], live?: boolean) {
   return groups;
 }
 
-export function MessageBubble({
-  message,
-  isStreaming,
-  onRetry,
-  onRegenerate,
-  onOpenFile,
-  resolveMedia,
-}: {
+// The people and agent a team chat's messages name: each `@name` painted where it is said.
+function Mentioned({ text, names }: { text: string; names: string[] }) {
+  const known = names.filter(Boolean).sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!known.length) return <>{text}</>;
+  return <>{text.split(new RegExp(`(@(?:${known.join("|")}))`, "gi")).map((p, i) =>
+    i % 2 ? <span key={i} className="rounded-md bg-foreground/10 px-1 py-px font-medium text-foreground">{p}</span> : p)}</>;
+}
+
+export type Team = { agent: string; logo?: string; names: string[]; people: Record<string, string>; me?: string };
+
+type BubbleProps = {
   message: Message;
+  team?: Team;   // a team chat's: who its messages can name, and who reacted
+  first?: boolean;   // a team chat's run of one person's messages: the name and time top it, the face ends it
+  last?: boolean;
+  reactions?: Record<string, string[]>;
+  onReact?: (emoji: string) => void;
+  onRewrite?: (text?: string) => Promise<void>;   // your own team message, said again or (no text) taken back
   isStreaming?: boolean;
   onRetry?: () => void;
   // Only passed for the last assistant message — regenerating an earlier one
@@ -131,38 +142,199 @@ export function MessageBubble({
   onRegenerate?: () => void;
   onOpenFile?: (path: string) => void;
   resolveMedia?: (path: string) => Promise<string>;   // a workspace file → a URL its picture can show from
+};
+
+const clock = (at: string | number) => new Date(at).toLocaleTimeString(getLang(), { hour: "numeric", minute: "2-digit" });
+const QUICK = ["👍", "❤️", "✅"];   // one click from a message's tools; every other is in the picker
+const tool = "hover:bg-secondary text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded-full transition cursor-pointer";
+
+// Two components, not one with an early return: a slot that turns from a person's message into a reply (a team
+// chat's reload, a page put above) must not run a different set of hooks.
+export function MessageBubble(props: BubbleProps) {
+  return props.message.role === "user" ? <UserBubble {...props} /> : <Reply {...props} />;
+}
+
+const Smile = () => (
+  <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" />
+  </svg>
+);
+
+// Every emoji, behind a smile: the full picker (search, categories, skin tones), above a message low on the screen.
+// `data-open` keeps the tools it sits in showing while it is.
+function ReactButton({ onReact }: { onReact: (emoji: string) => void }) {
+  const [up, setUp] = useState<boolean | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={ref} className="relative" data-open={up !== null || undefined}>
+      <button type="button" onClick={() => setUp(up === null ? ref.current!.getBoundingClientRect().top > 460 : null)}
+              className={tool} aria-label={t("react")} title={t("react")}><Smile /></button>
+      {up !== null && <EmojiPicker up={up} align="end" onPick={(e) => { onReact(e); setUp(null); }} onClose={() => setUp(null)} />}
+    </div>
+  );
+}
+
+// A team chat message's tools, beside it on hover (a tap on a phone): a reaction in one click, every other behind
+// the smile, and on your own an edit and a delete that asks once more.
+function Tools({ className = "", shown, onReact, onEdit, onDelete }: {
+  className?: string; shown?: boolean; onReact?: (emoji: string) => void; onEdit?: () => void; onDelete?: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [sure, setSure] = useState(false);
+  return (
+    <div onMouseLeave={() => setSure(false)}
+         className={`z-20 flex shrink-0 items-center gap-0.5 rounded-full border border-border bg-background p-0.5 shadow-sm has-[[data-open]]:visible ${shown ? "visible" : "invisible group-hover:visible"} ${className}`}>
+      {onReact && QUICK.map((e) => (
+        <button key={e} type="button" onClick={() => onReact(e)}
+                className="flex size-7 items-center justify-center rounded-full text-[15px] transition-transform hover:scale-110 hover:bg-secondary cursor-pointer">{e}</button>
+      ))}
+      {onReact && <ReactButton onReact={onReact} />}
+      {(onEdit || onDelete) && onReact && <span className="mx-0.5 h-4 w-px bg-border" />}
+      {onEdit && <button type="button" onClick={onEdit} className={tool} aria-label={t("edit")} title={t("edit")}><Icon name="pencil" className="w-3.5 h-3.5" /></button>}
+      {onDelete && (sure
+        ? <button type="button" onClick={onDelete} className="flex h-7 items-center rounded-full bg-red-500/10 px-2.5 text-xs font-medium text-red-600 dark:text-red-400 cursor-pointer">{t("delete")}</button>
+        : <button type="button" onClick={() => setSure(true)} className={tool} aria-label={t("delete")} title={t("delete")}><Icon name="trash" className="w-3.5 h-3.5" /></button>)}
+    </div>
+  );
+}
 
-  if (message.role === "user") {
-    const attachments = message.attachments;
-    return (
-      <div className="flex w-full max-w-3xl items-start gap-4 px-6 pb-2 justify-end">
-        <div className="flex flex-col items-end gap-2 max-w-[80%]">
-          {message.selection && <SelectionChip selection={message.selection} />}
-          {attachments && attachments.length > 0 && (
-            <div className="flex flex-row gap-2 flex-wrap justify-end">
-              {attachments.map((att, i) => (
-                <a
-                  key={att.name + i}
-                  href={att.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="border border-border bg-background hover:bg-secondary/50 flex items-center gap-3 rounded-2xl p-2 pr-3 transition-colors cursor-pointer"
-                >
-                  <AttachmentBody attachment={att} />
-                </a>
-              ))}
-            </div>
-          )}
-          <div dir={dirOf(message.content)} className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
-            {message.content}
+// A message's reactions: each with how many and who (yours marked), a click puts yours on or takes it off; the smile
+// after them adds another.
+function Reactions({ on, team, onReact }: { on?: Record<string, string[]>; team?: Team; onReact?: (emoji: string) => void }) {
+  const list = Object.entries(on || {});
+  if (!list.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {list.map(([e, who]) => (
+        <button key={e} type="button" onClick={() => onReact?.(e)}
+                title={who.map((p) => (p === team?.me ? t("you") : team?.people[p] || t("someone"))).join(", ")}
+                className={`flex h-6 items-center gap-1 rounded-full border px-2 text-xs transition-colors cursor-pointer ${team?.me && who.includes(team.me) ? "border-sky-500/50 bg-sky-500/10 text-foreground" : "border-border bg-background text-muted-foreground hover:border-foreground/20"}`}>
+          <span className="text-sm leading-none">{e}</span><span className="font-medium tabular-nums">{who.length}</span>
+        </button>
+      ))}
+      {onReact && <ReactButton onReact={onReact} />}
+    </div>
+  );
+}
+
+// Pictures sent with a message, shown as themselves: one at its own size, several in a grid. A click opens the
+// canvas. Each is fetched once a chat (use-chat), a soft frame until it is.
+function Pictures({ items, onOpenFile }: { items: Attachment[]; onOpenFile?: (path: string) => void }) {
+  const one = items.length === 1;
+  return (
+    <div className={one ? "max-w-full" : `grid max-w-sm gap-1.5 ${items.length === 2 || items.length === 4 ? "grid-cols-2" : "grid-cols-3"}`}>
+      {items.map((a, i) => (
+        <button key={a.path || i} type="button" onClick={() => a.path && onOpenFile?.(a.path)} aria-label={a.name}
+                className={`block overflow-hidden rounded-2xl border border-border bg-secondary cursor-pointer ${one ? "w-fit max-w-full" : "aspect-square"}`}>
+          {a.url ? <img src={a.url} alt={a.name} className={one ? "block max-h-80 max-w-[min(20rem,100vw_-_5rem)]" : "size-full object-cover"} />
+            : <span className={`block animate-pulse ${one ? "h-48 w-64 max-w-full" : "size-full"}`} />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// A video sent with a message: a tile, played here when pressed, its file fetched only then.
+function VideoTile({ att, resolve }: { att: Attachment; resolve?: (path: string) => Promise<string> }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  if (src) return <video src={src} controls autoPlay playsInline className="block max-h-80 max-w-[min(22rem,100vw_-_5rem)] rounded-2xl border border-border bg-black" />;
+  const play = async () => {
+    if (!resolve || !att.path || loading) return;
+    setLoading(true);
+    try { setSrc(await resolve(att.path)); } catch { /* the canvas still opens it */ } finally { setLoading(false); }
+  };
+  return (
+    <button type="button" onClick={() => void play()} aria-label={att.name}
+            className="relative flex aspect-video w-72 max-w-full items-center justify-center overflow-hidden rounded-2xl border border-border bg-neutral-900 text-white cursor-pointer">
+      <span className="flex size-12 items-center justify-center rounded-full bg-white/15 backdrop-blur-sm">
+        {loading ? <span className="size-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+          : <svg className="ms-0.5 size-5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z" /></svg>}
+      </span>
+      <span dir="auto" className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-3 pb-2 pt-6 text-start text-xs">{att.name}</span>
+    </button>
+  );
+}
+
+function UserBubble({ message, team, first = true, last = true, reactions, onReact, onRewrite, onOpenFile, resolveMedia }: BubbleProps) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [shown, setShown] = useState(false);   // a phone's tap on the message shows its tools
+  const attachments = message.deleted ? [] : message.attachments || [];
+  const kind = (a: Attachment) => (a.path && a.type.startsWith("image/") ? "picture" : a.path && a.type.startsWith("video/") ? "video" : "file");
+  const pictures = attachments.filter((a) => kind(a) === "picture");
+  const files = attachments.filter((a) => kind(a) === "file");
+  const other = message.by && !message.by.you ? message.by : null;   // a teammate's, in a team chat
+  const save = async () => {
+    const text = editing?.trim();
+    if (text && text !== message.content) await onRewrite?.(text).catch(() => {});
+    setEditing(null);
+  };
+  const tools = team && !message.deleted && editing === null && (
+    <Tools className={`absolute top-1/2 -translate-y-1/2 ${other ? "start-full ms-2" : "end-full me-2"}`} shown={shown} onReact={onReact}
+           onEdit={!other && onRewrite ? () => setEditing(message.content) : undefined}
+           onDelete={!other && onRewrite ? () => void onRewrite().catch(() => {}) : undefined} />
+  );
+  return (
+    <div onClick={() => { if (team && window.matchMedia?.("(hover: none)").matches) setShown((v) => !v); }}
+         className={`group flex w-full max-w-3xl gap-2.5 px-6 ${!team ? "pb-2" : last ? "pb-4" : "pb-1"} ${other ? "items-start justify-start" : "items-end justify-end"}`}>
+      {other && <span className="w-7 shrink-0">{first && <Face c={{ by: other, at: "" }} size={28} />}</span>}
+      <div className={`flex min-w-0 max-w-[80%] flex-col gap-1 ${other ? "items-start" : "items-end"}`}>
+        {team && first && (other ? <Byline name={other.name || t("someone")} at={message.at} />
+          : message.at && <span className="px-1 text-xs text-muted-foreground">{clock(message.at)}</span>)}
+        {message.selection && <SelectionChip selection={message.selection} />}
+        <div className={`relative flex flex-col gap-2 ${other ? "items-start" : "items-end"}`}>
+        {tools}
+        {pictures.length > 0 && <Pictures items={pictures} onOpenFile={onOpenFile} />}
+        {attachments.filter((a) => kind(a) === "video").map((a) => <VideoTile key={a.path} att={a} resolve={resolveMedia} />)}
+        {files.length > 0 && (
+          <div className={`flex flex-row gap-2 flex-wrap ${other ? "justify-start" : "justify-end"}`}>
+            {files.map((att, i) => {   // a file kept in the workspace opens in the canvas, as the agent's do
+              const tile = "border border-border bg-background hover:bg-secondary/50 flex items-center gap-3 rounded-2xl p-2 pr-3 transition-colors cursor-pointer";
+              return att.path && onOpenFile
+                ? <button key={att.name + i} type="button" onClick={() => onOpenFile(att.path!)} className={tile}><AttachmentBody attachment={att} /></button>
+                : <a key={att.name + i} href={att.url} target="_blank" rel="noopener noreferrer" className={tile}><AttachmentBody attachment={att} /></a>;
+            })}
           </div>
+        )}
+        {editing !== null ? (
+          <div className="flex w-[min(28rem,70vw)] flex-col gap-2 rounded-2xl border border-border bg-background p-2">
+            <textarea autoFocus value={editing} dir={dirOf(editing)} rows={Math.min(6, editing.split("\n").length)}
+                      onChange={(e) => setEditing(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void save(); }
+                        if (e.key === "Escape") setEditing(null);
+                      }}
+                      className="w-full resize-none bg-transparent px-2 py-1 text-sm outline-none" />
+            <div className="flex justify-end gap-1">
+              <button type="button" onClick={() => setEditing(null)} className="rounded-full px-3 py-1 text-xs hover:bg-secondary cursor-pointer">{t("cancel")}</button>
+              <button type="button" onClick={() => void save()} className="rounded-full bg-foreground px-3 py-1 text-xs text-background hover:opacity-80 cursor-pointer">{t("save")}</button>
+            </div>
+          </div>
+        ) : (message.content || message.deleted) && (
+          <div dir={dirOf(message.content)} className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
+            {message.deleted ? <span className="italic text-muted-foreground">{t("messageDeleted")}</span>
+              : team ? <Mentioned text={message.content} names={team.names} /> : message.content}
+          </div>
+        )}
         </div>
+        {message.edited && !message.deleted && <span className="px-1 text-[11px] text-muted-foreground">{t("edited")}</span>}
+        <Reactions on={reactions} team={team} onReact={onReact} />
       </div>
-    );
-  }
+    </div>
+  );
+}
 
+// Who wrote a team chat's message, beside their face: the name, then the time.
+function Byline({ name, at }: { name: string; at?: string | number }) {
+  return (
+    <div className="flex h-7 items-center gap-2">
+      <span className="text-sm font-medium text-foreground">{name}</span>
+      {at && <span className="text-xs text-muted-foreground">{clock(at)}</span>}
+    </div>
+  );
+}
+
+function Reply({ message, team, reactions, onReact, isStreaming, onRetry, onRegenerate, onOpenFile, resolveMedia }: BubbleProps) {
+  const [copied, setCopied] = useState(false);
   const parts = (message.parts || [])
     .filter((p) => p.type !== "chat_id")
     // Collapse consecutive canvas cards for the same file (retries) into one.
@@ -199,6 +371,7 @@ export function MessageBubble({
     .map((p) => (p.type === "step" && p.id && shapes.has(p.id) ? { ...p, picture: shapes.get(p.id) } : p))
     .map((p) => (p.type === "step" && p.id && byCall.has(p.id) ? { ...p, sources: byCall.get(p.id) } : p));
   const isEmpty = rendered.length === 0;
+  const at = parts.find((p) => typeof p.at === "number")?.at;   // when the reply began, for one with no time of its own
   // A limit is the line over the message box; in a reply it is the note, and only where it is the whole of one:
   // the reply it refused.
   const refused = isEmpty && !isStreaming ? parts.find((p) => p.type === "usage" && usedUp(p)) : undefined;
@@ -237,8 +410,15 @@ export function MessageBubble({
   };
 
   return (
-    <div className="group flex w-full max-w-3xl items-start gap-4 px-6 pb-2">
+    <div className={`group flex w-full max-w-3xl items-start px-6 ${team ? "gap-2.5 pb-4" : "gap-4 pb-2"}`}>
+      {team && <AgentMark logo={team.logo} name={team.agent} size={28} />}
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
+        {team && (
+          <div className="flex items-center gap-2">
+            <Byline name={team.agent} at={message.at || at} />
+            {onReact && !isStreaming && <Tools onReact={onReact} />}
+          </div>
+        )}
         {isEmpty && isStreaming && <Loader />}
         {refused && <UsageNote usage={refused} />}
 
@@ -257,12 +437,13 @@ export function MessageBubble({
         })}
 
         {!isStreaming && allSources.length > 0 && <SourcesPart sources={allSources} />}
+        <Reactions on={reactions} team={team} onReact={onReact} />
 
         {/* Actions */}
         {!isEmpty && !isStreaming && (
           <div
             className={cn(
-              "flex gap-0 -ms-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100",
+              "flex gap-0 -ms-2 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100 sm:has-[[data-open]]:opacity-100",
             )}
           >
             <button
@@ -284,6 +465,7 @@ export function MessageBubble({
                 <Icon name="refresh" className="w-3.5 h-3.5" />
               </button>
             )}
+            {team && onReact && <span className="[@media(hover:hover)]:hidden"><ReactButton onReact={onReact} /></span>}
           </div>
         )}
       </div>

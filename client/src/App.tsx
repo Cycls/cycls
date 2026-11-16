@@ -212,6 +212,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       name: [m.publicUserData?.firstName, m.publicUserData?.lastName].filter(Boolean).join(" ")
         || m.publicUserData?.identifier || m.publicUserData?.userId || "",
       email: m.publicUserData?.identifier,
+      image: m.publicUserData?.imageUrl,
     }))
     .filter((m) => m.id);
   setPeople(orgMembers);

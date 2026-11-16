@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { t, useLang, getLang, timeAgo } from "../lib/i18n";
@@ -218,7 +218,9 @@ type SortKey = "name" | "size" | "modified" | "type";
 
 const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : "");
 
-export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, fileInfo, onOpenChat, maxUpload, org }: FilesPanelProps) {
+const Dot = () => <span className="inline-block size-1.5 shrink-0 rounded-full bg-[#3171F6]" />;
+
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, fileInfo, onOpenChat, maxUpload, org, chatFiles }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -243,6 +245,16 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
 
   const segments = path ? path.split("/") : [];
   const fullPath = useCallback((name: string) => (path ? `${path}/${name}` : name), [path]);
+  // The open chat's files: a dot on each, and on each folder holding them, and those first; the filter shows them alone.
+  const [onlyChat, setOnlyChat] = useState(false);
+  const only = onlyChat && !!chatFiles?.length;
+  const fromChat = useMemo(() => {
+    const paths = (chatFiles || []).map((f) => f.path);
+    return (name: string, isDir: boolean) => {
+      const ep = path ? `${path}/${name}` : name;
+      return isDir ? paths.filter((p) => p.startsWith(`${ep}/`)).length : paths.includes(ep) ? 1 : 0;
+    };
+  }, [chatFiles, path]);
 
   // Reset transient state when the directory changes.
   useEffect(() => { setSelected(new Set()); setAnchor(null); setMenuOpen(null); }, [path]);
@@ -322,6 +334,8 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
   // ---- selection ----
   const sorted = [...entries].sort((a, b) => {
     if (a.type !== b.type) return a.type === "directory" ? -1 : 1;   // folders first
+    const ma = fromChat(a.name, a.type === "directory") > 0, mb = fromChat(b.name, b.type === "directory") > 0;
+    if (ma !== mb) return ma ? -1 : 1;   // then the open chat's
     let cmp = 0;
     if (sortKey === "name") cmp = a.name.localeCompare(b.name);
     else if (sortKey === "size") cmp = a.size - b.size;
@@ -352,8 +366,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
     setAnchor(name);
   };
 
-  const open = (name: string, isDir: boolean, kind?: string) => {
-    const ep = fullPath(name);
+  const open = (name: string, isDir: boolean, kind?: string, ep = fullPath(name)) => {
     if (isDir) return navigate(ep);
     if (isRenderable(name, kind) && onOpenInCanvas) return onOpenInCanvas(ep, name);
     onOpenFile(`${ep}?download=1`).then((url) => saveBlob(url, name));
@@ -461,6 +474,13 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
 
         {/* Actions — refresh stays on the bar; the rest collapse into one menu */}
         <div className="flex items-center gap-1 shrink-0 ml-2">
+          {!!chatFiles?.length && (
+            <button onClick={() => setOnlyChat((v) => !v)} aria-pressed={only}
+                    className={`flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors cursor-pointer ${only ? "border-[#3171F6]/40 bg-[#3171F6]/10 text-foreground" : "border-border text-muted-foreground hover:text-foreground"}`}>
+              <Dot />{t("fromThisChat")}<span className="text-muted-foreground">{chatFiles.length}</span>
+              {only && <Icon name="x" className="size-3" />}
+            </button>
+          )}
           <button
             onClick={() => onReload(path)}
             className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
@@ -579,8 +599,24 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
               </div>
             ))}
 
+            {/* The open chat's files alone, newest first, each with the folder it is in */}
+            {only && chatFiles!.map((f) => {
+              const name = f.path.split("/").pop()!, dir = f.path.slice(0, f.path.length - name.length);
+              return (
+                <div key={f.path} onClick={() => open(name, false, undefined, f.path)}
+                     className="flex items-center gap-3 px-4 py-2.5 sm:px-6 transition-colors cursor-pointer hover:bg-secondary/50">
+                  <FileTile name={name} className="size-8" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-foreground" title={f.path}>{shownName(name)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{[dir || t("workspace"), formatDate(f.at)].join(" · ")}</span>
+                  </div>
+                  <Face c={f} />
+                </div>
+              );
+            })}
+
             {/* File list */}
-            {sorted.map((entry) => {
+            {!only && sorted.map((entry) => {
               const entryPath = fullPath(entry.name);
               const isDir = entry.type === "directory";
               const isSel = selected.has(entry.name);
@@ -646,7 +682,12 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                       />
                     ) : (
                       <>
-                        <span className="text-sm text-foreground truncate block select-none" title={shownName(entry.name)}>{shownName(entry.name)}</span>
+                        <span className="flex items-center gap-1.5 text-sm text-foreground select-none" title={shownName(entry.name)}>
+                          {fromChat(entry.name, isDir) > 0 && <Dot />}<span className="truncate">{shownName(entry.name)}</span>
+                        </span>
+                        {isDir && fromChat(entry.name, true) > 0 && (
+                          <span className="block truncate text-xs text-[#3171F6] select-none">{t("fromThisChatCount").replace("{n}", String(fromChat(entry.name, true)))}</span>
+                        )}
                         {/* Too narrow for their columns: the size and date under the name */}
                         <span className="@lg:hidden block truncate text-xs text-muted-foreground select-none">
                           {[isDir ? "" : formatSize(entry.size), formatDate(entry.modified)].filter(Boolean).join(" · ")}

@@ -95,8 +95,15 @@ def test_after_a_run_every_file_it_changed_is_its_change(tmp_path):
     _write(w, "made.docx")                      # bash made it
     _write(w, "edited.md", "changed by the run")
     asyncio.run(activity.record(w, "theirs.md", activity.change(w, "edited")))   # someone else, recorded meanwhile
+    _write(w, "deck.fig")                       # the run made it, and the canvas saved it while open
+    asyncio.run(activity.record(w, "deck.fig", activity.change(w, "edited")))
+    _write(w, "upload.pdf")                     # a teammate's, sent while the run worked
+    asyncio.run(activity.record(w, "upload.pdf", activity.change(w, "uploaded")))
     os.utime(w.root / "kept.md", (time.time() - 3600, time.time() - 3600))
-    asyncio.run(activity.after_run(w, before, since, None, "super"))
+    asyncio.run(activity.after_run(w, before, since, "c1", "super"))
+    deck = asyncio.run(activity.info(w, "deck.fig"))
+    assert deck["created"]["agent"] == "super" and deck["created"]["chat"]["id"] == "c1"
+    assert [c.get("agent") for c in asyncio.run(activity.info(w, "upload.pdf"))["activity"]] == [None]
     made = asyncio.run(activity.info(w, "made.docx"))["created"]
     assert made["action"] == "created" and made["agent"] == "super"
     assert asyncio.run(activity.info(w, "edited.md"))["edited"]["action"] == "edited"
@@ -262,3 +269,26 @@ def test_where_a_request_came_from():
     assert activity.origin_of({"user-agent": "Cycls/28 CFNetwork/1568 Darwin/24.0"})["client"] == "ios"
     assert activity.origin_of({"user-agent": "okhttp/4.12.0"})["client"] == "android"
     assert activity.origin_of({"user-agent": "python-requests/2.32"})["client"] == "api"
+
+
+def test_a_chats_files_are_the_ones_it_made_sent_or_named_and_still_there(tmp_path):
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from cycls._agent.web.routers import chats_router
+    w = _ws(tmp_path)
+    for rel in ("deck/launch.fig", "attachments/ab-brief.pdf", "research/notes.md", "deck/old.fig", "other.md"):
+        _write(w, rel)
+    for rel, chat in (("deck/launch.fig", "c1"), ("deck/old.fig", "c1"), ("other.md", "c2")):
+        asyncio.run(activity.record(w, rel, activity.change(w, "created", agent="super", chat=chat)))
+    os.remove(w.root / "deck/old.fig")   # gone since
+    asyncio.run(state.append_messages(w, "c1", [
+        {"role": "user", "content": "build it from this", "attachments": [{"name": "brief.pdf", "path": "attachments/ab-brief.pdf", "type": "application/pdf", "size": 1, "url": ""}]},
+        {"role": "assistant", "content": "Done"},
+        {"role": "user", "content": "now use research/notes.md too"}], 0))
+    asyncio.run(state.touch_meta(w, "c1", "build it"))
+    app = FastAPI()
+    app.include_router(chats_router(Depends(lambda: w)))
+    got = TestClient(app).get("/chats/c1/files").json()
+    assert sorted(f["path"] for f in got) == ["attachments/ab-brief.pdf", "deck/launch.fig", "research/notes.md"]
+    made = next(f for f in got if f["path"] == "deck/launch.fig")
+    assert made["agent"] == "super" and made["by"]["id"] == "u_sara"

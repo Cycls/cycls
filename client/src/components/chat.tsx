@@ -1,7 +1,7 @@
 import type { PollApi } from "../lib/polls";
-import { setAgentLabel } from "./file-details";
+import { Face, setAgentLabel } from "./file-details";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
@@ -27,10 +27,10 @@ import { ShareDialog, type ShareLink, type ShareLinks } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
-import { WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import type { Attachment, ChatApi, AppConfig, SendExtra, Part, Connection } from "../hooks/use-chat";
+import { TeamPeople, WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
+import { isTeamChat, type Attachment, type ChatApi, type Message, type AppConfig, type SendExtra, type Part, type Connection } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
-import type { BrandKit, DesignVersion, FetchVersioned, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
+import type { BrandKit, DesignVersion, FetchVersioned, FileChange, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
 import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEditorsOpen } from "./sheets-editor-view";
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
@@ -81,7 +81,11 @@ export interface AccountInfo {
 
 const isUnder = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
 
+// A file the open chat made or changed, was sent or named: where it is, and who and when.
+export type ChatFile = FileChange & { path: string };
+
 export interface FilesPanelProps {
+  chatFiles?: ChatFile[] | null;
   entries: FileEntry[];
   path: string;
   loading: boolean;
@@ -150,7 +154,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   config?: AppConfig | null;
   view?: string;   // the org and workspace, which `kept` is keyed by
 }) {
-  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
+  const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, moveToTeam: onMoveToTeam, older, loadOlder: onLoadOlder, live, react: onReact, rewrite: onRewrite, typing: onTyping, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, freePlan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
@@ -164,8 +168,49 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
   setAgentLabel((id) => (id === name && meta?.name) || id.charAt(0).toUpperCase() + id.slice(1));
-  const inputPlaceholder = meta
-    ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
+  // A team workspace has two kinds of chat, the agent's (each person's own) and the team's; the open one says which.
+  const teamWs = workspaces?.active?.type === "team";
+  const [chatKind, setChatKind] = useState<"agent" | "team">("agent");
+  useEffect(() => { if (chatId) setChatKind(isTeamChat(chatId) ? "team" : "agent"); }, [chatId]);
+  const inTeam = teamWs && (chatId ? isTeamChat(chatId) : chatKind === "team");
+  const agentNames = [meta?.name, passMetadata?.en?.name, passMetadata?.ar?.name, name].filter(Boolean).map((n) => `@${n!.toLowerCase()}`);
+  // The team workspace's people: on General everyone in the org but those it lists, elsewhere those it lists.
+  const [members, setMembers] = useState<{ id: string; name: string; image?: string; you?: boolean }[]>([]);
+  useEffect(() => {
+    const w = workspaces?.active;
+    if (w?.type !== "team") { setMembers([]); return; }
+    workspaces!.fetchMembers(w.id).then((rows) => {
+      const listed = new Set(rows.map((r) => r.user_id));
+      setMembers(workspaces!.orgMembers.filter((m) => listed.has(m.id) !== !!w.builtin).map((m) => ({ ...m, you: m.id === user?.id })));
+    }).catch(() => setMembers([]));
+  }, [workspaces?.active?.id, workspaces?.orgMembers.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const team = useMemo(() => (inTeam ? { agent: meta?.name || name || "", logo: meta?.logo, names: [meta?.name || name || "", "all", ...members.map((m) => m.name)],
+                                         people: Object.fromEntries(members.map((m) => [m.id, m.name])), me: user?.id } : undefined),
+    [inTeam, meta?.name, meta?.logo, name, members, user?.id]);
+  // A team chat reads like a conversation: a line where each day begins, and one person's messages in a row
+  // (minutes apart) under one name and one face.
+  const shown = useMemo(() => {
+    const have = new Set(messages.flatMap((m) => (m.id ? [m.id] : [])));
+    const held = live.held.filter((m) => !m.id || !have.has(m.id));
+    return held.length ? [...messages, ...held] : messages;
+  }, [messages, live.held]);
+  // Someone else's request: the others see it worked on, may still write to the team, and only its asker stops it.
+  const othersRun = !!(inTeam && runStatus === "running" && !attached && live.asker && !live.asker.you);
+  const marks = useMemo(() => {
+    if (!team) return null;
+    const who = (m: Message) => (m.role === "user" ? (m.by && !m.by.you ? m.by.id : "") : null);
+    const near = (a?: Message, b?: Message) => !!a && !!b && who(a) !== null && who(a) === who(b)
+      && (!a.at || !b.at || Math.abs(Date.parse(b.at) - Date.parse(a.at)) < 5 * 60e3);
+    let day = "";
+    return shown.map((m, i) => {
+      const d = m.at ? new Date(m.at).toDateString() : "";
+      const begins = !!d && d !== day;
+      if (d) day = d;
+      return { day: begins ? m.at : undefined, first: begins || !near(shown[i - 1], m), last: !near(m, shown[i + 1]) };
+    });
+  }, [team, shown]);
+  const inputPlaceholder = inTeam ? t("teamPlaceholder").replace("{agent}", meta?.name || name || "")
+    : meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`)
     : undefined;
   // A prompt drafted before sign-in (public shell, example card) survives the
   // auth round-trip here — consumed once, so later remounts start clean.
@@ -219,6 +264,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const [pills, setPills] = useState<Connector[]>([]);
   const pillsRef = useRef<Connector[]>([]);
   useEffect(() => { pillsRef.current = pills; }, [pills]);
+  const typedRef = useRef(0);   // the others are told you are typing, every few seconds while you do
+  useEffect(() => {
+    if (!inTeam || !chatId || !input.trim() || Date.now() - typedRef.current < 3000) return;
+    typedRef.current = Date.now();
+    onTyping?.();
+  }, [input]);   // eslint-disable-line react-hooks/exhaustive-deps
   // The composer's text, read by the mention search without making it a dependency — a callback that
   // changed per keystroke would restart the picker's debounce.
   const inputRef = useRef(input);
@@ -392,13 +443,36 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else { sessionStorage.removeItem("cycls_settings"); setSettingsWs(null); }
   }, []);
   const wsNav = workspaces && { ...workspaces, onManage: (id: string) => { setSettingsWs(id); setSettingsOpen(true); } };
+  // A team chat's people: top right on a computer, under the workspace in the menu on a phone.
+  const ws = workspaces?.active;
+  const people = team && members.length > 0 && ws ? { members, agent: team.agent, logo: team.logo, ws,
+    onManage: ["owner", "admin"].includes(ws.role ?? "") ? () => wsNav!.onManage(ws.id) : undefined } : undefined;
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
-  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[]>([]);
+  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
+  // A chat opens on its newest: reaching the top reads the page before, and the view stays where it was.
+  const topRef = useRef<HTMLDivElement>(null);
+  const fromBottomRef = useRef<number | null>(null);
+  useEffect(() => {
+    const el = topRef.current;
+    if (!el || !older) return;
+    const seen = new IntersectionObserver(([e]) => {
+      const box = scrollRef.current;
+      if (!e.isIntersecting || !box) return;
+      fromBottomRef.current = box.scrollHeight - box.scrollTop;
+      void onLoadOlder?.();
+    }, { root: scrollRef.current });
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [older, chatId, chatLoading]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const box = scrollRef.current, from = fromBottomRef.current;
+    if (box && from != null) { box.scrollTop = box.scrollHeight - from; fromBottomRef.current = null; }
+  }, [messages]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmitRef = useRef<(overrideText?: string, origin?: string, extra?: SendExtra) => void>(() => {});
   // Send pressed while a file uploads: held, shown, and sent by itself when the uploads finish.
@@ -618,14 +692,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       .filter((c) => c.connected && c.allowed && c.on && connectorLabel(c).toLowerCase().includes(needle)
         && !inputRef.current.includes(`@${connectorLabel(c)}`))
       .map((c) => ({ name: connectorLabel(c), path: "", connector: c }));
-    return [...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
-  }, [account, connectors, searchFiles]);
+    // In a team chat the agent and the members come first: naming the agent asks it.
+    const people = team ? [{ id: "", name: team.agent, logo: team.logo }, { id: "all", name: "all" }, ...members.filter((m) => !m.you)]
+      .filter((m) => m.name.toLowerCase().includes(needle) && !inputRef.current.includes(`@${m.name}`))
+      .map((m) => ({ name: m.name, path: "", person: m })) : [];
+    return [...people, ...(account ? hits : []), ...(searchFiles ? await searchFiles(q) : [])];
+  }, [account, connectors, searchFiles, team, members]);
 
   // When Stop gives a prompt back, Send takes Stop's place: a double click must not send it again.
   const givenBackRef = useRef(0);
   const handleSubmit = useCallback((overrideText?: string, origin: string = "keyboard", extra?: SendExtra) => {
     const text = (overrideText ?? input).trim();
-    if (!text || Date.now() - givenBackRef.current < 600) return;
+    if ((!text && !attachments.length) || Date.now() - givenBackRef.current < 600) return;
     // A file still uploading holds the send (useHeldSend), in the composer where it can be
     // seen and edited; it comes back through here when the uploads finish.
     if (uploading(attachments)) {
@@ -639,13 +717,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const selection = attachedSel;
     if (selection) { extra = { ...extra, selection }; setAttachedSel(null); }
     if (files?.path) extra = { ...extra, folder: files.path };   // where a design named without a folder is saved
+    // In a team chat the agent answers when it is named; anything else is to the team alone.
+    if (inTeam) {
+      const asks = !["keyboard", "voice"].includes(origin) || agentNames.some((n) => text.toLowerCase().includes(n));
+      extra = { ...extra, team: true, ...(asks ? {} : { post: true }) };
+    }
     setInput("");
     setAttachments([]);
     setFollowUp(null);
     setAsk(null);
     // Sending mid-run queues instead: the agent's tool loops are long, and a
     // thought the user has now shouldn't wait on them. So does one written while a message waits on the connection.
-    if (isStreaming || connection.held === "send") {
+    if ((isStreaming && !(extra?.post && !attached)) || connection.held === "send") {
       const next = [...queuedRef.current,
                     { id: crypto.randomUUID(), text, attachments: sendAttachments, origin, extra }];
       queuedRef.current = next;
@@ -660,7 +743,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
     if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path]);
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -975,6 +1058,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  useEffect(() => {   // a team chat begun here, by a message to the team, has no title event to add it to the list
+    if (isTeamChat(chatId) && account && !chats.some((c) => c.id === chatId)) onListChats?.().then(setChats).catch(() => {});
+  }, [chatId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {   // a team workspace's list keeps up with what the others write
+    if (!teamWs || !account) return;
+    const id = setInterval(() => { if (document.visibilityState === "visible") onListChats?.().then(setChats).catch(() => {}); }, 15000);
+    return () => clearInterval(id);
+  }, [teamWs, account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {   // the chat open here is read as it comes
+    if (chats.some((c) => c.id === chatId && (c.unread || c.mention)))
+      setChats((prev) => prev.map((c) => (c.id === chatId ? { ...c, unread: false, mention: false } : c)));
+  }, [chatId, chats]);
   // Search finds what the sidebar lists, fresh each time it opens
   useEffect(() => {
     if (!searchOpen) return;
@@ -1006,6 +1101,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
 
   const canvasShowing = canvasTabs.length > 0 && !canvasHidden;
   const rightOpen = filesOpen || canvasShowing;
+  // The open chat's files, for Files: read as it opens on them, and again when a file is sent or a run ends.
+  const [chatFiles, setChatFiles] = useState<ChatFile[] | null>(null);
+  useEffect(() => { setChatFiles(null); }, [chatId]);
+  const sentFiles = messages.filter((m) => m.attachments?.length).length;
+  useEffect(() => {
+    if (!chatId || !files || !filesOpen || filesTab !== "files" || attached) return;
+    api(`/chats/${encodeURIComponent(chatId)}/files`, { silent: true }).then((r) => r.json()).then(setChatFiles).catch(() => {});
+  }, [chatId, filesOpen, filesTab, attached, runStatus, sentFiles]);   // eslint-disable-line react-hooks/exhaustive-deps
   const dock = (
     <PanelDock items={[
       { icon: "doc", label: t("instructions"), onClick: () => {
@@ -1050,8 +1153,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   };
 
   const inputProps = {
-    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming, onStop: handleStop,
-    working: (runStatus === "running" && !attached ? "background" : undefined) as "background" | undefined,
+    textareaRef, input, setInput, handleKeyDown, handleSubmit, isStreaming: isStreaming && !othersRun, onStop: handleStop,
+    working: (runStatus === "running" && !attached && !othersRun ? "background" : undefined) as "background" | undefined,
     onOpenFilePicker: openFilePicker,
     onOpenFiles: files ? () => openPanel("files") : undefined,
     attachments,
@@ -1128,6 +1231,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           )}
           </div>
           <div className="flex items-center gap-1">
+            {people && isDesktop && <TeamPeople {...people} />}
             {/* Desktop only; on a phone it stays a row inside the user menu */}
             {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
             {user && freePlan && <SubscribeButton onClick={() => openPricing(activeOrg ? "organization" : "user", "header")} />}
@@ -1196,7 +1300,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} people={isDesktop ? undefined : people} /></div>}
           </div>
         </div>
       </header>
@@ -1321,13 +1425,24 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               <div ref={contentRef} className="flex w-full flex-col items-center py-4">
                 <ConnectorsContext.Provider value={connectors ?? []}>
                 <FileActions.Provider value={fileActions}>
-                <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{messages.map((msg, i) => {
+                {older && <div ref={topRef} className="h-px w-full" />}
+                <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{shown.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
+                  // A reply is named by the message it answers, which is how a reaction finds it before a reload.
+                  const key = msg.id ?? (msg.role === "assistant" && shown[i - 1]?.id ? `${shown[i - 1].id}.re` : undefined);
+                  const day = marks?.[i].day;
                   return (
+                    <Fragment key={i}>
+                    {day && <DayLine at={day} />}
                     <MessageBubble
-                      key={i}
                       message={msg}
+                      team={team}
+                      first={marks?.[i].first}
+                      last={marks?.[i].last}
+                      reactions={key ? live.reactions[key] : undefined}
+                      onReact={team && key ? (emoji) => void onReact(key, emoji).catch(() => {}) : undefined}
+                      onRewrite={team && msg.id ? (text) => onRewrite(msg.id!, text) : undefined}
                       isStreaming={
                         isStreaming &&
                         isLast &&
@@ -1341,8 +1456,23 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                       onOpenFile={openFileInCanvas}
                       resolveMedia={resolveMedia}
                     />
+                    </Fragment>
                   );
                 })}
+                {team && live.typing.length > 0 && (
+                  <div className="flex w-full max-w-3xl items-end gap-2.5 px-6 pb-2" role="status"
+                       title={live.typing.length === 1 ? t("isTyping").replace("{name}", live.typing[0].name || t("someone"))
+                         : t("areTyping").replace("{names}", live.typing.map((p) => p.name || t("someone")).join(", "))}>
+                    <span className="flex shrink-0">
+                      {live.typing.slice(0, 3).map((p, i) => (
+                        <span key={p.id} className="rounded-full ring-2 ring-background" style={{ marginInlineStart: i ? -10 : 0 }}><Face c={{ by: p, at: "" }} size={28} /></span>
+                      ))}
+                    </span>
+                    <span className="flex h-9 items-center gap-1 rounded-3xl bg-secondary px-4">
+                      {[0, 1, 2].map((i) => <span key={i} className="size-1.5 rounded-full bg-muted-foreground animate-[typing_1.2s_infinite]" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                    </span>
+                  </div>
+                )}
                 {(runStatus === "interrupted" || messages[messages.length - 1]?.parts?.some((p) => p.type === "callout" && p.code === "cut_off"))
                   && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
@@ -1410,7 +1540,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
                   {runStatus === "running" && !attached && (
-                    <RunIndicator step={currentStep} startedAt={runStartedAt} onStop={handleStop} />
+                    <RunIndicator step={othersRun ? null : currentStep} startedAt={runStartedAt} onStop={othersRun ? undefined : handleStop}
+                                  label={othersRun ? t("workingFor").replace("{agent}", team?.agent || "").replace("{name}", live.asker?.name || t("someone")) : undefined} />
                   )}
                 </AnimatePresence>
                 <AnimatePresence initial={false}>
@@ -1631,7 +1762,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
+                <Files {...files} chatFiles={chatFiles} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
                        onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
@@ -1708,6 +1839,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   chats={chats}
                   loading={chatsLoading}
                   activeId={chatId}
+                  kind={teamWs ? chatKind : undefined}
+                  agent={meta?.name || name || ""}
+                  onKind={setChatKind}
+                  onMoveToTeam={teamWs && onMoveToTeam ? (id) => {
+                    onMoveToTeam(id).then((moved) => {
+                      setChats((prev) => prev.map((x) => (x.id === id ? { ...x, id: moved, team: true } : x)));
+                      setChatKind("team");
+                      if (chatId === id) void onLoadChat?.(moved);
+                      toastInfo(t("movedToTeam"));
+                    }).catch(() => {});
+                  } : undefined}
                   onLoad={(id) => { onLoadChat?.(id); if (window.innerWidth < 640) setFilesOpen(false); }}
                   onDelete={(id) => {
                     const name = chats.find((x) => x.id === id)?.title || t("untitled");
@@ -1767,14 +1909,31 @@ function EmptyState({ icon, title, subtitle }: { icon: React.ReactNode; title: s
   );
 }
 
+// Where a team chat's day begins: Today, Yesterday, else the day itself.
+function DayLine({ at }: { at: string }) {
+  const d = new Date(at), today = new Date();
+  const ago = Math.round((new Date(today.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 864e5);
+  const label = ago === 0 ? t("dayToday") : ago === 1 ? t("dayYesterday")
+    : d.toLocaleDateString(getLang(), { weekday: "long", month: "short", day: "numeric", ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
+  return (
+    <div className="flex w-full max-w-3xl items-center gap-3 px-6 py-3 text-xs font-medium text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />{label}<span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
 function formatShortDate(iso: string) {
   return new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
-function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onToggleFavorite }: {
-  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null }[];
+function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTeam, onLoad, onDelete, onRename, onToggleFavorite }: {
+  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[];
   loading: boolean;
   activeId?: string | null;
+  kind?: "agent" | "team";   // a team workspace's: which chats the list shows
+  agent: string;
+  onKind: (k: "agent" | "team") => void;
+  onMoveToTeam?: (id: string) => void;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => Promise<void>;
@@ -1786,7 +1945,9 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
 
   if (loading) return <div className="flex-1"><LoadingBar /></div>;
 
-  if (chats.length === 0) {
+  const team = kind === "team";
+  const listed = kind ? chats.filter((c) => !!c.team === team) : chats;
+  if (listed.length === 0 && !kind) {
     return (
       <div className="flex-1">
         <EmptyState
@@ -1798,14 +1959,25 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
     );
   }
 
-  const visible = favoritesOnly ? chats.filter((c) => c.favoritedAt) : chats;
+  const visible = favoritesOnly ? listed.filter((c) => c.favoritedAt) : listed;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex items-center gap-2 px-4 sm:px-6 py-2 border-b border-border">
+        {kind && (
+          <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
+            {(["agent", "team"] as const).map((k) => (
+              <button key={k} onClick={() => onKind(k)} aria-pressed={kind === k}
+                      className={`rounded-md px-2.5 py-1 transition-colors cursor-pointer ${kind === k ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                {k === "agent" ? agent || "Agent" : t("teamChats")}
+                {k === "team" && chats.some((c) => c.team && c.unread) && <span className="ms-1.5 inline-block size-1.5 rounded-full bg-foreground align-middle" />}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           onClick={() => setFavoritesOnly((v) => !v)}
-          className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors cursor-pointer ${favoritesOnly ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50"}`}
+          className={`ms-auto flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors cursor-pointer ${favoritesOnly ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50"}`}
           aria-label="Favorites only"
         >
           <Star filled={favoritesOnly} className="size-3.5" />
@@ -1813,6 +1985,10 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
         </button>
       </div>
       <div className="flex-1 overflow-y-auto divide-y divide-border pb-20">
+        {listed.length === 0 && (
+          <EmptyState icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
+                      title={t(team ? "noTeamChats" : "noChats")} subtitle={t(team ? "noTeamChatsSub" : "noChatsSub")} />
+        )}
         {visible.map((s) => {
           const isFav = !!s.favoritedAt;
           return (
@@ -1840,7 +2016,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onCancel={() => setRenaming(null)}
                   />
                 ) : (
-                  <span dir="auto" className={`text-sm text-foreground truncate block text-left ${activeId === s.id ? "font-medium" : ""}`}
+                  <span dir="auto" className={`text-sm text-foreground truncate block text-left ${activeId === s.id || s.unread ? "font-medium" : ""}`}
                         onDoubleClick={(e) => { e.stopPropagation(); setRenaming(s.id); }}>
                     {/* a run outlives the tab that started it — say so, or leaving
                         the chat looks the same as the agent stopping */}
@@ -1852,6 +2028,8 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                   </span>
                 )}
               </div>
+              {s.mention ? <span className="shrink-0 rounded-full bg-foreground px-1.5 text-[11px] font-semibold leading-5 text-background">@</span>
+                : s.unread && <span className="size-2 shrink-0 rounded-full bg-foreground" />}
               <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
                 {s.updatedAt ? formatShortDate(s.updatedAt) : ""}
               </span>
@@ -1872,6 +2050,7 @@ function ChatsPanel({ chats, loading, activeId, onLoad, onDelete, onRename, onTo
                     onClose={() => setMenuOpen(null)}
                     items={[
                       { label: t("rename"), onClick: () => setRenaming(s.id) },
+                      ...(onMoveToTeam && !s.team ? [{ label: t("moveToTeam"), onClick: () => onMoveToTeam(s.id) }] : []),
                       { label: t("delete"), danger: true, onClick: () => onDelete(s.id) },
                     ]}
                   />
@@ -1897,10 +2076,11 @@ function Star({ filled, className }: { filled: boolean; className?: string }) {
 // sent; clicking pulls it back into the composer (the same gesture that
 // accepts a follow-up), which is also the only way to send one while an
 // explicit Stop is holding the queue.
-function RunIndicator({ step, startedAt, onStop }: {
+function RunIndicator({ step, startedAt, onStop, label }: {
   step: string | null;
   startedAt: string | null;
-  onStop: () => void;
+  onStop?: () => void;   // none for someone else's request in a team chat
+  label?: string;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -1921,15 +2101,17 @@ function RunIndicator({ step, startedAt, onStop }: {
       <div className="flex items-center gap-2 rounded-2xl border border-border bg-secondary/40 py-1.5 ps-3 pe-1.5">
         <span className="inline-block size-1.5 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" dir="auto">
-          {(step && stepText(step)) || t("working")}
+          {label || (step && stepText(step)) || t("working")}
           {elapsed && <span className="ms-2 tabular-nums text-muted-foreground/60">{elapsed}</span>}
         </span>
-        <button
-          onClick={onStop}
-          className="shrink-0 rounded-full px-2.5 py-1 text-xs text-muted-foreground/80 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-        >
-          {t("stopRun")}
-        </button>
+        {onStop && (
+          <button
+            onClick={onStop}
+            className="shrink-0 rounded-full px-2.5 py-1 text-xs text-muted-foreground/80 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+          >
+            {t("stopRun")}
+          </button>
+        )}
       </div>
     </motion.div>
   );

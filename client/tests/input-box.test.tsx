@@ -78,3 +78,27 @@ describe("the composer while recording", () => {
     expect(cancelMic).toHaveBeenCalledOnce();
   });
 });
+
+describe("the @ picker and the keyboard", () => {
+  afterEach(cleanup);
+  it("keeps the row the arrow keys reach in view", async () => {
+    const seen: string[] = [];
+    Element.prototype.scrollIntoView = function () { seen.push(this.textContent || ""); };
+    function People() {
+      const [input, setInput] = useState("");
+      const ref = useRef<HTMLTextAreaElement>(null);
+      return (
+        <InputBox textareaRef={ref} input={input} setInput={setInput} handleKeyDown={() => {}} handleSubmit={() => {}} isStreaming={false}
+                  onStop={() => {}} listening={false} transcribing={false} startMic={() => {}} stopMic={() => {}} cancelMic={() => {}}
+                  onMentionSearch={async () => ["Sara", "Omar", "Noura"].map((n) => ({ name: n, path: "", person: { id: n, name: n } }))} />
+      );
+    }
+    render(<People />);
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: "@" } });
+    await screen.findByText("Noura");
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(seen.at(-1)).toContain("Noura");
+  });
+});

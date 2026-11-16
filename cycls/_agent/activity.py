@@ -149,6 +149,12 @@ async def put_person(ws, name=None, image=None):
     _people.pop(_org(ws), None)
 
 
+def mentioned(text, faces):
+    """Who a team chat's message names: `@Name` for each person, `all` for @all."""
+    low = text.lower()
+    return [pid for pid, p in faces.items() if p.get("name") and f"@{p['name'].lower()}" in low] + (["all"] if "@all" in low else [])
+
+
 def _who(pid, faces, me):
     return {"id": pid, **faces.get(pid, {}), **({"you": True} if pid == me else {})}
 
@@ -186,6 +192,16 @@ async def folder(ws, rel_dir, entries):
             if (c := _flat(m, "e_")).get("by"):
                 e["edited"] = _out(c, faces, me)
     return entries
+
+
+async def of_chat(ws, chat_id):
+    """{path: change} for the files a chat made or changed, read off every record's summary in one listing."""
+    found = {}
+    async for k, m in files_db(ws).scan():
+        m = _meta(m) if "activity" in m else m
+        if not k.startswith(TRASHED) and (c := next((c for p in ("e_", "c_") if (c := _flat(m, p)).get("chat") == chat_id), None)):
+            found[k] = c
+    return found
 
 
 async def info(ws, rel):
@@ -249,9 +265,11 @@ async def after_run(ws, before, since, chat_id, agent):
     files = [e for e in changed if not e["path"].startswith("apps/")]
     for e in files[:RUN_MOST]:
         rec = await db.get(e["path"])
-        if rec and _fresh(rec, _ts(e["modified"]), e["size"]):
-            continue   # someone's change, recorded as it happened
         new = before is not None and e["path"] not in before
+        # someone's change, recorded as it happened; but a file the run made, only saved since by an editor that
+        # had it open (a design in the canvas), was made by the run, in its chat
+        if rec and _fresh(rec, _ts(e["modified"]), e["size"]) and (rec.get("created") or not new):
+            continue
         await record(ws, e["path"], made("created" if new else "edited"))
     if len(files) > RUN_MOST:
         await audit(ws, made("files_changed", count=len(files) - RUN_MOST), "")

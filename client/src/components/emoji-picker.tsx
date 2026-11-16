@@ -10,11 +10,12 @@ const ALIGN = { start: "start-0", end: "end-0", right: "right-0" };
 // the mobile app's native keyboard; the server validates single-emoji anyway.
 // emoji-mart's vanilla web component: framework-agnostic (React-19 safe) and
 // lazy-loaded, so its data ships only when a picker actually opens.
-export function EmojiPicker({ onPick, onClear, onClose, align = "start" }: {
+export function EmojiPicker({ onPick, onClear, onClose, align = "start", up = false }: {
   onPick: (emoji: string) => void;
   onClear?: () => void;
   onClose: () => void;
   align?: keyof typeof ALIGN;
+  up?: boolean;   // opens above, for a message low on the screen
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
@@ -44,7 +45,7 @@ export function EmojiPicker({ onPick, onClear, onClose, align = "start" }: {
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); onClose(); }} />
-      <div className={`absolute z-50 top-full mt-1 ${ALIGN[align]} overflow-hidden rounded-lg border border-border bg-background shadow-lg`}>
+      <div className={`absolute z-50 ${up ? "bottom-full mb-1" : "top-full mt-1"} ${ALIGN[align]} w-max overflow-hidden rounded-lg border border-border bg-background shadow-lg`}>
         {loading && <div className="flex h-24 w-72 items-center justify-center text-sm text-muted-foreground">…</div>}
         <div ref={host} />
         {onClear && (

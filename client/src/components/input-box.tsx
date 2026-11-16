@@ -5,8 +5,11 @@ import { track } from "../lib/analytics";
 import { Icon } from "./icon";
 import { cn } from "../lib/utils";
 import { ConnectorIcon, Switch, connectorLabel, type Connector } from "./connectors-dialog";
+import { AgentMark, Face } from "./file-details";
 
-export type MentionHit = { name: string; path: string; connector?: Connector };
+// `person`: in a team chat, a member, everyone (`all`) or (no id) the agent itself.
+export type MentionHit = { name: string; path: string; connector?: Connector; person?: { id: string; name: string; image?: string; logo?: string } };
+const hitKind = (h: MentionHit) => (h.person ? "teamChats" : h.connector ? "connectors" : "files");   // its group's heading
 import { AttachmentBody } from "./attachment-body";
 import { LiveWaveform } from "./live-waveform";
 import { extTint } from "./canvas-utils";
@@ -117,6 +120,8 @@ export function InputBox({
 }) {
   const [dragOver, setDragOver] = useState(false);
 
+  const sendable = !!input.trim() || !!attachments?.length;   // a file goes on its own too
+
   // ---- @-mention file picker ----
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   // The query that came back with nothing, and the "@" it belonged to. Anything
@@ -127,6 +132,10 @@ export function InputBox({
   const [dead, setDead] = useState<{ start: number; query: string } | null>(null);
   const [results, setResults] = useState<MentionHit[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {   // the row the arrow keys moved to stays in view
+    listRef.current?.querySelector<HTMLElement>(`[data-i="${activeIdx}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIdx]);
   const [mentions, setMentions] = useState<string[]>([]);   // inserted paths → highlighted
   const [pills, setPills] = useState<string[]>([]);         // inserted @Connector tokens → painted as pills
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -170,11 +179,11 @@ export function InputBox({
   const selectMention = (hit: MentionHit) => {
     if (!mention) return;
     const caret = textareaRef.current?.selectionStart ?? input.length;
-    if (hit.connector) {   // a scope, not content: the token stays in the line, painted as a pill
+    if (hit.connector || hit.person) {   // a scope or a name, not content: the token stays in the line, painted as a pill
       const token = `@${hit.name}`;
       setInput(input.slice(0, mention.start) + token + " " + input.slice(caret));
       setPills((ps) => (ps.includes(token) ? ps : [...ps, token]));
-      onAddConnector?.(hit.connector);
+      if (hit.connector) onAddConnector?.(hit.connector);
       setDead(null); setMention(null); setResults([]);
       const at = mention.start + token.length + 1;
       requestAnimationFrame(() => {
@@ -330,24 +339,30 @@ export function InputBox({
               transition={{ duration: 0.12 }}
               dir="ltr"
               onClick={(e) => e.stopPropagation()}
+              ref={listRef}
               className="absolute bottom-full left-2 right-2 mb-2 z-50 max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg py-1"
             >
               {results.map((f, i) => (
-                <React.Fragment key={f.connector ? `c:${f.connector.name}` : f.path}>
-                  {(i === 0 || !!results[i - 1].connector !== !!f.connector) && (
-                    <div className="px-3 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{f.connector ? t("connectors") : t("files")}</div>
+                <React.Fragment key={f.person ? `p:${f.person.id || f.name}` : f.connector ? `c:${f.connector.name}` : f.path}>
+                  {(i === 0 || hitKind(results[i - 1]) !== hitKind(f)) && (
+                    <div className="px-3 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{t(hitKind(f))}</div>
                   )}
                   <button
                     type="button"
+                    data-i={i}
                     onMouseEnter={() => setActiveIdx(i)}
                     onMouseDown={(e) => { e.preventDefault(); selectMention(f); }}
                     className={`flex w-full items-center gap-2 px-3 py-1.5 text-sm cursor-pointer ${i === activeIdx ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/60"}`}
                   >
-                    {f.connector
+                    {f.person
+                      ? (!f.person.id ? <AgentMark logo={f.person.logo} size={18} />
+                        : f.person.id === "all" ? <span className="flex size-[18px] items-center justify-center rounded-full bg-secondary text-[10px] font-semibold text-foreground">@</span>
+                        : <Face c={{ by: f.person, at: "" }} size={18} />)
+                      : f.connector
                       ? <ConnectorIcon c={f.connector} className="size-4" />
                       : <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: extTint(f.name) || "var(--color-muted-foreground)" }} />}
                     <span className="truncate">
-                      {!f.connector && f.path.lastIndexOf("/") >= 0 && (
+                      {!f.connector && !f.person && f.path.lastIndexOf("/") >= 0 && (
                         <span className="text-muted-foreground/60">{f.path.slice(0, f.path.lastIndexOf("/") + 1)}</span>
                       )}
                       {f.name}
@@ -425,11 +440,11 @@ export function InputBox({
               While a file uploads, send stays pressable too: it holds the
               message until the uploads finish. Held, it spins; pressing it
               again changes nothing. */}
-          {(!isStreaming || input.trim()) && (
+          {(!isStreaming || sendable) && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); handleSubmit(); }}
-              disabled={!input.trim()}
+              disabled={!sendable}
               className={`flex size-8 items-center justify-center rounded-full transition disabled:opacity-30 ${isStreaming ? "border border-border text-foreground" : "bg-foreground text-background"} ${held ? "cursor-default opacity-60" : isStreaming ? "cursor-pointer hover:bg-secondary" : "cursor-pointer hover:opacity-80"}`}
               aria-label={held ? t("sendsAfterUpload") : isStreaming ? t("queueMessage") : "Send"}
               title={held ? t("sendsAfterUpload") : isStreaming ? t("queueMessage") : undefined}
