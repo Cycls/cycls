@@ -74,10 +74,17 @@ def test_rm_shim_deletes_scratch_for_real(tmp_path):
     assert not f.exists() and not any(trash.iterdir())
 
 
-def test_canvas_refuses_scratch(tmp_path):
+def test_canvas_refuses_scratch_and_shows_one_deliverable_a_reply(tmp_path):
     import asyncio
+    from types import SimpleNamespace
     from cycls._agent.tools import _exec_canvas
-    f = tmp_path / ".tmp" / "c1" / "report.html"
-    f.parent.mkdir(parents=True); f.write_text("<p>x</p>")
-    out = asyncio.run(_exec_canvas({"path": ".tmp/c1/report.html"}, str(tmp_path)))
-    assert out.startswith("Error") and "scratch" in out
+    for rel in (".tmp/c1/check.png", "report.html", "chart.png"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x")
+    out = asyncio.run(_exec_canvas({"path": ".tmp/c1/check.png"}, str(tmp_path)))
+    assert out.startswith("Error") and "`read` it" in out   # a check is looked at, never shown
+    reply = SimpleNamespace(shown=set())
+    show = lambda rel: asyncio.run(_exec_canvas({"path": rel}, str(tmp_path), reply))
+    assert show("report.html")["path"] == "report.html"
+    assert show("report.html")["path"] == "report.html"   # opened again after an edit
+    assert show("chart.png").startswith("Error: this reply already opened report.html")

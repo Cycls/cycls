@@ -70,8 +70,8 @@ _BASH_TOOL = {
         "Execute a shell command in the workspace sandbox.\n\n"
         "Usage:\n"
         "- Working directory is /workspace. Never prefix commands with `cd /workspace`.\n"
-        "- Scratch goes in `.tmp/`: downloads, intermediate data, anything "
-        "the user should not see in their files — it is hidden and cleaned up. Files the user "
+        "- Scratch goes in `.tmp/`: downloads, intermediate data, pictures you make to check your work "
+        "(then `read` them there), anything the user should not see in their files — it is hidden and cleaned up. Files the user "
         "keeps go in the workspace root. Never /tmp: every command gets its own, gone when it exits.\n"
         "- Use `rg` or `rg --files` for searching — it's faster than grep.\n"
         "- Use `jq` to extract fields from JSON.\n"
@@ -182,10 +182,12 @@ _CANVAS_TOOL = {
         "Use ONLY for a final artifact the user is actually expecting to view — the "
         "report, document, dashboard, sheet, or chart they asked you to produce, "
         "and only once it is complete.\n"
+        "It shows YOU nothing, and the person sees every call in the chat: to check your own work, "
+        "`read` the file (a picture, or a PDF's pages, comes back to you).\n"
         "Do NOT open transient or intermediate files: scripts you run, scratch or "
         "work-in-progress notes, intermediate/partial markdown, helper or config "
-        "files, or anything you are still editing. When unsure, don't open it.\n"
-        "Call this at most once, after the deliverable is ready. Give the "
+        "files, pictures made to check your work, or anything you are still editing. When unsure, don't open it.\n"
+        "Once per reply, after the deliverable is ready; link any other file in the reply. Give the "
         "workspace-relative path."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -691,7 +693,7 @@ async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     nxt = start + text.count("\n") + 1
     return f"{text}\n\n[Stopped at line {nxt - 1} of {len(lines)}. Continue with offset={nxt}.]"
 
-async def _exec_canvas(inp, workspace):
+async def _exec_canvas(inp, workspace, ctx=None):
     """Resolve + validate the path, then return a UI event the loop forwards to
     the client to open the canvas. The model gets a short ack (see the loop)."""
     raw = inp.get("path", "")
@@ -701,7 +703,13 @@ async def _exec_canvas(inp, workspace):
     if path.is_dir(): return f"Error: {raw} is a directory"
     rel = raw.removeprefix("/workspace/").lstrip("/")
     if path.relative_to(pathlib.Path(workspace).resolve()).parts[:1] == (spill.DIR,):
-        return f"Error: {spill.DIR}/ is scratch that may be deleted — write the deliverable elsewhere and open that"
+        return (f"Error: {spill.DIR}/ is your scratch, which the person never sees. To look at a file there "
+                "yourself, `read` it; open only the finished work.")
+    if ctx is not None:
+        if ctx.shown and rel not in ctx.shown:
+            return (f"Error: this reply already opened {next(iter(ctx.shown))}. Link any other file in your reply, "
+                    "and put pictures in it as images.")
+        ctx.shown.add(rel)
     return {"type": "ui", "action": "open_canvas", "path": rel,
             **_app_identity(path, path.name)}
 
@@ -1183,7 +1191,7 @@ _TOOLS = {
                        lambda inp: {"tool_name": "Editing", "step": inp.get("path", "")}),
     "database":   Tool(lambda inp, ws, ctx=None, **_: _exec_database(inp, ws, getattr(ctx, "user", None)),
                        lambda inp: {"tool_name": "Database", "step": inp.get("key") or inp.get("prefix") or ""}),
-    "canvas":     Tool(lambda inp, ws, **_: _exec_canvas(inp, ws.root),
+    "canvas":     Tool(lambda inp, ws, ctx=None, **_: _exec_canvas(inp, ws.root, ctx),
                        lambda inp: {"tool_name": "Canvas", "step": inp.get("path", "")}),
     "suggest":    Tool(lambda inp, ws, **_: _exec_suggest(inp),
                        lambda inp: {"tool_name": "Suggest", "step": inp.get("text", "")},
@@ -1395,6 +1403,7 @@ class ToolContext:
     skills: dict = None                  # the turn's skill catalog: what `skill` loads and bash mounts
     office: frozenset = frozenset()      # "docs" / "sheets" when on this turn: bash keeps off their files (office/guard.py)
     built: set = field(default_factory=set)   # Word / Excel files a bash command made this turn (they may be opened)
+    shown: set = field(default_factory=set)   # what `canvas` opened this turn: one deliverable a reply
     team: object = None                  # the run's agents (tools/agent.py)
     me: str | None = None                # the agent this run is, by the call that started it; None for the parent
     call: str | None = None              # the tool_use id being run
