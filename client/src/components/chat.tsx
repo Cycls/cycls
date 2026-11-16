@@ -7,6 +7,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
+import { APP_DATA_EVENT, TURN_END_EVENT, appScope } from "./app-bridge";
 import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
@@ -553,6 +554,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         window.dispatchEvent(new CustomEvent("cycls:docs-command", { detail: docsCommandDetail(ev) }));
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
         track("ui_action", { action: "docs_command" });
+      } else if (ev.action === "app_data" && typeof ev.slug === "string") {
+        // The agent changed an app's data: an app open on it reads it again now, not when it is reopened.
+        window.dispatchEvent(new CustomEvent(APP_DATA_EVENT, { detail: ev }));
       } else if (ev.action === "refresh_canvas" && typeof ev.path === "string") {
         // The agent changed a file that may be open (a Video edit): its view fetches it again now.
         window.dispatchEvent(new CustomEvent("cycls:canvas-refresh", { detail: { path: ev.path } }));
@@ -722,6 +726,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       const asks = !["keyboard", "voice"].includes(origin) || agentNames.some((n) => text.toLowerCase().includes(n));
       extra = { ...extra, team: true, ...(asks ? {} : { post: true }) };
     }
+    // The app open beside the chat, so "this" in the message points at it and the agent reads its data first.
+    const app = activeDesign ? appScope(activeDesign)?.split("/")[1] : undefined;
+    if (app) extra = { ...extra, app };
     setInput("");
     setAttachments([]);
     setFollowUp(null);
@@ -743,7 +750,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
     if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam, activeDesign]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -1124,6 +1131,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useEffect(() => {
     if (isStreaming) return;
     setReloadKey((k) => k + 1);
+    window.dispatchEvent(new Event(TURN_END_EVENT));   // an open app checks what the turn changed in its data
     void refreshVideoEditors();              // an open video editor, if a file tool changed its video
   }, [isStreaming]);
   const railIconsOnly = isDesktop && railIcons && canvasShowing;

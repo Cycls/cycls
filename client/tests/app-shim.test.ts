@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { injectShim } from "../src/components/app-shim";
 
 const shimOf = (html: string) => injectShim(html).match(/<script>[\s\S]*?<\/script>/)?.[0] ?? "";
@@ -118,9 +118,11 @@ describe("the injected cycls api", () => {
     expect(api.ctx).toMatchObject({ theme: "dark" });
   });
 
-  it("announces itself until the host replies", () => {
+  it("announces itself until the host replies, naming its document", () => {
     const { posted } = load("apps/burnup");
-    expect(posted[0]).toEqual({ type: "cycls:ready" });
+    expect(posted[0]).toMatchObject({ type: "cycls:ready" });
+    expect(typeof posted[0].doc).toBe("string");
+    expect((posted[0].doc as string).length).toBeGreaterThan(8);
   });
 
   it("resolves a bare filename against the app's own folder", async () => {
@@ -284,5 +286,373 @@ describe("the store's two safety rails", () => {
     expect(sent("put", 1).version).toBe("v2");
     deliver({ type: "cycls:data:result", id: sent("put", 1).id, ok: true, result: { ok: true } });
     await expect(done).resolves.toEqual([1, 2, 9]);
+  });
+});
+
+
+describe("hearing that the data changed", () => {
+  function load() {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win,
+      { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0),
+      clearTimeout,
+    );
+    const api = win.cycls as Record<string, (...a: unknown[]) => Promise<unknown>> & {
+      onChange: (fn: (e: unknown) => void) => () => void;
+    };
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: "apps/burnup/index.html", scope: "apps/burnup", canWrite: true });
+    const answer = (op: string, result: unknown, n = 0) => {
+      const m = posted.filter((p) => p.type === "cycls:data" && p.op === op)[n];
+      deliver({ type: "cycls:data:result", id: m.id, ok: true, result });
+    };
+    return { api, posted, deliver, answer };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("asks the host to be told once, after the handshake", async () => {
+    const { api, posted } = load();
+    api.onChange(() => {});
+    api.onChange(() => {});
+    await tick();
+    expect(posted.filter((m) => m.type === "cycls:listen")).toHaveLength(1);
+  });
+
+  it("reads the named keys again, then calls the listener with the new values in place", async () => {
+    const { api, deliver, answer, posted } = load();
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }, { key: "b", value: 1 }] });
+    await expect(first).resolves.toBe(1);
+    const heard: unknown[] = [];
+    api.onChange(async (e) => heard.push([e, await api.get("a"), await api.get("b")]));
+    deliver({ type: "cycls:changed", source: "agent", keys: ["a"] });
+    await tick();
+    expect(posted.filter((m) => m.op === "get").map((m) => m.key)).toEqual(["a"]);
+    answer("get", { value: 2, version: "v2" });
+    await tick(); await tick();
+    expect(heard).toEqual([[{ source: "agent", keys: ["a"] }, 2, 1]]);
+  });
+
+  it("drops a key that is gone", async () => {
+    const { api, deliver, answer } = load();
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    deliver({ type: "cycls:changed", source: "agent", keys: ["a"] });
+    await tick();
+    answer("get", null);
+    await tick();
+    await expect(api.get("a", "gone")).resolves.toBe("gone");
+  });
+
+  it("keeps a value of its own that is still on its way", async () => {
+    const { api, deliver, answer } = load();
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    void api.set("a", 5);   // not landed yet
+    await tick();
+    deliver({ type: "cycls:changed", source: "poll", keys: ["a"] });
+    await tick();
+    answer("get", { value: 1, version: "v1" });   // what the store had before it landed
+    await tick();
+    await expect(api.get("a")).resolves.toBe(5);
+  });
+
+  it("lists everything again when no key is named", async () => {
+    const { api, deliver, answer, posted } = load();
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    const heard: unknown[] = [];
+    api.onChange((e) => heard.push(e));
+    deliver({ type: "cycls:changed", source: "agent" });
+    await tick();
+    expect(posted.filter((m) => m.op === "list")).toHaveLength(2);
+    answer("list", { rows: [{ key: "a", value: 3 }, { key: "n", value: 1 }] }, 1);
+    await tick(); await tick();
+    expect(heard).toEqual([{ source: "agent" }]);
+    await expect(api.get("a")).resolves.toBe(3);
+    await expect(api.keys()).resolves.toEqual(["a", "n"]);
+  });
+
+  it("passes the files on, and reads nothing before the app has", async () => {
+    const { api, deliver, posted } = load();
+    const heard: unknown[] = [];
+    api.onChange((e) => heard.push(e));
+    deliver({ type: "cycls:changed", source: "turn", keys: [], files: ["data/rows.json"] });
+    await tick();
+    expect(heard).toEqual([{ source: "turn", keys: [], files: ["data/rows.json"] }]);
+    expect(posted.filter((m) => m.type === "cycls:data")).toEqual([]);
+  });
+
+  it("stops calling a listener that unsubscribed", async () => {
+    const { api, deliver } = load();
+    const heard: unknown[] = [];
+    const off = api.onChange((e) => heard.push(e));
+    off();
+    deliver({ type: "cycls:changed", source: "poll", keys: [] });
+    await tick();
+    expect(heard).toEqual([]);
+  });
+
+  it("refresh() lists again without waiting to be told", async () => {
+    const { api, answer, posted } = load();
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    const done = api.refresh();
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 9 }] }, 1);
+    await done;
+    await expect(api.get("a")).resolves.toBe(9);
+    expect(posted.filter((m) => m.op === "list")).toHaveLength(2);
+  });
+});
+
+
+// The canvas frame has no allow-forms, so the browser blocks a submission before the submit event:
+// every <form onSubmit> in an app did nothing. The shim fires the event itself.
+describe("forms in a sandboxed frame", () => {
+  function install() {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const scope = {
+      window, parent: { postMessage: () => {} },
+      addEventListener: window.addEventListener.bind(window),
+      setTimeout: () => 0, clearTimeout: () => {},
+    };
+    new Function(...Object.keys(scope), js)(...Object.values(scope));
+  }
+  const saved = HTMLFormElement.prototype.requestSubmit;
+  let form: HTMLFormElement;
+  let heard: (string | null)[];
+  beforeAll(install);
+  afterAll(() => { HTMLFormElement.prototype.requestSubmit = saved; });
+  beforeEach(() => {
+    document.body.innerHTML = `<form><input name="t" /><textarea></textarea>
+      <button type="button" id="plain">plain</button><button id="go">go</button></form>`;
+    form = document.querySelector("form")!;
+    heard = [];
+    form.addEventListener("submit", (e) => { e.preventDefault(); heard.push((e as SubmitEvent).submitter?.id ?? null); });
+  });
+
+  it("a submit button's click fires submit, with the button as submitter", () => {
+    document.getElementById("go")!.click();
+    expect(heard).toEqual(["go"]);
+  });
+
+  it("a type=button click does not", () => {
+    document.getElementById("plain")!.click();
+    expect(heard).toEqual([]);
+  });
+
+  it("an app handler that prevented the click wins", () => {
+    document.getElementById("go")!.addEventListener("click", (e) => e.preventDefault());
+    document.getElementById("go")!.click();
+    expect(heard).toEqual([]);
+  });
+
+  it("Enter in a text field submits; Enter in a textarea does not", () => {
+    const enter = (el: Element) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    enter(form.querySelector("textarea")!);
+    expect(heard).toEqual([]);
+    enter(form.querySelector("input")!);
+    expect(heard).toEqual(["go"]);
+  });
+
+  it("requestSubmit() fires it too", () => {
+    form.requestSubmit();
+    expect(heard).toEqual([null]);
+  });
+
+  it("a form that fails its own validation is not submitted", () => {
+    form.querySelector("input")!.required = true;
+    document.getElementById("go")!.click();
+    expect(heard).toEqual([]);
+  });
+});
+
+
+describe("following the chat's light or dark mode", () => {
+  function install() {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win, { postMessage: () => {} },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0), clearTimeout,
+    );
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    return { api: win.cycls as { ctx: { theme?: string }; onTheme: (fn: (t: string) => void) => () => void }, deliver };
+  }
+  afterEach(() => document.documentElement.classList.remove("dark"));
+
+  it("sets the dark class at init and on every switch, and tells the listeners", () => {
+    const { api, deliver } = install();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "dark" });
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    const heard: string[] = [];
+    const off = api.onTheme((t) => heard.push(t));
+    deliver({ type: "cycls:theme", theme: "light" });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(api.ctx.theme).toBe("light");
+    off();
+    deliver({ type: "cycls:theme", theme: "dark" });
+    expect(heard).toEqual(["light"]);
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+  });
+
+  it("ignores a mode it does not know", () => {
+    const { deliver } = install();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "light" });
+    deliver({ type: "cycls:theme", theme: "sepia" });
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+  });
+});
+
+
+describe("update() writes only a change", () => {
+  function load() {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win, { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0), clearTimeout,
+    );
+    const api = win.cycls as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: "apps/burnup/index.html", scope: "apps/burnup", canWrite: true });
+    const answer = (op: string, result: unknown) => {
+      const m = posted.filter((p) => p.type === "cycls:data" && p.op === op).pop()!;
+      deliver({ type: "cycls:data:result", id: m.id, ok: true, result });
+    };
+    return { api, posted, answer };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("writes nothing when fn changed nothing, even handed the value to change in place", async () => {
+    const { api, posted, answer } = load();
+    const done = api.update("issues", (map: Record<string, number>) => { if (!map.a) map.a = 1; return map; });
+    await tick();
+    answer("get", { value: { a: 1 }, version: "v1" });
+    await expect(done).resolves.toEqual({ a: 1 });
+    expect(posted.filter((m) => m.op === "put")).toHaveLength(0);
+  });
+
+  it("writes a change made in place", async () => {
+    const { api, posted, answer } = load();
+    const done = api.update("issues", (map: Record<string, number>) => { map.b = 2; return map; });
+    await tick();
+    answer("get", { value: { a: 1 }, version: "v1" });
+    await tick();
+    expect(posted.filter((m) => m.op === "put").map((m) => [m.value, m.version])).toEqual([[{ a: 1, b: 2 }, "v1"]]);
+    answer("put", { ok: true, version: "v2" });
+    await expect(done).resolves.toEqual({ a: 1, b: 2 });
+  });
+});
+
+describe("who is using it", () => {
+  function load(user: unknown) {
+    const js = injectShim("<html><head></head></html>").match(/<script>([\s\S]*)<\/script>/)![1];
+    const posted: Record<string, unknown>[] = [];
+    const listeners: ((e: { data: unknown }) => void)[] = [];
+    const win: Record<string, unknown> = {};
+    new Function("window", "parent", "addEventListener", "setTimeout", "clearTimeout", js)(
+      win,
+      { postMessage: (m: Record<string, unknown>) => posted.push(m) },
+      (t: string, fn: (e: { data: unknown }) => void) => t === "message" && listeners.push(fn),
+      (fn: () => void) => setTimeout(fn, 0),
+      clearTimeout,
+    );
+    const api = win.cycls as Record<string, (...a: unknown[]) => Promise<unknown>> & {
+      ctx: { user: unknown }; onChange: (fn: (e: unknown) => void) => () => void;
+    };
+    const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
+    deliver({ type: "cycls:init", path: "apps/burnup/index.html", scope: "apps/burnup", canWrite: true, user });
+    const answer = (op: string, result: unknown) => {
+      const m = posted.filter((p) => p.type === "cycls:data" && p.op === op)[0];
+      deliver({ type: "cycls:data:result", id: m.id, ok: true, result });
+    };
+    return { api, posted, deliver, answer };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("knows the viewer from the start, and nobody on a shared link", () => {
+    expect(load({ id: "u_me", name: "Me", role: "admin" }).api.ctx.user).toEqual({ id: "u_me", name: "Me", role: "admin" });
+    expect(load(undefined).api.ctx.user).toBeNull();
+    expect(load("u_me").api.ctx.user).toBeNull();   // only a person the host sends
+  });
+
+  it("asks the host for the members and for who changed a key", async () => {
+    const { api, posted, answer } = load({ id: "u_me" });
+    const people = api.people();
+    const who = api.who("tasks");
+    await tick();
+    expect(posted.filter((m) => m.type === "cycls:data").map((m) => [m.op, m.key]))
+      .toEqual([["people", undefined], ["who", "tasks"]]);
+    answer("people", [{ id: "u_me", you: true }]);
+    answer("who", { by: { id: "u_sara", name: "Sara" }, at: "T" });
+    await expect(people).resolves.toEqual([{ id: "u_me", you: true }]);
+    await expect(who).resolves.toEqual({ by: { id: "u_sara", name: "Sara" }, at: "T" });
+  });
+
+  it("says you changed a key you just wrote, before the host has looked again", async () => {
+    const { api, posted, deliver, answer } = load({ id: "u_me", name: "Me" });
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    const done = api.set("a", 2);
+    await tick();
+    const put = posted.find((m) => m.op === "put")!;
+    deliver({ type: "cycls:data:result", id: put.id, ok: true, result: { ok: true, version: "v2" } });
+    await done;
+    const who = api.who("a");
+    await tick();
+    answer("who", { by: { id: "u_sara" }, at: "2000-01-01T00:00:00+00:00" });   // the host's look predates the write
+    expect(await who).toMatchObject({ by: { id: "u_me", name: "Me", you: true } });
+  });
+
+  it("says you changed it just now, when the host still has your earlier change", async () => {
+    const { api, posted, deliver, answer } = load({ id: "u_me", name: "Me" });
+    const first = api.get("a");
+    await tick();
+    answer("list", { rows: [{ key: "a", value: 1 }] });
+    await first;
+    const done = api.set("a", 2);
+    await tick();
+    const put = posted.find((m) => m.op === "put")!;
+    deliver({ type: "cycls:data:result", id: put.id, ok: true, result: { ok: true, version: "v2" } });
+    await done;
+    const who = api.who("a");
+    await tick();
+    answer("who", { by: { id: "u_me", name: "Me", image: "data:image/webp;base64,AA" }, at: "2000-01-01T00:00:00+00:00" });
+    const got = (await who) as { by: { image?: string; you?: boolean }; at: string };
+    expect(got.by).toMatchObject({ image: "data:image/webp;base64,AA", you: true });   // the host's picture
+    expect(Date.parse(got.at)).toBeGreaterThan(Date.parse("2020-01-01"));             // this write's time, not the old one
+  });
+
+  it("passes on who changed each key", async () => {
+    const { api, deliver } = load({ id: "u_me" });
+    const heard: unknown[] = [];
+    api.onChange((e) => heard.push(e));
+    deliver({ type: "cycls:changed", source: "poll", keys: ["a"], who: { a: { by: { id: "u_sara" }, at: "T" } } });
+    await tick(); await tick();
+    expect(heard).toEqual([{ source: "poll", keys: ["a"], who: { a: { by: { id: "u_sara" }, at: "T" } } }]);
   });
 });

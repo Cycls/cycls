@@ -1004,3 +1004,87 @@ def test_the_same_design_name_in_two_workspaces_is_two_rooms(tmp_path, monkeypat
         rooms.append(client.get("/design/live", params={"path": "designs/launch.fig"},
                                 headers={"X-Workspace": ws_id}).json()["live"]["room"])
     assert rooms[0] != rooms[1]
+
+
+# ---------------------------------------------------------------------------
+# Keeping an open app in step — the versions an app's change check compares
+# ---------------------------------------------------------------------------
+
+def test_a_write_answers_with_the_version_a_read_sees(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    put = client.put("/apps/standup/data/entries/1", json="shipped", headers=h).json()
+    assert put["ok"] is True and put["version"]
+    assert client.get("/apps/standup/data/entries/1", headers=h).json()["version"] == put["version"]
+
+
+def test_versions_list_the_shared_keys_and_the_data_files_and_nothing_private(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    v = client.put("/apps/standup/data/entries/1", json="shared", headers=h).json()["version"]
+    client.put("/apps/standup/data/draft?who=me", json="private", headers=h)
+    client.post("/files/apps/standup/data", headers=h)
+    assert client.put("/files/apps/standup/data/rows.json", content=b"[1]", headers=h).status_code == 200
+    client.put("/files/apps/standup/app.json", content=b"{}", headers=h)   # not data: not listed
+    got = client.get("/apps/standup/versions", headers=h).json()
+    assert got["keys"] == {"entries/1": v}
+    assert list(got["files"]) == ["data/rows.json"]
+    assert got["truncated"] is False
+
+
+def test_versions_move_when_the_data_does(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/standup/data/a", json=1, headers=h)
+    client.put("/files/apps/standup/data/rows.json", content=b"[1]", headers=h)
+    before = client.get("/apps/standup/versions", headers=h).json()
+    client.put("/apps/standup/data/a", json=2, headers=h)
+    client.put("/files/apps/standup/data/rows.json", content=b"[1, 2]", headers=h)
+    client.delete("/apps/standup/data/a", headers=h)
+    client.put("/apps/standup/data/b", json=3, headers=h)
+    after = client.get("/apps/standup/versions", headers=h).json()
+    assert list(after["keys"]) == ["b"]
+    assert after["files"]["data/rows.json"] != before["files"]["data/rows.json"]
+
+
+def test_versions_of_an_app_with_nothing_yet_are_empty_not_an_error(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    got = client.get("/apps/fresh/versions", headers={"X-Workspace": ws})
+    assert got.status_code == 200 and got.json() == {"keys": {}, "who": {}, "files": {}, "truncated": False}
+
+
+def test_versions_refuse_a_bad_slug(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    assert client.get("/apps/%2E%2E/versions", headers={"X-Workspace": ws}).status_code == 400
+
+
+def test_versions_say_who_last_wrote_each_shared_key_and_the_value_stays_as_written(tmp_path):
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/standup/data/a", json=1, headers=h)
+    client.put("/apps/standup/data/b", json=2, headers={**h, "X-Test-User": "admin_1"})
+    client.put("/apps/standup/data/tab?who=me", json="x", headers=h)
+    who = client.get("/apps/standup/versions", headers=h).json()["who"]
+    assert set(who) == {"a", "b"} and (who["a"]["by"], who["b"]["by"]) == ("user_1", "admin_1") and who["a"]["at"]
+    assert client.get("/apps/standup/data/a", headers=h).json()["value"] == 1
+
+
+def test_a_teams_shared_app_data_reaches_the_audit_log_and_a_persons_own_rows_do_not(tmp_path):
+    from cycls._agent import activity
+    activity._app_seen.clear()
+    client = _client(tmp_path)
+    ws = _mk_team(client)
+    h = {"X-Workspace": ws}
+    client.put("/apps/standup/data/tab?who=me", json="x", headers=h)
+    for i in range(3):
+        client.put("/apps/standup/data/a", json=i, headers=h)
+    client.delete("/apps/standup/data/a", headers=h)
+    events = client.get("/audit", headers={**h, "X-Test-User": "admin_1"}).json()["events"]
+    rows = [e for e in events if e["action"] == "app_data"]
+    assert len(rows) == 1 and rows[0]["target"] == "apps/standup" and rows[0]["by"]["id"] == "user_1"

@@ -126,6 +126,7 @@ export type UIAction = { action: string } & Record<string, unknown>;
 export type SendExtra = {
   approvals?: string[]; declined?: string[]; connectors?: string[]; selection?: DesignSelection;
   folder?: string;   // the folder open in Files: where the agent saves a design named without one
+  app?: string;      // the slug of the app open beside the chat: the turn says so to the agent
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
   team?: boolean;   // a new chat is the team's
   post?: boolean;   // to the team alone: kept, and nothing runs
@@ -553,6 +554,7 @@ export function useChat(baseUrl: string = "") {
                                  ...(extra?.selection ? { selection: extra.selection } : {}),
                                  ...(extra?.folder ? { folder: extra.folder } : {}),
                                  ...(extra?.team ? { team: true } : {}),
+                                 ...(extra?.app ? { app: extra.app } : {}),
                                  ...replay }),
           signal: controller.signal,
         });

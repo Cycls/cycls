@@ -1,8 +1,10 @@
 """End-to-end scenarios for the DataBase tool — real engine roundtrip,
 isolated from the framework chat DB.
 
-`_exec_database` always returns a string (Anthropic's tool_result.content
-rejects raw dicts/lists), so get/scan results come back JSON-encoded.
+`_exec_database` returns a string (Anthropic's tool_result.content
+rejects raw dicts/lists), so get/scan results come back JSON-encoded. A write
+to an app's data is the one exception: `{"_model": <the string>, "_ui": …}`,
+the harness's two channels, so an app open on it hears at once.
 
 The conftest.py at tests/ resets the engine pool between tests so each
 scenario starts fresh.
@@ -195,7 +197,7 @@ def test_u_is_reserved_under_a_slug(tmp_path):
 def test_u_is_only_reserved_directly_under_the_slug(tmp_path):
     ws = _ws_user(tmp_path)
     out = _run(_exec_database({"command": "put", "key": "apps/standup/notes/u/x", "value": 1}, ws))
-    assert out.startswith("Stored")
+    assert out["_model"].startswith("Stored")
 
 
 def test_scan_hides_members_private_rows_and_reprefixes(tmp_path):
@@ -234,7 +236,163 @@ def test_an_admin_only_app_takes_the_tools_writes_from_admins_only(tmp_path):
     assert "only workspace admins" in _run(_exec_database(put, ws, alice))
     assert "only workspace admins" in _run(_exec_database({"command": "delete", "key": "apps/standup/config"}, ws, alice))
     assert "only workspace admins" in _run(_exec_database(put, ws))   # no person, no admin
-    assert _run(_exec_database(put, ws, bob)).startswith("Stored")
+    assert _run(_exec_database(put, ws, bob))["_model"].startswith("Stored")
     assert json.loads(_run(_exec_database({"command": "get", "key": "apps/standup/config"}, ws, alice))) == 1
     assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws, alice)).startswith("Stored")
 
+
+
+# ---- an open app hears the agent's writes (docs/notes/apps.md, "Keeping an open app in step") ----
+
+def test_an_app_write_tells_the_open_app_which_key_and_its_new_version(tmp_path):
+    ws = _ws_user(tmp_path)
+    out = _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    assert out["_model"] == "Stored 'apps/standup/entries/1'"
+    ui = out["_ui"]
+    assert ui["type"] == "ui" and ui["action"] == "app_data"
+    assert (ui["slug"], ui["key"]) == ("standup", "entries/1")
+    shelf = DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps", ws="t-eng"))
+    # the version the app's own check will read, so it does not count this change twice
+    assert ui["version"] == _run(shelf.get_gen("standup/entries/1"))[1]
+    assert "deleted" not in ui
+
+
+def test_an_app_delete_says_it_was_a_delete(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    out = _run(_exec_database({"command": "delete", "key": "apps/standup/entries/1"}, ws))
+    assert out["_model"] == "Deleted 'apps/standup/entries/1'"
+    assert out["_ui"]["deleted"] is True and out["_ui"]["key"] == "entries/1"
+
+
+def test_a_subtree_delete_names_no_key_so_the_app_reads_everything(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
+    out = _run(_exec_database({"command": "delete", "key": "apps/standup/entries/"}, ws))
+    assert out["_ui"] == {"type": "ui", "action": "app_data", "slug": "standup"}
+
+
+def test_the_agents_own_keys_and_reads_stay_plain_strings(tmp_path):
+    ws = _ws_user(tmp_path)
+    assert _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws)) == "Stored 'note'"
+    assert _run(_exec_database({"command": "delete", "key": "note"}, ws)) == "Deleted 'note'"
+    _run(_exec_database({"command": "put", "key": "apps/standup/a", "value": 1}, ws))
+    assert isinstance(_run(_exec_database({"command": "get", "key": "apps/standup/a"}, ws)), str)
+    assert isinstance(_run(_exec_database({"command": "scan", "prefix": "apps/standup/"}, ws)), str)
+
+
+def test_a_put_returns_the_version_a_read_and_a_listing_see(tmp_path):
+    db = DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps"))
+    v1 = _run(db.put("app/a", {"n": 1}))
+    assert v1 and _run(db.get_gen("app/a"))[1] == v1
+    v2 = _run(db.put("app/a", {"n": 2}))
+    assert v2 != v1
+    _run(db.put("app/b", 1))
+    _run(db.put("other/c", 1))
+    assert _run(db.versions(prefix="app/")) == {"app/a": v2, "app/b": _run(db.get_gen("app/b"))[1]}
+
+
+# ---- the agent cannot write over what someone changed in the app (docs/notes/apps.md) ----
+
+def _shelf(tmp_path):
+    return DB(workspace("tenant", tmp_path, base=f"file://{tmp_path}", slot=".apps", ws="t-eng"))
+
+
+def test_a_put_after_a_get_lands_and_a_second_put_needs_no_second_get(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_shelf(tmp_path).put("tasks/list", [1]))
+    assert json.loads(_run(_exec_database({"command": "get", "key": "apps/tasks/list"}, ws, chat="c1"))) == [1]
+    assert _run(_exec_database({"command": "put", "key": "apps/tasks/list", "value": [1, 2]}, ws, chat="c1"))["_model"].startswith("Stored")
+    assert _run(_exec_database({"command": "put", "key": "apps/tasks/list", "value": [1, 2, 3]}, ws, chat="c1"))["_model"].startswith("Stored")
+    assert _run(_shelf(tmp_path).get("tasks/list")) == [1, 2, 3]
+
+
+def test_a_put_over_a_change_made_in_the_app_since_the_get_is_refused(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_shelf(tmp_path).put("tasks/list", [1]))
+    _run(_exec_database({"command": "get", "key": "apps/tasks/list"}, ws, chat="c1"))
+    _run(_shelf(tmp_path).put("tasks/list", [1, "added in the app"]))   # a teammate, meanwhile
+    out = _run(_exec_database({"command": "put", "key": "apps/tasks/list", "value": [1, "from the agent"]}, ws, chat="c1"))
+    assert isinstance(out, str) and out.startswith("Error:") and "changed since you read it" in out
+    assert _run(_shelf(tmp_path).get("tasks/list")) == [1, "added in the app"]   # nothing lost
+    # read again, apply the change to what is there: it lands
+    cur = json.loads(_run(_exec_database({"command": "get", "key": "apps/tasks/list"}, ws, chat="c1")))
+    _run(_exec_database({"command": "put", "key": "apps/tasks/list", "value": cur + ["from the agent"]}, ws, chat="c1"))
+    assert _run(_shelf(tmp_path).get("tasks/list")) == [1, "added in the app", "from the agent"]
+
+
+def test_a_put_of_data_never_read_in_this_conversation_is_refused(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_shelf(tmp_path).put("tasks/list", ["theirs"]))
+    out = _run(_exec_database({"command": "put", "key": "apps/tasks/list", "value": ["from memory"]}, ws, chat="c1"))
+    assert out.startswith("Error:") and "not read in this conversation" in out
+    # a read in another conversation does not count for this one
+    _run(_exec_database({"command": "get", "key": "apps/tasks/list"}, ws, chat="other"))
+    assert _run(_exec_database({"command": "put", "key": "apps/tasks/list", "value": ["x"]}, ws, chat="c1")).startswith("Error:")
+    assert _run(_shelf(tmp_path).get("tasks/list")) == ["theirs"]
+
+
+def test_a_new_key_needs_no_read_but_is_not_created_twice(tmp_path):
+    ws = _ws_user(tmp_path)
+    assert _run(_exec_database({"command": "put", "key": "apps/tasks/new", "value": 1}, ws, chat="c1"))["_model"].startswith("Stored")
+    # read as absent, then someone creates it first: the create is refused
+    _run(_exec_database({"command": "get", "key": "apps/tasks/other"}, ws, chat="c1"))
+    _run(_shelf(tmp_path).put("tasks/other", "theirs"))
+    out = _run(_exec_database({"command": "put", "key": "apps/tasks/other", "value": "mine"}, ws, chat="c1"))
+    assert out.startswith("Error:") and _run(_shelf(tmp_path).get("tasks/other")) == "theirs"
+
+
+def test_a_scan_counts_as_reading_what_it_returned(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_shelf(tmp_path).put("tasks/a", 1))
+    _run(_shelf(tmp_path).put("tasks/b", 2))
+    _run(_exec_database({"command": "scan", "prefix": "apps/tasks/"}, ws, chat="c1"))
+    assert _run(_exec_database({"command": "put", "key": "apps/tasks/a", "value": 10}, ws, chat="c1"))["_model"].startswith("Stored")
+    _run(_shelf(tmp_path).put("tasks/b", 20))   # changed after the scan
+    assert _run(_exec_database({"command": "put", "key": "apps/tasks/b", "value": 3}, ws, chat="c1")).startswith("Error:")
+
+
+def test_a_delete_needs_the_value_read_and_unchanged(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_shelf(tmp_path).put("tasks/a", 1))
+    out = _run(_exec_database({"command": "delete", "key": "apps/tasks/a"}, ws, chat="c1"))
+    assert out.startswith("Error:") and "Nothing was deleted" in out
+    _run(_exec_database({"command": "get", "key": "apps/tasks/a"}, ws, chat="c1"))
+    _run(_shelf(tmp_path).put("tasks/a", 2))
+    assert _run(_exec_database({"command": "delete", "key": "apps/tasks/a"}, ws, chat="c1")).startswith("Error:")
+    _run(_exec_database({"command": "get", "key": "apps/tasks/a"}, ws, chat="c1"))
+    assert _run(_exec_database({"command": "delete", "key": "apps/tasks/a"}, ws, chat="c1"))["_model"].startswith("Deleted")
+    assert _run(_shelf(tmp_path).get("tasks/a")) is None
+
+
+def test_the_agents_own_memory_is_not_checked(tmp_path):
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "note", "value": 1}, ws, chat="c1"))
+    assert _run(_exec_database({"command": "put", "key": "note", "value": 2}, ws, chat="c2")) == "Stored 'note'"
+
+
+def test_the_agents_write_to_an_app_carries_its_person_and_name_and_reaches_the_teams_record(tmp_path):
+    from cycls._agent import activity, state
+    activity._app_seen.clear()
+    ws = _ws_user(tmp_path)
+    activity.ORIGIN.set({"agent": "super", "chat": "c1"})
+    try:
+        _run(_exec_database({"command": "put", "key": "apps/tasks/a", "value": 1}, ws, chat="c1"))
+    finally:
+        activity.ORIGIN.set({})
+    [(_, meta)] = _run(_shelf(tmp_path).versions(prefix="tasks/", meta=True)).values()
+    assert (meta["by"], meta["agent"]) == ("alice", "super") and meta["at"]
+    assert _run(_shelf(tmp_path).get("tasks/a")) == 1   # the value is what was written, nothing added
+    [row] = _run(activity.audit_page(state.org_db("tenant", tmp_path, f"file://{tmp_path}"), ws))[0]
+    assert (row["action"], row["target"], row["agent"], row["by"]["id"]) == ("app_data", "apps/tasks", "super", "alice")
+
+
+def test_a_list_sent_as_text_is_stored_as_the_list(tmp_path):
+    """Seen on super-dev 2026-11-11: the model sent the tasks as a JSON string, the app got text and stopped."""
+    ws = _ws_user(tmp_path)
+    _run(_exec_database({"command": "put", "key": "apps/tasks/tasks", "value": '[{"id": 1}]'}, ws, chat="c1"))
+    assert _run(_shelf(tmp_path).get("tasks/tasks")) == [{"id": 1}]
+    _run(_exec_database({"command": "put", "key": "note", "value": '{"a": 1}'}, ws))
+    _run(_exec_database({"command": "put", "key": "plain", "value": "[not json"}, ws))
+    assert json.loads(_run(_exec_database({"command": "get", "key": "note"}, ws))) == {"a": 1}
+    assert json.loads(_run(_exec_database({"command": "get", "key": "plain"}, ws))) == "[not json"

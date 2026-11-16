@@ -1340,3 +1340,37 @@ def test_every_provider_wording_for_a_full_context_is_recognised():
         assert _OVERFLOW_RE.search(msg), msg
     for msg in ("Error code: 400 - invalid api key", "rate limit exceeded", "upstream timeout"):
         assert not _OVERFLOW_RE.search(msg), msg
+
+
+
+# ---- the app open beside the chat (docs/notes/apps.md, "What the agent knows about an app") ----
+
+def test_the_open_app_line_names_the_app_and_where_its_data_is(tmp_path):
+    from cycls._agent.harness.main import _open_app_line, OPEN_APP
+    (tmp_path / "apps" / "burnup").mkdir(parents=True)
+    (tmp_path / "apps" / "burnup" / "index.html").write_text("<html></html>")
+    (tmp_path / "apps" / "burnup" / "app.json").write_text(json.dumps({"name": "Burn-up"}))
+    line = _open_app_line(tmp_path, "burnup")
+    assert line.startswith(OPEN_APP) and '"Burn-up"' in line and "scan apps/burnup/" in line
+
+
+def test_the_open_app_line_falls_back_to_the_slug_and_skips_a_missing_app(tmp_path):
+    from cycls._agent.harness.main import _open_app_line
+    assert _open_app_line(tmp_path, "nothing") is None
+    (tmp_path / "apps" / "tasks").mkdir(parents=True)
+    (tmp_path / "apps" / "tasks" / "index.html").write_text("<html></html>")
+    assert '"tasks"' in _open_app_line(tmp_path, "tasks")
+
+
+def test_the_open_app_line_is_hidden_from_what_the_person_typed():
+    from cycls._agent import state
+    from cycls._agent.harness.main import _with_line, OPEN_APP
+    msg = {"role": "user", "content": _with_line("add Sara to it", OPEN_APP + 'the app "Tasks" at apps/tasks/.]')}
+    assert state.user_text(msg) == "add Sara to it"
+
+
+def test_only_a_slug_is_taken_as_the_open_app():
+    from cycls._agent.web.server import _clean_app
+    assert _clean_app("burn-up_2") == "burn-up_2"
+    for bad in ("", "../x", "a/b", "Burnup", "x" * 65, 3, None):
+        assert _clean_app(bad) == ""

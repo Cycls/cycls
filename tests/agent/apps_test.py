@@ -267,3 +267,81 @@ def test_the_manifest_carries_the_description_the_catalog_reads(tmp_path, monkey
         "description"] == "Sprint burn-up over projects/*.json"
     tools._apps_cache.clear()
     assert "Sprint burn-up over projects" in tools.app_catalog(str(tmp_path))
+
+
+# ---- fonts and images an app's source refers to (tools._inline_binaries) ----
+# The builder takes text only, so a font in src/ never reached the bundle and every app fell back to the
+# system font: they are now written into the text that refers to them, as data: URLs.
+
+import base64 as _b64
+
+
+def _src(tmp_path, files):
+    for name, body in files.items():
+        p = tmp_path / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        (p.write_bytes if isinstance(body, bytes) else p.write_text)(body)
+    return tools._inline_binaries(tmp_path, tools._collect_source(tmp_path))
+
+
+FONT = b"wOF2" + bytes(range(256)) * 4
+
+
+def test_a_font_in_css_is_written_in():
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as d:
+        out = _src(pathlib.Path(d), {"index.html": "<html></html>", "fonts/Inter.woff2": FONT,
+                                     "app.css": '@font-face { src: url("./fonts/Inter.woff2") format("woff2"); }\n'
+                                                ".a { background: url(/fonts/Inter.woff2) }"})
+    css = out["app.css"]
+    assert css.count("data:font/woff2;base64," + _b64.b64encode(FONT).decode()) == 2
+    assert "Inter.woff2" not in css
+    assert "fonts/Inter.woff2" not in out   # a binary is never sent as a file
+
+
+def test_an_image_imported_in_script_or_named_in_html_is_written_in():
+    import tempfile, pathlib
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 40
+    with tempfile.TemporaryDirectory() as d:
+        out = _src(pathlib.Path(d), {
+            "index.html": '<html><link rel="icon" href="./logo.png"><img src="logo.png"></html>',
+            "logo.png": png,
+            "components/Header.tsx": 'import logo from "../logo.png";\nconst u = new URL("../logo.png", import.meta.url);\n',
+        })
+    url = "data:image/png;base64," + _b64.b64encode(png).decode()
+    assert out["index.html"].count(url) == 2
+    assert f'const logo = "{url}";' in out["components/Header.tsx"]
+    assert f'new URL("{url}")' in out["components/Header.tsx"]
+
+
+def test_what_is_not_a_local_asset_is_left_alone():
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as d:
+        css = ('.a{background:url(data:image/png;base64,AAAA)} .b{background:url(https://x.test/a.png)}'
+               ' .c{src:url(./missing.woff2)} .d{background:url(../outside.png)}')
+        out = _src(pathlib.Path(d), {"index.html": "<html></html>", "app.css": css,
+                                     "main.tsx": 'import x from "react";\nimport y from "./util";\n', "util.ts": ""})
+    assert out["app.css"] == css
+    assert out["main.tsx"] == 'import x from "react";\nimport y from "./util";\n'
+
+
+def test_a_file_too_big_to_carry_is_named():
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as d:
+        with pytest.raises(ValueError, match="huge.woff2"):
+            _src(pathlib.Path(d), {"index.html": "<html></html>", "huge.woff2": b"0" * (tools._ASSET_MAX + 1),
+                                   "app.css": "a{src:url(huge.woff2)}"})
+
+
+def test_a_text_file_grown_past_the_builders_cap_is_named(monkeypatch):
+    import tempfile, pathlib
+    monkeypatch.setattr(tools, "_APP_SRC_MAX_FILE", 2_000)
+    with tempfile.TemporaryDirectory() as d:
+        with pytest.raises(ValueError, match="app.css .*fonts and images"):
+            _src(pathlib.Path(d), {"index.html": "<html></html>", "a.woff2": FONT * 2, "app.css": "a{src:url(a.woff2)}"})
+
+
+def test_a_built_page_that_still_names_a_font_is_reported():
+    html = '<style>@font-face{src:url(./Inter.woff2)} .x{background:url("data:image/png;base64,AA")}</style>'
+    assert tools._unresolved_assets(html) == ["./Inter.woff2"]
+    assert tools._unresolved_assets('<p>url(data:font/woff2;base64,AA)</p>') == []

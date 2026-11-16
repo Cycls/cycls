@@ -683,3 +683,18 @@ def test_service_env_proxy(monkeypatch):
     monkeypatch.setenv("BROWSER_PROXY_SERVER", "http://s:1")
     monkeypatch.setenv("BROWSER_PROXY_USERNAME", "x")
     assert m._env_proxy() == {"server": "http://s:1", "username": "x"}
+
+
+def test_open_refuses_an_app_so_it_is_never_screenshotted(tmp_path, monkeypatch):
+    """An agent checking its work opened the app it had just built in the browser and screenshotted it: the
+    picture landed in the person's files and on the canvas, in front of the app, and showed no data."""
+    fake, _ = _use_fake(monkeypatch)
+    (tmp_path / "apps" / "tasks").mkdir(parents=True)
+    (tmp_path / "apps" / "tasks" / "index.html").write_text("<div id=root></div>", encoding="utf-8")
+    for url in ("apps/tasks/index.html", "/workspace/apps/tasks/index.html", "file:///workspace/apps/tasks/index.html"):
+        out = asyncio.run(_exec_browser({"action": "open", "url": url}, _ws(tmp_path)))
+        assert out.startswith("Error: apps/tasks/ is an app") and "canvas apps/tasks/index.html" in out
+    assert fake.calls == []
+    # a page that is not an app still opens
+    (tmp_path / "apps.html").write_text("<h1>x</h1>", encoding="utf-8")
+    assert not asyncio.run(_exec_browser({"action": "open", "url": "apps.html"}, _ws(tmp_path))).startswith("Error")
