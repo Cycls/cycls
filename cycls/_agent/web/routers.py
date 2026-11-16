@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urljoin, urlsplit, parse_qs
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -1717,7 +1717,9 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             try:
                 _examples_cache["cms"] = [
                     {"label": (p.get("label") or {}).get("en", ""), "label_ar": (p.get("label") or {}).get("ar") or None,
-                     "urls": p.get("cards") or []} for p in await _cms_pills(cms["examples"], cms.get("token"))]
+                     "urls": [{**c, "thumbnail": urljoin(cms["examples"], c["thumbnail"])} if c.get("thumbnail") else c
+                              for c in p.get("cards") or []]}   # a CMS upload is its /files/…: the CMS's own address
+                    for p in await _cms_pills(cms["examples"], cms.get("token"))]
             except Exception as e:
                 log("warn", chat_id=None, message=f"examples: the CMS read failed: {type(e).__name__}: {e}")
         return _examples_cache["cms"]
@@ -1730,8 +1732,9 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         product showcase, not user content."""
         if isinstance(entry, str):
             entry = {"share": entry}
+        pic = {"thumbnail": entry["thumbnail"]} if entry.get("thumbnail") else {}
         if entry.get("video"):
-            return {"video": entry["video"], "title": entry.get("title", "")}
+            return {"video": entry["video"], "title": entry.get("title", ""), **pic}
         url = entry.get("share", "")
         parts = urlsplit(url)
         seg = parts.path.strip("/").split("/")
@@ -1762,7 +1765,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                     "url": f"/share/{user}/{token}/file/{fp}{suffix}"}
         sep = "&" if suffix else "?"
         return {"share": f"/shared/{user}/{token}{suffix}{sep}example=1",
-                "title": meta.get("title", ""), "prompt": prompt, "file": file}
+                "title": meta.get("title", ""), "prompt": prompt, "file": file, **pic}
 
     @r.get("/examples")
     async def examples(response: Response):

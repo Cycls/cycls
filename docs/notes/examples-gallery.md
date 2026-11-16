@@ -80,6 +80,9 @@ web = cycls.Web().examples({
 # the thumbnail for YouTube, a play glyph otherwise) and its one action is
 # Watch, which plays it in-page in a lightbox (YouTube/Vimeo embeds, or
 # <video> for any hosted file, e.g. served via .copy_public()).
+# Either kind may add "thumbnail": a picture the card shows instead of drawing
+# the file (or the clip), for one that doesn't preview well:
+#   {"share": "/shared/<user>/<tok>", "thumbnail": "/public/deck-cover.png"}
 ```
 
 URLs must be shares minted by this agent (same deployment); absolute or
