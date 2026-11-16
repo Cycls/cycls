@@ -1105,7 +1105,7 @@ async def _exec_database(inp, ws, user=None, chat=None):
             db, k = _route(ws, key)
             await _may_write_app(ws, user, key)
             if not app_key:
-                await db.put(k, _value(inp.get("value")))
+                await db.put(k, inp.get("value"))
                 return f"Stored {key!r}"
             seen = _READ.get(_read_key(ws, chat, key))
             if seen is None:
