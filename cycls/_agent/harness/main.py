@@ -20,6 +20,7 @@ from ..logs import log
 from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
+from ..design.powerpoint import DECK_SUFFIXES   # what the Design tool's `import` opens
 from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded,
                            design_tool, design_wanted)
 from ..tools import ondemand
@@ -280,7 +281,6 @@ CLIP_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm")   # what the Video tool's `foo
 # What the Transcribe tool hears beyond those (cycls/_agent/transcribe/tool.py's AUDIO_TYPES).
 AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".amr", ".caf", ".aif",
                   ".aiff", ".3gp")
-DECK_SUFFIXES = (".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm")   # what the Design tool's `import` opens
 
 
 def _deck_note(fname, read):

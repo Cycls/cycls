@@ -8,11 +8,16 @@ import asyncio, base64, hashlib, json, pathlib
 from ..paths import _resolve_path
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
 
-_DECK_SUFFIXES = (".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm")   # PowerPoint's own (OOXML) files
+DECK_SUFFIXES = (".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm")   # PowerPoint's own (OOXML) files
 _SERVICE_BODY = 30 << 20     # the service's request limit (cycls-design LIMITS.body)
 _IMPORT_MAX = 22 << 20       # a deck, base64 in one request, under that
 _IMPORT_PARTS = 8            # requests for one deck: up to 480 slides at 60 a part
 _INDEX = (".cache", "design", "imports.json")   # a deck's sha256 → the design it was brought in as
+
+
+def _fits(*parts):
+    """Whether these go in one request, base64, under the service's limit (a megabyte kept for the rest)."""
+    return sum(map(len, parts)) * 4 // 3 + (1 << 20) <= _SERVICE_BODY
 
 
 def _index_path(root):
@@ -73,7 +78,7 @@ async def original_for(root, fig, user_id=None):
     if not path or not await asyncio.to_thread(path.is_file):
         return None
     data = await asyncio.to_thread(path.read_bytes)
-    return data if (len(data) + len(fig)) * 4 // 3 + (1 << 20) <= _SERVICE_BODY else None
+    return data if _fits(data, fig) else None
 
 
 def written_said(written, fmt="pptx"):
@@ -131,7 +136,7 @@ async def _import_deck(inp, workspace, name):
     if suffix == ".ppt":
         return (f"Error: {src} is an old PowerPoint file (.ppt), which can't be brought in. Nothing was done. "
                 f"Ask the person to save it as .pptx (PowerPoint: File › Save As › PowerPoint Presentation) and send that.")
-    if suffix not in _DECK_SUFFIXES:
+    if suffix not in DECK_SUFFIXES:
         return f"Error: {src} isn't a PowerPoint file — `import` brings in a .pptx. Nothing was done."
     root, subject = pathlib.Path(workspace.root), getattr(workspace, "subject", None)
     async with lock(path):                                   # the same deck asked for twice at once: once
@@ -157,7 +162,7 @@ async def _import_deck(inp, workspace, name):
                     return (f"Error: {src} is too large to bring in — after {parts - 1} parts it still had slides from "
                             f"{start + 1} on. Nothing was saved, and importing it again won't change that. Tell the "
                             f"person: a shorter copy of the deck (the slides to change) comes in.")
-                if fig is not None and (len(data) + len(fig)) * 4 // 3 + (1 << 20) > _SERVICE_BODY:
+                if fig is not None and not _fits(data, fig):
                     return (f"Error: {src} is too large to bring in whole — its pictures fill the request before its "
                             f"slides from {start + 1} on are in. Nothing was saved, and importing it again won't change "
                             f"that. Tell the person: a copy with its pictures compressed (PowerPoint: File › Compress "
