@@ -187,6 +187,32 @@ def mark_checked(root, rel, digest):
     _write_json(path, data)
 
 
+def _reviewed_path(root):
+    return Path(root) / SIDECAR / "design-reviewed.json"
+
+
+def design_reviewed(root, rel):
+    """Has the design review (the service's art director) looked at `rel` before a render? Once per video: the
+    render after its fixes goes ahead without a second round."""
+    try:
+        data = json.loads(_reviewed_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and rel in data
+
+
+def mark_design_reviewed(root, rel):
+    path = _reviewed_path(root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data[rel] = time.time()
+    _write_json(path, data)
+
+
 def voice_started(root, chat_id, name, token, key):
     data = load(root, chat_id)
     data.setdefault("voices", {})[name] = {"token": token, "key": key, "at": time.time()}

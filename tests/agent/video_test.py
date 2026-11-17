@@ -298,6 +298,7 @@ class FakeService:
         self.submitted, self.polls, self.refuse, self.state, self.filled = [], [], None, "done", []
         self.over = None
         self.warnings = None
+        self.design = None          # the design review's answer when switched on: {"design": {...}} or {"design": None}
         self.result = {"state": "done", "kind": "review", "findings": [], "sheet": SHEET}
         monkeypatch.setattr(video, "submit", self.submit)
         monkeypatch.setattr(video, "fill_template", self.fill)
@@ -313,6 +314,8 @@ class FakeService:
 
     async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
                      footage=None, fonts=None, lotties=None):
+        if kind == "design" and self.design is None:
+            return {"kind": "design", "off": True}          # the door, the review switched off (its default)
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key,
                                "audio": audio, "words": words, "files": files, "footage": footage, "fonts": fonts,
                                "lotties": lotties})
@@ -326,6 +329,9 @@ class FakeService:
 
     async def wait(self, ws, token, budget):
         self.polls.append(token)
+        sub = next((x for x in self.submitted if f"tok{self.submitted.index(x) + 1}" == token), None)
+        if sub and sub["kind"] == "design":
+            return {"state": "done", "kind": "design", **self.design}
         return self.result if self.state == "done" else {"state": self.state, "eta_s": 40}
 
     async def fetch(self, ws, token, dest, scratch, what="video"):
@@ -2490,3 +2496,42 @@ def test_a_zoom_region_is_read_however_its_four_numbers_are_written():
     assert _zoom("x=0, y=700, w=1080, h=600") == "0,700,1080,600"
     assert _zoom("#s4 .hl") == "#s4 .hl" and _zoom(".cap") == ".cap" and _zoom(None) == ""
     assert _zoom("#s1 > div:nth-of-type(2)") == "#s1 > div:nth-of-type(2)"     # a selector with digits stays one
+
+
+
+def test_before_a_videos_first_render_the_art_director_looks_and_its_fixes_come_back_once(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    fv = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    from cycls._agent.video.tool import VIDEO_HEARD
+    VIDEO_HEARD.set(["A calm reel for our café", "make it warmer"])
+    ws = _ws(tmp_path)
+    _run({"action": "write", "name": "hi", "html": COMP}, ws)
+    fv.design = {"design": {"score": 5, "verdict": "fix", "summary": "Faint sublines.",
+                            "fixes": [{"scene": "s1", "at": 1.2, "problem": "Grey on black.", "fix": "Lighten to #B5B9BD."}]}}
+    fv.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 2.0}}
+    out = _run({"action": "render", "name": "hi"}, ws)
+    assert "Design review before the render" in out and "5/10, fix first" in out and "- #s1 at 1.2 s: Grey on black." in out
+    assert "Not rendered yet" in out and not (tmp_path / "videos" / "hi.mp4").exists()
+    design = next(x for x in fv.submitted if x["kind"] == "design")
+    assert design["params"]["brief"] == "A calm reel for our café / make it warmer" and design["html"] == COMP
+    # The next render goes ahead without a second round.
+    n = len(fv.submitted)
+    out = _run({"action": "render", "name": "hi"}, ws)
+    assert "Rendered" in str(out) and all(x["kind"] != "design" for x in fv.submitted[n:])
+
+
+def test_a_review_that_says_ship_rides_with_the_render_and_none_never_stops_it(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    fv = FakeService(monkeypatch)
+    VIDEO_LOADED.set(True)
+    ws = _ws(tmp_path)
+    _run({"action": "write", "name": "a", "html": COMP}, ws)
+    fv.design = {"design": {"score": 8, "verdict": "ship", "summary": "Ready.", "fixes": []}}
+    fv.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 2.0}}
+    out = _run({"action": "render", "name": "a"}, ws)
+    assert "Rendered" in str(out) and "8/10, ready to post" in str(out)
+    _run({"action": "write", "name": "b", "html": COMP.replace("Hi", "Hey")}, ws)
+    fv.design = {"design": None, "reason": "TimeoutError"}
+    out = _run({"action": "render", "name": "b"}, ws)
+    assert "Rendered" in str(out) and "Design review" not in str(out)
