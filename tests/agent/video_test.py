@@ -1671,7 +1671,7 @@ def test_dub_lists_the_sentences_then_says_the_video_again_as_a_new_one(monkeypa
     _voice_files(tmp_path)
     (tmp_path / "videos" / "hi.video.html").write_text(
         VOICED.replace('<audio id="bed"', '<div class="cap" data-captions="vo"></div><audio id="bed"'), encoding="utf-8")
-    assert _run({"action": "dub", "name": "hi", "to": "fr"}, ws).startswith("Error: to: ar or en")
+    assert _run({"action": "dub", "name": "hi", "to": "fr"}, ws).startswith('Error: to: "ar" (Standard Arabic), "ar-SA" (the Saudi voice)')
     assert "speaks Arabic" in _run({"action": "dub", "name": "hi", "to": "en", "voice": "saudi"}, ws)
     assert "already in en" in _run({"action": "dub", "name": "hi", "to": "en"}, ws)
     listed = _run({"action": "dub", "name": "hi", "to": "ar"}, ws)
@@ -2460,3 +2460,33 @@ def test_words_burned_into_a_clip_are_said_with_it():
     assert report.burned_lines(None) == [] and report.burned_lines({"kind": "other"}) == []
     info = {"duration": 8, "width": 1080, "height": 1920, "burned": caps}
     assert "Captions are already burned into this clip" in report.footage_text("uploads/a.mp4", info)
+
+
+def test_a_piece_of_a_clip_the_edge_drops_with_a_bare_408_is_sent_again(monkeypatch, tmp_path):
+    """Three stock clips failed whole on one "408: Missing request, possibly due to expiry or cancellation" (2026-11-17)."""
+    _on(monkeypatch)
+    clip = tmp_path / "a.mp4"
+    clip.write_bytes(b"x" * 1000)
+    calls = []
+
+    def edge(r):
+        calls.append(r.url.params.get("offset"))
+        if len(calls) == 1:
+            return httpx.Response(408, text="Missing request, possibly due to expiry or cancellation")
+        return httpx.Response(200, json={"state": "uploaded"})
+
+    _transport(monkeypatch, edge)
+    assert asyncio.run(client.send_clip(_ws(tmp_path), clip, "ab" * 32)) == (1000, True)
+    assert calls == ["0", "0"]
+    _transport(monkeypatch, lambda r: httpx.Response(408, json={"error": "The door's own 408."}))
+    with pytest.raises(RuntimeError, match="door's own"):
+        asyncio.run(client.send_clip(_ws(tmp_path), clip, "ab" * 32))           # the door's own answer is not retried
+
+
+def test_a_zoom_region_is_read_however_its_four_numbers_are_written():
+    from cycls._agent.video.run import _zoom
+    assert _zoom("x,y: 0,700,1080,600") == "0,700,1080,600"          # as a real chat sent it
+    assert _zoom("0 700 1080 600") == "0,700,1080,600"
+    assert _zoom("x=0, y=700, w=1080, h=600") == "0,700,1080,600"
+    assert _zoom("#s4 .hl") == "#s4 .hl" and _zoom(".cap") == ".cap" and _zoom(None) == ""
+    assert _zoom("#s1 > div:nth-of-type(2)") == "#s1 > div:nth-of-type(2)"     # a selector with digits stays one

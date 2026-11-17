@@ -1097,7 +1097,7 @@ async def _dub(workspace, root, chat, name, to, voice_id, lines, note=""):
         return _err(f"there is no {rel}; `write` it first.")
     to = _language(to)
     if to not in ("ar", "en"):
-        return _err("to: ar or en, the language to dub the video into.")
+        return _err('to: "ar" (Standard Arabic), "ar-SA" (the Saudi voice) or "en", the language to dub the video into.')
     voice_id = voice_id or "default"
     if voice_id not in ("default", "saudi"):
         return _err("voice: default or saudi.")
@@ -1760,6 +1760,17 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
 _LISTS = ("skill", "stock", "at", "lines", "changes")
 
 
+def _zoom(raw):
+    """A zoom as the model writes it: a CSS selector as it is, or a region however its four numbers are written
+    ("x,y: 0,700,1080,600", "0 700 1080 600", "x=0 y=700 w=1080 h=600") as "x,y,w,h". A real chat sent the first
+    (2026-11-17), and the renderer, given it as a selector, failed the job."""
+    s = str(raw or "").strip()[:200]
+    nums = re.findall(r"-?\d+(?:\.\d+)?", s)
+    if len(nums) == 4 and re.fullmatch(r"[\sxywh,:=;()\[\]\-\d.]+", s, re.I):
+        return ",".join(nums)
+    return s
+
+
 def _lists(inp):
     """A list argument some models send as a JSON string ('["video-direction", "motion-design"]', seen on
     2026-11-09: refused twice, then sent one name a call) → the list itself."""
@@ -1941,7 +1952,7 @@ async def _exec_video(inp, workspace, ctx=None):
             if at:
                 if not isinstance(at, list) or not all(isinstance(t, (int, float)) for t in at):
                     return _err("at: a list of times in seconds.")
-                params = {"at": [float(t) for t in at][:9], "zoom": str(inp.get("zoom") or "")[:200]}
+                params = {"at": [float(t) for t in at][:9], "zoom": _zoom(inp.get("zoom"))}
                 text, blocks, _ = await _checks(workspace, root, rel, html, kind="look", params=params,
                                                 budget=BUDGET["look"], size=inp.get("size"))
             else:

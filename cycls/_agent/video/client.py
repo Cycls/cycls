@@ -121,8 +121,11 @@ async def _request(method, path, *, workspace=None, retry=False, timeout=_TIMEOU
         except httpx.HTTPError as e:
             raise Unavailable(f"the video service is unreachable: {type(e).__name__}") from e
         # The platform's own failures, not the door's (which carry {"error"}): a request that met a
-        # container as it stopped came back as a bare 500 after half a minute (2026-10-10).
-        if resp.status_code in (500, 502, 503, 504) and not _ours(resp):
+        # container as it stopped came back as a bare 500 after half a minute (2026-10-10); a piece of a clip
+        # whose body the edge gave up waiting for, a bare 408 "Missing request, possibly due to expiry or
+        # cancellation", and three stock clips failed with it (2026-11-17). A piece carries its offset, so
+        # sending it again is safe (the door answers 409 with where it is).
+        if resp.status_code in (408, 500, 502, 503, 504) and not _ours(resp):
             gone = RuntimeError(f"video service {resp.status_code} (no answer from the service itself)")
             continue
         break
