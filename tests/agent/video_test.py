@@ -787,7 +787,8 @@ def test_the_brands_own_voice_is_kept_only_with_consent_and_read_in_its_voice(mo
     # The guide names the kit; music with no query starts from the brand's.
     from cycls._agent.video import brand
     note = brand.video_note(tmp_path)
-    assert 'voice {voice: "brand"}' in note and "oud, calm" in note and "ends on its end card" in note
+    assert 'voice {voice: "brand"}' in note and "oud, calm" in note
+    assert "end card" not in note          # a voice and music, but no logo or name to sign off with
     assert "Not a mood" not in _run({"action": "music"}, ws)
     removed = _run({"action": "kit", "sample": "none"}, ws)
     assert "removed" in removed and "video_voice" not in (tmp_path / "brand" / "brand.yaml").read_text(encoding="utf-8")
@@ -1743,6 +1744,21 @@ def _kit(root, logo=True):
         'font_heading: "Playfair Display"\nfont_body: "Brand Sans"\n', encoding="utf-8")
     if logo:
         (root / "brand" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nlogo")
+
+
+def test_the_guide_asks_for_an_end_card_only_when_the_brand_has_something_to_sign_off_with(tmp_path):
+    from cycls._agent.video import brand
+    assert brand.video_note(tmp_path) == ""                        # no kit at all: no card to end on
+    (tmp_path / "brand").mkdir()
+    (tmp_path / "brand" / "brand.yaml").write_text("", encoding="utf-8")
+    assert brand.video_note(tmp_path) == ""                        # an empty kit file (Personal on super-dev has one)
+    (tmp_path / "brand" / "brand.yaml").write_text('video_music: "oud, calm"\n', encoding="utf-8")
+    note = brand.video_note(tmp_path)
+    assert "oud, calm" in note and "end card" not in note          # music, but nothing to sign off with
+    (tmp_path / "brand" / "brand.yaml").write_text('video_music: "oud"\nentity_name: "Najd Coffee"\n', encoding="utf-8")
+    assert "every video ends on its end card" in brand.video_note(tmp_path)        # a name
+    _kit(tmp_path)
+    assert "every video ends on its end card" in brand.video_note(tmp_path)        # a logo
 
 
 def test_the_brand_kit_is_read_for_video_and_said_in_the_guide(monkeypatch, tmp_path):

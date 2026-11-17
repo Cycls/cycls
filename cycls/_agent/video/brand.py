@@ -421,7 +421,9 @@ def video_note(root):
                      "voice-over unless the person asks for another")
     if k.get("music"):
         parts.append(f"its music: {k['music']} (music with no query starts from it)")
-    if (k.get("outro") or "logo").lower() == "logo":
+    # Only a brand with something to sign off with (a logo, a name): with no kit at all, the outro's default would tell
+    # every video of every workspace to end on an empty card (seen in the guide of a bare workspace, 2026-11-17).
+    if (k.get("outro") or "logo").lower() == "logo" and ((kit(root) or {}).get("logo") or identity(root).get("name")):
         parts.append("every video ends on its end card: motion {piece: \"end-card\", vars: {line}} after the last scene "
                      "(the kit's logo, name and website)")
     if (k.get("intro") or "").lower() == "logo":
