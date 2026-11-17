@@ -191,17 +191,19 @@ def _reviewed_path(root):
     return Path(root) / SIDECAR / "design-reviewed.json"
 
 
-def design_reviewed(root, rel):
-    """Has the design review (the service's art director) looked at `rel` before a render? Once per video: the
-    render after its fixes goes ahead without a second round."""
+def design_reviewed(root, rel, chat):
+    """Has the design review (the service's art director) looked at `rel` in this chat? Once a video a chat: the render
+    after its fixes goes ahead without a second round, and a new chat that writes a video under the same name is
+    looked at again."""
     try:
         data = json.loads(_reviewed_path(root).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return isinstance(data, dict) and rel in data
+    got = data.get(rel) if isinstance(data, dict) else None
+    return isinstance(got, dict) and got.get("chat") == str(chat)
 
 
-def mark_design_reviewed(root, rel):
+def mark_design_reviewed(root, rel, chat):
     path = _reviewed_path(root)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -209,7 +211,7 @@ def mark_design_reviewed(root, rel):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    data[rel] = time.time()
+    data[rel] = {"chat": str(chat), "at": time.time()}
     _write_json(path, data)
 
 
