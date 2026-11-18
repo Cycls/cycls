@@ -100,9 +100,9 @@ describe("a design's Edit | Preview switch", () => {
     expect(frame.closest("[inert]")).toBeNull();
   });
 
-  it("while the agent works on it, it is the editor; when its turn ends, the preview — unless the person took to the editor", async () => {
+  it("while the agent works on it, it stays where the person is; when its turn ends, the preview — unless the person took to the editor", async () => {
     const live = (on: boolean) => canvas("designs/a.fig", { tabs: [{ path: "designs/a.fig", name: "a", live: on }, TABS[1]] });
-    const { container, rerender } = render(live(true));
+    const { container, rerender } = render(live(true));                     // one the agent is making opens in the editor
     await flush();
     expect(pressed("Edit")).toBe("true");
     expect(container.querySelector("iframe")).toBeTruthy();                 // the agent's changes land in the editor
@@ -111,7 +111,18 @@ describe("a design's Edit | Preview switch", () => {
     expect(pressed("Preview")).toBe("true");
     expect(screen.getByTestId("design-picture")).toBeTruthy();
 
-    rerender(live(true));                                                     // its next turn: the editor again
+    // Its next turn, the person on the preview: it stays the preview, which shows each change as it is saved. It
+    // turned into the editor under them (a cold start) and back when the turn ended: "the app reopens".
+    rerender(live(true));
+    await flush();
+    expect(pressed("Preview")).toBe("true");
+    expect(screen.getByTestId("design-picture")).toBeTruthy();
+    rerender(live(false));
+    await flush();
+    expect(pressed("Preview")).toBe("true");
+
+    await toEdit();                                                           // the person in the editor keeps it
+    rerender(live(true));
     await flush();
     expect(pressed("Edit")).toBe("true");
     const frame = container.querySelector("iframe")!;
@@ -121,6 +132,27 @@ describe("a design's Edit | Preview switch", () => {
     rerender(live(false));
     await flush();
     expect(pressed("Edit")).toBe("true");                                     // it stays theirs
+  });
+
+  it("once its preview is up, the editor loads behind it, hidden, so Edit is there at once — not on a narrow screen", async () => {
+    const wait = (ms: number) => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
+    const { container } = render(canvas("designs/a.fig", { readFile: reader(1) }));
+    await flush();
+    expect(container.querySelector("iframe")).toBeNull();                   // the preview first
+    await wait(1700);
+    const frame = container.querySelector("iframe")!;
+    expect(frame).toBeTruthy();
+    expect(pressed("Preview")).toBe("true");
+    expect(frame.closest("[inert]")).toBeTruthy();                           // hidden under the preview, out of reach
+    await toEdit();
+    expect(container.querySelector("iframe")).toBe(frame);                  // Edit: the one already loading
+    cleanup();
+
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+    const narrow = render(canvas("designs/a.fig", { readFile: reader(1) }));
+    await flush();
+    await wait(1700);
+    expect(narrow.container.querySelector("iframe")).toBeNull();            // a phone keeps the preview light
   });
 
   it("says what it is beside its name", async () => {
