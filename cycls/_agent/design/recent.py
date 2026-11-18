@@ -196,7 +196,8 @@ def listing(root):
     rows = _read(root)[:_LISTED]
     if not rows:
         return ""
-    return ("This workspace's most recent designs, newest first: make the next one different from them in its "
+    return ("This workspace's most recent designs, made in this chat or earlier ones (the person's own work, newest "
+            "first): make the next one different from them in its "
             "concept, composition and palette or faces, unless it is meant to belong with one (design-direction, "
             "\"Never the same twice\").\n" + "\n".join(_line(d) for d in rows))
 
