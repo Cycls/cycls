@@ -1094,15 +1094,20 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   useEffect(() => { if (design && previewing) void loadPreview(undefined); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   // The agent's turn: a person in the editor keeps it, and sees the changes land there; one on the preview keeps
   // the preview, which shows each change as it is saved (below) — it never turns into the editor under them, which
-  // cold-started the editor for a moment and turned back (the "app reopens"). When the turn ends, the preview
-  // again — unless the person clicked into the editor meanwhile (the window loses focus to its frame).
+  // cold-started the editor for a moment and turned back (the "app reopens"). A design the agent is making opens in
+  // the editor, to watch it built; when that turn ends, its preview — unless the person clicked into the editor
+  // meanwhile (the window loses focus to its frame). A person who went to the editor themselves stays in it.
   const body = useRef<HTMLDivElement>(null);
   const handled = useRef(false);
   const wasLive = useRef(!!file.live);
+  const agentsEditor = useRef(design && !!file.live);   // the editor is up because the agent opened the design in it
   useEffect(() => {
     if (!design) return;
     if (file.live && !wasLive.current) handled.current = false;
-    if (!file.live && wasLive.current && !handled.current) void showPreview();
+    if (!file.live && wasLive.current) {
+      if (previewing || (agentsEditor.current && !handled.current)) void showPreview();
+      agentsEditor.current = false;                       // from here on, where it is shown is the person's
+    }
     wasLive.current = !!file.live;
   }, [file.live, design]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Edit at once: once the preview is up, the editor loads behind it, hidden, while the browser is idle — so the

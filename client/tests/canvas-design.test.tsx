@@ -121,17 +121,25 @@ describe("a design's Edit | Preview switch", () => {
     await flush();
     expect(pressed("Preview")).toBe("true");
 
-    await toEdit();                                                           // the person in the editor keeps it
+    await toEdit();                                                           // the person went to the editor themselves:
     rerender(live(true));
     await flush();
-    expect(pressed("Edit")).toBe("true");
-    const frame = container.querySelector("iframe")!;
-    frame.focus();                                                            // the person clicks into it
-    window.dispatchEvent(new Event("blur"));
-    await flush();
+    expect(pressed("Edit")).toBe("true");                                     // a turn keeps them there…
     rerender(live(false));
     await flush();
-    expect(pressed("Edit")).toBe("true");                                     // it stays theirs
+    expect(pressed("Edit")).toBe("true");                                     // …and so does its end
+    cleanup();
+
+    // One the agent is making opens in the editor: a person who clicks into it keeps it when the turn ends.
+    const again = render(live(true));
+    await flush();
+    const frame = again.container.querySelector("iframe")!;
+    frame.focus();
+    window.dispatchEvent(new Event("blur"));
+    await flush();
+    again.rerender(live(false));
+    await flush();
+    expect(pressed("Edit")).toBe("true");
   });
 
   it("once its preview is up, the editor loads behind it, hidden, so Edit is there at once — not on a narrow screen", async () => {
