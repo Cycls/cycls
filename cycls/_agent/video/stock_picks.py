@@ -1609,6 +1609,24 @@ CLIPS = {
      "link": "https://videos.pexels.com/video-files/36579901/15509291_1080_1920_60fps.mp4"
     }
    ]
+  },
+  {
+   "id": 36578304,
+   "url": "https://www.pexels.com/video/festive-dinner-table-with-middle-eastern-cuisine-36578304/",
+   "duration": 6,
+   "width": 2160,
+   "height": 3840,
+   "user": {
+    "name": "Orhan Pergel"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/36578304/15509331_1080_1920_60fps.mp4"
+    }
+   ]
   }
  ],
  "incense": [
@@ -1627,6 +1645,478 @@ CLIPS = {
      "width": 1080,
      "height": 1920,
      "link": "https://videos.pexels.com/video-files/20719518/20719518-hd_1080_1920_25fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 17928738,
+   "url": "https://www.pexels.com/video/a-small-incense-holder-with-smoke-coming-out-of-it-17928738/",
+   "duration": 30,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "‪yossrytop abdo‬‏"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/17928738/17928738-hd_1080_1920_25fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 7816005,
+   "url": "https://www.pexels.com/video/burning-wood-on-a-stone-7816005/",
+   "duration": 29,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Mikhail Nilov"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/7816005/7816005-hd_1080_1920_25fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 8943205,
+   "url": "https://www.pexels.com/video/smoke-from-a-burning-incense-8943205/",
+   "duration": 7,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Leeloo The First"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/8943205/8943205-hd_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 36705276,
+   "url": "https://www.pexels.com/video/serene-oud-music-session-indoors-36705276/",
+   "duration": 40,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "İrfan Simsar"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/36705276/15558145_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 17928486,
+   "url": "https://www.pexels.com/video/censer-smoke-incense-17928486/",
+   "duration": 21,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "‪yossrytop abdo‬‏"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/17928486/17928486-hd_1920_1080_25fps.mp4"
+    }
+   ]
+  }
+ ],
+ "heritage": [
+  {
+   "id": 37734489,
+   "url": "https://www.pexels.com/video/majestic-desert-sunset-at-alula-s-elephant-rock-37734489/",
+   "duration": 24,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Enthusiastic Traveler"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/37734489/16005705_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 37734444,
+   "url": "https://www.pexels.com/video/majestic-arabian-desert-road-in-saudi-arabia-37734444/",
+   "duration": 41,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Enthusiastic Traveler"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/37734444/16005683_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 34329524,
+   "url": "https://www.pexels.com/video/dramatic-arabian-desert-landscape-shot-34329524/",
+   "duration": 17,
+   "width": 2160,
+   "height": 3840,
+   "user": {
+    "name": "Grbr Snts"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/34329524/14543342_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 28219557,
+   "url": "https://www.pexels.com/video/the-sun-is-setting-over-a-desert-with-rocks-28219557/",
+   "duration": 8,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Viktoria B."
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/28219557/12331303_1080_1920_60fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 6358279,
+   "url": "https://www.pexels.com/video/moving-cars-on-a-desert-6358279/",
+   "duration": 15,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "Ibrahim Bennett"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/6358279/6358279-hd_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 4946072,
+   "url": "https://www.pexels.com/video/natural-rock-formations-on-a-desert-4946072/",
+   "duration": 11,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "Ibrahim Bennett"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/4946072/4946072-hd_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 18819906,
+   "url": "https://www.pexels.com/video/alula-old-town-saudi-arabia-18819906/",
+   "duration": 12,
+   "width": 3840,
+   "height": 2160,
+   "user": {
+    "name": "Aamir Somewhere"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/18819906/18819906-hd_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 11336190,
+   "url": "https://www.pexels.com/video/old-castle-ruins-11336190/",
+   "duration": 13,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Kashif Shah"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/11336190/11336190-hd_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 30226373,
+   "url": "https://www.pexels.com/video/majestic-fort-in-oman-at-sunset-30226373/",
+   "duration": 30,
+   "width": 2160,
+   "height": 3840,
+   "user": {
+    "name": "Christine  Cleireny"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/30226373/12959202_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 15820146,
+   "url": "https://www.pexels.com/video/low-angle-view-of-birds-flying-around-a-wind-tower-15820146/",
+   "duration": 20,
+   "width": 2082,
+   "height": 3702,
+   "user": {
+    "name": "Mohammed Sahil  Sarafudeen"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/15820146/15820146-hd_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 29277974,
+   "url": "https://www.pexels.com/video/charming-traditional-courtyard-in-dubai-29277974/",
+   "duration": 9,
+   "width": 2160,
+   "height": 3840,
+   "user": {
+    "name": "Asi Si"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/29277974/12628375_1080_1920_60fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 39627844,
+   "url": "https://www.pexels.com/video/exploring-traditional-adobe-brick-architecture-39627844/",
+   "duration": 16,
+   "width": 2160,
+   "height": 3840,
+   "user": {
+    "name": "bobest Imagery"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/39627844/16892270_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 30795888,
+   "url": "https://www.pexels.com/video/exploring-authentic-middle-eastern-bazaar-30795888/",
+   "duration": 15,
+   "width": 2160,
+   "height": 3840,
+   "user": {
+    "name": "Asi Si"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/30795888/13171597_1080_1920_30fps.mp4"
+    }
+   ]
+  }
+ ],
+ "mosque": [
+  {
+   "id": 34903825,
+   "url": "https://www.pexels.com/video/majestic-mosque-with-dome-and-minaret-under-clear-sky-34903825/",
+   "duration": 20,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Havvanur Akın"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/34903825/14787048_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 18468232,
+   "url": "https://www.pexels.com/video/mosque-18468232/",
+   "duration": 11,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "wajdi belghith"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/18468232/18468232-hd_1920_1080_50fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 10779949,
+   "url": "https://www.pexels.com/video/clear-sky-over-mosque-10779949/",
+   "duration": 16,
+   "width": 3840,
+   "height": 2160,
+   "user": {
+    "name": "Atif Dar"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/10779949/10779949-hd_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 35081957,
+   "url": "https://www.pexels.com/video/modern-mosque-exterior-with-blue-sky-35081957/",
+   "duration": 12,
+   "width": 1512,
+   "height": 2688,
+   "user": {
+    "name": "Sururi Ballıdağ Director"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/35081957/14862053_1080_1920_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 29803977,
+   "url": "https://www.pexels.com/video/majestic-mosque-at-twilight-with-soaring-birds-29803977/",
+   "duration": 25,
+   "width": 1080,
+   "height": 1920,
+   "user": {
+    "name": "Old Man TV"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1080,
+     "height": 1920,
+     "link": "https://videos.pexels.com/video-files/29803977/12804254_1080_1920_60fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 6576070,
+   "url": "https://www.pexels.com/video/drone-footage-of-a-mosque-6576070/",
+   "duration": 18,
+   "width": 3840,
+   "height": 2160,
+   "user": {
+    "name": "Khalid Khalitov"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/6576070/6576070-hd_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 7318023,
+   "url": "https://www.pexels.com/video/mosque-in-the-middle-east-7318023/",
+   "duration": 22,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "Pavel Danilyuk"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/7318023/7318023-hd_1920_1080_30fps.mp4"
+    }
+   ]
+  },
+  {
+   "id": 20671530,
+   "url": "https://www.pexels.com/video/the-minaret-of-the-mosque-is-seen-in-this-photo-20671530/",
+   "duration": 4,
+   "width": 1920,
+   "height": 1080,
+   "user": {
+    "name": "Orhan Pergel"
+   },
+   "video_files": [
+    {
+     "file_type": "video/mp4",
+     "width": 1920,
+     "height": 1080,
+     "link": "https://videos.pexels.com/video-files/20671530/20671530-hd_1920_1080_60fps.mp4"
     }
    ]
   }
