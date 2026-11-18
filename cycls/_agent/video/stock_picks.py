@@ -81,24 +81,6 @@ CLIPS = {
    ]
   },
   {
-   "id": 40780322,
-   "url": "https://www.pexels.com/video/traditional-tea-stall-in-cultural-setting-40780322/",
-   "duration": 20,
-   "width": 1080,
-   "height": 1920,
-   "user": {
-    "name": "sunny Hossain"
-   },
-   "video_files": [
-    {
-     "file_type": "video/mp4",
-     "width": 1080,
-     "height": 1920,
-     "link": "https://videos.pexels.com/video-files/40780322/17418681_1080_1920_30fps.mp4"
-    }
-   ]
-  },
-  {
    "id": 5988662,
    "url": "https://www.pexels.com/video/man-pouring-and-drinking-his-tea-5988662/",
    "duration": 21,
