@@ -1092,17 +1092,35 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   };
   const edit = () => { setEditorOn(true); setPreviewing(false); };
   useEffect(() => { if (design && previewing) void loadPreview(undefined); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  // The agent's turn: the editor while it works, the preview once it's done — unless the person clicked into
-  // the editor meanwhile (the window loses focus to its frame), when it stays theirs.
+  // The agent's turn: a person in the editor keeps it, and sees the changes land there; one on the preview keeps
+  // the preview, which shows each change as it is saved (below) — it never turns into the editor under them, which
+  // cold-started the editor for a moment and turned back (the "app reopens"). When the turn ends, the preview
+  // again — unless the person clicked into the editor meanwhile (the window loses focus to its frame).
   const body = useRef<HTMLDivElement>(null);
   const handled = useRef(false);
   const wasLive = useRef(!!file.live);
   useEffect(() => {
     if (!design) return;
-    if (file.live && !wasLive.current) { handled.current = false; edit(); }
+    if (file.live && !wasLive.current) handled.current = false;
     if (!file.live && wasLive.current && !handled.current) void showPreview();
     wasLive.current = !!file.live;
   }, [file.live, design]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Edit at once: once the preview is up, the editor loads behind it, hidden, while the browser is idle — so the
+  // first Edit doesn't wait for it to start (4–8 s measured cold). Only where there is room to edit (a phone keeps
+  // the preview light); loading saves nothing, the editor saves only what is changed in it.
+  useEffect(() => {
+    if (!design || !previewing || editorOn || !preview) return;
+    if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 768px)").matches) return;
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
+                                   cancelIdleCallback?: (id: number) => void };
+    const start = () => setEditorOn(true);
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(start, { timeout: 4000 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(start, 1500);
+    return () => window.clearTimeout(id);
+  }, [design, previewing, editorOn, preview]);
   useEffect(() => {
     if (!file.live) return;
     const onBlur = () => setTimeout(() => { if (body.current?.contains(document.activeElement)) handled.current = true; });
