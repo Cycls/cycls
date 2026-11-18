@@ -29,8 +29,10 @@ dashboard-like report.
 ## The theme
 
 Built-in themes: `editorial`, `corporate`, `minimal-light`, `minimal-dark`, `tech-dark`, `warm`, `mono`,
-`bold-gradient`, and the brand kit by default. A theme is also an object of overrides on a base, which is how
-the direction you chose becomes the document's: `{"base": "editorial", "accent": "#0f5257", "hero": "#10302f",
+`bold-gradient`, and the brand kit by default. They are BASES: one used as it stands looks like every document made
+from it. A theme is an object of overrides on a base, which is how the palette and faces you chose
+(design-direction) become the document's. A new document's cover and back draw no `glow` or `circles` unless the
+theme writes `"decor"` in, and the concept should give the cover its own idea instead: `{"base": "editorial", "accent": "#0f5257", "hero": "#10302f",
 "heroAccent": "#e9c46a", "heading": "Fraunces Bold", "body": "Source Serif 4", "arHeading": "Amiri Bold",
 "arBody": "IBM Plex Sans Arabic"}`.
 - `hero` paints the cover, the bands and the chapter pages.

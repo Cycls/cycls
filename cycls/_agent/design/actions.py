@@ -4,7 +4,8 @@ import asyncio, base64, json, pathlib
 from .. import trash
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
-from .prepare import _num, _prepare_document, _prepare_slide, _settle_look
+from .prepare import _num, _prepare_document, _prepare_slide, _quiet_decor, _quiet_note, _settle_look, _theme_base
+from . import recent
 from .report import _fixed_line, _layout_check, _page_changes
 from .files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _free_design, _opened, _render_again, _rendered_copy,
     _replacing, _stem_of, _write_beside)
@@ -101,6 +102,8 @@ async def _exec_document(action, inp, workspace, name):
                 return "Error: `update_document` needs `document` — the keys that change, e.g. {title, theme, cover}."
             if "sections" in change:
                 return "Error: `update_document` changes the document's own keys — its `sections` have add_section / update_section / move_section / delete_section."
+            if "theme" in change:                   # a new theme is drawn whole: its glow or circles only when asked for
+                change = {**change, "theme": _quiet_decor(change["theme"])[0]}
             doc = {k: v for k, v in {**doc, **change}.items() if v is not None}
             intent = "change the document"
     except ValueError as e:
@@ -504,6 +507,13 @@ async def _render_document(inp, workspace, name, kept=False):
             doc_in["look"] = spec_in.pop("look")
         if err := _settle_look(doc_in, "document", looked):
             return err
+        # …and draws its theme's glow or circles on the cover only when it asks for them (kept in the source,
+        # so its section changes keep the same cover; a document made before keeps what it had)
+        doc_in["theme"], left = _quiet_decor(doc_in.get("theme"))
+        if left:
+            looked.append(_quiet_note("document", _theme_base(doc_in["theme"]), left))
+        elif doc_in.get("theme") is None:
+            doc_in.pop("theme", None)
         inp = {**inp, "spec": spec_in}
     source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos and assets resolved
     spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
@@ -550,6 +560,9 @@ async def _render_document(inp, workspace, name, kept=False):
             f"document: update_section {{name: \"{name}\", number, section}} (or add_section / move_section / delete_section / "
             f"update_document) sends only what changes and renders it again in place — or this render again with "
             f"\"replace\": true. A page edited by hand does not re-flow the pages after it.")
+    if not kept:                                                   # a new look, against what this workspace made before
+        notes = [*notes, *await asyncio.to_thread(lambda: recent.remember(root, fig_rel, spec, "document",
+                                                                         brand=bool(_load_brand(root))))]
     for line in notes:
         ack += " " + line
     ack += _fixed_line(r.fixed, "pptx") + _layout_check(r.lint, "pptx")
@@ -594,7 +607,8 @@ async def _render_document(inp, workspace, name, kept=False):
     else:
         which = (f"All {count} pages are attached" if shown >= count else
                  f"Pages 1–{shown} of {count} are attached (Design inspect lists the rest)")
-    ack += (f" {which} — QA them before you present: the cover reads at a glance; no page ends in a large "
+    ack += (f" {which} — QA them before you present: the cover reads at a glance, with an idea of its own (not a "
+            "named theme's cover as it stands); no page ends in a large "
             "hole that a shorter or reordered block would close; every chart and table has its caption and "
             "says something; nothing overlaps or is cut; names, numbers and dates are exactly right. If the "
             "content needs changing, render again with \"replace\": true; then present.")

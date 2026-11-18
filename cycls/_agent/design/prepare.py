@@ -281,6 +281,60 @@ def _theme_base(theme):
     return str(base or "").strip().lower().replace(" ", "-").replace("_", "-")
 
 
+# The decoration a base theme draws by itself (cycls-design themes.js): a soft glow, or circles, on every content
+# slide and on a document's cover and back — the look every AI deck has. A NEW deck or document draws it only when
+# its theme writes `decor`; one made before keeps what it has, so the slides added to it still match.
+_LOUD_DECOR = {"minimal-dark": "glow", "bold-gradient": "glow", "tech-dark": "glow", "warm": "circles"}
+
+
+def _quiet_decor(theme):
+    """A new piece's theme without its base's glow or circles, unless it asks for them → (theme, what was left
+    out or None). A named theme becomes {base, decor}, which still gives the look its name gives (_look_for)."""
+    if theme is None or theme == "brand":
+        return theme, None
+    base = _theme_base(theme)
+    if base not in _LOUD_DECOR or (isinstance(theme, dict) and "decor" in theme):
+        return theme, None
+    if isinstance(theme, str):
+        return {"base": base, "decor": "none"}, _LOUD_DECOR[base]
+    if isinstance(theme, dict):
+        return {**theme, "decor": "none"}, _LOUD_DECOR[base]
+    return theme, None
+
+
+def _quiet_note(what, base, left):
+    one = left == "glow"
+    return (f"The {what}'s theme ({base}) draws {'a soft glow' if one else 'circles'} by itself; a new {what} leaves "
+            f"{'it' if one else 'them'} out (`\"decor\": \"none\"` in its theme): write `\"decor\": \"{left}\"` in the "
+            f"theme only if the concept needs {'it' if one else 'them'}.")
+
+
+def _quiet_deck(spec):
+    """A new deck's spec with its theme's glow or circles left out → (spec, note or None). The theme may stand
+    beside `deck` (_prepare_deck moves it in); the caller's spec is not changed."""
+    deck = spec.get("deck")
+    if not isinstance(deck, dict):
+        return spec, None
+    where = deck if deck.get("theme") is not None else spec if spec.get("theme") is not None else None
+    if where is None:
+        return spec, None
+    theme, left = _quiet_decor(where["theme"])
+    if not left:
+        return spec, None
+    out = dict(spec)
+    if where is deck:
+        out["deck"] = {**deck, "theme": theme}
+    else:
+        out["theme"] = theme
+    return out, _quiet_note("deck", _theme_base(theme), left)
+
+
+def _named(theme):
+    """A theme that is only a name: a string, or {base, decor: none} as _quiet_decor writes it."""
+    return isinstance(theme, str) or (isinstance(theme, dict) and set(theme) == {"base", "decor"}
+                                      and theme["decor"] == "none")
+
+
 def _look_for(spec, what="deck"):
     """The look a deck or a document gets when it names none → (look, why). A theme named for a look
     gives it; else what the piece says it is (its kind, eyebrow, title: a proposal → bold, a report →
@@ -288,7 +342,7 @@ def _look_for(spec, what="deck"):
     on a look's base gives that; else its shape (columns or chapter pages → editorial, no cover →
     swiss); else one chosen by its title. Never classic: that was every deck and every document, alike."""
     theme = spec.get("theme")
-    if isinstance(theme, str) and _theme_base(theme) in _THEME_LOOKS:
+    if _named(theme) and _theme_base(theme) in _THEME_LOOKS:
         return _THEME_LOOKS[_theme_base(theme)], "its theme's"
     if what == "deck":
         slides = spec.get("slides") if isinstance(spec.get("slides"), list) else []
@@ -384,10 +438,14 @@ def _prepare_deck(spec, brand, root):
         notes.append(f"A deck doesn't read {', '.join(f'`{k}`' for k in unread)} — it reads "
                      f"{', '.join(sorted(_DECK_KEYS))}; colours and fonts go in `theme`.")
     theme = deck.get("theme")
-    if isinstance(theme, dict):
+    if isinstance(theme, dict) and not _named(theme):
         own = [k for k in theme if k not in ("base", "name", "logo")]
         notes.append(f"The deck's theme: {theme.get('base') or 'minimal-light'}"
                      f"{' with your ' + ', '.join(own) if own else ''}.")
+    elif _named(theme) and theme != "brand":
+        notes.append(f"The deck's theme is {_theme_base(theme)} as it stands: a named theme looks like every deck made "
+                     f"from it — write it as {{\"base\": \"{_theme_base(theme)}\", \"bg\": …, \"accent\": …, \"heading\": …, "
+                     f"\"body\": …}} with this deck's own palette and faces (design-direction).")
     elif theme is None and not brand:
         notes.append("The deck has no `theme`, so it is minimal-light, the default — a theme of its own goes in the "
                      "deck: {\"deck\": {\"theme\": \"editorial\" or {\"base\": …, \"accent\": …, \"heading\": …}, \"slides\": […]}}.")

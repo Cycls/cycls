@@ -19,24 +19,24 @@ Two decks in the same look with different themes are the same design recoloured.
 every other deck" comes from the look, not the colours, so choose it on purpose.
 
 Built-in themes: `minimal-light`, `minimal-dark`, `bold-gradient`, `editorial`, `corporate`, `tech-dark`,
-`warm`, `mono`, and `brand` (the workspace's brand kit, the default when one exists). Each fits a kind of subject:
-- `corporate` for finance and B2B;
-- `editorial` for culture, research and premium work;
-- `tech-dark` for software and AI;
-- `warm` for people, food and education;
-- `mono` for architecture and design;
-- `bold-gradient` for a launch or an event;
-- `minimal-light` or `minimal-dark` when nothing else fits.
+`warm`, `mono`, and `brand` (the workspace's brand kit, the default when one exists). They are BASES: a named theme
+used as it stands looks like every other deck made from it. Start from the one nearest your direction
+(`corporate` finance and B2B, `editorial` culture and research, `tech-dark` software, `warm` people and food, `mono`
+architecture, `bold-gradient` a launch, `minimal-light` / `minimal-dark` anything) and make it this deck's own.
 
-A theme is also an object that overrides ANY of a base's keys, so the direction you chose becomes the deck's own:
+A theme is an object that overrides ANY of a base's keys, so the palette and faces you chose (design-direction)
+become the deck's own:
 - colours: `bg`, `text`, `muted` (content slides); `hero`, `heroText`, `heroMuted`, `heroAccent` (title,
   section and closing slides — `hero` may be a gradient); `accent`, `accent2`, `onAccent`; `surface` (cards,
   table bands), `line` (rules);
 - type: `heading`, `body`, `arHeading`, `arBody`;
-- `decor`: `glow`, `rule`, `bar`, `circles` or `none` (the deck's one motif); `radius` (corners).
+- `decor`: `rule`, `bar`, `glow`, `circles` or `none` (the deck's one motif); `radius` (corners). `glow` (a soft
+  ellipse in a corner) and `circles` are the decoration every AI deck has: a new deck draws neither unless you
+  write it in, so ask for one only when the concept is about light, sound or circles.
 
 Set the colours and fonts of the direction, not only the accent: a deck that differs only in its accent still
-looks like every other deck.
+looks like every other deck. The concept goes into the slides themselves: a custom title slide built on it, and
+its signature move carried through the deck.
 
 The looks (`"look"` in the deck, beside `theme`):
 - `editorial`: a running head over a hairline at the top of each slide, large titles, points as numbered rows

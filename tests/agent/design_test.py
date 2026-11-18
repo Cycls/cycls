@@ -331,7 +331,8 @@ def test_render_saves_and_opens_canvas(tmp_path, monkeypatch):
         {"action": "render", "name": "launch", "spec": {"size": [1080, 1080]}, "format": "png"},
         _ws(tmp_path)))
     assert (tmp_path / "launch.fig").read_bytes() == b"FIGZ"                     # the design is one file
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["launch.fig"]          # nothing beside it
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".cache", "launch.fig"]  # nothing beside it but the hidden
+    assert [p.name for p in (tmp_path / ".cache" / "design").iterdir()] == ["recent.json"]   # what it looks like (recent.py)
     assert calls["user_id"] == "org_1:user_1" and calls["spec"] == {"size": [1080, 1080]}
     assert calls["keep"] == {"kind": "post"}                                     # what it is, kept in the file
     assert calls["fmt"] == "png" and calls["scale"] == 1                         # its picture is only looked at
@@ -572,7 +573,8 @@ def test_a_deck_is_one_file_and_every_slide_is_qad(tmp_path, monkeypatch):
     spec = {"frames": [{"size": "slide", "notes": "Open with the story", "transition": "fade"},
                        {"size": "slide"}, {"size": "slide"}]}
     out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": spec}, _ws(tmp_path)))
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["pitch.fig"] and (tmp_path / "pitch.fig").read_bytes() == b"FIGZ"
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != ".cache") == ["pitch.fig"] \
+        and (tmp_path / "pitch.fig").read_bytes() == b"FIGZ"                     # (.cache: hidden, recent.py)
     assert calls["keep"] == {"kind": "deck"} and calls["every"] is False
     assert calls["spec"]["frames"][0]["notes"] == "Open with the story"     # notes reach the service
     m = out["_model"]
@@ -612,7 +614,7 @@ def test_a_carousel_is_one_file_too(tmp_path, monkeypatch):
     spec = {"frames": [{"size": "post-portrait"}] * 3}
     out = asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
     assert calls["keep"] == {"kind": "carousel"} and calls["every"] is False    # its slides' images are downloaded, not saved
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["tips.fig"]
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != ".cache") == ["tips.fig"]
     assert "Carousel saved (3 slides)" in out["_model"][-1]["text"] and out["_ui"]["path"] == "tips.fig"
     _fake_render(monkeypatch)
     asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
@@ -1384,7 +1386,8 @@ def test_a_deck_of_layouts_resolves_its_images(tmp_path, monkeypatch):
         {"layout": "team", "title": "Team", "people": [{"name": "Sara", "photo": "attachments/sara.png"}, {"name": "Omar"}]},
         {"layout": "custom", "nodes": [{"text": "hand-built", "x": 100, "y": 100}]}]}}
     spec, err, notes = _prepare_spec(deck, None, tmp_path)
-    assert err is None and notes == ["The deck's look: editorial, its theme's — `look` composes it another way (classic, swiss, bold, soft, minimal)."]
+    assert err is None and notes[1:] == ["The deck's look: editorial, its theme's — `look` composes it another way (classic, swiss, bold, soft, minimal)."]
+    assert notes[0].startswith("The deck's theme is editorial as it stands")
     d = spec["deck"]
     assert d["size"] == [1920, 1080] and d["theme"] == "editorial"                  # the size a deck defaults to
     assert d["slides"][0]["image"]["src"] == "attachments/farm.png" and d["slides"][0]["image"]["focus"] == [0.3, 0.5]
@@ -2024,7 +2027,8 @@ def test_a_document_takes_the_brand_kit_unless_it_names_a_theme(tmp_path, monkey
     assert "uses the workspace brand kit" in out["_model"][-1]["text"]
     # A theme the agent (or the user) chose stands; so does a document with no kit at all.
     asyncio.run(_exec_design({"action": "render", "name": "r2", "spec": {"document": {**plain, "theme": "tech-dark"}}}, _ws(tmp_path)))
-    assert calls["spec"]["document"]["theme"] == "tech-dark" and "logo" not in calls["spec"]["document"]
+    # (a new document leaves out its theme's glow: test_a_new_document_leaves_out_its_themes_circles…)
+    assert calls["spec"]["document"]["theme"] == {"base": "tech-dark", "decor": "none"} and "logo" not in calls["spec"]["document"]
 
 
 def test_what_is_wrong_with_a_document_is_said_in_words(tmp_path, monkeypatch):
@@ -3159,10 +3163,12 @@ def test_a_deck_says_the_theme_it_is_laid_out_with(tmp_path):
     # none given and no brand kit: the default — said, so a theme that never arrived is seen at once
     _, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}}, None, tmp_path)
     assert any("no `theme`" in n and "minimal-light" in n for n in notes), notes
-    # a named theme needs no word (only its look, which it chose)
-    assert _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2] == [
-        "The deck's look: minimal, its theme's — `look` composes it another way (classic, editorial, swiss, bold, soft)."]
-    assert _prepare_spec({"deck": {"theme": "mono", "look": "bold", "slides": _SLIDES}}, None, tmp_path)[2] == []
+    # a named theme as it stands is said to be every deck's, beside the look it chose
+    notes = _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2]
+    assert notes[0].startswith("The deck's theme is mono as it stands") and notes[1] == (
+        "The deck's look: minimal, its theme's — `look` composes it another way (classic, editorial, swiss, bold, soft).")
+    assert [n[:35] for n in _prepare_spec({"deck": {"theme": "mono", "look": "bold", "slides": _SLIDES}}, None, tmp_path)[2]] == [
+        "The deck's theme is mono as it stan"]
 
 
 # ---- a deck's or a document's look: how its slides or pages are composed, apart from its theme ----
@@ -3290,3 +3296,120 @@ def test_the_skill_a_render_needs_follows_what_it_makes():
     assert _skill_for({"deck": {}}) == "deck-design" and _skill_for({"frames": [{"size": "slide"}, {"size": "slide"}]}) == "deck-design"
     assert _skill_for({"frames": [{"size": "post-portrait"}] * 3}) == "graphic-design"       # a carousel
     assert _skill_for({"size": "square", "nodes": []}) == "graphic-design" and _skill_for({"pages": []}) == "graphic-design"
+
+
+# ---- every design new: a theme's stock glow left out of a new piece, and what the workspace made before ----
+
+_DARK = {"size": [1080, 1350], "fill": "#0e0e0e", "nodes": [
+    {"type": "ellipse", "x": 600, "y": -300, "w": 900, "h": 900,
+     "fill": {"gradient": ["#c9a45c66", "#c9a45c00"], "type": "radial"}},
+    {"type": "text", "text": "Oud Noir", "x": 96, "y": 500, "w": 888, "size": 160, "font": "Cormorant Garamond Semi Bold",
+     "color": "#f5efe3"},
+    {"type": "text", "text": "Eau de parfum", "x": 96, "y": 700, "w": 888, "size": 28, "font": "Montserrat Medium",
+     "color": "#c9a45c"}]}
+
+
+def test_a_new_deck_leaves_out_its_themes_glow_unless_it_asks_and_keeps_the_look_its_name_gives(tmp_path, monkeypatch):
+    """minimal-dark, bold-gradient and tech-dark draw a soft glow on every slide, warm draws circles: the look
+    every AI deck has. A new deck draws neither unless its theme writes `decor`, and says so; the look a named
+    theme gives (tech-dark → swiss) is still its look."""
+    from cycls._agent.design.prepare import _quiet_deck
+    spec, note = _quiet_deck({"deck": {"theme": "tech-dark", "slides": _SLIDES}})
+    assert spec["deck"]["theme"] == {"base": "tech-dark", "decor": "none"} and "soft glow" in note and '"decor": "glow"' in note
+    assert _prepare_spec(spec, None, tmp_path)[0]["deck"]["look"] == "swiss"
+    spec, note = _quiet_deck({"deck": {"slides": _SLIDES}, "theme": "warm"})            # beside the deck, it is the deck's
+    assert spec["theme"] == {"base": "warm", "decor": "none"} and "circles" in note
+    assert _prepare_spec(spec, None, tmp_path)[0]["deck"]["look"] == "soft"
+    own = {"base": "minimal-dark", "accent": "#3ddc97", "decor": "glow"}                 # asked for: kept
+    assert _quiet_deck({"deck": {"theme": own, "slides": _SLIDES}}) == ({"deck": {"theme": own, "slides": _SLIDES}}, None)
+    for quiet in ("editorial", "mono", {"base": "corporate"}, None, "brand"):              # nothing to leave out
+        deck = {"deck": {"slides": _SLIDES, **({"theme": quiet} if quiet is not None else {})}}
+        assert _quiet_deck(deck) == (deck, None)
+    # through the tool: the deck is drawn, and kept, without it
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "spec": {"deck": {"theme": "bold-gradient",
+                                                                                          "slides": _SLIDES}}}, _ws(tmp_path)))
+    assert calls["spec"]["deck"]["theme"] == {"base": "bold-gradient", "decor": "none"} and calls["spec"]["deck"]["look"] == "bold"
+    assert calls["keep"]["deck"]["theme"] == {"base": "bold-gradient", "decor": "none"}   # so its added slides match
+    assert "draws a soft glow by itself" in _text(out)
+
+
+def test_a_deck_from_before_keeps_its_glow_on_the_slides_added_to_it(tmp_path):
+    """A deck made before keeps its theme as its file has it: a slide added to it is laid out with the same
+    settings, glow and all, so the deck doesn't come out half decorated."""
+    from cycls._agent.design.prepare import _prepare_deck
+    spec, err, _ = _prepare_deck({"deck": {"theme": "tech-dark", "look": "classic", "slides": _SLIDES}}, None, tmp_path)
+    assert err is None and spec["deck"]["theme"] == "tech-dark"
+
+
+def test_a_named_theme_as_it_stands_is_said_to_be_every_decks(tmp_path):
+    _, _, notes = _prepare_spec({"deck": {"theme": "editorial", "slides": _SLIDES}}, None, tmp_path)
+    assert any("editorial as it stands" in n and '"base": "editorial"' in n for n in notes), notes
+    _, _, notes = _prepare_spec({"deck": {"theme": _OWN, "slides": _SLIDES}}, None, tmp_path)
+    assert not any("as it stands" in n for n in notes)
+
+
+def test_a_new_document_leaves_out_its_themes_circles_and_its_sections_keep_that(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    calls = _doc_render(monkeypatch)
+    doc = {"title": "Nour", "theme": "warm", "sections": [{"title": "A", "blocks": ["x"]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "appeal", "spec": {"document": doc}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "warm", "decor": "none"}
+    assert _source(tmp_path, "appeal")["theme"] == {"base": "warm", "decor": "none"} and doc["theme"] == "warm"
+    assert calls["spec"]["document"]["look"] == "soft" and "draws circles by itself" in out["_model"][-1]["text"]
+    asyncio.run(_exec_design({"action": "update_section", "name": "appeal", "number": 1, "section": {"blocks": ["y"]}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "warm", "decor": "none"}
+    # one from before: its source keeps the theme it had, circles and all
+    _source(tmp_path, "appeal")["theme"] = "warm"
+    asyncio.run(_exec_design({"action": "update_section", "name": "appeal", "number": 1, "section": {"blocks": ["z"]}}, ws))
+    assert calls["spec"]["document"]["theme"] == "warm"
+    # a theme changed on it later is drawn whole, and without its glow unless it asks
+    asyncio.run(_exec_design({"action": "update_document", "name": "appeal", "document": {"theme": "minimal-dark"}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "minimal-dark", "decor": "none"}
+    asyncio.run(_exec_design({"action": "update_document", "name": "appeal",
+                              "document": {"theme": {"base": "warm", "decor": "circles"}}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "warm", "decor": "circles"}
+
+
+def test_what_a_design_looks_like_is_read_from_what_it_holds():
+    from cycls._agent.design import recent
+    fp = recent.fingerprint(_DARK)
+    assert fp["kind"] == "post" and fp["ground"] == "#0e0e0e" and fp["faces"] == ["Cormorant Garamond", "Montserrat"]
+    assert fp["moves"] == ["soft glow or big faint ellipse"]
+    deck = recent.fingerprint({"deck": {"theme": {"base": "editorial", "bg": "#f6f1e7", "accent": "#b4532a",
+                                                  "heading": "Fraunces Bold", "body": "DM Sans"}, "look": "editorial"}})
+    assert deck == {"kind": "deck", "look": "editorial", "theme": "editorial", "ground": "#f6f1e7",
+                    "accent": "#b4532a", "faces": ["Fraunces", "DM Sans"]}
+    framed = recent.fingerprint({"size": [1080, 1080], "fill": {"gradient": ["#4f46e5", "#db2777"], "angle": 135}, "nodes": [
+        {"type": "rect", "x": 40, "y": 40, "w": 1000, "h": 1000, "stroke": "#c9a45c"},
+        {"type": "rect", "x": 96, "y": 96, "w": 600, "h": 300, "fill": "#ffffff1a", "backdropBlur": 30},
+        {"type": "stack", "x": 96, "y": 96, "w": 800, "children": [{"type": "text", "text": "x", "size": 220, "color": "#ffffff26",
+                                                                   "font": {"family": "Anton"}}]}]})
+    assert framed["ground"] == "gradient #4f46e5→#db2777" and framed["faces"] == ["Anton"]
+    assert framed["moves"] == ["giant faint word", "glass card", "inset frame"]
+
+
+def test_a_workspace_remembers_its_designs_and_a_render_like_one_of_them_says_so(tmp_path, monkeypatch):
+    """Given the same brief, a model makes the same free choices. Each new design is remembered by what it
+    holds; the skills list the latest before the next is composed, and a render that shares two things or more
+    with one of them (not itself) says what, as a note: never a refusal."""
+    ws = _ws(tmp_path)
+    _fake_render(monkeypatch, preview=b"\xff\xd8jpg")
+    first = _text(asyncio.run(_exec_design({"action": "render", "name": "oud-noir", "spec": _DARK}, ws)))
+    assert "every AI design tool makes" in first and "It shares" not in first   # the stock glow, said
+    calm = {**_DARK, "nodes": _DARK["nodes"][1:]}                                     # the same ground and face, no glow
+    second = _text(asyncio.run(_exec_design({"action": "render", "name": "musk-blanc", "spec": calm}, ws)))
+    assert "shares its ground (#0e0e0e) and its heading face (Cormorant Garamond) with oud-noir.fig" in second
+    assert "every AI design tool makes" not in second
+    again = _text(asyncio.run(_exec_design({"action": "render", "name": "musk-blanc", "replace": True, "spec": calm}, ws)))
+    assert "with musk-blanc.fig" not in again                                        # never alike itself
+    listed = asyncio.run(_exec_design({"action": "skill", "skill": "design-direction"}, ws))
+    assert "most recent designs" in listed and listed.index("musk-blanc.fig") < listed.index("oud-noir.fig")
+    assert "ground #0e0e0e" in listed and "faces Cormorant Garamond / Montserrat" in listed
+    # a deck is not alike a post; a brand kit's colours and faces are meant to be shared
+    from cycls._agent.design import recent
+    fp = recent.fingerprint(calm)
+    assert recent.alike(tmp_path, "x.fig", {**fp, "kind": "deck"}) is None
+    assert recent.alike(tmp_path, "x.fig", fp, brand=True) is None
+    # nothing remembered: nothing listed
+    assert recent.listing(tmp_path / "elsewhere") == ""

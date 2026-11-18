@@ -31,7 +31,11 @@ A visual is read, not studied. Count the words before the render:
 
 If the user's text is longer, the rest goes in the caption you write with it, not on the image.
 
-## Ten compositions (coordinates for 1080 × 1350, margin 96)
+## Ten common compositions (coordinates for 1080 × 1350, margin 96)
+
+These are the mechanics of the usual layouts, not a menu to pick from every time: `design-direction` has more,
+and the concept should suggest the layout (a menu as a receipt, a route as a line). When this workspace made a
+post in one of these recently, take another, or make your own.
 
 1. **Type poster**: the headline fills 80–90% of the width, set from y ≈ 300, and a small line plus CTA sit at
    the foot. Use it when the message is a few words.
@@ -46,7 +50,8 @@ If the user's text is longer, the rest goes in the caption you write with it, no
 5. **Big number**: one figure at 300–420 px ("3×", "40%", "١٠٠٠") with its label under it in one line.
    Use it for results, milestones and offers.
 6. **Glass card**: a texture or photo over the whole frame, and a card 96 px in (888 wide) with fill
-   `#ffffff1a`, stroke `#ffffff33`, radius 40 and `"backdropBlur": 30` holding the copy. Use it for premium or tech.
+   `#ffffff1a`, stroke `#ffffff33`, radius 40 and `"backdropBlur": 30` holding the copy. Use it over a photo whose
+   detail should show through; on a plain dark field it is the stock "AI" look.
 7. **Framed**: an inset rect with only a `stroke` (48 px in) and centred copy inside. Use it for invitations,
    certificates, announcements and condolences.
 8. **List post**: a title, then 3–5 rows of icon + short line (a horizontal stack per row, rows in a vertical
@@ -123,6 +128,10 @@ Wrong shapes that cost a refused call:
 ```
 
 ## Example: an Arabic Ramadan post, 1080 × 1350
+
+This shows the mechanics of an Arabic post (anchored right, an Arabic face, a pattern band). It is not the look to
+use for Ramadan: navy, gold and a crescent is what every Ramadan post has. Find the concept in this brand's own
+Ramadan (its hours, its product at iftar, the dawn, the table) and give it its own palette and layout.
 
 ```json
 {"size": "post-portrait", "fill": {"gradient": ["#0b1d3a", "#132c55"], "angle": 90}, "nodes": [

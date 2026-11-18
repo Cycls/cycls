@@ -6,7 +6,8 @@ from . import skill
 from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
-from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
+from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec, _quiet_deck
+from . import recent
 from .extract import _pdf_parts
 from .powerpoint import _import_deck
 from .report import _edit_names, _fixed_line, _layout_check, _outline_text
@@ -94,9 +95,16 @@ async def _design_call(inp, workspace):
     asked = str(inp.get("action") or "render").lower()
     if asked == "skill":                                    # text only: it runs on the short form too, and loads the whole
         text = skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name"))
-        return text if DESIGN_LOADED.get() or text.startswith("Error") else f"{text}\n\n{_GUIDE_LOADED}"
+        if text.startswith("Error"):
+            return text
+        made = await asyncio.to_thread(recent.listing, workspace.root)   # what's new is new against these
+        text = f"{text}\n\n{made}" if made else text
+        return text if DESIGN_LOADED.get() else f"{text}\n\n{_GUIDE_LOADED}"
     if not DESIGN_LOADED.get():
-        return _GUIDE_LOADED if asked == "guide" else _GUIDE_NOT_RUN
+        if asked == "guide":
+            made = await asyncio.to_thread(recent.listing, workspace.root)
+            return f"{_GUIDE_LOADED}\n\n{made}" if made else _GUIDE_LOADED
+        return _GUIDE_NOT_RUN
     if asked == "guide":
         return ("Design's instructions are already loaded — they are this tool's description. Call it with "
                 "what you want made (render, edit, inspect, …). Nothing was made or changed by this call.")
@@ -315,10 +323,12 @@ async def _design_call(inp, workspace):
             credits, err = await assets.named(inp["spec"], root, subject)
             if err:
                 return err
-            spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
+            # a new deck draws its theme's glow or circles only when it asks for them (an old one's slides keep theirs)
+            spec_in, quiet = _quiet_deck(inp["spec"])
+            spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(spec_in, _load_brand(root), root))
             if err:
                 return err
-            notes = [*mended, *notes, *(f"{c}." for c in credits)]
+            notes = [*mended, *notes, *([quiet] if quiet else []), *(f"{c}." for c in credits)]
             # what it is, kept in the .fig: a deck keeps the settings its added slides are laid out with
             if isinstance(spec.get("deck"), dict):
                 from cycls._agent.design.deck import settings_of
@@ -367,6 +377,8 @@ async def _design_call(inp, workspace):
             else f"Design {saved}{f' ({note[2:]})' if note else ''}")
     ack, ui = (f"{what}: {fig_rel}. Its earlier version is kept in its history.", again) if replacing else _opened(fig_rel, what)
     ack += " Change it with Design edit — or, slide by slide, add_slide / update_slide." if count > 1 or kind == "deck" else " Change it with Design edit."
+    if action == "render":                                    # what it looks like, against what this workspace made before
+        notes = [*notes, *await asyncio.to_thread(_remember, root, fig_rel, spec, kind)]
     for line in notes:
         ack += " " + line
     ack += _fixed_line(r.fixed, fmt if count == 1 else "pptx") + _layout_check(lint, fmt if count == 1 else "pptx")
@@ -399,7 +411,8 @@ async def _design_call(inp, workspace):
         ack += (f" {which} — QA EVERY slide before you present: its headline clearly dominant; "
                 "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
                 "nothing overlapping or cut off; copy exactly right; and the slides CONSISTENT with "
-                "each other (title position, margins, palette, fonts). If anything is off, fix it "
+                "each other (title position, margins, palette, fonts); the deck made for THIS content, not a "
+                "named theme as it stands or a stock look. If anything is off, fix it "
                 f"now with {fix} (ops take `frame`, the slide index from 0), then present.")
         return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
     look, media = (preview, "image/jpeg") if preview else (r.image, _DESIGN_QA_TYPES.get("png"))
@@ -409,11 +422,18 @@ async def _design_call(inp, workspace):
     ack += (f" {shown} — QA it before you present: headline clearly dominant; "
             "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
             "aligned, nothing overlapping or cut off; copy exactly right (spelling, names, "
-            f"numbers); on-brand. If anything is off, fix it now with {fix}, then present.")
+            f"numbers); on-brand; made for THIS content, not a stock look or the last design again. "
+            f"If anything is off, fix it now with {fix}, then present.")
     return {"_model": [{"type": "image", "source": {"type": "base64", "media_type": media,
                                                     "data": base64.b64encode(look).decode()}},
                        {"type": "text", "text": ack}],
             "_ui": ui}
+
+
+def _remember(root, fig_rel, spec, kind):
+    """A new render's look, kept so the next design can be new against it → the notes it earns: what it shares
+    with a recent design, and the stock glow (recent.py). Remembering never stops a render."""
+    return recent.remember(root, fig_rel, spec, kind, brand=bool(_load_brand(root)))
 
 
 def _design_step(inp):
