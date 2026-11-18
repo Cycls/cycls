@@ -299,8 +299,6 @@ class FakeService:
         self.over = None
         self.warnings = None
         self.design = None          # the design review's answer when switched on: {"design": {...}} or {"design": None}
-        self.probes = 0
-        monkeypatch.setattr(vrun, "_DESIGN_ON", {"at": -1e9, "on": False})
         self.result = {"state": "done", "kind": "review", "findings": [], "sheet": SHEET}
         monkeypatch.setattr(video, "submit", self.submit)
         monkeypatch.setattr(video, "fill_template", self.fill)
@@ -316,9 +314,6 @@ class FakeService:
 
     async def submit(self, ws, kind, html, images=None, files=None, *, params=None, key=None, audio=None, words=None,
                      footage=None, fonts=None, lotties=None):
-        if kind == "design" and (params or {}).get("probe"):
-            self.probes += 1
-            return {"kind": "design", "off": self.design is None, "on": self.design is not None}
         if kind == "design" and self.design is None:
             return {"kind": "design", "off": True}          # the door, the review switched off (its default)
         self.submitted.append({"kind": kind, "html": html, "images": images, "params": params, "key": key,
@@ -334,7 +329,7 @@ class FakeService:
 
     async def wait(self, ws, token, budget):
         self.polls.append(token)
-        sub = next((x for k, x in enumerate(self.submitted) if f"tok{k + 1}" == token), None)
+        sub = next((x for x in self.submitted if f"tok{self.submitted.index(x) + 1}" == token), None)
         if sub and sub["kind"] == "design":
             return {"state": "done", "kind": "design", **self.design}
         return self.result if self.state == "done" else {"state": self.state, "eta_s": 40}
@@ -2524,11 +2519,6 @@ def test_before_a_videos_first_render_the_art_director_looks_and_its_fixes_come_
     n = len(fv.submitted)
     out = _run({"action": "render", "name": "hi"}, ws)
     assert "Rendered" in str(out) and all(x["kind"] != "design" for x in fv.submitted[n:])
-    # A new chat that writes a video under the same name is looked at again; the probe was asked once.
-    n = len(fv.submitted)
-    _run({"action": "write", "name": "hi", "html": COMP}, ws, chat="chat-2")
-    out = _run({"action": "render", "name": "hi"}, ws, chat="chat-2")
-    assert "Not rendered yet" in out and [x["kind"] for x in fv.submitted[n:]].count("design") == 1 and fv.probes == 1
 
 
 def test_a_review_that_says_ship_rides_with_the_render_and_none_never_stops_it(monkeypatch, tmp_path):
@@ -2545,19 +2535,6 @@ def test_a_review_that_says_ship_rides_with_the_render_and_none_never_stops_it(m
     fv.design = {"design": None, "reason": "TimeoutError"}
     out = _run({"action": "render", "name": "b"}, ws)
     assert "Rendered" in str(out) and "Design review" not in str(out)
-
-
-
-def test_switched_off_the_review_costs_a_render_one_small_probe_now_and_then(monkeypatch, tmp_path):
-    _on(monkeypatch)
-    fv = FakeService(monkeypatch)
-    VIDEO_LOADED.set(True)
-    ws = _ws(tmp_path)
-    fv.result = {"state": "done", "kind": "render", "video": {"bytes": 8, "duration": 2.0}}
-    for name in ("a", "b", "c"):
-        _run({"action": "write", "name": name, "html": COMP.replace("Hi", name)}, ws)
-        assert "Rendered" in str(_run({"action": "render", "name": name}, ws))
-    assert fv.probes == 1 and all(x["kind"] != "design" for x in fv.submitted)       # no media sent for a review
 
 
 def test_a_search_about_a_gulf_subject_is_offered_the_picked_clips_first(monkeypatch, tmp_path):

@@ -592,72 +592,35 @@ async def _guide(workspace, root, loaded):
     return "\n".join(lines)
 
 
-_DESIGN_ON = {"at": -1e9, "on": False}
-DESIGN_ON_S = 300.0
-
-
-async def _design_on(workspace):
-    """Is the service's design review switched on? Asked with a probe that carries no media and kept for a few minutes,
-    so a service with the review off costs a render nothing. An older service (no `design` jobs) answers no."""
-    from cycls._agent import video
-
-    if time.monotonic() - _DESIGN_ON["at"] < DESIGN_ON_S:
-        return _DESIGN_ON["on"]
-    try:
-        job = await video.submit(workspace, "design", "<p></p>", params={"probe": True})
-        on = bool(job.get("on")) and not job.get("off")
-    except Exception:  # noqa: BLE001 - no review is the safe answer
-        on = False
-    _DESIGN_ON.update(at=time.monotonic(), on=on)
-    return on
-
-
-async def _design_review(workspace, root, chat, rel, html):
+async def _design_review(workspace, root, rel, html):
     """The service's art director looks at the video before its first render (cycls-video critic.py): stills of each
-    scene, the person's own words, the look. -> (review, asked): the review {score, verdict, fixes, summary} or None
-    (switched off, an older service, anything that went wrong: the render goes ahead as it would have); `asked` is
-    False when it could not be asked at all because the render itself will be refused (media problems, errors in the
-    composition), so the next render asks again."""
+    scene, the person's own words, the look. → its review {score, verdict, fixes, summary}, or None: switched off, an
+    older service, or anything that went wrong — the render then goes ahead as it would have."""
     from cycls._agent import video
     from ..logs import log
     from .tool import VIDEO_HEARD
 
-    t0 = time.monotonic()
-
-    def said(review=None, reason=None):
-        log("video_design", chat_id=chat, rel=rel, score=(review or {}).get("score"), verdict=(review or {}).get("verdict"),
-            fixes=len((review or {}).get("fixes") or []), reason=reason, ms=round((time.monotonic() - t0) * 1000))
-
-    if not await _design_on(workspace):
-        return None, True
     heard = VIDEO_HEARD.get() or []
     brief = " / ".join(str(x) for x in heard[-2:])[-1500:]
+    t0 = time.monotonic()
     try:
         images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
         if problems:
-            said(reason="media")
-            return None, False
+            return None
         key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|design|{_sha(html, sent, words, footage)}|{brief}"
                              .encode()).hexdigest()
         job = await video.submit(workspace, "design", html, images, sent, params={"brief": brief}, key=key, audio=audio,
                                  words=words, footage=footage, **_fonts_kw(fonts))
         if job.get("off") or not job.get("token"):
-            _DESIGN_ON.update(at=time.monotonic(), on=False)
-            said(reason="off")
-            return None, True
+            return None
         r = await video.wait(workspace, job["token"], BUDGET["design"])
         review = r.get("design") if r.get("state") == "done" else None
-        if not (isinstance(review, dict) and review.get("verdict") in ("ship", "fix")):
-            said(reason=str(r.get("reason") or r.get("state"))[:120])
-            return None, True
-        said(review)
-        return review, True
-    except video.Refused:
-        said(reason="refused")
-        return None, False
-    except Exception as e:  # noqa: BLE001 - a review that could not run never stops a render
-        said(reason=type(e).__name__)
-        return None, True
+        log("video_design", score=(review or {}).get("score"), verdict=(review or {}).get("verdict"),
+            fixes=len((review or {}).get("fixes") or []), reason=None if review else str(r.get("reason") or r.get("state"))[:120],
+            ms=round((time.monotonic() - t0) * 1000))
+        return review if isinstance(review, dict) and review.get("verdict") in ("ship", "fix") else None
+    except Exception:  # noqa: BLE001 - a review that could not run never stops a render
+        return None
 
 
 def _design_text(r):
@@ -680,10 +643,9 @@ async def _render(workspace, root, chat, name, quality, fps=30):
     except FileNotFoundError:
         html = None
     design_note = ""
-    if html is not None and not await asyncio.to_thread(files.design_reviewed, root, rel, chat):
-        review, asked = await _design_review(workspace, root, chat, rel, html)
-        if asked:
-            await asyncio.to_thread(files.mark_design_reviewed, root, rel, chat)      # once a video a chat
+    if html is not None and not await asyncio.to_thread(files.design_reviewed, root, rel):
+        await asyncio.to_thread(files.mark_design_reviewed, root, rel)        # once a video, whatever comes back
+        review = await _design_review(workspace, root, rel, html)
         if review and review["verdict"] == "fix" and review.get("fixes"):
             return (_design_text(review) + "\n\nNot rendered yet: make these fixes with `edit` (look at the frames "
                     "after), then call `render` again — it renders then; the review runs once a video.")
