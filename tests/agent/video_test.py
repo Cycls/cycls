@@ -2589,3 +2589,12 @@ def test_a_search_about_a_gulf_subject_is_offered_the_picked_clips_first(monkeyp
     rel, _, others = asyncio.run(stock.find(tmp_path, "iced coffee over ice", orientation="portrait"))
     assert rel == "videos/footage/iced-coffee-over-ice-1.mp4" and len(others) == 1               # no Gulf subject: as before
     assert stock_picks.topics("dating couple having coffee") == [] and stock_picks.topics("saudi coffee dallah") == ["coffee"]
+
+    async def refused(query, orientation, per_page):
+        raise httpx.HTTPStatusError("429 Too Many Requests", request=httpx.Request("GET", stock.SEARCH),
+                                    response=httpx.Response(429))
+    monkeypatch.setattr(stock, "_search", refused)
+    rel, _, others = asyncio.run(stock.find(tmp_path, "saudi coffee dallah", orientation="landscape"))
+    assert rel == "videos/footage/saudi-coffee-dallah-901.mp4" and len(others) == 1       # Pexels refused: the picks alone
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(stock.find(tmp_path, "waves on rocks"))                                # no picks: the refusal stands

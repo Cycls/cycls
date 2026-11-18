@@ -149,13 +149,18 @@ async def find(root, query, *, orientation=None, pick=0, timing=None):
     if isinstance(kept, dict) and time.time() - kept.get("at", 0) < SEARCH_KEPT_S and kept.get("videos"):
         videos = kept["videos"]
     else:
-        data = await _search(query, orientation, RESULTS)
+        # A Gulf subject (Arabic coffee, kabsa, Riyadh, …): the clips picked by eye for it first (stock_picks.py).
+        picked = [c for c in stock_picks.clips(query, orientation) if _file(c) and (c.get("duration") or 0) <= MAX_SECONDS]
+        try:
+            data = await _search(query, orientation, RESULTS)
+        except Exception:
+            if not picked:
+                raise
+            data = {}         # Pexels refused (its hourly allowance, the network): the picks are offered on their own
         videos = [_slim(v) for v in data.get("videos") or [] if _file(v) and (v.get("duration") or 0) <= MAX_SECONDS]
         # A shot in a video is seconds long: the clips of SHORT_S or less first (in the search's order), so a long
         # one is not fetched, sent and read for two seconds of it (a 132 MB clip took 2.4 min on dev, 2026-11-09).
         videos.sort(key=lambda v: (v.get("duration") or 0) > SHORT_S)
-        # A Gulf subject (Arabic coffee, kabsa, Riyadh, …): the clips picked by eye for it first (stock_picks.py).
-        picked = [c for c in stock_picks.clips(query, orientation) if _file(c) and (c.get("duration") or 0) <= MAX_SECONDS]
         if picked:
             ids = {c["id"] for c in picked}
             videos = picked + [v for v in videos if v.get("id") not in ids]
