@@ -2558,3 +2558,34 @@ def test_switched_off_the_review_costs_a_render_one_small_probe_now_and_then(mon
         _run({"action": "write", "name": name, "html": COMP.replace("Hi", name)}, ws)
         assert "Rendered" in str(_run({"action": "render", "name": name}, ws))
     assert fv.probes == 1 and all(x["kind"] != "design" for x in fv.submitted)       # no media sent for a review
+
+
+def test_a_search_about_a_gulf_subject_is_offered_the_picked_clips_first(monkeypatch, tmp_path):
+    """stock_picks.py: "arabic coffee" mostly finds Turkish coffee in handled cups on Pexels; the dallah and finjan clips
+    picked by eye come first, in the asked orientation first, then what the search found; other searches are as they were."""
+    from cycls._agent.video import stock, stock_picks
+
+    monkeypatch.setenv("PEXELS_API_KEY", "pexels-key")
+    mp4 = lambda w, h, link: {"file_type": "video/mp4", "width": w, "height": h, "link": link}  # noqa: E731
+    clip = lambda i, w, h, words: {"id": i, "duration": 12, "width": w, "height": h, "user": {"name": "N"},  # noqa: E731
+                                   "url": f"https://www.pexels.com/video/{words}-{i}/",
+                                   "video_files": [mp4(w, h, f"https://videos.pexels.com/video-files/{i}/hd.mp4")]}
+    monkeypatch.setattr(stock_picks, "CLIPS", {"coffee": [clip(901, 1920, 1080, "person-pouring-coffee-into-dallah"),
+                                                          clip(902, 1080, 1920, "man-pouring-from-dallah")]})
+    found = {"videos": [clip(1, 1080, 1920, "turkish-coffee-in-a-cup"), clip(902, 1080, 1920, "man-pouring-from-dallah")]}
+
+    async def search(query, orientation, per_page):
+        return found
+
+    async def download(url, dest):
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(b"clip")
+        return 4
+    monkeypatch.setattr(stock, "_search", search)
+    monkeypatch.setattr(stock, "_download", download)
+    rel, _, others = asyncio.run(stock.find(tmp_path, "arabic coffee pouring", orientation="portrait"))
+    assert rel == "videos/footage/arabic-coffee-pouring-902.mp4" and stock.fetched(rel)        # the vertical pick first
+    assert others == ["1: person pouring coffee into dallah (12 s, 1920x1080)", "2: turkish coffee in a cup (12 s, 1080x1920)"]
+    rel, _, others = asyncio.run(stock.find(tmp_path, "iced coffee over ice", orientation="portrait"))
+    assert rel == "videos/footage/iced-coffee-over-ice-1.mp4" and len(others) == 1               # no Gulf subject: as before
+    assert stock_picks.topics("dating couple having coffee") == [] and stock_picks.topics("saudi coffee dallah") == ["coffee"]

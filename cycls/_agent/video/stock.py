@@ -4,7 +4,8 @@
 workspace (videos/footage/…) and hands back its path, so the rest of the tool sees an ordinary
 clip of the person's: made ready, described, cut. The other results are listed with it, each by
 what its page calls it, so another can be picked without searching again. The filmmaker is
-credited in the reply.
+credited in the reply. A search about a Gulf subject (Arabic coffee, dates, kabsa, Riyadh, the
+desert, Ramadan, …) is offered the clips picked by eye for it first (stock_picks.py).
 
 Configured by `PEXELS_API_KEY` (the agent process's environment), the key Design's stock photos
 use. Without it the reply says to put a clip in the workspace instead.
@@ -13,6 +14,8 @@ import json
 import os
 import re
 from pathlib import Path
+
+from . import stock_picks
 
 SEARCH = "https://api.pexels.com/videos/search"
 DIR = "videos/footage"
@@ -151,6 +154,11 @@ async def find(root, query, *, orientation=None, pick=0, timing=None):
         # A shot in a video is seconds long: the clips of SHORT_S or less first (in the search's order), so a long
         # one is not fetched, sent and read for two seconds of it (a 132 MB clip took 2.4 min on dev, 2026-11-09).
         videos.sort(key=lambda v: (v.get("duration") or 0) > SHORT_S)
+        # A Gulf subject (Arabic coffee, kabsa, Riyadh, …): the clips picked by eye for it first (stock_picks.py).
+        picked = [c for c in stock_picks.clips(query, orientation) if _file(c) and (c.get("duration") or 0) <= MAX_SECONDS]
+        if picked:
+            ids = {c["id"] for c in picked}
+            videos = picked + [v for v in videos if v.get("id") not in ids]
     if timing is not None:
         timing["search_ms"] = round((time.monotonic() - t0) * 1000)
     if not videos:
