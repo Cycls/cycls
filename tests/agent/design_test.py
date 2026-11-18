@@ -3073,6 +3073,9 @@ def test_skills_load_in_one_call_and_say_nothing_was_made(tmp_path):
     one = asyncio.run(_exec_design({"action": "skill", "skill": "Deck-Design, deck-design"}, _ws(tmp_path)))
     assert one.count("<design-skill ") == 1 and skill.SKILLS["deck-design"][1] in one
     assert "<design-skill name=\"document-design\">" in asyncio.run(_exec_design({"action": "skill", "name": "document-design"}, _ws(tmp_path)))
+    # a list written out as text, as some models send it, is that list
+    listed = asyncio.run(_exec_design({"action": "skill", "skill": '["design-direction", "graphic-design"]'}, _ws(tmp_path)))
+    assert listed.count("<design-skill ") == 2 and not listed.startswith("Error")
     assert not list(tmp_path.iterdir())                                       # nothing written
 
 
