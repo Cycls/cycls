@@ -23,7 +23,7 @@ from .tool import ACTIONS, VIDEO_HEARD, VIDEO_LOADED, VIDEO_SKILLED
 
 # How long a call waits for the service before it answers anyway. The harness has no per-tool
 # limit, so the client keeps its own: a save with its frames, a look, a render.
-BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300, "dub": 420, "send": 240, "footage": 420, "design": 150}
+BUDGET = {"check": 300, "look": 180, "render": 900, "voice": 300, "dub": 420, "send": 240, "footage": 420}
 MAX_HTML = 400_000
 
 _LOADED_NOTE = ("\n\nVideo's full instructions were not loaded when you made this call; they are now in this tool's "
@@ -592,65 +592,15 @@ async def _guide(workspace, root, loaded):
     return "\n".join(lines)
 
 
-async def _design_review(workspace, root, rel, html):
-    """The service's art director looks at the video before its first render (cycls-video critic.py): stills of each
-    scene, the person's own words, the look. → its review {score, verdict, fixes, summary}, or None: switched off, an
-    older service, or anything that went wrong — the render then goes ahead as it would have."""
-    from cycls._agent import video
-    from ..logs import log
-    from .tool import VIDEO_HEARD
-
-    heard = VIDEO_HEARD.get() or []
-    brief = " / ".join(str(x) for x in heard[-2:])[-1500:]
-    t0 = time.monotonic()
-    try:
-        images, audio, sent, words, footage, problems, fonts = await asyncio.to_thread(_media, html, root)
-        if problems:
-            return None
-        key = hashlib.sha256(f"{getattr(workspace, 'subject', '')}|design|{_sha(html, sent, words, footage)}|{brief}"
-                             .encode()).hexdigest()
-        job = await video.submit(workspace, "design", html, images, sent, params={"brief": brief}, key=key, audio=audio,
-                                 words=words, footage=footage, **_fonts_kw(fonts))
-        if job.get("off") or not job.get("token"):
-            return None
-        r = await video.wait(workspace, job["token"], BUDGET["design"])
-        review = r.get("design") if r.get("state") == "done" else None
-        log("video_design", score=(review or {}).get("score"), verdict=(review or {}).get("verdict"),
-            fixes=len((review or {}).get("fixes") or []), reason=None if review else str(r.get("reason") or r.get("state"))[:120],
-            ms=round((time.monotonic() - t0) * 1000))
-        return review if isinstance(review, dict) and review.get("verdict") in ("ship", "fix") else None
-    except Exception:  # noqa: BLE001 - a review that could not run never stops a render
-        return None
-
-
-def _design_text(r):
-    head = (f"Design review before the render (an art director the service consults; {r['score']}/10, "
-            f"{'ready to post' if r['verdict'] == 'ship' else 'fix first'}): {r.get('summary') or ''}".rstrip())
-    fixes = [f"- #{f.get('scene')} at {float(f.get('at') or 0):g} s: {f.get('problem')} Fix: {f.get('fix')}"
-             for f in (r.get("fixes") or []) if isinstance(f, dict)]
-    return "\n".join([head] + fixes)
-
-
 async def _render(workspace, root, chat, name, quality, fps=30):
     """`_render_once`, with the browser check beside it when this version never had one: the last
     edits were small and checked by their frames alone (quick.py). It runs at the same time (an
-    organisation's second GPU when free), so the render waits for nothing it did not already.
-    Before a video's first render the service's art director looks at it (`_design_review`): when it says fix, its
-    fixes come back instead of the MP4, and the next render goes ahead — one round, never a loop."""
+    organisation's second GPU when free), so the render waits for nothing it did not already."""
     rel = files.composition(name)
     try:
         html = (root / rel).read_text(encoding="utf-8")
     except FileNotFoundError:
         html = None
-    design_note = ""
-    if html is not None and not await asyncio.to_thread(files.design_reviewed, root, rel):
-        await asyncio.to_thread(files.mark_design_reviewed, root, rel)        # once a video, whatever comes back
-        review = await _design_review(workspace, root, rel, html)
-        if review and review["verdict"] == "fix" and review.get("fixes"):
-            return (_design_text(review) + "\n\nNot rendered yet: make these fixes with `edit` (look at the frames "
-                    "after), then call `render` again — it renders then; the review runs once a video.")
-        if review:
-            design_note = "\n\n" + _design_text(review)
     beside = None
     if html is not None and await asyncio.to_thread(files.checked, root, rel) != _digest(html):
         beside = asyncio.create_task(_check(workspace, root, rel, html, quiet=True))
@@ -660,8 +610,6 @@ async def _render(workspace, root, chat, name, quality, fps=30):
         if beside:
             beside.cancel()
         raise
-    if design_note and isinstance(out, dict) and "_model" in out:
-        out["_model"] += design_note
     if beside is None:
         return out
     if not (isinstance(out, dict) and "_model" in out):
