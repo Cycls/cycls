@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useEscape } from "../hooks/use-escape";
 import type { BrandKit, DesignLive, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
 import { track } from "../lib/analytics";
 import { useComments } from "../lib/comments";
 import { peerColor } from "../lib/people";
+import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { CommentsList, OpenComment, editorComments } from "./comments";
 import { getLang, t, tn, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
@@ -244,6 +246,11 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const [frameKey, setFrameKey] = useState(0);        // bump → the editor iframe remounts
   const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
+  // "Saved ✓" goes in the file's header, beside Edit | Preview, where the text editor says "Saved": over the
+  // editor it covered the editor's own controls (Simple | Designer, its bars). Full screen, or with no
+  // header (a share), it stays over the editor, at the top.
+  const slots = useContext(CanvasHeaderSlot);
+  const savedInHeader = !!slots.end && !full;
   const [copyOf, setCopyOf] = useState<{ fig: string } | null>(null);
   // A save refused over a change made elsewhere; saves wait while the person decides.
   const [conflict, setConflict] = useState<{ version: string; fig: string } | null>(null);
@@ -866,8 +873,14 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           {hint && t("exitFullScreen")}
         </button>
       )}
-      {status !== "ready" && (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur">
+      {status === "saved" && savedInHeader && createPortal(
+        <span className="text-xs text-muted-foreground" role="status" data-testid="design-saved">{t("editorSaved")}</span>,
+        slots.end!,
+      )}
+      {status !== "ready" && !(status === "saved" && savedInHeader) && (
+        <div data-testid="design-status"
+             className={cn("pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur",
+                           full ? "top-12" : "top-3")}>
           {t(status === "error" ? "editorError"
             : status === "saveerror" ? "editorSaveError"
               : status === "saved" ? "editorSaved"

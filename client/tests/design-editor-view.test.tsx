@@ -4,6 +4,7 @@ import {
   DesignEditorView, designPage, designPages, designPresence, designSelection, detachDesignEditorsUnder, flushDesignEditor,
   followDesignPeer, fullscreenDesignEditor, showDesignPage, type DesignHost,
 } from "../src/components/design-editor-view";
+import { CanvasHeaderSlot } from "../src/components/canvas-header-slot";
 import { DesignPresenceRow } from "../src/components/design-presence";
 import { designEditorComments } from "../src/components/design-editor-view";
 import { CommentsContext, commentStore, forgetComments, type CommentThread, type CommentsApi, type CommentsHost } from "../src/lib/comments";
@@ -1036,5 +1037,43 @@ describe("DesignEditorView, comments", () => {
     fromEditor(frame, "commentPlace", { doc: load.doc, id: "t1", at: { x: 300, y: 200 }, box: { w: 1000, h: 700 } });   // a stale place
     await flush();
     expect(screen.queryByTestId("comment-thread")).toBeNull();
+  });
+});
+
+// "Saved ✓" over the editor covered the editor's own controls (its Simple | Designer switch, the bar under
+// a narrow slide): in the canvas it is said in the file's header instead, where the text editor says it.
+describe("DesignEditorView, saved", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async (u: string) => ({ arrayBuffer: async () => new Uint8Array(bytes[u]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("in the canvas: in the header, not over the editor", async () => {
+    const end = document.createElement("div");
+    document.body.appendChild(end);
+    const writeFile = vi.fn(async () => {});
+    const utils = render(
+      <CanvasHeaderSlot.Provider value={{ start: null, end }}>
+        <DesignEditorView url="blob:orig" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR} writeFile={writeFile} host={host()} />
+      </CanvasHeaderSlot.Provider>);
+    const frame = utils.container.querySelector("iframe")!;
+    const { load } = await ready(frame, 2);
+    fromEditor(frame, "saved", { doc: load.doc, id: "s1", fig: b64([5, 6]) });
+    await flush();
+    expect(end.querySelector("[data-testid=design-saved]")?.textContent).toBe("Saved ✓");
+    expect(utils.container.querySelector("[data-testid=design-status]")).toBeNull();
+    end.remove();
+  });
+
+  it("with no header (a share): over the editor, at the top", async () => {
+    const { frame } = mount({ host: host() });
+    const { load } = await ready(frame(), 2);
+    fromEditor(frame(), "saved", { doc: load.doc, id: "s1", fig: b64([5, 6]) });
+    await flush();
+    const pill = screen.getByTestId("design-status");
+    expect(pill.textContent).toBe("Saved ✓");
+    expect(pill.className).toContain("top-3");
+    expect(pill.className).not.toContain("bottom-3");
   });
 });
