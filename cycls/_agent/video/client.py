@@ -354,6 +354,19 @@ async def ingest(workspace, sha, *, language=None, key=None, transcribe=True):
     return resp.json()
 
 
+async def reference(workspace, sha, brief=""):
+    """A ready clip read as a reference ("make one like this", protocol 5): its shots described by the service's
+    vision model from stills of it. → the reading {summary, hook, pace, style, palette, brand, closest_look, shots}, or
+    Refused saying why it could not be read."""
+    resp = await _request("POST", f"/v1/assets/{sha}/reference", workspace=workspace, retry=True,
+                          json={"brief": str(brief or "")[:600]}, timeout=httpx.Timeout(150.0, connect=15.0))
+    if resp.status_code in (409, 422, 503):
+        raise Refused((_body(resp) or {}).get("error") or "the reference could not be read", [])
+    if resp.status_code != 200:
+        raise _error(resp)
+    return resp.json()["reference"]
+
+
 async def forget_clip(workspace, sha):
     """Have the door drop its copy of a clip. Never raises: the door drops it by itself in time."""
     try:

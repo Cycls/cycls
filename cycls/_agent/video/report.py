@@ -392,3 +392,37 @@ def clip(text):
 
 def b64(data):
     return base64.b64encode(data).decode() if data else ""
+
+
+def reference_text(rel, reading, info=None):
+    """A video the person showed to say "make one like this", as the agent rebuilds from it: what it is and how it is
+    made, shot by shot (read by the service's vision model, reference.py), and how to make it theirs. The clip itself
+    stays out of the video: its pictures, logo, people and sound are someone else's."""
+    r = reading or {}
+    lines = [f"{rel} is a REFERENCE, read to be made again for the person: never put it (or a frame of it) in the video. "
+             "Its pictures, logo, people and sound belong to someone else; take its structure and craft only.",
+             f"What it is: {r.get('summary', '').strip()}",
+             f"The hook (its first second): {r.get('hook', '').strip()}",
+             f"Pace: {r.get('pace', '').strip()}. Style: {r.get('style', '').strip()}"]
+    if r.get("palette"):
+        lines.append("Its colours: " + ", ".join(r["palette"]) + " (use the person's brand colours instead when they have a kit).")
+    if (r.get("brand") or "").strip():
+        lines.append(f"Its brand: {r['brand'].strip()} — replace every sign of it with the person's own.")
+    lines.append(f"{len(r.get('shots') or [])} shots, {float(r.get('duration') or 0):.1f} s, {r.get('width')}x{r.get('height')}:")
+    for s in r.get("shots") or []:
+        words = f" · on screen «{s['on_screen']}»" if s.get("on_screen") else ""
+        lines.append(f"{s['shot']}. {s['start']:.1f}–{s['end']:.1f} s · {s.get('role')} · {s.get('kind')}{words} · "
+                     f"picture: {s.get('picture')} · layout: {s.get('layout')} · motion: {s.get('motion')}")
+    heard = (info or {}).get("transcript") or {}
+    said = [x.get("text", "").strip() for x in (heard.get("sentences") or []) if isinstance(x, dict)] if isinstance(heard, dict) else []
+    if said:
+        lines.append("What is said in it: " + " ".join(said)[:1200])
+    look = r.get("closest_look")
+    lines.append(
+        "Make it theirs: one scene per shot above (merge shots under a second into one beat), the same lengths scaled to "
+        "the length asked, the same hook move, the same pace and the same way type comes in; "
+        + (f"start from the {look} look (the closest to it); " if look else "")
+        + "the person's words, products, offer and brand kit in place of the reference's; their own photos and clips, or "
+        "stock found for the same roles (`footage {stock}`), where it shows footage. Never copy its words unless the person "
+        "asks, never its brand name, logo or people. Say in one line what you kept from it and what you changed.")
+    return "\n".join(lines)

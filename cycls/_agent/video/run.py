@@ -1408,6 +1408,17 @@ async def _footage(workspace, root, chat, inp):
         return r
     _log_footage(chat, fetch_ms, full, r, time.monotonic() - t_ready, timing)
     info, sheet, words_rel = r["info"], r.get("sheet"), r["words_rel"]
+    if inp.get("as") == "reference":
+        # "make one like this": the clip read by the service's vision model, shot by shot, to be rebuilt (uploads only)
+        from cycls._agent import video
+        if wanted:
+            return _err("a reference is a video the person gave you (a path in the workspace), not a stock clip.")
+        try:
+            reading = await video.reference(workspace, r["sha"], brief=str(inp.get("brief") or ""))
+        except video.Refused as e:
+            return _err(f"{rel} is ready, but it could not be read as a reference: {e}. Describe it from its sheet below "
+                        "and what is said in it, and say so to the person.")
+        return _result(report.reference_text(rel, reading, info), report.sheet_blocks(sheet, info.get("sheet_times"), rel))
     text = report.footage_text(rel, info, words_rel=words_rel, reused=r["reused"], credit=credit)
     if inp.get("tidy"):
         text += "\n" + report.tidy_text(rel, info)
