@@ -4,10 +4,11 @@ import { LoadingBar } from "./loading-bar";
 import { ContextMenu, InlineInput } from "./files";
 import { EmojiPicker } from "./emoji-picker";
 import { Icon } from "./icon";
+import { CatalogShelves } from "./apps-catalog";
 import { t } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
 
-export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUploadIcon, onDelete, onBrowse }: {
+export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUploadIcon, onDelete, onBrowse, catalog }: {
   apps: AppInfo[];
   loading: boolean;
   onOpen: (app: AppInfo) => void;
@@ -16,6 +17,8 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
   onUploadIcon?: (app: AppInfo, file: File) => void;
   onDelete?: (app: AppInfo) => void;   // admins only — the server enforces it too
   onBrowse?: () => void;               // the catalog (Web.apps): offered while the panel is empty
+  // the catalog's shelves, shown in the empty panel (Web.apps)
+  catalog?: { api: Parameters<typeof CatalogShelves>[0]["api"]; onOpen: (entry: string, name: string) => void; onChanged?: () => void };
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; app: AppInfo } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -30,6 +33,18 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
     ...(onDelete ? [{ label: t("delete"), danger: true, divider: true,
                       onClick: () => { if (confirm(t("deleteAppConfirm").replace("{name}", app.name))) onDelete(app); } }] : []),
   ];
+  const empty = (
+    <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-center">
+      <Icon name="folder" className="size-8 text-muted-foreground" strokeWidth={1.5} />
+      <p className="text-sm font-medium">{t("noApps")}</p>
+      <p className="text-xs text-muted-foreground">{t("noAppsSub")}</p>
+      {onBrowse && (
+        <button onClick={onBrowse} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 cursor-pointer">
+          <Icon name="search" className="size-4" />{t("browseApps")}
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
@@ -43,16 +58,8 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
       />
       <div className="flex-1 overflow-y-auto pb-20">
         {apps.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-center">
-            <Icon name="folder" className="size-8 text-muted-foreground" strokeWidth={1.5} />
-            <p className="text-sm font-medium">{t("noApps")}</p>
-            <p className="text-xs text-muted-foreground">{t("noAppsSub")}</p>
-            {onBrowse && (
-              <button onClick={onBrowse} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 cursor-pointer">
-                <Icon name="search" className="size-4" />{t("browseApps")}
-              </button>
-            )}
-          </div>
+          // With a catalog the empty panel is a store (CatalogShelves); this is what is left when it has nothing to offer.
+          catalog ? <CatalogShelves {...catalog} onSeeAll={onBrowse} fallback={empty} /> : empty
         ) : (
           // A phone's home screen: an app opens on a click, its menu on a right-click, what it does on hover
           <div className="grid grid-cols-3 gap-x-2 gap-y-5 px-3 py-5">

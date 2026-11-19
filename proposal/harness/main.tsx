@@ -1,11 +1,12 @@
 // Scenes for the screenshots: the real components from client/src, the API mocked in memory.
-//   ?scene=menu | catalog | theme | app      &lang=ar  &dark=1  &admin=0  &palette=<color>|<base>-<color>
+//   ?scene=menu | catalog | theme | app | shelves      &lang=ar  &dark=1  &admin=0  &palette=<color>|<base>-<color>
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./harness.css";
 import { InputBox, type MenuApp } from "../../client/src/components/input-box";
 import { ConnectorsDialog, type Connector } from "../../client/src/components/connectors-dialog";
 import { CanvasDoc } from "../../client/src/components/canvas";
+import { AppsPanel } from "../../client/src/components/apps-panel";
 import { ToastProvider } from "../../client/src/lib/toast";
 import { setLang } from "../../client/src/lib/i18n";
 import { setAppTheme, type AppThemeChoice, type Base, type Color } from "../../client/src/lib/app-theme";
@@ -81,6 +82,28 @@ function DialogScene({ view }: { view: "browse" | "theme" }) {
   );
 }
 
+// The empty Apps panel as a store: the side panel's width, the real catalog and pictures from public/shelf/
+// (a copy of super-dev3's default_apps: catalog.json + <slug>.webp — not committed).
+function ShelvesScene() {
+  const shelfApi = useMemo(() => (async (path: string) => {
+    if (path !== "/apps/catalog") return api(path);
+    const rows = (await (await fetch("/shelf/catalog.json")).json()).apps as { slug: string }[];
+    return new Response(JSON.stringify({ admin, apps: rows.map((r) => ({ ...r, state: "available", thumb_url: `/shelf/${r.slug}.webp` })) }),
+                        { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof api, []);
+  return (
+    <div className="flex h-dvh bg-background">
+      <div className="flex w-[330px] shrink-0 flex-col border-e border-border">
+        <div className="flex h-12 shrink-0 items-center gap-4 border-b border-border px-4 text-sm">
+          <span className="text-muted-foreground">Chats</span><span className="text-muted-foreground">Files</span>
+          <span className="border-b-2 border-foreground pb-3 pt-3 font-medium">Apps</span>
+        </div>
+        <AppsPanel apps={[]} loading={false} onOpen={() => {}} onBrowse={() => {}} catalog={{ api: shelfApi, onOpen: () => {} }} />
+      </div>
+    </div>
+  );
+}
+
 function AppScene() {
   const [html, setHtml] = useState<string | null>(null);
   const [label, setLabel] = useState(q.get("palette") ?? "none");
@@ -109,7 +132,8 @@ setAppTheme(parsePalette(q.get("palette")));
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ToastProvider>
-      {scene === "menu" ? <MenuScene /> : scene === "app" ? <AppScene /> : <DialogScene view={scene === "theme" ? "theme" : "browse"} />}
+      {scene === "menu" ? <MenuScene /> : scene === "app" ? <AppScene /> : scene === "shelves" ? <ShelvesScene />
+        : <DialogScene view={scene === "theme" ? "theme" : "browse"} />}
     </ToastProvider>
   </StrictMode>,
 );

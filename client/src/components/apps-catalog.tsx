@@ -1,7 +1,7 @@
 // The Apps section of the connectors window (docs/notes/apps.md, "The catalog"): the agent's catalog
 // with what this workspace has installed, and the workspace's app theme. Same shapes as the
 // Connectors list beside it — search, category chips, two-column cards, one 28px state slot.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icon";
 import { PLATE } from "./connectors-dialog";
@@ -227,6 +227,73 @@ function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (e
       {peek && <AppPreview api={api} a={peek} admin={!!data?.admin} busy={busy === peek.slug}
         onInstall={() => { const a = peek; setPeek(null); act(a, "install"); }} onClose={() => setPeek(null)} />}
     </>
+  );
+}
+
+// ---- Shelves: the empty Apps panel as a store ------------------------------------------------
+// One row per category, scrolled sideways; the panel scrolls down (the App Store's Apps tab). A card opens the
+// preview, Get installs it (admins): the app opens and the panel lists it. Games and templates come last.
+const rank = (a: CatalogApp) => (a.section === "games" ? 2 : a.category === "Templates" ? 1 : 0);
+
+export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback }: {
+  api: Api; onOpen: (entry: string, name: string) => void; onChanged?: () => void; onSeeAll?: () => void; fallback: ReactNode;
+}) {
+  const [data, setData] = useState<{ apps: CatalogApp[]; admin: boolean } | null>(null);
+  const [peek, setPeek] = useState<CatalogApp | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    api("/apps/catalog", { silent: true }).then((r) => r.json()).then(setData).catch(() => setData({ apps: [], admin: false }));
+  }, [api]);
+  const install = async (a: CatalogApp) => {
+    setBusy(a.slug);
+    try {
+      await api("/apps/install", { method: "POST", json: { slug: a.slug } });
+      track("app_catalog_action", { app: a.slug, action: "install", source: "shelves" });
+      onChanged?.();
+      onOpen(`apps/${a.slug}/index.html`, appName(a));
+    } catch { /* the api's own toast says what failed */ }
+    finally { setBusy(null); }
+  };
+  if (!data) return null;
+  const shelves = new Map<string, CatalogApp[]>();
+  for (const a of [...data.apps].sort((x, y) => rank(x) - rank(y))) {
+    if (a.state !== "available") continue;
+    const k = a.section === "games" ? t("games") : category(a) || t("allApps");
+    shelves.set(k, [...(shelves.get(k) ?? []), a]);
+  }
+  if (!shelves.size) return <>{fallback}</>;
+  return (
+    <div className="flex flex-col gap-6 py-4">
+      {!data.admin && <p className="px-4 text-xs text-muted-foreground">{t("appsAdminOnly")}</p>}
+      {[...shelves].map(([name, apps]) => (
+        <section key={name}>
+          <div className="mb-2 flex items-baseline justify-between px-4">
+            <h4 className="text-sm font-semibold text-foreground"><bdi>{name}</bdi></h4>
+            {onSeeAll && <button onClick={onSeeAll} className="cursor-pointer text-xs text-primary hover:underline">{t("seeAll")}</button>}
+          </div>
+          <div className="flex snap-x scroll-px-4 gap-3 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {apps.map((a) => (
+              <div key={a.slug} data-app={a.slug} className="w-40 shrink-0 snap-start">
+                <button onClick={() => setPeek(a)} aria-label={`${t("previewApp")} ${appName(a)}`} className="block w-full cursor-pointer transition hover:opacity-90">
+                  {a.thumb || a.thumb_url ? <Thumb api={api} a={a} />
+                    : <span className="flex aspect-[16/10] items-center justify-center rounded-xl border border-border bg-secondary"><Glyph a={a} /></span>}
+                </button>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-foreground"><bdi>{appName(a)}</bdi></p>
+                    {about(a) && <p className="truncate text-[11px] text-muted-foreground"><bdi>{about(a)}</bdi></p>}
+                  </div>
+                  {data.admin && <button disabled={busy === a.slug} onClick={() => void install(a)}
+                    className="shrink-0 cursor-pointer rounded-full bg-secondary px-3 py-1 text-[11px] font-semibold text-primary hover:opacity-80 disabled:opacity-40">{t("getApp")}</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+      {peek && <AppPreview api={api} a={peek} admin={data.admin} busy={busy === peek.slug}
+        onInstall={() => { const a = peek; setPeek(null); void install(a); }} onClose={() => setPeek(null)} />}
+    </div>
   );
 }
 

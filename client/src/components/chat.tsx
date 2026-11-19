@@ -1671,6 +1671,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
                   onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
                   onBrowse={account && config?.apps_catalog ? () => openConnectors("apps_panel", undefined, "apps") : undefined}
+                  catalog={account && config?.apps_catalog ? {
+                    api,
+                    onOpen: (entry, appName) => { openFileInCanvas(entry, appName); if (!isDesktop) setFilesOpen(false); },
+                    onChanged: () => void refreshApps(),
+                  } : undefined}
                 />
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
