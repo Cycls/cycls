@@ -145,10 +145,14 @@ def state_of(root, entry):
     app = Path(root) / "apps" / entry["slug"]
     if not app.exists():
         return "available"
-    stamp = stamp_of(_manifest(app / "app.json"))
+    m = _manifest(app / "app.json")
+    stamp = stamp_of(m)
     if stamp is None:
         return "conflict" if ((app / "index.html").exists() or (app / "app.json").exists()) else "available"
-    return "installed" if stamp.get("version") == entry["version"] else "update"
+    if stamp.get("version") != entry["version"]:
+        return "update"
+    # installed before what was shipped was recorded, with another icon than the catalog's now: one more update brings it
+    return "update" if "shipped" not in stamp and entry.get("icon") and m.get("icon") not in (None, entry["icon"]) else "installed"
 
 
 def listing(root, catalog, copy=None, origin=""):
@@ -198,11 +202,16 @@ def install(root, catalog, slug, *, trash=None, allow_update=True):
     shipped = _manifest(bundle / "app.json")
     shipped.pop("extension", None)          # build_app must stay able to rebuild it
     shipped.pop(LEGACY_STAMP, None)
-    keep = {k: current[k] for k in ("name", "icon") if not fresh and current.get(k)}
+    # What the person changed stays: a name or icon that differs from what the catalog shipped last time. A stamp
+    # from before that was recorded (2026-11-19) keeps the name and takes the new icon.
+    was = (stamp_of(current) or {}).get("shipped")
+    keep = {k: current[k] for k in ("name", "icon") if not fresh and current.get(k)
+            and (current[k] != was.get(k) if isinstance(was, dict) else k == "name")}
     manifest = {**shipped, **keep}
     manifest.pop(LEGACY_STAMP, None)        # one stamp from now on
     manifest[STAMP] = {"version": entry["version"],
-                       "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                       "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "shipped": {k: shipped[k] for k in ("name", "icon") if shipped.get(k)}}
     app.mkdir(parents=True, exist_ok=True)
     (app / "data").mkdir(exist_ok=True)
     # The stamp first: a folder holding our index.html without it would read as a person's app.

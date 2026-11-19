@@ -190,6 +190,24 @@ def test_the_legacy_default_app_stamp_reads_as_installed(tmp_path, shelf):
 
 # ---- update --------------------------------------------------------------------------------
 
+def test_an_update_brings_the_catalogs_new_icon_unless_the_person_changed_it(tmp_path, shelf):
+    client, vol = _client(tmp_path, shelf)
+    client.post("/apps/install", json={"slug": "tasks"})
+    app = _personal(vol, "user_1") / "apps" / "tasks"
+    read = lambda: json.loads((app / "app.json").read_text(encoding="utf-8"))
+    _bundle(shelf, "tasks", html="<html>v2</html>", name="Tasks", icon="data:image/svg+xml,mono")   # a new icon ships
+    client2, _ = _client(tmp_path, shelf)
+    client2.post("/apps/update", json={"slug": "tasks"})
+    assert read()["icon"] == "data:image/svg+xml,mono" and read()["catalog"]["shipped"]["icon"] == "data:image/svg+xml,mono"
+
+    # installed before what was shipped was recorded: the old icon, no record — offered one more update, which brings it
+    legacy = {**read(), "icon": "✅", "catalog": {"version": read()["catalog"]["version"], "at": "2026-11-01T00:00:00+00:00"}}
+    (app / "app.json").write_text(json.dumps(legacy), encoding="utf-8")
+    assert _rows(client2)["tasks"]["state"] == "update"
+    client2.post("/apps/update", json={"slug": "tasks"})
+    assert read()["icon"] == "data:image/svg+xml,mono" and _rows(client2)["tasks"]["state"] == "installed"
+
+
 def test_update_replaces_the_bundle_keeps_data_name_and_icon_and_trashes_the_old(tmp_path, shelf):
     client, vol = _client(tmp_path, shelf)
     client.post("/apps/install", json={"slug": "tasks"})
