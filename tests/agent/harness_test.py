@@ -419,6 +419,23 @@ def test_llm_honours_the_persons_tool_switches():
     assert seen["allowed_tools"] == ["Bash", "WebSearch", "Canvas"]
 
 
+def test_llm_defer_reaches_the_loop_only_when_set():
+    """`.defer` groups go to the loop as `deferred_tools`; without one the loop is called as before,
+    so a custom loop written without the kwarg still runs. `.tools()` after it keeps the groups."""
+    seen = []
+    async def fake_loop(**kw):
+        seen.append(kw)
+        yield "ok"
+    schema = {"name": "tender_search", "description": "d", "input_schema": {"type": "object"}}
+    base = cycls.LLM().model("openai/gpt-x").loop(fake_loop)
+    async def drain(llm):
+        return [ev async for ev in llm.run(context=None)]
+    asyncio.run(drain(base))
+    asyncio.run(drain(base.defer("tenders", [schema], about="government tenders").tools([])))
+    assert "deferred_tools" not in seen[0]
+    assert seen[1]["deferred_tools"] == {"tenders": ("government tenders", [schema])}
+
+
 def test_llm_price_and_context_default_unset():
     assert cycls.LLM()._price is None
     assert cycls.LLM()._context is None

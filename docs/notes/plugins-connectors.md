@@ -190,6 +190,11 @@ warning: the provider our deployed agents actually run on.
     so discovery costs no network call of its own — and an `@` mention skips it entirely,
     injecting that connector's tools for the turn because the user already chose.
 
+    **An agent's own tools can take the same road.** `LLM.defer(name, tools, about=)` keeps a
+    group of custom tools behind `find_tools` with one line of its own (Super's six tender
+    tools, ~1,800 tokens, are wanted in a few chats out of a hundred). Discovery, stickiness
+    and the load on a direct call are the connectors'; the handlers are the agent's `.on`.
+
 23. **A large tool result is a file to compute over, not text to read back.** Truncating a
     result loses data that has no other copy; spilling it to a file and telling the model to
     *read* it just delays the same explosion. We spill to the **workspace**, where bash
