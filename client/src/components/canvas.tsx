@@ -1137,8 +1137,14 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     wasLive.current = !!file.live;
   }, [file.live, design]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ▶ Present in the editor: the deck as saved (what is unsaved is saved first), full screen, from that slide (by
-  // name; its place, should the name be gone). The keys then drive the presenter, not the editor under it.
-  const [showing, setShowing] = useState<{ deck: DeckManifest; start: number } | null>(null);
+  // name; its place, should the name be gone). The keys then drive the presenter, not the editor under it. Its
+  // slides take the service a moment to draw (6–12 s measured): the screen goes to the presenter's black at once,
+  // full screen while the click still counts, and says so.
+  const [showing, setShowing] = useState<{ deck: DeckManifest; start: number } | "getting" | null>(null);
+  const leavePresenting = () => {
+    setShowing(null);
+    if (document.fullscreenElement === document.documentElement) void document.exitFullscreen().catch(() => {});
+  };
   const polls = useMemo(() => pollsFor?.(file.path), [pollsFor, file.path]);
   useEffect(() => {
     if (!design) return;
@@ -1146,15 +1152,19 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
       const d = (e as CustomEvent<{ path?: string; page?: string; slide?: string; index?: number }>).detail;
       if (d?.path !== file.path) return;
       if (document.activeElement instanceof HTMLIFrameElement) document.activeElement.blur();
+      setShowing("getting");
+      if (!document.fullscreenElement) void document.documentElement.requestFullscreen?.().catch(() => {});
       await flushDesignEditor(file.path, 3000);
       try {
         const deck = parseDeck(await readFile(`${file.path}?as=slides${pageQuery(d.page)}`, true));
-        if (!deck?.count) return;
+        if (!deck?.count) return leavePresenting();
         const byName = d.slide ? (deck.names ?? []).indexOf(d.slide) : -1;
         const start = byName >= 0 ? byName : Math.min(Math.max(0, d.index ?? 0), deck.count - 1);
         track("deck_presented", { slides: deck.count, from: start === 0 ? "start" : "current" });
-        setShowing({ deck, start });
-      } catch { /* nothing to present: the editor stays as it is */ }
+        setShowing((now) => (now === "getting" ? { deck, start } : now));   // not if it was left meanwhile
+      } catch {
+        leavePresenting();   // nothing to present: the editor stays as it is
+      }
     };
     window.addEventListener("cycls:design-present", onPresent);
     return () => window.removeEventListener("cycls:design-present", onPresent);
@@ -1389,7 +1399,10 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 <div className="absolute inset-x-0 top-0"><LoadingBar /></div>
               </div>
             )}
-            {showing && <PresentMode deck={showing.deck} start={showing.start} polls={polls} onClose={() => setShowing(null)} />}
+            {showing === "getting" && createPortal(
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black text-sm text-white/70" data-testid="present-getting"
+                   role="status" onClick={leavePresenting}>{t("presentGetting")}</div>, document.body)}
+            {showing && showing !== "getting" && <PresentMode deck={showing.deck} start={showing.start} polls={polls} onClose={leavePresenting} />}
             {previewing && (() => {
               const pictures = preview ? parseDeck(preview) : null;
               return (

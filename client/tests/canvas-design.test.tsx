@@ -174,6 +174,7 @@ describe("a design opens in its editor", () => {
     readFile.mockClear();
     t.say("present", { doc: t.sent("load")[0]?.doc, slide: "slide-2", index: 0 });   // by name, not its place
     await flush();
+    expect(screen.getByTestId("present-getting").textContent).toBe("Getting the slides ready…");   // at once
     const ask = t.sent("flush").at(-1);
     expect(ask).toBeTruthy();
     expect(readFile).not.toHaveBeenCalled();
@@ -183,6 +184,7 @@ describe("a design opens in its editor", () => {
     expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides", true);
     expect(screen.getByTestId("present-mode")).toBeTruthy();
     expect(screen.getByTestId("present-counter").textContent).toBe("2 / 3");
+    expect(screen.queryByTestId("present-getting")).toBeNull();
   });
 
   it("+ Add slide in the editor: the service makes it, and the editor makes it too, as an agent's edit", async () => {
