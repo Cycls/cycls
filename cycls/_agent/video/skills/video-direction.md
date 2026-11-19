@@ -110,6 +110,10 @@ colours. A campaign shares one look; different clients should not all get the sa
 | warm | round serif on oat, paprika | food, cafés, hospitality, family, iftar | word by word, soft fades |
 | luxe | thin capitals, champagne gold on near-black | real estate, hotels, jewellery, perfume, Ramadan, Eid | slow blur-ins, long dissolves |
 | pop | stickers on yellow, hot pink | creators, tips, deals, giveaways, kids | everything pops, whip-pans |
+| swiss | the grid you can see: one sans, one red block, flush to the start side | results, reports, B2B and fintech launches, events | wipes and slides, hard cuts |
+| bauhaus | circle, square, triangle in red, blue, yellow on paper; lowercase geometric type | education, explainers, schools, design-led launches | slides that lock, hard cuts |
+| brutalist | black borders and hard shadows on cream, one yellow block | SaaS, dev tools, apps, startups, feature walkthroughs | blocks slam in, hard cuts |
+| riso | two inks off register (fluorescent pink, teal) on grainy paper; poster caps | creators, indie brands, events, music, zines, cafés | sheets off the drum, hard cuts |
 
 **A direction is a look plus a motif** you add in the scene's own markup (§7):
 

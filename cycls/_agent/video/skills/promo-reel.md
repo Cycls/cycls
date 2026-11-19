@@ -44,7 +44,7 @@ It is then an ordinary composition: add music and a sound on the price drop with
 
 **The look.** A sale, a drop, sport, an event: `bold` (hard cuts, built for the beat). A café, a restaurant, an
 opening: `warm`. An app, AI or fintech launch: `tech`. Real estate, perfume, a gala, Ramadan, Eid: `luxe`. Deals,
-giveaways, a creator's tip: `pop`. Fashion, a brand story: `editorial`. A teaser, a destination: `cinematic`.
+giveaways, a creator's tip: `pop`. A SaaS or app launch with a playful edge: `brutalist`. Results, a report, a B2B launch: `swiss`. A course, a school, a studio: `bauhaus`. An event poster, a creator, an indie café: `riso`. Fashion, a brand story: `editorial`. A teaser, a destination: `cinematic`.
 Render a promo at 30 (the default): where type or graphics move fast, the final carries motion blur, so they read as filmed.
 
 ## Real pictures first

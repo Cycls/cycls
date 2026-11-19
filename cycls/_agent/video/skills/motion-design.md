@@ -31,6 +31,10 @@ ends. Seconds from the scene's start:
 | warm | fade-up 0.1 | words 0.3 | fade-up 0.95 | pop 1.2 | fade | fade 0.5 |
 | luxe | track-in 0.2 | blur-in 0.5 | fade-up 1.4 | fade-up 1.6 | fade | fade 0.9 |
 | pop | pop 0.05 | pop 0.2 | words 0.7 | pop 0.9 | none | whip-pan 0.35 |
+| swiss | wipe 0.05 | slide 0.15 | fade-up 0.6 | slide 0.8 | none | cut |
+| bauhaus | pop 0.05 | slide 0.15 | fade-up 0.6 | slide 0.8 | none | cut |
+| brutalist | pop 0.05 | pop 0.15 | fade-up 0.6 | pop 0.8 | none | cut |
+| riso | type 0.05 | rise 0.15 | fade-up 0.6 | pop 0.8 | none | cut |
 
 A num counts up at 0.05–0.5 s, a brand arrives at 0.05–0.4 s, a meta comes last (0.75–2 s).
 
