@@ -67,7 +67,9 @@ class LLM:
     def defer(self, name, tools, about=""):
         """Custom tools kept out of every request until a chat needs them, the way a connector's are:
         the system prompt carries one line (`name`, `about`), `find_tools` loads them, and they stay for
-        the rest of the chat. Their handlers are registered with `.on` as usual."""
+        the rest of the chat. `find_tools` matches the group on `name` and `about` only, so `about`
+        names the subject ("Saudi government tenders on Etimad"), not verbs every connector shares.
+        Their handlers are registered with `.on` as usual."""
         return self._copy(_deferred={**getattr(self, "_deferred", {}), name: (about, list(tools))})
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))
     def max_tokens(self, n):        return self._copy(_max_tokens=n)

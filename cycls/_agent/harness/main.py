@@ -625,7 +625,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     for name, (about, schemas) in (deferred_tools or {}).items():   # the agent's own (`LLM.defer`), kept back the same way
         schemas = build_tools([], schemas, vendor=vendor)
         deferred.setdefault(name, []).append((None, schemas, {}, {}))
-        catalog[name] = (name, about, [f'{s["name"]} {s.get("description") or ""}' for s in schemas])
+        catalog[name] = (name, about, [])   # found by its name and `about`: its tools' text shares "search", "list"… with every connector's
 
     def _discover(name):
         """Its tools enter the turn and stay for the rest of the chat — the cache breakpoint sits on the

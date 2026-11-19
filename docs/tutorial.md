@@ -576,7 +576,7 @@ async for ev in llm.run(context=context):
 | `.model(str)` | `provider/model` string: `anthropic/...`, `openai/...`, `groq/...`, etc. |
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
-| `.defer(name, tools, about=)` | Custom tools kept out of every request until a chat needs them: one index line (`name`, `about`), `find_tools` loads them for the rest of the chat; a call to one loads it too. Handlers are registered with `.on` as usual |
+| `.defer(name, tools, about=)` | Custom tools kept out of every request until a chat needs them: one index line (`name`, `about`), `find_tools` loads them for the rest of the chat (matched on `name` and `about` only); a call to one loads it too. Handlers are registered with `.on` as usual |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
 | `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `Video`, `Transcribe`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design`, `Video` and `Transcribe` are offered only when their service is configured (see below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |

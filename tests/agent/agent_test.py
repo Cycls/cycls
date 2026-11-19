@@ -2200,7 +2200,7 @@ def test_find_tools_matches_on_what_the_tools_do(agent_env):
     assert c.matches("nothing relevant here", catalog) == []
 
 
-_TENDERS = {"tenders": ("Saudi government tenders: search and awards",
+_TENDERS = {"tenders": ("Saudi government tenders on Etimad",
                         [{"name": "tender_search", "description": "Search open government tenders",
                           "input_schema": {"type": "object"}}])}
 
@@ -2224,7 +2224,7 @@ def test_the_agent_s_deferred_tools_wait_for_find_tools(agent_env):
 
     first = [t["name"] for t in calls[0]["tools"]]
     assert "tender_search" not in first and "find_tools" in first
-    assert "- tenders: Saudi government tenders" in _all_system(calls[0])
+    assert "- tenders: Saudi government tenders on Etimad (1 tools)" in _all_system(calls[0])
     assert "tender_search" in [t["name"] for t in calls[1]["tools"]]
     search.assert_awaited_once()
 
@@ -2241,6 +2241,25 @@ def test_a_deferred_tool_called_before_it_loads_loads_and_runs(agent_env):
 
     search.assert_awaited_once()
     assert "tender_search" in [t["name"] for t in calls[1]["tools"]]
+
+
+def test_a_connector_lookup_leaves_the_agent_s_deferred_tools_alone(agent_env):
+    """`tender_search` says "search" too: a group is found by its name and `about`, so looking for
+    Drive's files never loads it along."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "search my files"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, _make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, deferred_tools=_TENDERS, handlers={},
+                                mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(_google())])))
+
+    names = [t["name"] for t in calls[1]["tools"]]
+    assert "drive_search_files" in names and "tender_search" not in names
 
 
 def test_deferred_tools_stay_loaded_for_the_rest_of_the_chat(agent_env):
