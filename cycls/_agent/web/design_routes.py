@@ -241,7 +241,9 @@ def design_router(ws_dep, user_dep, changed):
     async def deck_op(path: str, request: Request, ws: Workspace = ws_dep):
         """The deck viewer's slide changes, run on the saved .fig like the agent's. Slides from 1:
           {op: "move" | "duplicate" | "delete", number, to?}
-          {op: "add", number?, title?, text?}   after `number` (0: first; absent: last) → `added`
+          {op: "add", number?, title?, text?}   after `number` (0: first; absent: last) → `added`, and
+                                                the edit for an open editor to make (`script`, `version`;
+                                                `live`: the design's room already has it)
           {op: "notes", number, notes}"""
         from cycls._agent import design
         from cycls._agent.design import deck as decks
@@ -280,10 +282,21 @@ def design_router(ws_dep, user_dep, changed):
             raise HTTPException(415, str(e))
         except RuntimeError as e:
             raise HTTPException(422, str(e))
-        # editors open on it reload (this one's own is re-opened by the app)
         from cycls._agent.design import live
-        await live.notify(ws.root, rel, {"kind": "reload", "version": r.get("version")})
-        return {"ok": True, "slides": len(r.get("slides") or []), **({"added": added} if added else {})}
+        script = r.get("script") if kind == "add" else None
+        if script:
+            # A new slide reaches the editors open on the deck as the agent's edits do — made in place, not a
+            # reload: the room's at once; the asker's own, from `script` (unless the room already took it).
+            said = await live.notify(ws.root, rel, {"kind": "command", "script": script, "version": r.get("version"),
+                                                    "intent": "add a slide"})
+            delivered = bool(said and said.get("delivered"))
+        else:
+            # editors open on it reload (this one's own is re-opened by the app)
+            await live.notify(ws.root, rel, {"kind": "reload", "version": r.get("version")})
+            delivered = False
+        return {"ok": True, "slides": len(r.get("slides") or []), **({"added": added} if added else {}),
+                **({"script": script, "version": r.get("version")} if script and not delivered else {}),
+                **({"live": True} if delivered else {})}
 
     @r.post("/design/new")
     async def new_design(request: Request, ws: Workspace = ws_dep):

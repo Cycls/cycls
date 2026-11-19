@@ -2249,13 +2249,18 @@ def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch)
     client = _ws_routers_client(tmp_path)
 
     r = client.post("/deck/designs/pitch.fig", json={"op": "add", "number": 2, "title": "شريحة جديدة", "text": "أضف نصك"})
-    assert r.status_code == 200 and r.json() == {"ok": True, "slides": 4, "added": 3}
+    assert r.status_code == 200
+    got = r.json()
+    # The new slide, and the edit an editor open on the deck makes to have it too (no room took it: none here).
+    assert {k: got[k] for k in ("ok", "slides", "added", "script")} == {"ok": True, "slides": 4, "added": 3, "script": "S"}
+    assert got["version"] and "live" not in got
     [op] = seen[-1]
     assert op["op"] == "slide_add" and op["at"] == 2
     assert op["slide"]["layout"] == "bullets" and op["slide"]["title"] == "شريحة جديدة" and op["slide"]["bullets"] == ["أضف نصك"]
     assert op["deck"]["theme"] == "editorial"                         # laid out as the deck's own slides are
     # No place said: at the end, with words of its own.
-    assert client.post("/deck/designs/pitch.fig", json={"op": "add"}).json() == {"ok": True, "slides": 4, "added": 4}
+    got = client.post("/deck/designs/pitch.fig", json={"op": "add"}).json()
+    assert (got["ok"], got["slides"], got["added"]) == (True, 4, 4)
     [op] = seen[-1]
     assert "at" not in op and op["slide"]["title"] == "New slide" and op["slide"]["bullets"] == ["Add your text"]
 

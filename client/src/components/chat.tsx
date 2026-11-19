@@ -118,7 +118,7 @@ export interface FilesPanelProps {
   versionPreview?: (path: string, id: string) => Promise<Blob>;
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
   onNewDesign?: () => void;
-  deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
+  deckOp?: (path: string, body: DeckOp) => Promise<unknown>;    // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
   comments?: CommentsApi;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;

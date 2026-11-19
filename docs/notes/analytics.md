@@ -161,13 +161,14 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
 | `deck_opened` | a design of several slides opens in the deck viewer (its preview, from the canvas, Files or a share) | `slides` — are decks being made and looked at? |
-| `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
+| `deck_presented` | Present on a deck — in its preview, or ▶ Present in the design editor (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
+| `deck_slide_added` | + Add slide in the design editor's slide list (the service makes it in the deck's theme) | — whether people build decks out themselves, not only through the agent |
 | `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |
 | `poll_voted` | someone in the audience votes, on the deck's public link (`?vote=1`) | `options` — votes ÷ polls opened is how many people answer |
 | `deck_exported` | a deck downloaded from the deck viewer | `format` (`pptx` / `pdf` / `images` / `fig`) — which file people take away |
 | `deck_slide_changed` | the owner changed the slides in the deck viewer: moved (drag), duplicated or deleted one, added one to start from, or wrote a slide's speaker notes | `op` (`move` / `duplicate` / `delete` / `add` / `notes`) — do people shape decks by hand, or ask the agent? |
 | `design_created` | "New design" — the canvas `+`, the Files panel, or File › New design in the editor | `source` (`canvas` / `files` / `editor`), `size` (the preset or `WxH`) — do people start designs by hand, not only by asking? |
-| `design_previewed` | the Edit \| Preview switch of a design in the canvas, to Preview | — how often a design is looked at without the editor |
+| `design_previewed` | the Edit \| Preview switch of a design in the canvas, to Preview (only an older editor has it: a current one presents itself) | — how often a design is looked at without the editor |
 | `design_exported` | an export from the design editor, written into the workspace beside the design | `format`, `files` — which formats leave the editor |
 | `design_copied` | "Save a copy" in the design editor | — do people branch designs? |
 | `design_save_conflict` | a design save refused because the file changed elsewhere (another tab, person or script), then the choice made | `choice` (`shown` / `latest` / `mine` / `copy`) — how often do edits collide, and how do people settle it? |

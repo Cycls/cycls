@@ -21,10 +21,11 @@ import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
 import { VideoEditorView, canEditVideo, flushVideoEditor, videoEditorOpen, watchVideoEditors } from "./video-editor-view";
-import { DesignEditorView, canFullscreen, designEditorComments, designPage, flushDesignEditor, fullscreenDesignEditor, showDesignPage, useDesignPages, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designEditorComments, designEditorPresents, designInRoom, designPage, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, showDesignPage, showDesignSlideAfterLoad, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
-import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckOp } from "./deck-view";
+import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckManifest, type DeckOp } from "./deck-view";
+import { PresentMode } from "./present-mode";
 import type { ShareLinks } from "./share-dialog";
 import type { PollApi } from "../lib/polls";
 import { attachBridge, appScope } from "./app-bridge";
@@ -590,7 +591,7 @@ export function Canvas({ tabs, active, docked, hidden, expanded, onToggleExpand,
   openFile: (path: string, silent?: boolean) => Promise<string>;    // authed blob URL (pdf / download / media)
   writeFile: WriteFile;  // overwrite (editor); binary for the .fig editor
   uploadFile?: (dir: string, file: File) => Promise<void>;   // images and videos dropped into the editor
-  deckOp?: (path: string, body: DeckOp) => Promise<void>;        // a deck's slide moves / copies / deletes
+  deckOp?: (path: string, body: DeckOp) => Promise<unknown>;     // a deck's slide moves / copies / deletes (→ {added?})
   pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;  // app save dialog
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
@@ -1003,7 +1004,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   readFile: (path: string, silent?: boolean) => Promise<string>;
   openFile: (path: string, silent?: boolean) => Promise<string>;
   writeFile: WriteFile;
-  deckOp?: (path: string, body: DeckOp) => Promise<void>;
+  deckOp?: (path: string, body: DeckOp) => Promise<unknown>;
   pollsFor?: (deck: string) => PollApi;   // live polls in a presented deck (the owner's)
   listFolders?: () => Promise<{ name: string; path: string }[]>;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
@@ -1053,12 +1054,24 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // A design opens as its preview — what it is — and Edit is the design editor. While the agent works on
-  // it (`live`) it is the editor, where its changes land; when the agent's turn ends, the preview again,
-  // unless the person took to the editor meanwhile. The editor is loaded the first time it is wanted.
+  // A design opens in its editor — there is no preview first. ▶ Present, the slide tools and the speaker notes
+  // are in the editor itself, which asks the app for what it can't do (below: "cycls:design-present",
+  // "cycls:design-slide-op"). An older editor — no "present" in its `ready`, today's production one — keeps the
+  // Edit / Preview switch and its preview, as before (and its end of the agent's turn: the preview again, unless
+  // the person took to the editor meanwhile). While the editor starts (4–8 s the first time), a picture of the
+  // design's first slide, so it is never blank.
   const design = isDesignEditor(fileKind(file)) && !!designEditorUrl;
-  const [previewing, setPreviewing] = useState(design && !file.live);
-  const [editorOn, setEditorOn] = useState(!design || !!file.live);
+  const [presents, setPresents] = useState<boolean | null>(() => designEditorPresents(file.path));
+  useEffect(() => {
+    setPresents(designEditorPresents(file.path));
+    const onEditor = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) setPresents(designEditorPresents(file.path));
+    };
+    window.addEventListener("cycls:design-editor", onEditor);
+    return () => window.removeEventListener("cycls:design-editor", onEditor);
+  }, [file.path]);
+  const [previewing, setPreviewing] = useState(false);
+  const [editorOn, setEditorOn] = useState(true);
   const [preview, setPreview] = useState<string | null>(null);     // its slide manifest
   const [previewFailed, setPreviewFailed] = useState(false);
   // With several pages, they are tabs above the design, in the editor and the preview alike.
@@ -1091,12 +1104,25 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     await loadPreview(designPage(file.path) ?? previewPage.current);
   };
   const edit = () => { setEditorOn(true); setPreviewing(false); };
-  useEffect(() => { if (design && previewing) void loadPreview(undefined); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  // The agent's turn: a person in the editor keeps it, and sees the changes land there; one on the preview keeps
-  // the preview, which shows each change as it is saved (below) — it never turns into the editor under them, which
-  // cold-started the editor for a moment and turned back (the "app reopens"). A design the agent is making opens in
-  // the editor, to watch it built; when that turn ends, its preview — unless the person clicked into the editor
-  // meanwhile (the window loses focus to its frame). A person who went to the editor themselves stays in it.
+  // Its slides as pictures, once: what it is ("Deck · 8 slides"), and its first slide while the editor starts.
+  // Not for a design the agent is making (it is drawn in the editor as it is made).
+  useEffect(() => { if (design && !file.live) void loadPreview(undefined); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [editorReady, setEditorReady] = useState(false);
+  useEffect(() => {
+    if (!design) return;
+    const onLoaded = (e: Event) => {
+      if ((e as CustomEvent<{ path?: string }>).detail?.path === file.path) setEditorReady(true);
+    };
+    window.addEventListener("cycls:design-loaded", onLoaded);
+    const giveUp = window.setTimeout(() => setEditorReady(true), 30000);   // an editor that never opens says why itself
+    return () => { window.removeEventListener("cycls:design-loaded", onLoaded); window.clearTimeout(giveUp); };
+  }, [design, file.path]);
+  const opening = design && presents !== false && !editorReady && !file.live && !previewing;
+  const openingPicture = opening && preview ? parseDeck(preview)?.slides?.[0] ?? null : null;
+  // The agent's turn (an older editor's): a person in the editor keeps it, and sees the changes land there; one on
+  // the preview keeps the preview, which shows each change as it is saved (below). A design the agent is making
+  // opens in the editor, to watch it built; when that turn ends, its preview — unless the person clicked into the
+  // editor meanwhile (the window loses focus to its frame). With an editor that presents, it simply stays.
   const body = useRef<HTMLDivElement>(null);
   const handled = useRef(false);
   const wasLive = useRef(!!file.live);
@@ -1105,27 +1131,59 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
     if (!design) return;
     if (file.live && !wasLive.current) handled.current = false;
     if (!file.live && wasLive.current) {
-      if (previewing || (agentsEditor.current && !handled.current)) void showPreview();
+      if (presents === false && (previewing || (agentsEditor.current && !handled.current))) void showPreview();
       agentsEditor.current = false;                       // from here on, where it is shown is the person's
     }
     wasLive.current = !!file.live;
   }, [file.live, design]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // Edit at once: once the preview is up, the editor loads behind it, hidden, while the browser is idle — so the
-  // first Edit doesn't wait for it to start (4–8 s measured cold). Only where there is room to edit (a phone keeps
-  // the preview light); loading saves nothing, the editor saves only what is changed in it.
+  // ▶ Present in the editor: the deck as saved (what is unsaved is saved first), full screen, from that slide (by
+  // name; its place, should the name be gone). The keys then drive the presenter, not the editor under it.
+  const [showing, setShowing] = useState<{ deck: DeckManifest; start: number } | null>(null);
+  const polls = useMemo(() => pollsFor?.(file.path), [pollsFor, file.path]);
   useEffect(() => {
-    if (!design || !previewing || editorOn || !preview) return;
-    if (typeof window.matchMedia === "function" && !window.matchMedia("(min-width: 768px)").matches) return;
-    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
-                                   cancelIdleCallback?: (id: number) => void };
-    const start = () => setEditorOn(true);
-    if (w.requestIdleCallback) {
-      const id = w.requestIdleCallback(start, { timeout: 4000 });
-      return () => w.cancelIdleCallback?.(id);
-    }
-    const id = window.setTimeout(start, 1500);
-    return () => window.clearTimeout(id);
-  }, [design, previewing, editorOn, preview]);
+    if (!design) return;
+    const onPresent = async (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; page?: string; slide?: string; index?: number }>).detail;
+      if (d?.path !== file.path) return;
+      if (document.activeElement instanceof HTMLIFrameElement) document.activeElement.blur();
+      await flushDesignEditor(file.path, 3000);
+      try {
+        const deck = parseDeck(await readFile(`${file.path}?as=slides${pageQuery(d.page)}`, true));
+        if (!deck?.count) return;
+        const byName = d.slide ? (deck.names ?? []).indexOf(d.slide) : -1;
+        const start = byName >= 0 ? byName : Math.min(Math.max(0, d.index ?? 0), deck.count - 1);
+        track("deck_presented", { slides: deck.count, from: start === 0 ? "start" : "current" });
+        setShowing({ deck, start });
+      } catch { /* nothing to present: the editor stays as it is */ }
+    };
+    window.addEventListener("cycls:design-present", onPresent);
+    return () => window.removeEventListener("cycls:design-present", onPresent);
+  }, [design, file.path, readFile]);
+  // + Add slide in the editor: made by the service in the deck's theme, after the slide in view, and handed to the
+  // editor as an agent's edit is (made in place; the editor then shows it). Undo in the editor doesn't take it back.
+  useEffect(() => {
+    if (!design || !deckOp) return;
+    const onSlideOp = async (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; op?: string; number?: number }>).detail;
+      if (d?.path !== file.path || d.op !== "add") return;
+      await flushDesignEditor(file.path, 3000);
+      try {
+        const r = (await deckOp(file.path, { op: "add", ...(typeof d.number === "number" ? { number: d.number } : {}) })) as
+          { added?: number; script?: string; version?: string; live?: boolean } | undefined;
+        track("deck_slide_added", {});
+        if (r?.live) return;                                    // the room made it, this editor with it
+        if (typeof r?.script === "string") {                    // made here as the agent's edits are: no reload
+          window.dispatchEvent(new CustomEvent("cycls:design-command", {
+            detail: { path: file.path, script: r.script, version: r.version, intent: "add a slide", reload: false, live: false } }));
+          return;
+        }
+        if (typeof r?.added === "number") showDesignSlideAfterLoad(file.path, r.added - 1);
+        if (!designInRoom(file.path)) reloadDesignEditors(file.path);   // in a room it reopens by itself
+      } catch { /* the editor's "Adding…" gives up by itself */ }
+    };
+    window.addEventListener("cycls:design-slide-op", onSlideOp);
+    return () => window.removeEventListener("cycls:design-slide-op", onSlideOp);
+  }, [design, deckOp, file.path]);
   useEffect(() => {
     if (!file.live) return;
     const onBlur = () => setTimeout(() => { if (body.current?.contains(document.activeElement)) handled.current = true; });
@@ -1231,7 +1289,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
             {design && !previewing && <CommentButtons path={file.path}
                                                       onComment={(adding) => { if (adding && !designEditorComments(file.path)) void showPreview(); }}
                                                       onList={() => { if (!designEditorComments(file.path)) void showPreview(); }} />}
-            {design && <EditPreviewSwitch previewing={previewing} onEdit={edit} onPreview={() => void showPreview()} />}
+            {/* Only an older editor's: one that presents has no preview. */}
+            {design && presents === false && <EditPreviewSwitch previewing={previewing} onEdit={edit} onPreview={() => void showPreview()} />}
             {/* Invisible, not removed, in a preview so the switch beside it doesn't jump. */}
             {design && canFullscreen() && (
               <button onClick={() => fullscreenDesignEditor(file.path)} className={cn(headerBtn, previewing && "invisible")}
@@ -1324,6 +1383,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                          onDownload={download} onShare={onShareFile ? () => setShareOpen(true) : undefined} onOpenFile={onOpenFile} />
               </CanvasHeaderSlot.Provider>
             </div>}
+            {openingPicture && (
+              <div className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center bg-background p-6" data-testid="design-opening">
+                <img src={openingPicture} alt="" className="max-h-full max-w-full object-contain shadow-lg" />
+                <div className="absolute inset-x-0 top-0"><LoadingBar /></div>
+              </div>
+            )}
+            {showing && <PresentMode deck={showing.deck} start={showing.start} polls={polls} onClose={() => setShowing(null)} />}
             {previewing && (() => {
               const pictures = preview ? parseDeck(preview) : null;
               return (
@@ -1334,7 +1400,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                     : <DesignPages file={file} data={preview!} readFile={readFile} openFile={openFile} tabs={!several}
                                    onPage={(page) => { previewPage.current = page; setShownPage(page); showDesignPage(file.path, page); }}
                                    onReload={() => void loadPreview(previewPage.current)}
-                                   onSlideOp={deckOp ? (op) => deckOp(file.path, op) : undefined} pollsFor={pollsFor} />}
+                                   onSlideOp={deckOp ? (op) => deckOp(file.path, op).then(() => undefined) : undefined} pollsFor={pollsFor} />}
                 </div>
               );
             })()}

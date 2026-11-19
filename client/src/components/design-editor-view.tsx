@@ -18,6 +18,8 @@ import { cn } from "../lib/utils";
 //     load {protocol:2, doc, name, fig, brand?, page?, live?} · written {doc, id, ok}
 //     save · flush {id} · command {script, intent?, page?} · theme {theme} · locale {lang}
 //     page {name} (feature "pages") · fit (feature "fit")
+//     host {features: ["present", "slides"]} · slide {index} (feature "present": what the app does for it — the
+//     deck presented, a new slide made by the service — and, after that, the slide to show)
 //     comments {pins, adding, active, draft, me} (feature "comments")
 //     follow {client} · liveTicket {id, ticket} · liveBase {version} · liveReset (feature "live")
 //   editor → host:
@@ -28,6 +30,7 @@ import { cn } from "../lib/utils";
 //     newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files} · exportAs {doc, format}
 //     presence {doc, peers, saver, connected} · liveTicket {id}
 //     liveAgent {doc, version} · liveReload {doc, version} · liveBase {doc, version}
+//     present {doc, page?, slide?, index} · slideOp {doc, page?, op: "add", number?} (feature "present")
 // `doc` tags one load: a save from an older load is refused. Saves name the version they
 // stand on as their base, so a save over a newer file is refused. An editor before
 // protocol 2 sends none of the new messages and never waits for `written`.
@@ -113,6 +116,7 @@ type EditorMessage = {
   peers?: DesignPeer[]; saver?: boolean; connected?: boolean; version?: string | null; live?: "seed" | "join";
   frames?: { name: string; w: number; h: number }[]; frame_name?: string; x?: number; y?: number;
   at?: { x: number; y: number } | null; box?: { w: number; h: number };
+  slide?: string; index?: number; op?: string; number?: number;
 };
 
 // The latest selection per design: what "Add selection" attaches to a message. A video's
@@ -187,6 +191,17 @@ const frameSets = new Map<string, DesignFrames>();
 const commenting = new Set<string>();
 // An older editor can't draw pins: comments then go on the design's preview.
 export const designEditorComments = (path: string) => commenting.has(path);
+// An editor that presents and adds slides itself (feature "present"): the design has no preview. An older
+// one (today's production editor) keeps the Edit / Preview switch. Unknown until the editor is ready.
+const presenting = new Map<string, boolean>();
+export const designEditorPresents = (path: string): boolean | null => presenting.get(path) ?? null;
+// The slide to show once the editor has the design again (a slide added by the service: it reopens with it).
+const slideAfterLoad = new Map<string, number>();
+export function showDesignSlideAfterLoad(path: string, index: number): void {
+  slideAfterLoad.set(path, index);
+}
+// In a live room, a change the service made reloads the editor by itself (`liveReload`).
+export const designInRoom = (path: string) => presences.has(path);
 export function useDesignFrames(path: string): DesignFrames | null {
   const [value, setValue] = useState(() => frameSets.get(path) ?? null);
   useEffect(() => {
@@ -470,6 +485,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         protocol.current = typeof m.protocol === "number" ? m.protocol : 0;
         features.current = new Set(Array.isArray(m.features) ? m.features : []);
         commenting.delete(latest.current.path);
+        presenting.set(latest.current.path, features.current.has("present"));
+        window.dispatchEvent(new CustomEvent("cycls:design-editor", { detail: { path: latest.current.path } }));
         if (!disposed) { setPinsOn(false); setPlace(null); }
         let source = sourceRef.current;
         sourceRef.current = null;
@@ -518,6 +535,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
             post({ type: "theme", theme: document.body.classList.contains("dark") ? "dark" : "light" });
             post({ type: "locale", lang: getLang() });
           }
+          // The app presents the deck and adds slides for it (the canvas: "cycls:design-present", "-slide-op").
+          if (features.current.has("present")) post({ type: "host", features: ["present", "slides"] });
         } catch {
           if (!disposed) setStatus("error");
         } finally {
@@ -545,7 +564,20 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           commenting.add(latest.current.path);
           if (!disposed) setPinsOn(true);
         }
+        window.dispatchEvent(new CustomEvent("cycls:design-loaded", { detail: { path: latest.current.path } }));
+        const show = slideAfterLoad.get(latest.current.path);
+        if (show != null) {
+          slideAfterLoad.delete(latest.current.path);
+          post({ type: "slide", index: show });
+        }
         pump();
+      } else if ((m.type === "present" || m.type === "slideOp") && features.current.has("present")) {
+        // ▶ Present, or + Add slide, in the editor: the canvas does them (it has the deck's presenter and its ops).
+        if (m.doc && m.doc !== doc.current) return;
+        const detail = { path: latest.current.path, page: typeof m.page === "string" ? m.page : undefined,
+                         slide: typeof m.slide === "string" ? m.slide : undefined, index: typeof m.index === "number" ? m.index : 0,
+                         op: typeof m.op === "string" ? m.op : undefined, number: typeof m.number === "number" ? m.number : undefined };
+        window.dispatchEvent(new CustomEvent(m.type === "present" ? "cycls:design-present" : "cycls:design-slide-op", { detail }));
       } else if (m.type === "frames" && Array.isArray(m.frames)) {
         if (m.doc && m.doc !== doc.current) return;
         const now: DesignFrames = { path: latest.current.path, page: typeof m.page === "string" ? m.page : "",
