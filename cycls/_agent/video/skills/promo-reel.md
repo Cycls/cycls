@@ -33,6 +33,15 @@ needs, in what order, and how fast.
 | an offer, a launch, an invite, an opening | 9–15 s reel | hook → product → offer → end card |
 | a story: why this product | 20–30 s promo | hook → desire → product → benefits/demo → proof → offer → end card |
 
+**A sale with real prices: start from a sale template.** `template {name, template, vars}` with `sale-promo`
+(one offer: the discount, the old price struck, the new one, the code, the deadline), `sale-countdown` (the days
+or hours truly left until a sale starts or ends, from when the video is posted) or `sale-carousel` (3–7
+products, each with its prices, then the code). The tool works out every number from the shop's own: give
+`was` and ONE of `percent`, `amount` or `now`, the currency, and the code and deadline exactly as the shop says
+them (none → leave them out: no made-up urgency). Pick its `theme` by the occasion (white-friday, black-friday,
+ramadan, eid, national-day, founding-day, summer, clean); the brand kit's colours and fonts come by themselves.
+It is then an ordinary composition: add music and a sound on the price drop with `edit`.
+
 **The look.** A sale, a drop, sport, an event: `bold` (hard cuts, built for the beat). A café, a restaurant, an
 opening: `warm`. An app, AI or fintech launch: `tech`. Real estate, perfume, a gala, Ramadan, Eid: `luxe`. Deals,
 giveaways, a creator's tip: `pop`. Fashion, a brand story: `editorial`. A teaser, a destination: `cinematic`.

@@ -21,12 +21,15 @@ examples and their wording differ from the originals.
   "anidoodle / Copyright 2026 Alex Greenshpun".
 - video-shotcraft, https://github.com/vincentwei1021/video-shotcraft.
 - frontend-design, https://github.com/anthropics/skills (skills/frontend-design), by Anthropic.
+- OpenMotion, https://github.com/nexu-io/openmotion: its library skills (the sale films, the design-style
+  cards, the talking-head overlay recipes, the editing methods) and its director's review notes.
 
 ## MIT-licensed skills
 
 - motion-video-kit, https://github.com/echris6/motion-video-kit — Copyright (c) 2026 echris6
 - motion-video-skill, https://github.com/farhan-syah/motion-video-skill — Copyright (c) 2026 Farhan Syah
 - motion-design-skills, https://github.com/iart-ai/motion-design-skills — Copyright (c) 2026 iart.ai
+- ecommerce-video-skills and tiktok-video-skills, https://github.com/iart-ai — Copyright (c) 2026 iart.ai
 - motion-design-skill, https://github.com/lottiefiles/motion-design-skill — Copyright (c) 2025 LottieFiles
 - b-roll-skills and tiktok-video-skills, https://github.com/iart-ai — Copyright (c) 2026 iart.ai
 - marketingskills, https://github.com/coreyhaines31/marketingskills — Copyright (c) 2025 Corey Haines
