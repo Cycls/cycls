@@ -20,6 +20,7 @@ class LLM:
         self._model = None
         self._system = ""
         self._tools = []
+        self._deferred = {}
         self._allowed_tools = []
         self._max_tokens = None   # None = 8k default
         self._context = None      # None = 1M default
@@ -63,6 +64,13 @@ class LLM:
     def model(self, name):          return self._copy(_model=name)
     def system(self, text):         return self._copy(_system=text)
     def tools(self, tools):         return self._copy(_tools=list(tools))
+    def defer(self, name, tools, about=""):
+        """Custom tools kept out of every request until a chat needs them, the way a connector's are:
+        the system prompt carries one line (`name`, `about`), `find_tools` loads them, and they stay for
+        the rest of the chat. `find_tools` matches the group on `name` and `about` only, so `about`
+        names the subject ("Saudi government tenders on Etimad"), not verbs every connector shares.
+        Their handlers are registered with `.on` as usual."""
+        return self._copy(_deferred={**getattr(self, "_deferred", {}), name: (about, list(tools))})
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))
     def max_tokens(self, n):        return self._copy(_max_tokens=n)
     def context(self, n):
@@ -238,8 +246,10 @@ class LLM:
                 agent_name=getattr(context, "agent_name", ""),   # its Word comments are signed as the parent's are
                 messages=SimpleNamespace(raw=[{"role": "user", "content": brief}])), team=team, me=call, **agent_kw)
             team = Team(context.workspace, chat_id, spawn)
+        deferred = getattr(self, "_deferred", {})   # only when set: a custom loop written before it still runs
         try:
-            async for ev in loop(context=context, **kw, **({"team": team} if team else {})):
+            async for ev in loop(context=context, **kw, **({"team": team} if team else {}),
+                                 **({"deferred_tools": deferred} if deferred else {})):
                 yield ev
         finally:
             if team: await team.close()
