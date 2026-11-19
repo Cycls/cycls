@@ -27,14 +27,14 @@ _PURPOSE = (
     "charts, a deck or a design turned into a video, on-screen text and captions — with a voice-over in Arabic "
     "or English and music when the person wants sound. It also cuts the person's own clips (an interview, a "
     "phone video) and stock footage into a video, captioned from what is said. "
-    "Stills, posters, slides and documents are Design, not Video. "
+    "Stills, posters, slides and documents are Design. "
     "Each video is one file, videos/<name>.video.html; `render` makes videos/<name>.mp4 and opens it for the user."
 )
 
 _SHORT = _PURPOSE + (
-    "\n\nSHORT form: how a video is written is not in it. Call {\"action\": \"guide\"} first (the instructions "
-    "load, the renderer warms up), then its skills in one call, {\"action\": \"skill\", \"skill\": [\"video-direction\", "
-    "\"motion-design\", <kind>]} (kinds: " + ", ".join(n for n in SKILLS if n not in ("video-direction", "motion-design"))
+    "\n\nSHORT form: how a video is written is not in it. Call {\"action\": \"guide\"} first (it loads them and "
+    "warms the renderer), then its skills in one call, {\"action\": \"skill\", \"skill\": [\"video-direction\", "
+    "\"motion-design\", <kind>]} (kinds and styles: " + ", ".join(n for n in SKILLS if n not in ("video-direction", "motion-design"))
     + "), then write the video."
 )
 

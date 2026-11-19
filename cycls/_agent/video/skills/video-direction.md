@@ -115,6 +115,10 @@ colours. A campaign shares one look; different clients should not all get the sa
 | brutalist | black borders and hard shadows on cream, one yellow block | SaaS, dev tools, apps, startups, feature walkthroughs | blocks slam in, hard cuts |
 | riso | two inks off register (fluorescent pink, teal) on grainy paper; poster caps | creators, indie brands, events, music, zines, cafés | sheets off the drum, hard cuts |
 
+A style the person names that no look is (whiteboard, split-flap, stop motion, paper collage, a dark premium
+reveal, a logo sting): load `style-recipes` (overlays, explainers, stings, covers) or `promo-recipes` (promos and
+product ads); an edit of their footage (shorts from a long talk, a script edit, multicam): `edit-recipes`.
+
 **A direction is a look plus a motif** you add in the scene's own markup (§7):
 
 | direction | look | add on top |

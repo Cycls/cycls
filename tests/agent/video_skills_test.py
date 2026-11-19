@@ -9,7 +9,8 @@ from cycls._agent.video.tool import VIDEO_LOADED, VIDEO_SKILLED, video_skills_lo
 
 from tests.agent.video_test import COMP, FakeService, _on, _run, _ws
 
-NAMES = ["video-direction", "motion-design", "promo-reel", "explainer-video", "footage-video"]
+NAMES = ["video-direction", "motion-design", "promo-reel", "explainer-video", "footage-video",
+         "edit-recipes", "promo-recipes", "style-recipes"]
 FILES = sorted(p for p in pathlib.Path(skill.__file__).with_name("skills").glob("*.md") if p.name != "NOTICE.md")
 
 
@@ -59,7 +60,7 @@ def test_a_skill_loaded_on_the_short_form_says_the_instructions_loaded_too(monke
 
 
 def test_the_skill_files_are_read_as_the_harness_reads_a_skill_and_fit_its_limits():
-    assert len(FILES) == len(skill.SKILLS) == 5
+    assert len(FILES) == len(skill.SKILLS) == 8
     for f in FILES:
         raw = f.read_bytes()
         meta, body = parse_frontmatter(raw.decode("utf-8").replace("\r\n", "\n"))
