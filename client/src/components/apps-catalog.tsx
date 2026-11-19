@@ -235,8 +235,9 @@ function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (e
 // preview, Get installs it (admins): the app opens and the panel lists it. Games and templates come last.
 const rank = (a: CatalogApp) => (a.section === "games" ? 2 : a.category === "Templates" ? 1 : 0);
 
-export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback }: {
+export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback, title }: {
   api: Api; onOpen: (entry: string, name: string) => void; onChanged?: () => void; onSeeAll?: () => void; fallback: ReactNode;
+  title?: string;   // under installed apps: what the shelves are ("Discover")
 }) {
   const [data, setData] = useState<{ apps: CatalogApp[]; admin: boolean } | null>(null);
   const [peek, setPeek] = useState<CatalogApp | null>(null);
@@ -264,6 +265,7 @@ export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback }: {
   if (!shelves.size) return <>{fallback}</>;
   return (
     <div className="flex flex-col gap-6 py-4">
+      {title && <h3 className={cn(H4, "mb-0 px-4")}>{title}</h3>}
       {!data.admin && <p className="px-4 text-xs text-muted-foreground">{t("appsAdminOnly")}</p>}
       {[...shelves].map(([name, apps]) => (
         <section key={name}>

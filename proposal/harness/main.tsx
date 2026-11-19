@@ -85,10 +85,13 @@ function DialogScene({ view }: { view: "browse" | "theme" }) {
 // The empty Apps panel as a store: the side panel's width, the real catalog and pictures from public/shelf/
 // (a copy of super-dev3's default_apps: catalog.json + <slug>.webp — not committed).
 function ShelvesScene() {
+  // &installed=1: one app is there, the shelves sit under it
+  const mine = q.get("installed") ? [{ slug: "answers", name: "Answer Library", icon: "📚", entry: "apps/answers/index.html" }] : [];
   const shelfApi = useMemo(() => (async (path: string) => {
     if (path !== "/apps/catalog") return api(path);
     const rows = (await (await fetch("/shelf/catalog.json")).json()).apps as { slug: string }[];
-    return new Response(JSON.stringify({ admin, apps: rows.map((r) => ({ ...r, state: "available", thumb_url: `/shelf/${r.slug}.webp` })) }),
+    return new Response(JSON.stringify({ admin, apps: rows.map((r) => ({ ...r, state: mine.some((m) => m.slug === r.slug) ? "installed" : "available",
+                                                                         thumb_url: `/shelf/${r.slug}.webp` })) }),
                         { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof api, []);
   return (
@@ -98,7 +101,7 @@ function ShelvesScene() {
           <span className="text-muted-foreground">Chats</span><span className="text-muted-foreground">Files</span>
           <span className="border-b-2 border-foreground pb-3 pt-3 font-medium">Apps</span>
         </div>
-        <AppsPanel apps={[]} loading={false} onOpen={() => {}} onBrowse={() => {}} catalog={{ api: shelfApi, onOpen: () => {} }} />
+        <AppsPanel apps={mine as never[]} loading={false} onOpen={() => {}} onBrowse={() => {}} catalog={{ api: shelfApi, onOpen: () => {} }} />
       </div>
     </div>
   );

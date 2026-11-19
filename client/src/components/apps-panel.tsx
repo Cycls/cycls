@@ -60,8 +60,8 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
         {apps.length === 0 ? (
           // With a catalog the empty panel is a store (CatalogShelves); this is what is left when it has nothing to offer.
           catalog ? <CatalogShelves {...catalog} onSeeAll={onBrowse} fallback={empty} /> : empty
-        ) : (
-          // A phone's home screen: an app opens on a click, its menu on a right-click, what it does on hover
+        ) : (<>
+          {/* A phone's home screen: an app opens on a click, its menu on a right-click, what it does on hover */}
           <div className="grid grid-cols-3 gap-x-2 gap-y-5 px-3 py-5">
             {apps.map((app, i) => (
               <div
@@ -104,7 +104,11 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
               </div>
             ))}
           </div>
-        )}
+          {/* the rest of the store below what is installed; read again when that changes (the key) */}
+          {catalog && <div className="border-t border-border">
+            <CatalogShelves key={apps.map((a) => a.slug).join(",")} {...catalog} onSeeAll={onBrowse} title={t("discover")} fallback={null} />
+          </div>}
+        </>)}
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={itemsFor(menu.app)} onClose={() => setMenu(null)} />}
     </div>
