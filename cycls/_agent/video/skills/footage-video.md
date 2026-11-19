@@ -161,6 +161,13 @@ sheet and keep graphics above or below it.
   at("#p3", [{ opacity: 0, transform: "scale(1.4)" }, { opacity: 1, transform: "none" }], 360, 500, "cubic-bezier(0.34, 1.56, 0.64, 1)");
   ```
   A punch line may run past its piece into the end card above it (a higher track): the words carry the cut.
+- **A note worth keeping** (a tip, a claim, a spec said aloud): `motion {name, piece: "note", start, vars: {text,
+  style, mark_at}}`. `text` is the line as it is said, its key words starred (`"The one habit: *drink water first*"`,
+  up to 4 words); `start` is when the sentence begins and `mark_at` when the starred words are said (both from the
+  footage reply's word times), so the mark lands on the spoken word. Styles: `highlighter` (study tips, book notes,
+  calm talks), `marker` (how-tos, ideas building up), `red-pen` (a claim checked or corrected), `impact` (a number
+  or a result to slam: no card), `spec` (a product spec, with `label`). One note at a time, never over the face
+  (it moves off a face like a lower third); a note is earned like a punch line, once every 10–20 s.
 - **Accents** (`lottie {query}`: underline, circle, arrow, check): on a plain word, not on a block of the same
   colour. A Lottie's stroke sits in the middle of its box: place the box so its middle is just under the word,
   and never on the caption rail (the captions hide it).

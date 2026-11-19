@@ -90,7 +90,7 @@ def _schema():
         "template": {"type": "string", "description": "template: which template (they are listed in the instructions)."},
         "vars": {"type": "object", "description": "template: its variables, as the instructions list them. "
                                                   "motion: the piece's (name, role, title, items, text, accent, …)."},
-        "piece": {"type": "string", "enum": ["lower-third", "logo-reveal", "chart", "kinetic-title", "end-card"],
+        "piece": {"type": "string", "enum": ["lower-third", "logo-reveal", "chart", "kinetic-title", "end-card", "note"],
                   "description": "motion: which piece."},
         "start": {"type": "number", "description": "motion: when the piece starts, in seconds."},
         "speed": {"type": "number", "description": "voice: 0.75 (slower) to 1.25 (faster); 0.85 reads calmly."},

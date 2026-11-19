@@ -1674,7 +1674,7 @@ def _lottie(query):
     return "\n".join(lines)
 
 
-PIECES = ("lower-third", "logo-reveal", "chart", "kinetic-title", "end-card")
+PIECES = ("lower-third", "logo-reveal", "chart", "kinetic-title", "end-card", "note")
 
 
 async def _motion(workspace, root, chat, name, rel, inp, note):
@@ -1684,7 +1684,7 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
 
     piece = str(inp.get("piece") or "").strip()
     if piece not in PIECES:
-        return _err("motion needs piece: lower-third, logo-reveal, chart, kinetic-title or end-card.")
+        return _err("motion needs piece: lower-third, logo-reveal, chart, kinetic-title, end-card or note.")
     if not (root / rel).exists():
         return _err(f"there is no {rel}; `write` it first.")
     variables = dict(inp.get("vars") or {}) if isinstance(inp.get("vars"), dict) else {}
@@ -1694,7 +1694,8 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
         kit = None
     if kit:
         colours = kit.get("colours") or {}
-        variables.setdefault("accent", colours.get("accent") or colours.get("primary"))
+        if piece != "note":     # a note's mark keeps its style's colour (the highlighter's yellow) unless one is named
+            variables.setdefault("accent", colours.get("accent") or colours.get("primary"))
         if piece in ("logo-reveal", "chart") and colours.get("background"):
             variables.setdefault("background", colours.get("background"))
         heading = kit.get("heading") or kit.get("body")
@@ -1745,6 +1746,11 @@ async def _motion(workspace, root, chat, name, rel, inp, note):
             said.append(f"a soft {made['sting']} as the logo lands, so the video does not end on silence")
         said.append("its words come in as the look times them and hold to the last frame")
         return _result("; ".join(said) + f".\n{text}", blocks, note, _shown(rel, name, clean, version))
+    if piece == "note" and isinstance(made.get("mark_at"), (int, float)):
+        said = (f"Added a {made.get('style') or 'highlighter'} note to {rel}: its id is {made.get('id')}, from {start or 0:g} s; "
+                f"its key words are marked at {made['mark_at']:g} s (check that is when they are said, in the footage reply's "
+                "word times, and move mark_at if not). Kept off the face like a lower third.")
+        return _result(f"{said}\n{text}", blocks, note, _shown(rel, name, clean, version))
     where = {"up": " It sits higher than usual, above the scene's own text.",
              "down": " It sits lower than usual, below the scene's own text."}.get(made.get("moved"), "")
     own = made.get("colours") if isinstance(made.get("colours"), dict) else {}
