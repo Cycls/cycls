@@ -1,6 +1,7 @@
 import type { PollApi } from "../lib/polls";
 import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/comments";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { fetchAuthed } from "../hooks/use-auth-headers";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { MessageBubble } from "./message";
@@ -130,6 +131,8 @@ interface Queued {
 const RAIL_ICON_W = 44;   // folded rail: icon strip only
 // Switching workspace remounts Chat: each one keeps the chat and canvas tabs it had open, for when it's back.
 const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean }>();
+
+let chromeLinked = false;   // once per page: the claim below is the same for every chat
 
 export function Chat({ chat, onShare, files, account, config, view = "" }: {
   chat: ChatApi;
@@ -552,6 +555,29 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // Focus on mount
   useEffect(() => {
     textareaRef.current?.focus();
+  }, []);
+
+  // Links this Chrome to the signed-in person. Only a site the Cycls extension names sees chrome.runtime here.
+  useEffect(() => {
+    const runtime = (window as unknown as { chrome?: { runtime?: { sendMessage?: (id: string, m: unknown, cb: () => void) => void; lastError?: unknown } } }).chrome?.runtime;
+    if (!runtime?.sendMessage || chromeLinked) return;
+    chromeLinked = true;
+    void fetchAuthed("/extension/claim", { method: "POST" }).then((r) => (r.ok ? r.json() : null)).then((link) => {
+      for (const id of link?.extensions ?? []) runtime.sendMessage!(id, { type: "cycls:claim", claim: link.claim }, () => void runtime.lastError);
+    }).catch(() => {});
+  }, []);
+
+  // The Chrome extension's side panel hands over text for the person to finish (a selected passage, a pairing code).
+  useEffect(() => {
+    if (window.parent === window) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== window.parent || !e.origin.startsWith("chrome-extension://") || e.data?.type !== "cycls:prefill") return;
+      setInput((cur) => (cur.trim() ? `${cur.trimEnd()}\n\n${e.data.text}` : String(e.data.text)));
+      textareaRef.current?.focus();
+    };
+    window.addEventListener("message", onMessage);
+    window.parent.postMessage({ type: "cycls:chat-ready" }, "*");
+    return () => window.removeEventListener("message", onMessage);
   }, []);
 
   const searchFiles = files?.searchFiles;

@@ -16,6 +16,8 @@ Optional:
                     - cdp:        BROWSER_URL is already a raw CDP endpoint
                                   (e.g. http://host:9222) — no secret required
                     - browserbase: managed provider (Phase 4)
+                    - extension:  the person's own Chrome, through the Cycls
+                                  extension's relay (BROWSER_URL) — one endpoint each
 
 If BROWSER_URL is unset (or the secret is missing for a secret-requiring
 provider) the feature is simply off: `configured()` is False and `session()`
@@ -65,6 +67,17 @@ class Unavailable(RuntimeError):
 
 def _provider():
     return (os.environ.get("BROWSER_PROVIDER") or "steel").lower()
+
+
+def extension_claim(user_id, ttl=60):
+    """Proof of who is signed in, good for a minute: the page gives it to the person's Chrome extension, which
+    gives it to the relay. None unless this agent's browser is the extension."""
+    secret = os.environ.get("BROWSER_SECRET")
+    if _provider() != "extension" or not secret:
+        return None
+    import hashlib, hmac, time
+    body = f"{user_id}.{int(time.time()) + ttl}"
+    return f"{body}.{hmac.new(secret.encode(), f'claim:{body}'.encode(), hashlib.sha256).hexdigest()}"
 
 
 # A service session holds page state (the open page, cookies, the `data-cy-ref`
@@ -181,6 +194,11 @@ async def _cdp_endpoint(user_id=None, chat_id=None):
         _STEEL_SESSIONS[_skey(user_id, chat_id)] = ws
         return ws
 
+    if provider == "extension" and secret:   # the Chrome is the person's, whichever workspace ("org:user") they're in
+        from urllib.parse import quote
+        person = str(user_id).rsplit(":", 1)[-1]
+        return f"{url.rstrip('/').replace('http', 'ws', 1)}/cdp/{quote(person, safe='')}?key={secret}"
+
     raise Unavailable(f"unknown BROWSER_PROVIDER: {provider!r}")
 
 
@@ -223,7 +241,8 @@ class Session:
         # the browser service's job (the cycls service and Steel both do it).
         try:
             from . import stealth
-            await stealth.apply(self._context)
+            if _provider() != "extension":   # the person's own Chrome is already a real browser
+                await stealth.apply(self._context)
         except Exception:
             pass
         self._page = (self._context.pages[0] if self._context.pages

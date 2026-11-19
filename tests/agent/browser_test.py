@@ -47,6 +47,25 @@ def test_cdp_provider_returns_url_verbatim(monkeypatch):
     assert asyncio.run(client._cdp_endpoint()) == "http://host:9222"
 
 
+def test_extension_claim_is_signed_only_for_the_extension_provider(monkeypatch):
+    import hashlib
+    import hmac
+    monkeypatch.setenv("BROWSER_SECRET", "s3")
+    monkeypatch.setenv("BROWSER_PROVIDER", "steel")
+    assert client.extension_claim("user_1") is None
+    monkeypatch.setenv("BROWSER_PROVIDER", "extension")
+    user, expiry, mac = client.extension_claim("user_1").rsplit(".", 2)
+    assert user == "user_1" and mac == hmac.new(b"s3", f"claim:{user}.{expiry}".encode(), hashlib.sha256).hexdigest()
+
+
+def test_extension_provider_is_one_relay_endpoint_per_person(monkeypatch):
+    monkeypatch.setenv("BROWSER_PROVIDER", "extension")
+    monkeypatch.setenv("BROWSER_URL", "https://relay.example/")
+    monkeypatch.setenv("BROWSER_SECRET", "s")
+    assert asyncio.run(client._cdp_endpoint("user_1")) == "wss://relay.example/cdp/user_1?key=s"
+    assert asyncio.run(client._cdp_endpoint("org_9:user_1")) == "wss://relay.example/cdp/user_1?key=s"   # any workspace
+
+
 def test_unconfigured_raises_unavailable():
     with pytest.raises(browser.Unavailable):
         asyncio.run(client._cdp_endpoint())

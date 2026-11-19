@@ -138,7 +138,11 @@ export function useSpeechRecognition({
       release();
       recorderRef.current = null;
       track("mic_permission_denied", { reason: (e as Error)?.name });   // NotAllowedError, NotFoundError, NotSupportedError…
-      toastError(t("micUnavailable"));
+      const extension = window.location.ancestorOrigins?.[0];   // Chrome can't ask for the mic in a side panel: the Cycls extension asks from a tab
+      if ((e as Error)?.name === "NotAllowedError" && extension?.startsWith("chrome-extension://"))
+        window.parent.postMessage({ type: "cycls:mic-blocked" }, extension);
+      else
+        toastError(t("micUnavailable"));
     }
   }, [onEnd, release, toastError]);
 

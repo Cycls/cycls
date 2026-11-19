@@ -145,7 +145,7 @@ export function MessageBubble({
               ))}
             </div>
           )}
-          <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap break-words">
+          <div dir="auto" className="rounded-3xl bg-secondary text-secondary-foreground px-4 py-2.5 whitespace-pre-wrap [overflow-wrap:anywhere]">
             {message.content}
           </div>
         </div>

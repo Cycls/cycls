@@ -403,6 +403,15 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
 
     from .routers import resolve_ws_id
 
+    @app.post("/extension/claim")
+    async def extension_claim(user: User = required_auth):
+        """Links the person's Chrome: a signed claim, and the extension ids (BROWSER_EXTENSION_IDS) that may take it."""
+        from cycls._agent.browser.client import extension_claim as claim_for
+        claim = claim_for(user.id)
+        if not claim:
+            raise HTTPException(status_code=404)
+        return {"claim": claim, "extensions": [x for x in os.environ.get("BROWSER_EXTENSION_IDS", "").split(",") if x]}
+
     @app.post("/")
     @app.post("/chat")
     @app.post("/chat/completions")
