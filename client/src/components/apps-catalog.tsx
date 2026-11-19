@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icon";
+import { Mono, isMono } from "./app-icon";
 import { PLATE } from "./connectors-dialog";
 import type { ChatApi } from "../hooks/use-chat";
 import { t, getLang } from "../lib/i18n";
@@ -33,6 +34,11 @@ const category = (a: CatalogApp) => (ar() && a.category_ar) || a.category || "";
 const kb = (n: number) => `${Math.max(1, Math.round(n / 1024)).toLocaleString(ar() ? "ar" : "en")} KB`;
 
 function Glyph({ a, className = "size-10" }: { a: CatalogApp; className?: string }) {
+  if (isMono(a.icon)) return (
+    <span className={cn(className, "flex shrink-0 items-center justify-center rounded-[24%] bg-foreground text-background")}>
+      <Mono src={a.icon!} className="size-[56%]" />
+    </span>
+  );
   const img = a.icon?.startsWith("data:image/");
   return (
     <span className={cn(className, "flex shrink-0 items-center justify-center text-xl", PLATE)}>

@@ -42,7 +42,7 @@ _SLUG = re.compile(r"^[a-z0-9_-]{1,64}$")   # build_app's alphabet (_APP_SLUG_OK
 _SKIP = {"data", "app.json", "index.html", "preview.webp"}   # handled explicitly, or never touched
 # `section`: "games" lists the bundle under Games, beside Apps, instead of in Apps.
 _FIELDS = ("name", "name_ar", "icon", "description", "description_ar", "category", "category_ar", "section")
-_CAPS = {"name": 60, "name_ar": 60, "icon": 512, "description": 300, "description_ar": 300,
+_CAPS = {"name": 60, "name_ar": 60, "icon": 2048,   # icon: an emoji, or a pictogram's SVG as a data: URI "description": 300, "description_ar": 300,
          "category": 40, "category_ar": 40, "section": 20}
 
 

@@ -85,8 +85,10 @@ function DialogScene({ view }: { view: "browse" | "theme" }) {
 // The empty Apps panel as a store: the side panel's width, the real catalog and pictures from public/shelf/
 // (a copy of super-dev3's default_apps: catalog.json + <slug>.webp — not committed).
 function ShelvesScene() {
-  // &installed=1: one app is there, the shelves sit under it
-  const mine = q.get("installed") ? [{ slug: "answers", name: "Answer Library", icon: "📚", entry: "apps/answers/index.html" }] : [];
+  // &installed=1: one app is there, the shelves sit under it; &mono=1: with its black-and-white pictogram
+  const [mono, setMono] = useState<string | undefined>();
+  useEffect(() => { if (q.get("mono")) fetch("/shelf/mono-answers.txt").then((r) => r.text()).then((t) => setMono(t.trim())); }, []);
+  const mine = q.get("installed") ? [{ slug: "answers", name: "Answer Library", icon: mono ?? "📚", iconSrc: mono, entry: "apps/answers/index.html" }] : [];
   const shelfApi = useMemo(() => (async (path: string) => {
     if (path !== "/apps/catalog") return api(path);
     const rows = (await (await fetch("/shelf/catalog.json")).json()).apps as { slug: string }[];

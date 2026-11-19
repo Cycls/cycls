@@ -53,7 +53,7 @@ export function parseManifest(slug: string, raw: string | null): AppInfo {
     }
   }
   const name = str(m.name, 60) ?? titleise(slug);
-  const icon = str(m.icon, 512);
+  const icon = str(m.icon, 2048);   // room for a pictogram's SVG (data:image/svg+xml, the default apps' mono icons)
   const app: AppInfo = {
     slug,
     name,

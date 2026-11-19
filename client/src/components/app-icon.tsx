@@ -7,6 +7,15 @@ export interface AppIconSource {
   letter?: string;
 }
 
+// A black-and-white pictogram: an SVG marked data-mono, drawn in the text colour through a mask, so its tile takes
+// the page's opposite colour and the icon follows light and dark by itself (the default apps' icons).
+export const isMono = (src?: string) => !!src?.startsWith("data:image/svg+xml") && decodeURIComponent(src).includes("data-mono");
+
+export function Mono({ src, className }: { src: string; className?: string }) {
+  const m = `url("${src}") center / contain no-repeat`;
+  return <span aria-hidden className={cn("shrink-0 bg-current", className)} style={{ mask: m, WebkitMask: m }} />;
+}
+
 // An image if the manifest names one, else its emoji, else the first letter of
 // the app's name — so an app always has something to recognise it by.
 export function AppIcon({ app, className, textClassName }: {
@@ -14,6 +23,7 @@ export function AppIcon({ app, className, textClassName }: {
   className?: string;
   textClassName?: string;
 }) {
+  if (isMono(app.iconSrc)) return <Mono src={app.iconSrc!} className={className} />;
   if (app.iconSrc) {
     return (
       <img
@@ -50,6 +60,12 @@ export function AppTile({ app, className, textClassName }: {
   textClassName?: string;
 }) {
   const tint = TINTS[[...(app.slug ?? app.name)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 0) % TINTS.length];
+  if (isMono(app.iconSrc)) return (   // black on white, white on black: the page's opposite
+    <span className={cn("flex shrink-0 items-center justify-center rounded-[24%] bg-foreground text-background",
+      "shadow-[0_1px_3px_rgba(0,0,0,0.12),inset_0_0_0_0.5px_rgba(127,127,127,0.25)]", className)}>
+      <Mono src={app.iconSrc!} className="size-[56%]" />
+    </span>
+  );
   return (
     <span className={cn(
       "flex shrink-0 items-center justify-center overflow-hidden rounded-[24%] bg-gradient-to-b text-neutral-700 dark:text-neutral-100",
