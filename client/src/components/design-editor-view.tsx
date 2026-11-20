@@ -230,6 +230,15 @@ function keepPage(path: string, page: string | null) {
 // An agent edit to replay: `intent` labels the cursor, `version` is the file's after it.
 type Command = { script: string; intent?: string; version?: string; page?: string };
 
+// The design (with its version) and the brand, asked for as the view opens instead of when the editor says
+// `ready`: the editor takes a second or more to start, and these came after it, one request behind the other
+// (1.45 s of a 5.4 s open, measured on super-dev). The first `ready` takes them only while nothing has changed
+// the file as far as this view knows — no agent edit arrived, no reload — and they aren't old; else it reads
+// afresh, as before.
+type Early = { got: Promise<{ url: string; version: string } | null>; brand: Promise<unknown>; at: number; stale: boolean };
+const EARLY_FOR = 20_000;   // ms an early read stays good for the first `ready`
+const dropEarly = (e: Early | null) => { if (e) void e.got.then((g) => { if (g) URL.revokeObjectURL(g.url); }); };
+
 export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host }: {
   url: string;        // blob URL of the .fig, used when there's no host.fetchVersioned
   path: string;       // workspace path to write edits back to
@@ -281,8 +290,18 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const resetWait = useRef<number | null>(null);   // "Load the latest" in a room: the editor is telling the room
   const known = useRef(new Set<string>());   // file versions the room's document holds (`liveBase`)
   const retried = useRef(0);            // consecutive 412 retries on a version the room holds
+  const early = useRef<Early | null>(null);   // the design and brand, asked for as the view opened (Early)
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? name).replace(/\.fig$/i, "");
+
+  useEffect(() => {
+    const h = latest.current.host;
+    if (!h?.fetchVersioned) return;
+    const e: Early = { got: h.fetchVersioned(latest.current.path).catch(() => null), brand: h.brand().catch(() => null),
+                       at: Date.now(), stale: false };
+    early.current = e;
+    return () => { if (early.current === e) { early.current = null; dropEarly(e); } };   // unused: let its blob go
+  }, []);
 
   const post = useCallback((msg: Record<string, unknown>) => {
     if (origin) frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin);
@@ -328,6 +347,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
 
   // Re-open on the saved file (a fresh fetch, with its version).
   const reopen = useCallback(() => {
+    dropEarly(early.current);
+    early.current = null;
     commands.current = [];
     replaying.current = null;
     editorLoaded.current = false;
@@ -497,6 +518,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         if (!disposed) { setPinsOn(false); setPlace(null); }
         let source = sourceRef.current;
         sourceRef.current = null;
+        const pre = early.current;      // the first `ready` only (Early)
+        early.current = null;
+        if (!(protocol.current >= 2 && host?.fetchVersioned)) dropEarly(pre);   // an editor from before the protocol
         version.current = loadedVersion.current = null;
         commands.current = [];          // edits made before now are in the file this load reads
         replaying.current = null;
@@ -506,14 +530,15 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           // Read afresh with its version: the base its saves name (design/store.py).
           if (source) URL.revokeObjectURL(source);
           try {
-            const got = await host.fetchVersioned(latest.current.path);
+            let got = pre && !pre.stale && Date.now() - pre.at < EARLY_FOR ? await pre.got : null;
+            if (!got) { dropEarly(pre); got = await host.fetchVersioned(latest.current.path); }
             source = got.url;
             version.current = loadedVersion.current = got.version || null;
           } catch {
             if (!disposed) setStatus("error");
             return;
           }
-        } else if (!source && readies > 0 && latest.current.reload) {
+        } else if (!source && (readies > 0 || !latest.current.url) && latest.current.reload) {
           // A later `ready` (the editor reloaded itself) reads the saved file again.
           try { source = await latest.current.reload(); } catch { source = null; }
         }
@@ -526,8 +551,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         try {
           const together = protocol.current >= 2 && features.current.has("live") && !!host?.live && !!host.me;
           const [buf, brand, room] = await Promise.all([
-            fetch(source ?? latest.current.url).then((r) => r.arrayBuffer()),
-            protocol.current >= 2 && host ? host.brand().catch(() => null) : Promise.resolve(null),
+            (source ?? latest.current.url) ? fetch((source ?? latest.current.url)!).then((r) => r.arrayBuffer())
+              : Promise.reject(new Error("no design to load")),
+            protocol.current >= 2 && host ? (pre?.brand ?? host.brand().catch(() => null)) : Promise.resolve(null),
             together ? host!.live!(latest.current.path).catch(() => null) : Promise.resolve(null),
           ]);
           if (disposed) return;
@@ -711,6 +737,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         reopen();
       } else if (m.type === "commandError") {
         // The server already saved the edit: reopen on a fresh fetch, or an auto-save would undo it.
+        dropEarly(early.current);
+        early.current = null;
         commands.current = [];
         replaying.current = null;
         editorLoaded.current = false;
@@ -773,6 +801,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         window.clearTimeout(pending.current.timer);
         pending.current = null;
       }
+      if (early.current) early.current.stale = true;   // it may not hold this edit: the first `ready` reads afresh
       commands.current.push({ script: d.script, intent: d.intent, version: typeof d.version === "string" ? d.version : undefined,
                               page: typeof d.page === "string" && d.page ? d.page : undefined });
       pump();

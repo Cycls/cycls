@@ -63,6 +63,9 @@ export interface CanvasFile {
   live?: boolean;     // a design the agent is working on: in the editor while it does, then its preview
 }
 
+// `content` of a design whose editor reads the file itself (useFileContent's `designByEditor`): not a URL.
+export const DESIGN_BY_EDITOR = "cycls:design-by-editor";
+
 // Fetch a file's content for the canvas. pdf → blob URL (native viewer);
 // other types → source text. Revokes the blob URL on change/unmount. Pass
 // file=null to fetch nothing (e.g. unrenderable file shown as a download card).
@@ -72,6 +75,7 @@ export function useFileContent(
   openFile: (p: string, silent?: boolean) => Promise<string>,
   reloadKey: number = 0,   // bump to re-fetch: the agent rewrote the file
   designAsPictures: boolean = false,   // no .fig editor (a shared page): fetch its slide manifest
+  designByEditor: boolean = false,     // the .fig editor reads the file itself, with its version: nothing to fetch here
 ) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -101,7 +105,11 @@ export function useFileContent(
     // files fetch the server's PDF render.
     // Editor-less designs fetch their slide manifest; a Video composition the page the video
     // service builds of it (always a JSON answer).
-    const load = (designAsPictures && isDesignEditor(kind))
+    // A design its editor reads itself (with its version, as the editor starts) isn't downloaded here first: the
+    // editor waited for this download before it began to load (0.8 s of a 5.4 s open, measured on super-dev).
+    const load = (designByEditor && isDesignEditor(kind))
+      ? Promise.resolve(DESIGN_BY_EDITOR)
+      : (designAsPictures && isDesignEditor(kind))
       ? readFile(`${file.path}?as=slides`, true)
       : isComposition(kind)
       ? readFile(`${file.path}?as=player`, true)
@@ -115,7 +123,7 @@ export function useFileContent(
     load.then((v) => { if (!cancelled) { setContent(v); setError(false); loaded.current = true; } })
         .catch((e) => { if (!cancelled) { if (file.writable && e?.status === 404) setContent(""); else if (!loaded.current) setError(true); } });
     return () => { cancelled = true; if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [file?.path, file?.name, file?.writable, readFile, openFile, reloadKey, designAsPictures]);
+  }, [file?.path, file?.name, file?.writable, readFile, openFile, reloadKey, designAsPictures, designByEditor]);
 
   return { content, setContent, error };
 }
@@ -482,7 +490,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   // manifest, shown read-only.
   if (isDesignEditor(fileKind(file))) {
     if (content && designEditorUrl) {
-      return <DesignEditorView url={content} path={file.path} name={file.name}
+      return <DesignEditorView url={content === DESIGN_BY_EDITOR ? "" : content} path={file.path} name={file.name}
                                editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})}
                                reload={reloadFile} host={shared ? undefined : designHost} />;
     }
@@ -1023,7 +1031,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
   const [slotStart, setSlotStart] = useState<HTMLElement | null>(null);
   const [slotEnd, setSlotEnd] = useState<HTMLElement | null>(null);
   const headerSlots = useMemo(() => ({ start: slotStart, end: slotEnd }), [slotStart, slotEnd]);
-  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl);
+  const { content, setContent, error } = useFileContent(file, readFile, openFile, (reloadKey ?? 0) + bump, !designEditorUrl,
+                                                       !!designEditorUrl && !!designHost?.fetchVersioned);
   const onReload = useCallback(() => setBump((n) => n + 1), []);
   // The agent changed this file mid-turn (a Video edit): fetch it again now, not when the turn ends.
   useEffect(() => {

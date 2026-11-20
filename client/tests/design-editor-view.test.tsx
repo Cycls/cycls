@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import {
   DesignEditorView, designPage, designPages, designPresence, designSelection, detachDesignEditorsUnder, flushDesignEditor,
-  followDesignPeer, fullscreenDesignEditor, showDesignPage, type DesignHost,
+  followDesignPeer, fullscreenDesignEditor, reloadDesignEditors, showDesignPage, type DesignHost,
 } from "../src/components/design-editor-view";
 import { CanvasHeaderSlot } from "../src/components/canvas-header-slot";
 import { DesignPresenceRow } from "../src/components/design-presence";
@@ -308,6 +308,65 @@ describe("DesignEditorView", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads the design (with its version) and the brand as it opens, not after the editor's `ready`", async () => {
+    const h = versioned(() => "v4");
+    const { frame } = mount({ host: h });
+    await flush();
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(1);                         // before the editor said anything
+    expect(h.brand).toHaveBeenCalledTimes(1);
+    const { load } = await ready(frame(), 2);
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(1);                         // `ready` used that read
+    expect(h.brand).toHaveBeenCalledTimes(1);
+    expect(load).toMatchObject({ fig: b64(bytes["blob:orig"]), brand: { colors: { primary: "#b45309" } } });
+  });
+
+  it("an agent edit before `ready`: the editor reads the design afresh, not the read begun as it opened", async () => {
+    let v = "v4";
+    const h = versioned(() => v);
+    const { frame } = mount({ host: h });
+    await flush();
+    v = "v5";
+    await command({ script: "A", version: "v5" });                             // saved after that read, maybe
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    fromEditor(frame(), "ready", { protocol: 2 });
+    await flush();
+    await flush();
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:orig");             // the early read let go
+    const load = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "load")!;
+    fromEditor(frame(), "loaded", { doc: load.doc });
+    await flush();
+    expect(post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === "command")).toEqual([]);   // v5 holds it
+  });
+
+  it("an editor opened again reads afresh; one closed before `ready` lets its early read go", async () => {
+    const h = versioned(() => "v4");
+    const { frame, unmount } = mount({ host: h });
+    await ready(frame(), 2);
+    reloadDesignEditors("designs/launch.fig");
+    await flush();
+    await ready(frame(), 2);
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);
+    unmount();
+
+    const h2 = versioned(() => "v4");
+    const second = mount({ host: h2 });
+    await flush();
+    second.unmount();
+    await flush();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:orig");
+  });
+
+  it("given no URL (its canvas left the reading to it), an editor without a versioned read reads the saved file", async () => {
+    const reload = vi.fn(async () => "blob:fresh");
+    const writeFile = vi.fn(async () => {});
+    const utils = render(<DesignEditorView url="" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR}
+                                           writeFile={writeFile} reload={reload} />);
+    const { post } = await ready(utils.container.querySelector("iframe")!, 2);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "load", fig: b64(bytes["blob:fresh"]) }), EDITOR);
   });
 
   it("agent edits replay one at a time, and one the editor loaded already is skipped", async () => {

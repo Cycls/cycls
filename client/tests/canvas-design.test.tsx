@@ -216,6 +216,38 @@ describe("a design opens in its editor", () => {
   });
 });
 
+describe("a design opens fast", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([7]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  const deck = (n: number) => JSON.stringify({ count: n, slides: Array.from({ length: n }, (_, i) => `data:image/jpeg;base64,S${i + 1}`),
+                                               names: Array.from({ length: n }, (_, i) => `slide-${i + 1}`), fig: "designs/a.fig" });
+  const designHost = () => ({
+    fetchVersioned: vi.fn(async () => ({ url: "blob:versioned", version: "v3" })), brand: vi.fn(async () => null),
+    newDesign: vi.fn(), writeNew: vi.fn(), openInCanvas: vi.fn(), refreshFiles: vi.fn(),
+  });
+
+  it("the editor starts at once, without the design downloaded first, and reads it once, with its version", async () => {
+    // The canvas downloaded the .fig before the editor's frame existed, and the editor read it again on `ready`.
+    const openFile = vi.fn(async () => "blob:fig");
+    const host = designHost();
+    const { container } = render(canvas("designs/a.fig", { openFile, designHost: host, readFile: async (p: string) => (p.includes("?as=slides") ? deck(2) : "") }));
+    await flush();
+    expect(container.querySelector("iframe")).toBeTruthy();
+    expect(openFile).not.toHaveBeenCalledWith("designs/a.fig");                // no download of its own
+    expect(host.fetchVersioned).toHaveBeenCalledTimes(1);                      // the editor's read, begun as it opened
+    const t = talk(container);
+    t.say("ready", { protocol: 2, features: ["present"] });
+    await flush();
+    await flush();
+    expect(host.fetchVersioned).toHaveBeenCalledTimes(1);                      // not again on `ready`
+    expect(t.sent("load")[0]).toMatchObject({ fig: btoa(String.fromCharCode(7)) });
+  });
+});
+
 describe("an older editor keeps its Edit | Preview switch", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1]).buffer })));
