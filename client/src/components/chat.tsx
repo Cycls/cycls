@@ -37,6 +37,7 @@ import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEd
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText, langOf } from "../lib/i18n";
 import { track } from "../lib/analytics";
+import { useWarmService } from "../lib/warm";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
@@ -616,6 +617,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     }
   }, []);
   const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders, warm: !!config?.voice_warm });
+  useWarmService(config?.design_editor_url);   // the design editor's service, awake before a design opens (lib/warm.ts)
 
   // Reset sidebar data when org changes
   useEffect(() => {
