@@ -216,7 +216,7 @@ describe("a design opens in its editor", () => {
   });
 });
 
-describe("a design opens fast", () => {
+describe("a design opens fast, and presents what a save drew", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([7]).buffer })));
     URL.revokeObjectURL = vi.fn();
@@ -245,6 +245,38 @@ describe("a design opens fast", () => {
     await flush();
     expect(host.fetchVersioned).toHaveBeenCalledTimes(1);                      // not again on `ready`
     expect(t.sent("load")[0]).toMatchObject({ fig: btoa(String.fromCharCode(7)) });
+  });
+
+  it("▶ Present asks for the first page by no name: the manifest a save drew in the background", async () => {
+    // The editor names its page ("Page 1"); by name it was another cache entry, drawn again on every Present.
+    const readFile = vi.fn(async (p: string) => (p.includes("?as=slides") ? deck(3) : ""));
+    const { container } = render(canvas("designs/a.fig", { readFile }));
+    await flush();
+    const t = talk(container);
+    t.say("ready", { protocol: 2, features: ["present"] });
+    await flush();
+    await flush();
+    const doc = t.sent("load")[0]?.doc;
+    t.say("loaded", { doc });
+    t.say("pages", { doc, page: "Page 1", pages: ["Page 1"] });
+    await flush();
+    readFile.mockClear();
+    t.say("present", { doc, page: "Page 1", slide: "slide-2", index: 1 });
+    await flush();
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides", true);
+    expect(screen.getByTestId("present-counter").textContent).toBe("2 / 3");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await flush();
+
+    // A later page of several keeps its name.
+    t.say("pages", { doc, page: "Story", pages: ["Post", "Story"] });
+    await flush();
+    readFile.mockClear();
+    t.say("present", { doc, page: "Story", slide: "slide-1", index: 0 });
+    await flush();
+    await flush();
+    expect(readFile).toHaveBeenCalledWith("designs/a.fig?as=slides&page=Story", true);
   });
 });
 

@@ -21,7 +21,7 @@ import { DocxView } from "./docx-view";
 import { SlidesView } from "./slides-view";
 import { DesignPresenceRow } from "./design-presence";
 import { VideoEditorView, canEditVideo, flushVideoEditor, videoEditorOpen, watchVideoEditors } from "./video-editor-view";
-import { DesignEditorView, canFullscreen, designEditorComments, designEditorPresents, designInRoom, designPage, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, showDesignPage, showDesignSlideAfterLoad, useDesignPages, type DesignHost } from "./design-editor-view";
+import { DesignEditorView, canFullscreen, designEditorComments, designEditorPresents, designInRoom, designPage, designPages, flushDesignEditor, fullscreenDesignEditor, reloadDesignEditors, showDesignPage, showDesignSlideAfterLoad, useDesignPages, type DesignHost } from "./design-editor-view";
 import { VersionHistory } from "./version-history";
 import { CommentButtons, CommentLayer, CommentsList } from "./comments";
 import { DeckView, EditPreviewSwitch, PageTabs, parseDeck, type DeckManifest, type DeckOp } from "./deck-view";
@@ -1164,8 +1164,13 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
       setShowing("getting");
       if (!document.fullscreenElement) void document.documentElement.requestFullscreen?.().catch(() => {});
       await flushDesignEditor(file.path, 3000);
+      // The first page (or the only one) is asked for by no name: its manifest is the one a save draws in the
+      // background (design/refresh.py) once saves go quiet. By name it was another entry in the cache, drawn
+      // again on every Present (the editor always names its page).
+      const pages = designPages(file.path)?.pages;
+      const page = d.page && !(pages && (pages.length < 2 || d.page === pages[0])) ? d.page : undefined;
       try {
-        const deck = parseDeck(await readFile(`${file.path}?as=slides${pageQuery(d.page)}`, true));
+        const deck = parseDeck(await readFile(`${file.path}?as=slides${pageQuery(page)}`, true));
         if (!deck?.count) return leavePresenting();
         const byName = d.slide ? (deck.names ?? []).indexOf(d.slide) : -1;
         const start = byName >= 0 ? byName : Math.min(Math.max(0, d.index ?? 0), deck.count - 1);
