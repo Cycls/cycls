@@ -16,3 +16,11 @@ def test_a_reference_is_told_as_structure_to_rebuild_and_never_to_use():
     assert "1. 0.0–1.5 s · hook · footage" in text and "on screen «خصم 20%»" in text
     assert "start from the warm look" in text and "Some Café" in text and "replace every sign of it" in text
     assert "Wake up to better coffee." in text
+
+
+def test_a_reference_keeps_each_products_picture_with_its_own_price():
+    # dev 2026-11-20 (om2): a bakery carousel rebuilt from a reference showed each price over the NEXT product's
+    # picture, and nothing caught it; the sale templates keep a picture with its price by construction
+    text = report.reference_text("uploads/ref.mp4", READING)
+    assert "ONE unit" in text and "never sits over another product's picture" in text
+    assert "sale-carousel" in text and "sale-promo" in text

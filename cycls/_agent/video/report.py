@@ -425,4 +425,10 @@ def reference_text(rel, reading, info=None):
         + "the person's words, products, offer and brand kit in place of the reference's; their own photos and clips, or "
         "stock found for the same roles (`footage {stock}`), where it shows footage. Never copy its words unless the person "
         "asks, never its brand name, logo or people. Say in one line what you kept from it and what you changed.")
+    lines.append(
+        "Products with prices: each product's picture, name and price are ONE unit, timed together — they come in and "
+        "leave at the same moment, so a price never sits over another product's picture (a card that peeks in at the side "
+        "is the next product; the centre card keeps its own price). Prices with the products' photos: start from a sale "
+        "template (`template` sale-carousel for several products, sale-promo for one: the tool works out the numbers and "
+        "keeps each photo with its price), then give it the reference's moves with `edit`.")
     return "\n".join(lines)
