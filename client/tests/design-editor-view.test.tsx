@@ -359,6 +359,39 @@ describe("DesignEditorView", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:orig");
   });
 
+  it("a design not written yet when it opened: the editor says so, and opens it when the file comes", async () => {
+    const h = versioned(() => "v1");
+    let there = false;
+    h.fetchVersioned = vi.fn(async () => { if (!there) throw Object.assign(new Error("HTTP 404"), { status: 404 }); return { url: "blob:orig", version: "v1" }; });
+    const props = { url: "", path: "designs/launch.fig", name: "launch.fig", editorUrl: EDITOR, writeFile: vi.fn(async () => {}), host: h };
+    const utils = render(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#0" /></ToastProvider>);
+    const first = utils.container.querySelector("iframe")!;
+    fromEditor(first, "ready", { protocol: 2 });
+    await flush();
+    await flush();
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);                        // the early read, then afresh: both 404
+    expect(screen.getByText(/couldn.t|could not|error/i)).toBeTruthy();
+    there = true;                                                             // the agent wrote it: the canvas's reload
+    utils.rerender(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#1" /></ToastProvider>);
+    await flush();
+    const second = utils.container.querySelector("iframe")!;
+    expect(second).not.toBe(first);                                           // reopened
+    const { load } = await ready(second, 2);
+    expect(load).toMatchObject({ fig: b64(bytes["blob:orig"]) });
+  });
+
+  it("a reload of a design that opened fine changes nothing in its editor", async () => {
+    const h = versioned(() => "v1");
+    const props = { url: "", path: "designs/launch.fig", name: "launch.fig", editorUrl: EDITOR, writeFile: vi.fn(async () => {}), host: h };
+    const utils = render(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#0" /></ToastProvider>);
+    const frame = utils.container.querySelector("iframe")!;
+    await ready(frame, 2);
+    utils.rerender(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#1" /></ToastProvider>);
+    await flush();
+    expect(utils.container.querySelector("iframe")).toBe(frame);              // its edits come as commands
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(1);
+  });
+
   it("given no URL (its canvas left the reading to it), an editor without a versioned read reads the saved file", async () => {
     const reload = vi.fn(async () => "blob:fresh");
     const writeFile = vi.fn(async () => {});

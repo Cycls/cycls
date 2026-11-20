@@ -63,8 +63,10 @@ export interface CanvasFile {
   live?: boolean;     // a design the agent is working on: in the editor while it does, then its preview
 }
 
-// `content` of a design whose editor reads the file itself (useFileContent's `designByEditor`): not a URL.
+// `content` of a design whose editor reads the file itself (useFileContent's `designByEditor`): not a URL. It
+// carries the reload count, so a file rewritten (or only now written) reaches an editor that couldn't open it.
 export const DESIGN_BY_EDITOR = "cycls:design-by-editor";
+const byEditor = (content: string | null) => !!content && content.startsWith(DESIGN_BY_EDITOR);
 
 // Fetch a file's content for the canvas. pdf → blob URL (native viewer);
 // other types → source text. Revokes the blob URL on change/unmount. Pass
@@ -108,7 +110,7 @@ export function useFileContent(
     // A design its editor reads itself (with its version, as the editor starts) isn't downloaded here first: the
     // editor waited for this download before it began to load (0.8 s of a 5.4 s open, measured on super-dev).
     const load = (designByEditor && isDesignEditor(kind))
-      ? Promise.resolve(DESIGN_BY_EDITOR)
+      ? Promise.resolve(`${DESIGN_BY_EDITOR}#${reloadKey}`)
       : (designAsPictures && isDesignEditor(kind))
       ? readFile(`${file.path}?as=slides`, true)
       : isComposition(kind)
@@ -490,7 +492,7 @@ export function CanvasDoc({ file, content, error, shared = false, readFile, open
   // manifest, shown read-only.
   if (isDesignEditor(fileKind(file))) {
     if (content && designEditorUrl) {
-      return <DesignEditorView url={content === DESIGN_BY_EDITOR ? "" : content} path={file.path} name={file.name}
+      return <DesignEditorView url={byEditor(content) ? "" : content} refresh={byEditor(content) ? content : undefined} path={file.path} name={file.name}
                                editorUrl={designEditorUrl} writeFile={writeFile ?? (async () => {})}
                                reload={reloadFile} host={shared ? undefined : designHost} />;
     }

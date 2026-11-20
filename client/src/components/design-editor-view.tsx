@@ -239,8 +239,9 @@ type Early = { got: Promise<{ url: string; version: string } | null>; brand: Pro
 const EARLY_FOR = 20_000;   // ms an early read stays good for the first `ready`
 const dropEarly = (e: Early | null) => { if (e) void e.got.then((g) => { if (g) URL.revokeObjectURL(g.url); }); };
 
-export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host }: {
+export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host, refresh }: {
   url: string;        // blob URL of the .fig, used when there's no host.fetchVersioned
+  refresh?: string;   // changes when the file was rewritten: an editor that couldn't open it tries again
   path: string;       // workspace path to write edits back to
   name: string;
   editorUrl: string;  // base URL of the deployed editor (config.design_editor_url)
@@ -255,6 +256,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const [frameKey, setFrameKey] = useState(0);        // bump → the editor iframe remounts
   const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
+  const statusRef = useRef(status);
+  statusRef.current = status;
   // "Saved ✓" goes in the file's header, beside Edit | Preview, where the text editor says "Saved": over the
   // editor it covered the editor's own controls (Simple | Designer, its bars). Full screen, or with no
   // header (a share), it stays over the editor, at the top.
@@ -355,6 +358,15 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
     setStatus("loading");
     setFrameKey((k) => k + 1);
   }, []);
+
+  // The file rewritten — or only now written: a design opened while the agent was still making it — reaches an
+  // editor that couldn't read it (the canvas once fetched the file first and showed the editor when it came).
+  const lastRefresh = useRef(refresh);
+  useEffect(() => {
+    if (refresh === lastRefresh.current) return;
+    lastRefresh.current = refresh;
+    if (statusRef.current === "error") reopen();
+  }, [refresh, reopen]);
 
   // Full screen is the editor's box, not the page, so the iframe doesn't reload.
   const enterFullscreen = useCallback(() => {
