@@ -29,13 +29,15 @@ import {
 } from "@lexical/table";
 import { $setBlocksType } from "@lexical/selection";
 import { $findMatchingParent, mergeRegister } from "@lexical/utils";
-import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, TRANSFORMERS, type ElementTransformer, type TextMatchTransformer } from "@lexical/markdown";
+import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, TRANSFORMERS, type ElementTransformer, type MultilineElementTransformer, type TextMatchTransformer } from "@lexical/markdown";
 import {
   $getSelection, $setSelection, $isRangeSelection, $createParagraphNode, $getNearestNodeFromDOMNode, $getRoot, $insertNodes,
-  $applyNodeReplacement, createCommand, DecoratorNode, PASTE_COMMAND, DROP_COMMAND,
+  $applyNodeReplacement, $getNodeByKey, $getState, $setState, createState, createCommand, DecoratorNode, PASTE_COMMAND, DROP_COMMAND,
   FORMAT_TEXT_COMMAND, UNDO_COMMAND, REDO_COMMAND, CAN_UNDO_COMMAND, CAN_REDO_COMMAND, COMMAND_PRIORITY_LOW,
   type BaseSelection, type ElementNode, type LexicalEditor, type NodeKey, type SerializedLexicalNode, type Spread, type TextFormatType,
 } from "lexical";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { Media } from "./parts/media";
 import { Icon } from "./icon";
 import { t } from "../lib/i18n";
@@ -66,8 +68,41 @@ export class MediaNode extends DecoratorNode<React.JSX.Element> {
 const $createMediaNode = (src: string, alt = "") => $applyNodeReplacement(new MediaNode(src, alt));
 const $isMediaNode = (node: unknown): node is MediaNode => node instanceof MediaNode;
 
+// $E = mc^2$ in a line, $$…$$ on lines of its own: drawn as the formula, saved as written. A click edits its TeX.
+function MathView({ tex, block, nodeKey }: { tex: string; block: boolean; nodeKey: NodeKey }) {
+  const [editor] = useLexicalComposerContext();
+  const [editing, setEditing] = useState(false);
+  const done = (v: string) => {
+    setEditing(false);
+    editor.update(() => { const n = $getNodeByKey(nodeKey); if (n instanceof MathNode) n.getWritable().__tex = tex.startsWith("\n") ? `\n${v.trim()}\n` : v.trim(); });
+  };
+  return editing ? (
+    <textarea autoFocus defaultValue={tex.trim()} dir="ltr" rows={block ? 3 : 1} cols={block ? undefined : Math.max(8, tex.trim().length)}
+              onBlur={(e) => done(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); done(e.currentTarget.value); } }}
+              className={cn("resize-none rounded bg-secondary px-2 py-1 font-mono text-[0.9em] focus:outline-none", block ? "w-full" : "inline-block align-middle")} />
+  ) : (
+    <span onClick={() => setEditing(true)} className={cn("cursor-pointer", block && "block overflow-x-auto py-2")}
+          dangerouslySetInnerHTML={{ __html: katex.renderToString(tex.trim(), { displayMode: block, throwOnError: false }) }} />
+  );
+}
+type SerializedMath = Spread<{ tex: string; block: boolean }, SerializedLexicalNode>;
+export class MathNode extends DecoratorNode<React.JSX.Element> {
+  __tex: string;
+  __block: boolean;
+  static getType() { return "math"; }
+  static clone(node: MathNode) { return new MathNode(node.__tex, node.__block, node.__key); }
+  static importJSON(json: SerializedMath) { return $applyNodeReplacement(new MathNode(json.tex, json.block)); }
+  constructor(tex: string, block = false, key?: NodeKey) { super(key); this.__tex = tex; this.__block = block; }
+  exportJSON(): SerializedMath { return { type: "math", version: 1, tex: this.__tex, block: this.__block }; }
+  createDOM() { return document.createElement(this.__block ? "div" : "span"); }
+  updateDOM() { return false; }
+  isInline() { return !this.__block; }
+  decorate() { return <MathView tex={this.__tex} block={this.__block} nodeKey={this.__key} />; }
+}
+
 export const NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, CodeNode, HorizontalRuleNode,
-  TableNode, TableRowNode, TableCellNode, MediaNode];
+  TableNode, TableRowNode, TableCellNode, MediaNode, MathNode];
 
 // The path may hold balanced parentheses — "shot-(1600×900).png" — or be <wrapped>, as in CommonMark.
 const MEDIA_PATH = String.raw`(<[^>\n]*>|(?:[^()\s]|\([^()\s]*\))+)`;
@@ -80,6 +115,34 @@ const MEDIA: TextMatchTransformer = {
   replace: (textNode, match) => { textNode.replace($createMediaNode(match[2].replace(/^<|>$/g, ""), match[1])); },
   trigger: ")",
   type: "text-match",
+};
+
+// Not a price: "$5 to $10" has a space before its second "$", "$5-$10" a digit after it.
+const MATH: TextMatchTransformer = {
+  dependencies: [MathNode],
+  export: (node) => (node instanceof MathNode && !node.__block ? `$${node.__tex}$` : null),
+  importRegExp: /(?<![\\$])\$([^\s$](?:[^$\n]*[^\s$\\])?)\$(?![\d$])/,
+  regExp: /(?<![\\$])\$([^\s$](?:[^$\n]*[^\s$\\])?)\$$/,
+  replace: (textNode, match) => { textNode.replace($applyNodeReplacement(new MathNode(match[1]))); },
+  trigger: "$",
+  type: "text-match",
+};
+const MATH_BLOCK: MultilineElementTransformer = {
+  dependencies: [MathNode],
+  export: (node) => (node instanceof MathNode && node.__block ? `$$${node.__tex}$$` : null),
+  regExpStart: /^\$\$/,
+  handleImportAfterStartMatch: ({ lines, rootNode, startLineIndex }) => {
+    for (let i = startLineIndex; i < lines.length; i++) {
+      const at = lines.slice(startLineIndex, i + 1).join("\n");
+      if (/[^]\$\$\s*$/.test(at.slice(2))) {
+        rootNode.append($applyNodeReplacement(new MathNode(at.trim().slice(2, -2), true)));
+        return [true, i];
+      }
+    }
+    return null;
+  },
+  replace: () => false,
+  type: "multiline-element",
 };
 
 const HR: ElementTransformer = {
@@ -98,6 +161,8 @@ const HR: ElementTransformer = {
 // GFM tables: the first row is the header; a divider line marks it on the way in.
 const TABLE_ROW = /^\|(.+)\|\s?$/;
 const TABLE_DIVIDER = /^(\| ?:?-+:? ?)+\|\s?$/;
+const ALIGN = { left: ":---", center: ":---:", right: "---:" } as const;
+const alignState = createState("align", { parse: (v) => (Array.isArray(v) ? v.map(String) : []) });
 const TABLE: ElementTransformer = {
   dependencies: [TableNode, TableRowNode, TableCellNode],
   export: (node) => {
@@ -107,7 +172,7 @@ const TABLE: ElementTransformer = {
       if (!$isTableRowNode(row)) return;
       const cells = row.getChildren().map((c) => $convertToMarkdownString(MARKDOWN, c as ElementNode).replace(/\n+/g, " ").trim());
       lines.push(`| ${cells.join(" | ")} |`);
-      if (i === 0) lines.push(`| ${cells.map(() => "---").join(" | ")} |`);
+      if (i === 0) lines.push(`| ${cells.map((_, j) => ALIGN[$getState(node, alignState)[j] as keyof typeof ALIGN] ?? "---").join(" | ")} |`);
     });
     return lines.join("\n");
   },
@@ -116,6 +181,10 @@ const TABLE: ElementTransformer = {
     const prev = parent.getPreviousSibling();
     if (TABLE_DIVIDER.test(match[0])) {
       if ($isTableNode(prev)) {
+        $setState(prev, alignState, match[0].split("|").slice(1, -1).map((c) => {
+          const d = c.trim();
+          return d.startsWith(":") ? (d.endsWith(":") ? "center" : "left") : d.endsWith(":") ? "right" : "";
+        }));
         const head = prev.getFirstChild();
         if ($isTableRowNode(head)) head.getChildren().forEach((c) => $isTableCellNode(c) && c.setHeaderStyles(TableCellHeaderStates.ROW));
       }
@@ -133,7 +202,7 @@ const TABLE: ElementTransformer = {
   },
   type: "element",
 };
-export const MARKDOWN = [HR, TABLE, CHECK_LIST, MEDIA, ...TRANSFORMERS];   // MEDIA before LINK: ![a](b) contains [a](b)
+export const MARKDOWN = [MATH_BLOCK, HR, TABLE, CHECK_LIST, MEDIA, MATH, ...TRANSFORMERS];   // MEDIA before LINK: ![a](b) contains [a](b)
 
 const THEME = {
   code: "md-code",

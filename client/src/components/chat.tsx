@@ -4,7 +4,7 @@ import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/com
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
-import { MessageBubble } from "./message";
+import { MessageBubble, quoteName } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
 import { APP_DATA_EVENT, TURN_END_EVENT, appScope } from "./app-bridge";
@@ -29,7 +29,7 @@ import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
 import { TeamPeople, WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import { isTeamChat, type Attachment, type ChatApi, type Message, type AppConfig, type SendExtra, type Part, type Connection } from "../hooks/use-chat";
+import { isTeamChat, type Attachment, type ChatApi, type Message, type AppConfig, type SendExtra, type Part, type Connection, type Quote } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileChange, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
@@ -46,7 +46,7 @@ import { usePaneWidth } from "../hooks/use-pane-width";
 import { useEscapeFallback } from "../hooks/use-escape";
 import { useHeldSend, uploading } from "../hooks/use-held-send";
 import { SUGGESTIONS } from "./suggestions-data";
-import { ExamplesGallery } from "./examples";
+import { ExamplesGallery, useExampleComposer } from "./examples";
 import { AskCard, type AskQuestion } from "./ask-card";
 import { Surfaces } from "./surfaces";
 import { SurveyStrip, useSurvey } from "./survey-strip";
@@ -328,6 +328,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     setAsk(null);
     setConnect(null);
     setPills([]);
+    setReplyTo(null);
     queuedRef.current = [];
     setQueued([]);
     heldRef.current = false;
@@ -354,6 +355,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
   const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
   const [attachedSel, setAttachedSel] = useState<DesignSelection | null>(null);
+  const [replyTo, setReplyTo] = useState<Quote | null>(null);   // a team chat's message the next one answers
   useEffect(() => {
     setDesignSel(activeDesign ? designSelection(activeDesign) : null);
     const onSelection = (e: Event) => {
@@ -444,15 +446,16 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else { sessionStorage.removeItem("cycls_settings"); setSettingsWs(null); }
   }, []);
   const wsNav = workspaces && { ...workspaces, onManage: (id: string) => { setSettingsWs(id); setSettingsOpen(true); } };
-  // A team chat's people: top right on a computer, under the workspace in the menu on a phone.
+  // A team workspace's people, at the top in every chat of it, not only its team chats, on a phone too.
   const ws = workspaces?.active;
-  const people = team && members.length > 0 && ws ? { members, agent: team.agent, logo: team.logo, ws,
+  const people = teamWs && members.length > 0 && ws ? { members, ws,
     onManage: ["owner", "admin"].includes(ws.role ?? "") ? () => wsNav!.onManage(ws.id) : undefined } : undefined;
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[]>([]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const examples = useExampleComposer(input, setInput, textareaRef);   // the empty screen's gallery and the composer
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
   // A chat opens on its newest: reaching the top reads the page before, and the view stays where it was.
@@ -724,7 +727,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     // In a team chat the agent answers when it is named; anything else is to the team alone.
     if (inTeam) {
       const asks = !["keyboard", "voice"].includes(origin) || agentNames.some((n) => text.toLowerCase().includes(n));
-      extra = { ...extra, team: true, ...(asks ? {} : { post: true }) };
+      extra = { ...extra, team: true, ...(asks ? {} : { post: true }), ...(replyTo ? { reply: replyTo } : {}) };
+      setReplyTo(null);
     }
     // The app open beside the chat, so "this" in the message points at it and the agent reads its data first.
     const app = activeDesign ? appScope(activeDesign)?.split("/")[1] : undefined;
@@ -750,7 +754,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
     if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam, activeDesign]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam, activeDesign, replyTo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -849,6 +853,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       setInput((cur) => (cur ? `${cur} ${sent.text}` : sent.text));
       if (sent.attachments?.length) setAttachments((cur) => [...cur, ...sent.attachments!]);
       if (sent.extra?.selection) setAttachedSel(sent.extra.selection);
+      if (sent.extra?.reply) setReplyTo(sent.extra.reply);
       const named = sent.extra?.connectors ?? [];
       if (named.length) setPills((ps) => [...ps, ...(connectors ?? []).filter((c) => named.includes(c.name) && !ps.some((p) => p.name === c.name))]);
       requestAnimationFrame(() => textareaRef.current?.focus());
@@ -1181,13 +1186,15 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       api(`/connectors/${c.name}`, { method: "PATCH", json: { on } }).catch(loadConnectors);
     },
     onAddConnector: (c: Connector) => addPill(c, "picker"),
-    placeholder: inputPlaceholder,
+    placeholder: (isEmpty && examples.hint) || inputPlaceholder,
     selection: attachedSel,
     onAddSelection: designSel && !attachedSel ? () => {
       setAttachedSel(designSel);
       track("design_selection_attached", { nodes: designSel.nodes.length });
     } : undefined,
     onRemoveSelection: () => setAttachedSel(null),
+    reply: replyTo && { name: quoteName(replyTo, team), text: replyTo.text },
+    onCancelReply: () => setReplyTo(null),
   };
 
   return (
@@ -1239,7 +1246,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           )}
           </div>
           <div className="flex items-center gap-1">
-            {people && isDesktop && <TeamPeople {...people} />}
+            {people && <TeamPeople {...people} />}
             {/* Desktop only; on a phone it stays a row inside the user menu */}
             {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
             {user && freePlan && <SubscribeButton onClick={() => openPricing(activeOrg ? "organization" : "user", "header")} />}
@@ -1308,7 +1315,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} people={isDesktop ? undefined : people} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} /></div>}
           </div>
         </div>
       </header>
@@ -1402,8 +1409,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   </div>
                 </div>
                 <ExamplesGallery
-                  className="mt-5"
-                  onUsePrompt={(text) => { setInput(text); textareaRef.current?.focus(); }}
+                  className="mt-3"
+                  name={meta?.name}
+                  onUsePrompt={examples.makeLike}
+                  onFormat={examples.setFormat}
                 />
               </div>
             </div>
@@ -1446,10 +1455,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     <MessageBubble
                       message={msg}
                       team={team}
+                      anchor={key && `m-${key}`}
                       first={marks?.[i].first}
                       last={marks?.[i].last}
                       reactions={key ? live.reactions[key] : undefined}
                       onReact={team && key ? (emoji) => void onReact(key, emoji).catch(() => {}) : undefined}
+                      onReply={team && key && !msg.deleted ? () => {
+                        const said = msg.role === "user" ? msg.content || msg.attachments?.[0]?.name || ""
+                          : msg.parts?.find((p) => p.type === "text" && p.text?.trim())?.text || "";
+                        setReplyTo({ id: key, ...(msg.role === "user" ? { by: msg.by?.id ?? user?.id, name: msg.by?.name } : {}),
+                                     text: said.split(/\s+/).join(" ").slice(0, 100) });
+                        textareaRef.current?.focus();
+                      } : undefined}
                       onRewrite={team && msg.id ? (text) => onRewrite(msg.id!, text) : undefined}
                       isStreaming={
                         isStreaming &&

@@ -105,6 +105,29 @@ test("a message's tools react in one click, and its delete asks once more", () =
   expect(rewrite).toHaveBeenCalledWith();
 });
 
+test("a reply names the message it answers: its send carries the key, its bubble whose it was and how it began", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  global.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ chat_id: "team-1", posted: true }), { headers: { "Content-Type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const { result } = renderHook(() => useChat(""));
+  const reply = { id: "msg-0001", by: "u_noura", name: "Noura", text: "تمام، أراجع الأرقام" };
+  await act(() => result.current.send("Thanks", undefined, "keyboard", { team: true, post: true, reply }));
+  expect(bodies[0]).toMatchObject({ post: true, team: true, reply: "msg-0001" });   // the server quotes the chat itself
+  expect(result.current.messages[0].reply).toEqual(reply);   // shown as it goes
+  const onReply = vi.fn();
+  render(<>
+    <MessageBubble message={{ role: "user", content: "Thanks", id: "msg-0002", by: { id: "u_me", you: true }, reply }} team={TEAM} />
+    <MessageBubble message={{ role: "user", content: "Fine", id: "msg-0003", by: { id: "u_noura", name: "Noura" }, reply: { id: "msg-0002.re", text: "Done" } }}
+                   team={TEAM} onReply={onReply} />
+  </>);
+  expect(screen.getByText("Noura Saad")).toBeTruthy();   // a teammate's, by their name in the team now
+  expect(screen.getByText("Super")).toBeTruthy();   // the agent's answer, by the agent's
+  fireEvent.click(screen.getByLabelText("Reply"));
+  expect(onReply).toHaveBeenCalled();
+});
+
 test("a video sent in the chat plays there when pressed, fetched only then", async () => {
   const resolve = vi.fn(async () => "blob:clip");
   const { container } = render(<MessageBubble message={{ role: "user", content: "", attachments: [{ name: "clip.mp4", type: "video/mp4", url: "", size: 10, path: "attachments/clip.mp4" }] }}

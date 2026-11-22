@@ -55,10 +55,28 @@ test("the toolbar has every markdown control", () => {
 
 test("markdown the rich editor would flatten stays in the plain-text editor", async () => {
   const { PLAIN_MD } = await import("../src/components/canvas");
-  for (const md of ["$$x^2$$", "price $a_1$ here", "a <br> b", "note[^1]"])
+  for (const md of ["\\(a_1\\)", "\\[x\\]"])
     expect(PLAIN_MD.test(md), md).toBe(true);
-  for (const md of [MD, "| a | b |\n|---|---|\n| 1 | 2 |", "![logo](a.png)", "Costs 5 SAR.", "see <https://cycls.com>", "a | b in prose"])
+  for (const md of [MD, "$$x^2$$", "price $a_1$ here", "a <br> b", "note[^1]", "Replace <name> here", "Costs 5 SAR.", "see <https://cycls.com>"])
     expect(PLAIN_MD.test(md), md).toBe(false);
+});
+
+test("math, HTML, footnotes and aligned tables come out of the editor as they went in", () => {
+  const md = [
+    "Inline $E = mc^2$ and $a_1 * b_2$, prices $5 to $10 and $5-$10, code `$x$`.",
+    "$$\n\\text{Total} = \\sum_{i=1}^{n} \\text{price}_i\n$$",
+    "$$x^2$$",
+    "| Item | Qty | Price |\n| :--- | :---: | ---: |\n| Pen | 10 | 4.50 |",
+    "| a | b |\n| --- | --- |\n| one<br>two | 2 |",
+    "<details>\n<summary>More</summary>\n\nhidden *text*\n\n</details>",
+    "Here is a statement.[^1]",
+    "[^1]: And this is the footnote.",
+  ].join("\n\n");
+  const editor = createEditor({ nodes: NODES, onError: (e) => { throw e; } });
+  editor.update(() => $convertFromMarkdownString(md, MARKDOWN), { discrete: true });
+  expect(editor.getEditorState().read(() => $convertToMarkdownString(MARKDOWN))).toBe(md);
+  const math = editor.getEditorState().read(() => [...editor.getEditorState()._nodeMap.values()].filter((n) => n.getType() === "math").length);
+  expect(math).toBe(4);
 });
 
 test("markdown media: workspace files load with credentials, videos play, links load as they are", async () => {

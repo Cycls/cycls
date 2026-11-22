@@ -126,7 +126,8 @@ class Web:
         any CMS: plain GET URLs returning the contract JSON (title/title_ar/description/description_ar/
         icon_svg; {"agents": [...]} for explore; {"connectors": [...]} for connectors; {"pills": [{"label":
         {"en", "ar"}, "cards": [{"share"} | {"video", "title"}]}]} for examples, what
-        cms.cycls.ai/site/examples/{agent} serves), optional bearer `token`. What the code declares wins,
+        cms.cycls.ai/site/examples/{agent} serves; a card may describe itself instead — {share, title, prompt, kind,
+        template, thumbnail}, what cms.cycls.ai/site/gallery/{agent} serves from its library), optional bearer `token`. What the code declares wins,
         piece by piece — `.brand()`, `.explore()`, `.examples()`, and each field a cycls.OAuth2/cycls.Key
         sets for itself."""
         cms = {k: v for k, v in (("brand", brand), ("explore", explore), ("connectors", connectors),

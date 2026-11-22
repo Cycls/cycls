@@ -4,8 +4,8 @@ import { useChat, type ChatApi } from "../src/hooks/use-chat";
 import { Chat } from "../src/components/chat";
 
 // The chat view, rendered whole. A long chat opens on its newest page: it shows before its pictures arrive, and reaching
-// the top reads the page before. A team chat's people sit top right, in the menu on a phone, and who is typing shows as
-// faces and dots.
+// the top reads the page before. A team workspace's people sit at the top of every chat, on a phone too, and who is
+// typing shows as faces and dots.
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState({}, "", "/"); });
 const browser = (desktop = false) => {
@@ -46,7 +46,7 @@ test("a chat opened again still reads its older messages at the top, and shows b
   expect(asked.some((u) => u.includes("before=40"))).toBe(true);
 });
 
-test.each([["computer", true], ["phone", false]])("on a %s a team chat's people are a click away, the agent first, and who is typing shows as faces and dots", async (_, desktop) => {
+test.each([["computer", true], ["phone", false]])("on a %s a team workspace's people sit at the top of every chat, you first, and who is typing shows as faces and dots", async (_, desktop) => {
   browser(desktop);
   vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
   global.fetch = vi.fn(async (url: string) => new Response(JSON.stringify(!String(url).includes("/chats/team-1") ? [] :
@@ -59,12 +59,12 @@ test.each([["computer", true], ["phone", false]])("on a %s a team chat's people 
   const Harness = () => { chat = useChat(""); return <Chat chat={chat} config={{ name: "super" } as never}
     account={{ user: { id: "u_me" }, workspaces } as never} />; };
   render(<Harness />);
+  expect(await screen.findByRole("button", { name: "Members" })).toBeTruthy();   // a new chat, not a team chat: there too
   act(() => { void chat.loadChat("team-1"); });
   expect((await screen.findByRole("status")).getAttribute("title")).toBe("Sara is typing…");
 
-  if (!desktop) fireEvent.click(screen.getByRole("button", { name: "Profile" }));   // under the workspace in the menu
-  fireEvent.click(await screen.findByRole("button", { name: "Members" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Members" }));   // at the top on a phone as on a computer
   const list = within(screen.getByText("Manage people").parentElement!);   // the button is an admin's
-  expect(list.getAllByText(/^(super|Mohammed|Sara)$/).map((e) => e.textContent)).toEqual(["super", "Mohammed", "Sara"]);
+  expect(list.getAllByText(/^(super|Mohammed|Sara)$/).map((e) => e.textContent)).toEqual(["Mohammed", "Sara"]);   // people only
   expect(list.getByText("Everyone in the organization")).toBeTruthy();
 });

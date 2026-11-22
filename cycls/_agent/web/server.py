@@ -507,10 +507,13 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         except LookupError: raise HTTPException(404, "Chat not found")
         if state.is_team(chat_id) and user is not None:   # its id is the client's, which shows it before it is saved
             said = (messages or [{}])[-1]
-            turn = said.get("id")
+            turn, to = said.get("id"), data.get("reply")
             context.by = {**await _author(user, context.workspace),
                           "turn": turn if isinstance(turn, str) and re.fullmatch(r"[\w-]{6,40}", turn) else None,
                           "mentions": activity.mentioned(state.user_text(said), await activity.people(context.workspace))}
+            if isinstance(to, str) and re.fullmatch(r"[\w-]{6,40}(\.re)?", to) and (q := await state.quote(context.workspace, chat_id, to)):
+                context.by["reply"] = q   # whose message it answers is told, as an @ tells them
+                if q.get("by") and q["by"] != context.by["id"]: context.by["mentions"].append(q["by"])
 
         # Every run gets an entry, fresh id or not: `stop` finds it there, the cap
         # counts it, and shutdown drains it. A fresh id simply never collides.

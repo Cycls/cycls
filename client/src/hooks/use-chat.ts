@@ -130,7 +130,11 @@ export type SendExtra = {
   replay?: "regenerate" | "retry";   // the server runs the turn it saved again, not this copy of it
   team?: boolean;   // a new chat is the team's
   post?: boolean;   // to the team alone: kept, and nothing runs
+  reply?: Quote;    // a team chat's message that answers another
 };
+// What a team chat's reply answers: its key (a message's id, `<id>.re` for the agent's answer to it), whose it is
+// (no `by`: the agent's) and how it begins. The server quotes the chat as saved; this copy only shows it till then.
+export type Quote = { id: string; by?: string; name?: string; text: string };
 // What was sent: what retry sends again, and what Stop gives back to the composer.
 export type Sent = { text: string; attachments?: Attachment[]; origin?: string; extra?: SendExtra };
 export type UIHandler = (ev: UIAction) => void;
@@ -155,6 +159,7 @@ export interface Message {
   at?: string;
   edited?: string;
   deleted?: string;
+  reply?: Quote;
 }
 
 // A team chat's live side, read with each look at it: reactions (message id → emoji → who), who is typing, what
@@ -472,14 +477,16 @@ export function useChat(baseUrl: string = "") {
 
       const team = isTeamChat(chatIdRef.current) || !!extra?.team;   // its messages carry an id and a time from the start
       const userMessage: Message = { role: "user", content: text, attachments, ...(extra?.selection ? { selection: extra.selection } : {}),
-                                     ...(team ? { id: crypto.randomUUID().slice(0, 13), at: new Date().toISOString() } : {}) };
+                                     ...(team ? { id: crypto.randomUUID().slice(0, 13), at: new Date().toISOString() } : {}),
+                                     ...(extra?.reply ? { reply: extra.reply } : {}) };
+      const reply = extra?.reply ? { reply: extra.reply.id } : {};
       const view = viewRef.current;
       if (extra?.post) {   // nothing runs: the message is kept, and the next look at the chat reads it back
         setMessages((prev) => [...prev, userMessage]);
         try {
           const id = chatIdRef.current;
           const res = await api(id ? `/chat?id=${encodeURIComponent(id)}` : "/chat",
-                                { method: "POST", json: { messages: [wire(userMessage)], post: true, team: true } });
+                                { method: "POST", json: { messages: [wire(userMessage)], post: true, team: true, ...reply } });
           const { chat_id } = await res.json();
           if (viewRef.current === view) { if (!id) adopt(chat_id); cursorRef.current = null; }
           track("team_message_posted", { chat_id, message_length: text.length });
@@ -555,7 +562,7 @@ export function useChat(baseUrl: string = "") {
                                  ...(extra?.folder ? { folder: extra.folder } : {}),
                                  ...(extra?.team ? { team: true } : {}),
                                  ...(extra?.app ? { app: extra.app } : {}),
-                                 ...replay }),
+                                 ...reply, ...replay }),
           signal: controller.signal,
         });
 

@@ -12,6 +12,7 @@ export type MentionHit = { name: string; path: string; connector?: Connector; pe
 const hitKind = (h: MentionHit) => (h.person ? "teamChats" : h.connector ? "connectors" : "files");   // its group's heading
 import { AttachmentBody } from "./attachment-body";
 import { LiveWaveform } from "./live-waveform";
+import { Quoted } from "./message";
 import { extTint } from "./canvas-utils";
 import type { Attachment } from "../hooks/use-chat";
 import type { DesignSelection } from "./design-editor-view";
@@ -45,7 +46,7 @@ function highlightMentions(text: string, mentions: string[], pills: string[]) {
   if (!all.length) return text;
   const re = new RegExp(`(${all.map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "g");
   return text.split(re).map((p, i) =>
-    pills.includes(p) ? <span key={i} className="rounded-full bg-foreground/10 text-foreground">{p}</span>
+    pills.includes(p) ? <span key={i} className="rounded-full bg-[#3171F6]/15 text-[#3171F6]">{p}</span>
       : mentions.includes(p) ? <span key={i} className="rounded bg-muted">{p}</span>
       : <span key={i}>{p}</span>,
   );
@@ -84,6 +85,8 @@ export function InputBox({
   onRemoveSelection,
   held,
   onCancelHeld,
+  reply,
+  onCancelReply,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   input: string;
@@ -117,6 +120,8 @@ export function InputBox({
   placeholder?: string;
   held?: boolean;               // send was pressed while a file uploads: it goes when the uploads finish
   onCancelHeld?: () => void;
+  reply?: { name: string; text: string } | null;   // a team chat's message this one answers
+  onCancelReply?: () => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
 
@@ -240,7 +245,8 @@ export function InputBox({
   return (
     <motion.div
       layoutId="chat-input"
-      className={`border bg-background rounded-3xl p-2 shadow-sm cursor-text ${dragOver ? "border-primary" : "border-border"}`}
+      // A flat light grey (dark grey in the dark), no line until you type
+      className={`border rounded-3xl p-2 cursor-text transition-colors duration-200 bg-[#f2f2f2] hover:bg-[#ededed] dark:bg-[#1e1e1e] dark:hover:bg-[#232323] ${dragOver ? "border-primary" : "border-transparent focus-within:border-black/10 dark:focus-within:border-white/[.12]"}`}
       onClick={() => textareaRef.current?.focus()}
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
       onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -253,6 +259,7 @@ export function InputBox({
         }
       }}
     >
+      {reply && <div className="mb-1.5"><Quoted name={reply.name} text={reply.text} onClose={onCancelReply} /></div>}
       {/* File previews */}
       <AnimatePresence initial={false}>
         {attachments && attachments.length > 0 && (

@@ -134,7 +134,7 @@ def to_ui_messages(raw):
                 continue
             ui = {"role": "user", "content": state.user_text(msg)}
             if msg.get("by"):   # a team chat's: the face beside it, and what a reaction or an edit names
-                ui.update({k: msg[k] for k in ("by", "id", "at", "edited", "deleted") if msg.get(k)})
+                ui.update({k: msg[k] for k in ("by", "id", "at", "edited", "deleted", "reply") if msg.get(k)})
                 if msg.get("deleted"): ui["content"] = ""
             if msg.get("attachments"):
                 # with no address: the one it was sent with is the sender's tab's own, gone for anyone else
@@ -1771,13 +1771,24 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         """One configured entry → a gallery card, or None (bad URL, dead
         token, non-public, not a chat). A {video, title} entry is a tutorial
         card and needs no resolution — the FE previews the clip and plays it
-        in-page. Author fields are deliberately absent: examples read as
-        product showcase, not user content."""
+        in-page. A card that describes itself (a CMS library's: its title,
+        request, format and «Make one like this» template, each {en, ar}) is
+        taken as it is, its chat never read. Author fields are deliberately
+        absent: examples read as product showcase, not user content."""
         if isinstance(entry, str):
             entry = {"share": entry}
         pic = {"thumbnail": entry["thumbnail"]} if entry.get("thumbnail") else {}
         if entry.get("video"):
             return {"video": entry["video"], "title": entry.get("title", ""), **pic}
+        if entry.get("title") and entry.get("share"):
+            def en_ar(v):
+                v = v if isinstance(v, dict) else {"en": v or ""}
+                return (v.get("en") or v.get("ar") or ""), (v.get("ar") or None)
+            (title, title_ar), (template, template_ar) = en_ar(entry["title"]), en_ar(entry.get("template"))
+            share = entry["share"]
+            return {"share": share + ("&" if "?" in share else "?") + "example=1", "title": title, "title_ar": title_ar,
+                    "prompt": entry.get("prompt", ""), "kind": entry.get("kind"),
+                    "template": template or None, "template_ar": template_ar, **pic}
         url = entry.get("share", "")
         parts = urlsplit(url)
         seg = parts.path.strip("/").split("/")

@@ -830,6 +830,30 @@ def test_examples_come_from_the_cms(tmp_path, monkeypatch):
     assert len(reads) == 2   # the code's pills win, and the CMS isn't asked
 
 
+def test_examples_from_a_cms_library_describe_themselves(tmp_path, monkeypatch):
+    """A CMS library's cards (/site/gallery/{agent}) bring their title, request, format and «Make one like this»
+    template, each {en, ar}: taken as they are, the share's chat never read."""
+    from types import SimpleNamespace
+    from cycls._agent.web import routers
+
+    svc, user, client = _share_test_app(tmp_path)
+    card = {"share": "https://super.test/shared/u/t?ws=t-a", "thumbnail": "/files/deck.png", "prompt": "أبي عرض",
+            "title": {"en": "A pitch deck", "ar": "عرض للمستثمرين"}, "kind": "pptx",
+            "template": {"en": "A deck for [business]", "ar": "عرض لـ [المشروع]"}}
+
+    async def cms(url, token=None):
+        return [{"label": {"en": "", "ar": ""}, "cards": [card, {**card, "share": "https://super.test/shared/u/t2", "template": {}}]}]
+    monkeypatch.setattr(routers, "_cms_pills", cms)
+    monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)
+    svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/gallery/super"})
+
+    first, second = client.get("/examples").json()["categories"][0]["items"]
+    assert first == {"share": "https://super.test/shared/u/t?ws=t-a&example=1", "title": "A pitch deck", "title_ar": "عرض للمستثمرين",
+                     "prompt": "أبي عرض", "kind": "pptx", "template": "A deck for [business]", "template_ar": "عرض لـ [المشروع]",
+                     "thumbnail": "https://cms.test/files/deck.png"}
+    assert second["share"].endswith("/t2?example=1") and second["template"] is None and second["template_ar"] is None
+
+
 def test_examples_builder_normalizes_labels():
     """String keys are the label for both locales; a (en, ar) tuple key gives
     the pill an Arabic label, mirroring explore's title/title_ar."""

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { InputBox } from "./input-box";
-import { ExamplesGallery } from "./examples";
+import { ExamplesGallery, useExampleComposer } from "./examples";
 import { EmptyHero, Suggestions } from "./chat";
 import { CyclsLogo } from "./cycls-logo";
 import { AppBanner } from "./app-banner";
@@ -27,11 +27,18 @@ export function PublicHome({ config, onSignIn }: {
   const meta = _active
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => sessionStorage.getItem("cycls_draft") || "");   // a draft link's text, kept
   // One Tap signs in without passing the gate — keep the draft either way.
   useEffect(() => { if (input.trim()) sessionStorage.setItem("cycls_draft", input.trim()); }, [input]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const noop = () => {};
+  // The composer grows with what's in it, as the signed-in chat's does (chat.tsx).
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+  }, [input]);
+  const examples = useExampleComposer(input, setInput, textareaRef);
 
   // The Sign in button alone is not a sign-up start — returning users press it.
   const gate = (text?: string, source: "compose" | "suggestion" | "sign_in" = "compose") => {
@@ -101,7 +108,7 @@ export function PublicHome({ config, onSignIn }: {
               stopMic={noop}
               cancelMic={noop}
               voice={false}
-              placeholder={meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined}
+              placeholder={examples.hint || (meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined)}
             />
             {!config?.examples_enabled && config?.suggestions && (
               <div className="relative">
@@ -114,8 +121,10 @@ export function PublicHome({ config, onSignIn }: {
           </div>
           {config?.examples_enabled && (
             <ExamplesGallery
-              className="mt-5"
-              onUsePrompt={(text) => { setInput(text); textareaRef.current?.focus(); }}
+              className="mt-3"
+              name={meta?.name}
+              onUsePrompt={examples.makeLike}
+              onFormat={examples.setFormat}
             />
           )}
         </div>
