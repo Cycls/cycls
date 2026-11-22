@@ -11,7 +11,7 @@ import { APP_DATA_EVENT, TURN_END_EVENT, appScope } from "./app-bridge";
 import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
-import { SearchDialog } from "./search-dialog";
+import { SearchDialog, type Kind } from "./search-dialog";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, Spinner, type IconName } from "./icon";
@@ -28,7 +28,7 @@ import { ShareDialog, type ShareLink, type ShareLinks } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
-import { TeamPeople, WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
+import { TeamPeople, WorkspaceMenu, type People, type WorkspacesMenu } from "./workspace-switcher";
 import { isTeamChat, type Attachment, type ChatApi, type Message, type AppConfig, type SendExtra, type Part, type Connection, type Quote } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileChange, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
@@ -144,8 +144,10 @@ interface Queued {
 }
 
 const RAIL_ICON_W = 44;   // folded rail: icon strip only
-// Switching workspace remounts Chat: each one keeps the chat and canvas tabs it had open, for when it's back.
-const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean }>();
+type ChatRow = { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean };
+// Switching workspace remounts Chat: each one keeps what it showed — the open chat, the canvas tabs, the chat list, its
+// people — and shows it again at once when it's back, while the fresh copy loads.
+const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean; chats: ChatRow[]; members: People["members"] }>();
 
 export function Chat({ chat, onShare, files, account, config, view = "" }: {
   chat: ChatApi;
@@ -153,7 +155,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   files?: FilesPanelProps;
   account?: AccountInfo | null;
   config?: AppConfig | null;
-  view?: string;   // the org and workspace, which `kept` is keyed by
+  view?: string;   // the account, org and workspace, which `kept` is keyed by
 }) {
   const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, moveToTeam: onMoveToTeam, older, loadOlder: onLoadOlder, live, react: onReact, rewrite: onRewrite, typing: onTyping, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, freePlan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
@@ -175,8 +177,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useEffect(() => { if (chatId) setChatKind(isTeamChat(chatId) ? "team" : "agent"); }, [chatId]);
   const inTeam = teamWs && (chatId ? isTeamChat(chatId) : chatKind === "team");
   const agentNames = [meta?.name, passMetadata?.en?.name, passMetadata?.ar?.name, name].filter(Boolean).map((n) => `@${n!.toLowerCase()}`);
+  const [was] = useState(() => kept.get(view));
+  // A chat about to open — the one kept here, or the address's — shows as loading, never the empty screen first.
+  const [opening, setOpening] = useState(() => !!(was?.chat || (account && new URLSearchParams(window.location.search).has("id"))));
+  useEffect(() => { if (chatLoading) setOpening(false); }, [chatLoading]);
   // The team workspace's people: on General everyone in the org but those it lists, elsewhere those it lists.
-  const [members, setMembers] = useState<{ id: string; name: string; image?: string; you?: boolean }[]>([]);
+  const [members, setMembers] = useState<People["members"]>(was?.members ?? []);
   useEffect(() => {
     const w = workspaces?.active;
     if (w?.type !== "team") { setMembers([]); return; }
@@ -345,12 +351,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // Typing hushes every surface — prompt, tip, survey — until the next turn.
   const [hushed, setHushed] = useState(false);
   useEffect(() => { setHushed(false); }, [turnsDone]);
-  const [was] = useState(() => kept.get(view));
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>(was?.tabs ?? []);
   const [canvasActive, setCanvasActive] = useState<string | null>(was?.active ?? null);
   const [canvasHidden, setCanvasHidden] = useState(was?.hidden ?? false);
-  useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden }); },
-    [view, chatId, canvasTabs, canvasActive, canvasHidden]);
   // "Add selection": the visible design's selection, and the one attached to the draft.
   const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
   const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
@@ -450,9 +453,23 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const ws = workspaces?.active;
   const people = teamWs && members.length > 0 && ws ? { members, ws,
     onManage: ["owner", "admin"].includes(ws.role ?? "") ? () => wsNav!.onManage(ws.id) : undefined } : undefined;
+  // A search hit in another workspace: that workspace opens, and it opens the hit as it loads (?id= ?file= ?app=).
+  const here = ws?.id ?? `u-${user?.id}`;
+  const openHit = (kind: Kind, key: string, at?: string) => {
+    if (wsNav && at && at !== here) {
+      wsNav.onSwitch(at.startsWith("u-") ? null : at);
+      window.history.replaceState({}, "", `?${{ chats: "id", files: "file", apps: "app" }[kind]}=${encodeURIComponent(key)}`);
+    } else if (kind === "chats") onLoadChat?.(key);
+    else if (kind === "files") openFileInCanvas(key);
+    else { const app = apps.find((a) => a.slug === key); if (app) openApp(app); }
+  };
+  useUrlParam("file", openFileInCanvas);
+  useUrlParam("app", (slug) => { const app = apps.find((a) => a.slug === slug); if (app) openApp(app); }, !appsLoading);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
-  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[]>([]);
+  const [chats, setChats] = useState<ChatRow[]>(was?.chats ?? []);
+  useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden, chats, members }); },
+    [view, chatId, canvasTabs, canvasActive, canvasHidden, chats, members]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const examples = useExampleComposer(input, setInput, textareaRef);   // the empty screen's gallery and the composer
@@ -619,13 +636,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     }
   }, []);
   const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders, warm: !!config?.voice_warm });
-
-  // Reset sidebar data when org changes
-  useEffect(() => {
-    setChats([]);
-    setShares([]);
-    setFilesOpen(false);
-  }, [activeOrg?.id]);
 
   const handleFilesAdded = useCallback(async (incoming: File[]) => {
     // Reject oversized files up front (server enforces the same cap).
@@ -943,7 +953,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // active tab's data, same as the click path would have, and the chat that was open here.
   useEffect(() => {
     if (filesOpen) selectTab(filesTab);
-    if (was?.chat) onLoadChat(was.chat).catch(() => {});
+    if (was?.chat && !new URLSearchParams(window.location.search).has("id")) onLoadChat(was.chat).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1212,43 +1222,47 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         />
       )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header className="relative z-30 h-12 shrink-0" dir="ltr">
-        <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
+      <header className="relative z-30 h-13.5 shrink-0" dir="ltr">
+        <div className="mx-auto flex h-full max-w-full items-center justify-between gap-2 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2">
           {meta?.brand ? (
-            <span className="flex h-6 items-center">
+            <span className="flex h-6.5 items-center">
               {meta.brand.startsWith("<") ? (
-                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+                <span className="flex h-6.5 items-center [&>svg]:h-6.5 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
               ) : (
-                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+                <img src={meta.brand} alt="" className="h-6.5 w-auto object-contain" />
               )}
             </span>
           ) : (
-            <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
-              <CyclsLogo className="h-5 fill-muted-foreground" />
+            // On a phone the agent's name alone: the room is the people's and the actions'.
+            <a href="https://cycls.ai" className={cn("flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity", name && "max-sm:hidden")}>
+              <CyclsLogo className="h-5.5 fill-muted-foreground" />
             </a>
           )}
           {name && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="text-muted-foreground/40">|</span>
+            <div className="flex min-w-0 items-center gap-2 text-base text-muted-foreground">
+              <span className={cn("text-muted-foreground/40", !meta?.brand && "max-sm:hidden")}>|</span>
               {config?.explore_enabled ? (
                 <button
                   onClick={openExplore}
                   className="font-display flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
                 >
                   {meta?.name || name}
-                  <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
+                  <Icon name="chevron-down" className="size-3.5 text-muted-foreground" />
                 </button>
               ) : (
                 <span className="font-display text-foreground font-medium capitalize">{meta?.name || name}</span>
               )}
+              {/* Super / Research | its people: the workspace read as part of the agent */}
+              {user && wsNav && <><span className="text-muted-foreground/40">/</span>
+                <span className="flex items-center gap-3.5">
+                  <WorkspaceMenu workspaces={wsNav} />
+                  {people && <><span className="h-4 w-px bg-foreground/15 max-sm:hidden" /><TeamPeople {...people} /></>}
+                </span></>}
             </div>
           )}
           </div>
           <div className="flex items-center gap-1">
-            {people && <TeamPeople {...people} />}
-            {/* Desktop only; on a phone it stays a row inside the user menu */}
-            {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
             {user && freePlan && <SubscribeButton onClick={() => openPricing(activeOrg ? "organization" : "user", "header")} />}
             {messages.length > 0 && (
               <>
@@ -1257,7 +1271,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="New chat"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="size-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
@@ -1268,7 +1282,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                       className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                       aria-label="Share"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="size-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                       </svg>
                     </button>
@@ -1288,7 +1302,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
             )}
             {!user && (
               <>
-                <IconButton name="moon" onClick={() => toggleDark("header")} label="Toggle theme" />
+                <IconButton name="moon" onClick={() => toggleDark("header")} label="Toggle theme" className="[&>svg]:size-4.5" />
                 <button
                   onClick={() => {
                     const next = isAr ? "en" : "ar";
@@ -1298,11 +1312,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="Toggle language"
                 >
-                  <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "ع"}</span>
+                  <span className="text-[13px] font-medium size-4.5 flex items-center justify-center">{isAr ? "En" : "ع"}</span>
                 </button>
               </>
             )}
-            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} />}
+            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} className="[&>svg]:size-4.5" />}
             {(files || account) && (
               <button
                 onClick={() => rightOpen ? closeRight() : openRight()}
@@ -1310,12 +1324,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 aria-label={rightOpen ? t("collapse") : t("expand")}
                 title={rightOpen ? t("collapse") : t("expand")}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <svg className="size-4.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 3.75v16.5M20.25 3.75H3.75v16.5h16.5M14.25 3.75v16.5" />
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
           </div>
         </div>
       </header>
@@ -1323,7 +1337,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       <Surfaces config={config ?? null} ready={turnsDone > 0} active={!isStreaming && !ask && !hushed} />
 
       {/* Explore agents dropdown */}
-      <Popover open={exploreOpen} onClose={() => setExploreOpen(false)} className="left-4 sm:left-6 top-12 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+      <Popover open={exploreOpen} onClose={() => setExploreOpen(false)} className="left-4 sm:left-6 top-13.5 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
         <div dir={isAr ? "rtl" : "ltr"}>
           <div className="px-3 py-2 border-b border-border">
             <p className="text-xs font-medium text-muted-foreground">{t("explore")}</p>
@@ -1391,8 +1405,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && rightExpanded && rightOpen && "hidden")}>
       <UpgradeContext.Provider value={upgradeWith}>
       <LayoutGroup>
-        <LoadingBar active={chatLoading} />
-        {!chatLoading && (isEmpty ? (
+        <LoadingBar active={chatLoading || opening} />
+        {!chatLoading && !opening && (isEmpty ? (
           examplesEnabled ? (
             // With a gallery the empty screen is a page that scrolls: hero and
             // composer centered in the viewport, category chips and the top of
@@ -1625,9 +1639,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           chats={account ? chats : undefined}
           apps={files ? apps : undefined}
           searchFiles={files?.searchFiles}
-          onOpenChat={(id) => onLoadChat?.(id)}
-          onOpenFile={(path, name) => openFileInCanvas(path, name)}
-          onOpenApp={openApp}
+          everywhere={wsNav?.search}
+          here={here}
+          onOpen={openHit}
           onClose={() => setSearchOpen(false)}
         />
       )}
@@ -1952,7 +1966,7 @@ function formatShortDate(iso: string) {
 }
 
 function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTeam, onLoad, onDelete, onRename, onToggleFavorite }: {
-  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[];
+  chats: ChatRow[];
   loading: boolean;
   activeId?: string | null;
   kind?: "agent" | "team";   // a team workspace's: which chats the list shows
@@ -1968,7 +1982,7 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
-  if (loading) return <div className="flex-1"><LoadingBar /></div>;
+  if (loading && !chats.length) return <div className="flex-1"><LoadingBar /></div>;
 
   const team = kind === "team";
   const listed = kind ? chats.filter((c) => !!c.team === team) : chats;
@@ -2147,9 +2161,9 @@ function RunIndicator({ step, startedAt, onStop, label }: {
 function SubscribeButton({ onClick }: { onClick: () => void }) {
   const id = useId().replace(/\W/g, "");   // a url(#…) reference doesn't take useId's colons
   return (
-    <button type="button" onClick={onClick} dir="auto"
-            className="me-1 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border ps-2.5 pe-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary">
-      <svg viewBox="0 0 24 24" className="size-3 shrink-0" aria-hidden>
+    <button type="button" onClick={onClick} dir="auto" aria-label={t("subscribeShort")}
+            className="me-1 inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border ps-3 pe-3.5 text-[13px] font-medium text-foreground transition-colors hover:bg-secondary max-sm:px-2.5">
+      <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" aria-hidden>
         <defs>
           <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0.2" stopColor="#3171F6" /><stop offset="0.8" stopColor="#EF8733" />
@@ -2157,7 +2171,7 @@ function SubscribeButton({ onClick }: { onClick: () => void }) {
         </defs>
         <path fill={`url(#${id})`} d="M12 0l1.11 3.78c.98 3.43 3.68 6.12 7.11 7.12L24 11.98l-3.78 1.09c-3.43 1-6.13 3.69-7.11 7.12L12 24l-1.11-3.78c-.98-3.43-3.68-6.12-7.11-7.11L0 12.02l3.78-1.09c3.43-1 6.13-3.69 7.11-7.12L12 0z" />
       </svg>
-      {t("subscribeShort")}
+      <span className="max-sm:hidden">{t("subscribeShort")}</span>   {/* a phone's top has room for its star alone */}
     </button>
   );
 }

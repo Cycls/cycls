@@ -50,18 +50,18 @@ export function PublicHome({ config, onSignIn }: {
 
   return (
     <div className="h-dvh flex flex-col bg-background">
-      <header className="relative z-30 h-12 shrink-0" dir="ltr">
+      <header className="relative z-30 h-13.5 shrink-0" dir="ltr">
         <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           {meta?.brand ? (
-            <span className="flex h-6 items-center">
+            <span className="flex h-6.5 items-center">
               {meta.brand.startsWith("<") ? (
-                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+                <span className="flex h-6.5 items-center [&>svg]:h-6.5 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
               ) : (
-                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+                <img src={meta.brand} alt="" className="h-6.5 w-auto object-contain" />
               )}
             </span>
           ) : (
-            <CyclsLogo className="h-5 fill-muted-foreground" />
+            <CyclsLogo className="h-5.5 fill-muted-foreground" />
           )}
           <div className="flex items-center gap-1">
             <button
@@ -73,12 +73,12 @@ export function PublicHome({ config, onSignIn }: {
               className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
               aria-label="Toggle language"
             >
-              <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
+              <span className="text-[13px] font-medium h-4.5 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
             </button>
-            <IconButton name="moon" onClick={() => toggleDark("public_home")} label="Toggle theme" />
+            <IconButton name="moon" onClick={() => toggleDark("public_home")} label="Toggle theme" className="[&>svg]:size-4.5" />
             <button
               onClick={() => gate("", "sign_in")}
-              className="ms-1 rounded-full bg-foreground px-3.5 py-1.5 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"
+              className="ms-1 rounded-full bg-foreground px-4 py-1.5 text-[15px] font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"
             >
               {t("signIn")}
             </button>

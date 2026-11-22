@@ -265,6 +265,14 @@ function useNear(ref: React.RefObject<HTMLDivElement | null>) {
   return near;
 }
 
+// A card comes in once a page: back after a workspace switch (Chat remounts), it is simply there.
+const entered = new WeakSet<ExampleItem>();
+function useEntrance(item: ExampleItem) {
+  const [first] = useState(() => !entered.has(item));
+  useEffect(() => { entered.add(item); }, [item]);
+  return { initial: first && { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.2 } };
+}
+
 function ExampleCard({ item, category, onUseExample, onWatch }: {
   item: ExampleItem;
   category: string;
@@ -309,13 +317,12 @@ function WorkCard({ item, category, onUseExample }: {
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNear(ref);
+  const entrance = useEntrance(item);
   const viewed = () => track("example_viewed", { category, share: item.share });
   return (
     <motion.div
       ref={ref}
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
+      {...entrance}
       className="group relative grid min-w-0 content-start gap-2.5 text-start"
     >
       <a href={item.share || "#"} target="_blank" rel="noopener noreferrer" onClick={viewed} aria-label={titleOf(item) || t("viewExample")}
@@ -457,6 +464,7 @@ function PreviewFallback({ item }: { item: ExampleItem }) {
 function VideoCard({ item, category, onWatch }: { item: ExampleItem; category: string; onWatch: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const visible = useNear(ref);
+  const entrance = useEntrance(item);
 
   const yt = youtubeId(item.video || "");
   const isFile = !yt && !vimeoId(item.video || "");
@@ -467,9 +475,7 @@ function VideoCard({ item, category, onWatch }: { item: ExampleItem; category: s
   return (
     <motion.div
       ref={ref}
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
+      {...entrance}
       className="group relative grid min-w-0 content-start gap-2.5 text-start"
     >
       <button onClick={watch} aria-label={t("watch")} className={cn(TILE, "cursor-pointer")}>

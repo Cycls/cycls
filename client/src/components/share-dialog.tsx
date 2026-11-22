@@ -67,7 +67,7 @@ export function ShareDialog({ onClose, mode = "chat", subtitle = "", org, onShar
   };
 
   return (
-    <Popover open onClose={onClose} className="right-2 top-12 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+    <Popover open onClose={onClose} className="right-2 top-13.5 mt-2 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
       <div className="px-4 pt-4 pb-3">
         <div className="flex items-center gap-2 mb-1">
           <Icon name="link" className="w-4 h-4 text-foreground shrink-0" />

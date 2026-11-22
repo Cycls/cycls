@@ -791,6 +791,26 @@ def _search(entries, query, cap=_SEARCH_CAP):
     return [row[4] for row in ranked[:cap]]
 
 
+_FOUND_CAP = 30   # hits of a kind a search across the workspaces returns
+
+
+def _apps_in(root):
+    """A workspace's apps: each folder under apps/ with an index.html, named by its app.json, else by its folder."""
+    out, apps = [], Path(root) / "apps"
+    if not apps.is_dir():
+        return out
+    for d in sorted(apps.iterdir()):
+        if not (d / "index.html").is_file():
+            continue
+        try:
+            m = json.loads((d / "app.json").read_text()) if (d / "app.json").is_file() else {}
+        except Exception:
+            m = {}
+        name = m.get("name") or re.sub(r"\b\w", lambda c: c.group().upper(), re.sub(r"[-_]+", " ", d.name))
+        out.append({"slug": d.name, "name": str(name), "description": str(m.get("description") or "")})
+    return out
+
+
 def _sorted(entries, key, desc):
     """Folders first, then the requested key. `desc` never reverses the
     grouping."""
@@ -2072,6 +2092,26 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         if await _role_or_404(user, ws_id) not in ("owner", "admin"):
             raise HTTPException(403, "Managing this workspace requires owner or admin")
 
+    async def _mine(user):
+        """The workspaces `user` may enter: Personal, the teams they are a member of, General unless excluded.
+        Two LISTs total — my member rows and the registry — joined in memory; per-team gets would be 2K
+        roundtrips on object storage."""
+        orgdb = _orgdb(user)
+        out = [{"id": f"u-{user.id}", "name": "Personal", "type": "personal", "role": "owner"}]
+        members = {k.split("/")[1]: m async for k, m in orgdb.scan(glob=f"members/*/{user.id}")}
+        regs = {k.split("/")[-1]: row async for k, row in orgdb.scan(prefix="workspaces/")}
+        for ws_id, member in members.items():
+            reg = regs.get(ws_id)
+            if reg and not reg.get("builtin") and member.get("role") != "excluded":
+                out.append({**reg, "role": member.get("role")})
+        # General: every org member by default; admins immune to exclusion.
+        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")) and reg.get("builtin"):
+            if _is_org_admin(user):
+                out.append({**reg, "role": "admin"})
+            elif members.get("t-shared", {}).get("role") != "excluded":
+                out.append({**reg, "role": "editor"})
+        return out
+
     @r.get("/workspaces")
     async def list_workspaces(request: Request, user: Any = user_dep):
         await state.ensure_general(user, volume, base)
@@ -2088,21 +2128,57 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             out += [{"id": d, "name": d[2:], "type": "personal", "role": None}
                     for d in sorted(dirs) if d.startswith("u-") and d != f"u-{user.id}"]
             return out
-        # Two LISTs total — my member rows and the registry — joined in
-        # memory; per-team gets would be 2K roundtrips on object storage.
-        members = {k.split("/")[1]: m async for k, m in orgdb.scan(glob=f"members/*/{user.id}")}
-        regs = {k.split("/")[-1]: row async for k, row in orgdb.scan(prefix="workspaces/")}
-        for ws_id, member in members.items():
-            reg = regs.get(ws_id)
-            if reg and not reg.get("builtin") and member.get("role") != "excluded":
-                out.append({**reg, "role": member.get("role")})
-        # General: every org member by default; admins immune to exclusion.
-        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")) and reg.get("builtin"):
-            if _is_org_admin(user):
-                out.append({**reg, "role": "admin"})
-            elif members.get("t-shared", {}).get("role") != "excluded":
-                out.append({**reg, "role": "editor"})
-        return out
+        return await _mine(user)
+
+    @r.get("/search")
+    async def search_everywhere(request: Request, user: Any = user_dep):
+        """Chats by title, files by path, apps by name, in every workspace you may enter, each hit naming its
+        workspace so opening it can go there; the one you're in (X-Workspace) first. Only what you can open: your
+        own chats in each workspace and its team chats, never a teammate's own; each team workspace passes the
+        same check every other request makes (resolve_ws_id). A blank query: the latest chats, and files and apps
+        as they come. A workspace whose files aren't indexed yet is searched for them next time."""
+        await state.ensure_general(user, volume, base)
+        q = request.query_params.get("q", "")
+        tokens = _norm(q).split()
+        hit = lambda text: all(t in _norm(text or "") for t in tokens)
+        here = request.headers.get("x-workspace") or f"u-{user.id}"
+        mine = []
+        for w in await _mine(user):
+            try:
+                if await resolve_ws_id(user, w["id"], mode, volume, base) == w["id"]:
+                    mine.append(w)
+            except HTTPException:
+                pass
+
+        async def one(w):
+            ws = workspace(user, volume, base=base, ws=w["id"])
+            chats = [{"id": data.get("id", cid), "title": data.get("title", ""), "updatedAt": data.get("updatedAt", ""), "ws": w["id"]}
+                     for store in filter(None, (ws, state.team_chats(ws)))
+                     async for cid, data in state.list_chats(store)
+                     if not data.get("deletedAt") and hit(data.get("title", ""))]
+            root = Path(ws.root).resolve()
+            if not root.is_dir():
+                return chats, [], []
+            try:   # a first walk can take a while: the others answer meanwhile
+                entries, _ = await asyncio.wait_for(_catalog_get(root), timeout=3)
+            except asyncio.TimeoutError:
+                entries = []
+            files = [{"name": e["name"], "path": e["path"], "ws": w["id"]}
+                     for e in _search(entries, q) if not e["path"].startswith("apps/")]
+            apps = [{**a, "ws": w["id"]} for a in await asyncio.to_thread(_apps_in, root)
+                    if hit(f"{a['name']} {a['description']} {a['slug']}")]
+            return chats, files, apps
+
+        chats, files, apps = [], [], []
+        for got in await asyncio.gather(*(one(w) for w in mine), return_exceptions=True):
+            if isinstance(got, BaseException):
+                log("warn", message=f"search: a workspace was not searched: {type(got).__name__}: {got}")
+                continue
+            chats += got[0]; files += got[1]; apps += got[2]
+        elsewhere = lambda h: h["ws"] != here
+        chats.sort(key=lambda c: c["updatedAt"], reverse=True)
+        return {"workspaces": [{k: w.get(k) for k in ("id", "name", "type", "icon")} for w in mine],
+                **{k: sorted(v, key=elsewhere)[:_FOUND_CAP] for k, v in (("chats", chats), ("files", files), ("apps", apps))}}
 
     @r.post("/workspaces")
     async def create_workspace(request: Request, user: Any = user_dep):

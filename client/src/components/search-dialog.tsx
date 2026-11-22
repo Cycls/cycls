@@ -7,48 +7,64 @@ import { shownName } from "./canvas-utils";
 import { fold, matchTokens } from "../hooks/use-files";
 import { t, getLang } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
+import type { Everywhere } from "../hooks/use-workspaces";
 
-type Kind = "chats" | "files" | "apps";
+export type Kind = "chats" | "files" | "apps";
 type Hit = { key: string; title: string; meta?: string; icon: ReactNode; open: () => void };
 
 const UNDER_ALL = 5;   // per kind under All; a filter shows every match
 const tile = "flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-secondary text-muted-foreground";
 
-// Everything by its name, as the sidebar lists it: chat titles, the workspace's files, apps.
-export function SearchDialog({ chats, apps, searchFiles, onOpenChat, onOpenFile, onOpenApp, onClose }: {
+// Everything by its name: chat titles, files, apps. With workspaces, in every one you may enter (`everywhere`), a hit
+// from another named by its workspace and opened there; else the open workspace's, as the sidebar lists it.
+export function SearchDialog({ chats, apps, searchFiles, everywhere, here, onOpen, onClose }: {
   chats?: { id: string; title: string; updatedAt: string }[];   // absent when signed out
   apps?: AppInfo[];
   searchFiles?: (query: string) => Promise<{ name: string; path: string }[]>;
-  onOpenChat: (id: string) => void;
-  onOpenFile: (path: string, name: string) => void;
-  onOpenApp: (app: AppInfo) => void;
+  everywhere?: (query: string) => Promise<Everywhere>;
+  here?: string;   // the workspace you're in
+  onOpen: (kind: Kind, key: string, ws?: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind | "all">("all");
   const [files, setFiles] = useState<{ name: string; path: string }[]>([]);
+  const [all, setAll] = useState<Everywhere | null>(null);
   const [active, setActive] = useState(0);
 
   useEffect(() => {
-    if (!searchFiles) return;
     let live = true;
-    const wait = setTimeout(() => void searchFiles(query).then((r) => live && setFiles(r)), 150);
+    const look = everywhere ? () => everywhere(query).then((r) => live && setAll(r))
+      : searchFiles && (() => searchFiles(query).then((r) => live && setFiles(r)));
+    if (!look) return;
+    const wait = setTimeout(() => void look().catch(() => {}), 150);
     return () => { live = false; clearTimeout(wait); };
-  }, [query, searchFiles]);
+  }, [query, everywhere, searchFiles]);
   useEffect(() => setActive(0), [query, kind]);
 
   const tokens = fold(query).split(/\s+/).filter(Boolean);
   const day = (iso: string) => iso ? new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" }) : "";
+  const where = (ws?: string) => {   // another workspace's hit says whose it is
+    const w = ws !== here && all?.workspaces.find((x) => x.id === ws);
+    return w ? [w.icon, w.name].filter(Boolean).join(" ") : undefined;
+  };
+  const chatsFound: { id: string; title: string; updatedAt: string; ws?: string }[] =
+    all?.chats ?? (chats || []).filter((c) => matchTokens(c.title || "", tokens));
+  const filesFound: { name: string; path: string; ws?: string }[] = all?.files ?? files;
+  const appsFound: { slug: string; name: string; description?: string; ws?: string }[] =
+    all?.apps ?? (apps || []).filter((a) => matchTokens(`${a.name} ${a.description ?? ""}`, tokens));
   const found: Partial<Record<Kind, Hit[]>> = {
-    ...(chats && { chats: chats.filter((c) => matchTokens(c.title || "", tokens)).map((c) => ({
-      key: c.id, title: c.title || t("untitled"), meta: day(c.updatedAt),
-      icon: <span className={tile}><Icon name="chat" strokeWidth={1.5} /></span>, open: () => onOpenChat(c.id) })) }),
-    ...(searchFiles && { files: files.map((f) => ({
-      key: f.path, title: shownName(f.name), meta: f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : t("workspace"),
-      icon: <FileTile name={f.name} className="size-8" />, open: () => onOpenFile(f.path, f.name) })) }),
-    ...(apps && { apps: apps.filter((a) => matchTokens(`${a.name} ${a.description ?? ""}`, tokens)).map((a) => ({
-      key: a.slug, title: a.name, meta: a.description,
-      icon: <AppTile app={a} className="size-8" textClassName="text-lg" />, open: () => onOpenApp(a) })) }),
+    ...((all || chats) && { chats: chatsFound.map((c) => ({
+      key: `${c.ws}/${c.id}`, title: c.title || t("untitled"), meta: where(c.ws) ?? day(c.updatedAt),
+      icon: <span className={tile}><Icon name="chat" strokeWidth={1.5} /></span>, open: () => onOpen("chats", c.id, c.ws) })) }),
+    ...((all || searchFiles) && { files: filesFound.map((f) => ({
+      key: `${f.ws}/${f.path}`, title: shownName(f.name),
+      meta: where(f.ws) ?? (f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : t("workspace")),
+      icon: <FileTile name={f.name} className="size-8" />, open: () => onOpen("files", f.path, f.ws) })) }),
+    ...((all || apps) && { apps: appsFound.map((a) => ({
+      key: `${a.ws}/${a.slug}`, title: a.name, meta: where(a.ws) ?? a.description,
+      icon: <AppTile app={(!where(a.ws) && apps?.find((x) => x.slug === a.slug)) || a} className="size-8" textClassName="text-lg" />,
+      open: () => onOpen("apps", a.slug, a.ws) })) }),
   };
   const kinds = (["chats", "files", "apps"] as Kind[]).filter((k) => found[k]);
   const sections = (kind === "all" ? kinds : [kind])

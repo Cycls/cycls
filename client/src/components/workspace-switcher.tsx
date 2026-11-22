@@ -3,7 +3,7 @@ import { t } from "../lib/i18n";
 import { Icon } from "./icon";
 import { EmojiPicker } from "./emoji-picker";
 import { Face } from "./file-details";
-import type { WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
+import type { Everywhere, WorkspaceInfo, MemberInfo } from "../hooks/use-workspaces";
 
 export interface WorkspacesMenu {
   active: WorkspaceInfo | null;   // null = personal
@@ -20,6 +20,7 @@ export interface WorkspacesMenu {
   fetchMembers: (id: string) => Promise<MemberInfo[]>;
   onSetMember: (id: string, userId: string, role: string) => Promise<void>;
   onRemoveMember: (id: string, userId: string) => Promise<void>;
+  search?: (query: string) => Promise<Everywhere>;
 }
 
 export type OrgMember = { id: string; name: string; email?: string; image?: string };
@@ -44,13 +45,8 @@ export function WsIcon({ ws, className = "" }: { ws: { name: string; icon?: stri
 }
 
 // The workspace list: it switches, and its members button opens Settings on that workspace, where it is managed.
-// `onClose` closes the menu after a switch. `onBack` is only for the drill-in case; as its own dropdown there is
-// nothing to go back to, so the row is omitted.
-export function WorkspacePanel({ workspaces, onBack, onClose }: {
-  workspaces: WorkspacesMenu;
-  onBack?: () => void;
-  onClose: () => void;
-}) {
+// `onClose` closes the menu after a switch.
+function WorkspacePanel({ workspaces, onClose }: { workspaces: WorkspacesMenu; onClose: () => void }) {
   const [newWsName, setNewWsName] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const row = "flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors cursor-pointer";
@@ -58,15 +54,6 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
 
   return (
     <div>
-      {onBack && (
-        <>
-          <button onClick={onBack} className={`${row} py-2.5 ${inactive}`}>
-            <Icon name="chevron-left" className="w-3.5 h-3.5 rtl:rotate-180" />
-            {t("back")}
-          </button>
-          <div className="border-t border-border" />
-        </>
-      )}
       <div className="py-1">
         <button
           onClick={() => { workspaces.onSwitch(null); onClose(); }}
@@ -148,25 +135,26 @@ export function WorkspacePanel({ workspaces, onBack, onClose }: {
 // The switcher as its own control beside the avatar: the active workspace is
 // visible without opening anything, and switching is one click instead of
 // three (avatar → Workspaces → pick).
+// Beside the agent's name, Super / Research, its list opening under it; on a phone the workspace's icon alone.
 export function WorkspaceMenu({ workspaces }: { workspaces: WorkspacesMenu }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground cursor-pointer"
+        className="flex h-9 max-w-44 items-center gap-1.5 px-1 text-[15px] text-foreground transition-opacity hover:opacity-70 cursor-pointer"
         aria-label={t("workspaces")}
       >
         <WsIcon ws={workspaces.active} />
-        <span className="truncate">{workspaces.active?.name || t("personal")}</span>
-        <Icon name="chevron-down" className="size-3 shrink-0" />
+        <span className="truncate max-sm:hidden">{workspaces.active?.name || t("personal")}</span>
+        <Icon name="chevron-down" className="size-3 shrink-0 text-muted-foreground" />
       </button>
       {open && (
         <>
           {/* Anchored to this button, not the viewport — `Popover` portals to
               document.body, which put the panel at the far edge of the page. */}
           <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
-          <div className="absolute top-full z-[80] mt-1 w-56 ltr:right-0 rtl:left-0 rounded-lg border border-border bg-background shadow-lg">
+          <div className="absolute left-0 top-full z-[80] mt-1 w-56 rounded-lg border border-border bg-background shadow-lg">
             <WorkspacePanel workspaces={workspaces} onClose={() => setOpen(false)} />
           </div>
         </>
@@ -175,7 +163,7 @@ export function WorkspaceMenu({ workspaces }: { workspaces: WorkspacesMenu }) {
   );
 }
 
-// A team chat's people: top right on a computer (`TeamPeople`), under the workspace in the menu on a phone.
+// A team workspace's people: beside its name on a computer (`TeamPeople`), never on a phone.
 export type People = {
   members: { id: string; name: string; image?: string; you?: boolean }[];
   ws: WorkspaceInfo; onManage?: () => void;
@@ -223,16 +211,16 @@ export function PeopleList({ members, ws, onManage, onClose }: People & { onClos
 export function TeamPeople(people: People) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="relative">
+    <div className="relative max-sm:hidden">
       <button onClick={() => setOpen((o) => !o)} aria-label={t("members")}
-              className={`flex h-8 items-center gap-1.5 rounded-lg ps-1 pe-2 text-xs transition-colors hover:bg-secondary/80 cursor-pointer ${open ? "bg-secondary text-foreground" : "text-muted-foreground"}`}>
-        <Faces members={people.members} />
+              className="flex h-9 items-center gap-1.5 text-[13px] transition-opacity hover:opacity-70 cursor-pointer">
+        <Faces members={people.members} size={25} />
         <span className="text-foreground">{people.members.length}</span>
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
-          <div className="absolute top-full z-[80] mt-1 w-72 overflow-hidden rounded-xl border border-border bg-background shadow-lg ltr:right-0 rtl:left-0 max-sm:fixed max-sm:inset-x-2 max-sm:top-12 max-sm:w-auto">
+          <div className="absolute left-0 top-full z-[80] mt-1 w-72 overflow-hidden rounded-xl border border-border bg-background shadow-lg">
             <PeopleList {...people} onClose={() => setOpen(false)} />
           </div>
         </>

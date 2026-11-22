@@ -3,7 +3,6 @@ import { t } from "../lib/i18n";
 import { toggleDark } from "../lib/utils";
 import { Popover } from "./popover";
 import { Icon } from "./icon";
-import { WorkspacePanel, WsIcon, type WorkspacesMenu } from "./workspace-switcher";
 
 export interface UserInfo {
   id?: string;      // who is signed in — the name on their cursor when a design is edited together
@@ -21,7 +20,7 @@ export interface PlanInfo {
   planPeriod: string;
 }
 
-export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans, workspaces }: {
+export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onCreateOrg, onManageOrg, onSwitchOrg, activeOrg, orgs, plan, onOpenPlans }: {
   user: UserInfo;
   onSignOut?: () => void;
   onManageAccount?: () => void;
@@ -33,43 +32,35 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
   orgs?: { id: string; name: string; imageUrl: string }[];
   plan?: PlanInfo;
   onOpenPlans?: () => void;
-  workspaces?: WorkspacesMenu;
 }) {
   const [open, setOpen] = useState(false);
   const [showOrgs, setShowOrgs] = useState(false);
-  const [showWs, setShowWs] = useState(false);
 
   return (
     <div className="relative">
       <button
-        onClick={() => { setOpen(!open); setShowOrgs(false); setShowWs(false); }}
-        className="flex items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer px-1 h-8"
+        onClick={() => { setOpen(!open); setShowOrgs(false); }}
+        className="flex items-center justify-center rounded-lg hover:opacity-80 transition-opacity cursor-pointer px-1 h-9"
         aria-label="Profile"
       >
         <div className="flex items-center -space-x-2">
           {activeOrg?.imageUrl && (
             <div
-              className="size-6 rounded-full bg-secondary shrink-0 ring-2 ring-background"
+              className="size-7 rounded-full bg-secondary shrink-0 ring-2 ring-background"
               style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }}
             />
           )}
           <div
-            className="size-6 rounded-full bg-secondary text-foreground flex items-center justify-center text-xs font-medium select-none ring-2 ring-background"
+            className="size-7 rounded-full bg-secondary text-foreground flex items-center justify-center text-[13px] font-medium select-none ring-2 ring-background"
             style={user.imageUrl ? { backgroundImage: `url(${user.imageUrl})`, backgroundSize: "cover" } : undefined}
           >
             {!user.imageUrl && (user.name?.charAt(0) || user.email?.charAt(0) || "?")}
           </div>
         </div>
       </button>
-      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); setShowWs(false); }} className="right-2 top-12 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
+      <Popover open={open} onClose={() => { setOpen(false); setShowOrgs(false); }} className="right-2 top-13.5 mt-2 w-56 rounded-lg border border-border bg-background shadow-lg">
         <div>
-            {showWs && workspaces ? (
-              <WorkspacePanel
-                workspaces={workspaces}
-                onBack={() => setShowWs(false)}
-                onClose={() => { setOpen(false); setShowWs(false); }}
-              />
-            ) : showOrgs ? (
+            {showOrgs ? (
               <>
                 <button
                   onClick={() => setShowOrgs(false)}
@@ -164,22 +155,6 @@ export function UserMenu({ user, onSignOut, onManageAccount, onOpenSettings, onC
                         <div className="size-4 rounded-full shrink-0" style={{ backgroundImage: `url(${activeOrg.imageUrl})`, backgroundSize: "cover" }} />
                       )}
                       {activeOrg ? activeOrg.name : t("personal")}
-                    </span>
-                    <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
-                  </button>
-                  </>
-                )}
-                {workspaces && (
-                  <>
-                  <div className="border-t border-border" />
-                  <p className="px-3 pt-2 pb-1 text-[8px] font-medium uppercase tracking-wider text-muted-foreground/40">{t("workspaces")}</p>
-                  <button
-                    onClick={() => setShowWs(true)}
-                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2 truncate">
-                      <WsIcon ws={workspaces.active} />
-                      <span className="truncate">{workspaces.active?.name || t("personal")}</span>
                     </span>
                     <Icon name="chevron-right" className="w-3.5 h-3.5 rtl:rotate-180" />
                   </button>

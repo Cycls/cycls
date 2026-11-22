@@ -122,10 +122,10 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
   const { user } = useUser();
   const files = useFiles();
   useRefreshOnTurnEnd(files, chat.isStreaming);
-  const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded, sessionClaims } = useAuth();
   const clerk = useClerk();
   const { organization, membership, memberships } = useOrganization(workspace ? { memberships: ALL } : {});
+  const ws = useWorkspaces("", `${user?.id}:${organization?.id}`);
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: ALL });
   useAllPages(memberships, userMemberships);
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
@@ -268,6 +268,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       fetchMembers: ws.members,
       onSetMember: ws.setMember,
       onRemoveMember: ws.removeMember,
+      search: ws.search,
     } : undefined,
   };
 
@@ -278,7 +279,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       files={filesPanelProps(files, true, organization ? { id: organization.id, name: organization.name } : null, authorFields)}
       account={account}
       config={config}
-      view={view}
+      view={`${user?.id}:${view}`}
     />
   );
 }
