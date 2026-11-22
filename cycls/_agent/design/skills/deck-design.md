@@ -69,6 +69,8 @@ again.
   long deck. End on `closing`, with its `cta`, `contact` or `qr`.
 - Change the layout every slide or two. Never put three `bullets` slides in a row. For every two slides of text,
   give one of picture, number or chart (`image-left` / `image-right`, `image`, `stats`, `chart`, `quote`).
+- A slide with little on it (a title and two short points) is drawn as something else: `stats`, a big `quote`,
+  a picture slide or one statement on a `custom` slide, never a sparse list in an empty slide.
 - Vary how slides of one kind are drawn with a slide's `style`, so two `bullets` slides don't look alike:
   - `bullets`: `list`, `rows`, `numbers`, `cards` or `plain`;
   - `stats`: `dividers`, `ruled`, `tiles` or `plain`;
@@ -156,7 +158,8 @@ the one number and its meaning. The chart's colours come from the theme's accent
 
 1. **One render for the whole deck**: theme, every slide, notes and footer. Never build it slide by slide.
    Use `"format": "pptx"` when it will be presented or edited in PowerPoint; other formats come later from `export`.
-2. **Every slide comes back to you.** Fix what's off without rendering again:
+2. **Every slide comes back to you.** Give each one the polish pass (`design-direction`), then fix what's off
+   without rendering again:
    - wording or style on a slide: ONE `edit`, ops with `frame` (the slide index from 0) and the node's name
      (layouts name their parts: `title`, `subtitle`, `eyebrow`, `stat-1` …; `inspect` lists them);
    - a slide rebuilt: `update_slide` {number from 1, slide};

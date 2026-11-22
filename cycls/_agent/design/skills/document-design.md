@@ -136,7 +136,9 @@ still doesn't.
    - tell the user what can't be kept;
    - call again with `"discard_edits": true`.
    Never send the same call again unchanged, and never run several section changes in parallel on one document.
-4. **Another format** is `export`; a new render under a new name is never how to change a document.
+4. **The pages come back to you**: give them the polish pass (`design-direction`). A fault in the content or
+   the flow is a section change; a fault on one page, once the content is settled, is that page's `edit`.
+5. **Another format** is `export`; a new render under a new name is never how to change a document.
 
 ## Example: a short report
 

@@ -50,7 +50,9 @@ Then write all of it into the spec, and render once.
   - glass cards floating on a dark field;
   - a gold inset frame on black for anything "premium";
   - one 3D emoji as decoration beside the headline;
-  - three cards in a row with an icon each.
+  - three cards in a row with an icon each;
+  - a short accent bar under every title;
+  - everything centred on one axis, nothing large enough to lead the eye.
 - **Two similar briefs, two designs.** Two perfume brands, two Ramadan posts, two decks for two startups do
   not share a layout. When the tool's reply says the design shares its ground, its faces or its composition with
   an earlier one that it isn't meant to match, change that with one `edit` before presenting.
@@ -233,6 +235,8 @@ title slide, a section slide made for it, the signature move repeated with varia
 - letterSpacing goes only on small Latin capitals (4–8). Never use it on Arabic. Huge Latin display type may go slightly tight (−1 to −3).
 - Emphasis inside a headline is one word in the accent or in the display italic, written with `runs`.
 - Arabic has no italics. An Arabic display face needs ~10–15% more size than Latin to read the same.
+- Few sizes: three or four in a piece (display, heading, body, small), each used wherever it applies.
+- A headline's lines break evenly: set its `w` so that no line ends on one word on its own.
 
 ## Compositions (take one the concept suggests, or make your own)
 
@@ -287,18 +291,32 @@ one, and make them differ in concept and composition, not only in colour. Ask wh
 that page (`edit` with `page`) and `page_delete` the rest. One render for three looks is cheaper than three renders
 and a conversation.
 
-## Look before you present
+## The polish pass: look as a stranger, then refine
 
-The render comes back as an image. Check it against these:
-- **Two seconds**: is the idea, and the headline, what's read first?
-- **Template smell**: could any company's logo go on it? If so, push the concept, the scale or the signature
-  move further.
-- **Sameness**: is it a direction's example with new words, one of the moves every AI tool makes, or what this
-  workspace got last time? If so, change it.
-- **The accent** is used once or twice, with nothing else competing.
-- **Edges**: margins are equal, and the text shares one or two left edges.
+The render comes back as an image. A first render nearly always has faults: hunt for them as a stranger would
+before you present, and if you found none, look again at the edges and the gaps. The layout check in the reply
+catches text overlapping text, text off the frame, small text and weak contrast on a flat colour; your eye
+catches the rest:
+- **Two seconds**: is the idea, and the headline, what's read first? Is there one clear thing to look at?
+- **Template smell and sameness**: could any company's logo go on it? Is it a direction's example with new
+  words, one of the moves every AI tool makes, or what this workspace got last time? Push the concept, the scale
+  or the signature move further.
+- **Collisions**: text across a busy part of a photo or a shape's edge; a label off the middle of its button or
+  badge; a rule placed for a one-line title under a title that wrapped.
+- **Edges**: margins equal on every side; nothing cut by the frame that isn't cut on purpose; text inside its
+  card with room to spare, never touching its edge.
+- **Space**: gaps from one scale (each a multiple of the smallest), the same gap wherever the same two things
+  meet; no two blocks nearly touching; no hole on one side while the other is cramped.
+- **Alignment**: the text shares one or two left edges (right edges in Arabic); cards side by side are one
+  height; a number sits square over its label.
+- **Reading**: the accent on the one thing that matters and nothing else; a scrim under light text on a photo;
+  no headline line ending on one word alone.
+- **Copy**: no typo, no placeholder words, nothing over the copy budget.
 
-Fix everything you find in ONE `edit` holding all the ops.
+Then refine what is there and add nothing: make parts bigger or smaller, align them, cut one. Another shape,
+glow or ornament does not rescue a weak composition. Fix everything in ONE `edit` holding all the ops. The
+edit shows you what it changed: look at that, and stop unless a fault is still there. "Could be better" is not
+a fault.
 
 ## A worked example: a café's subscription post, 1080 × 1350
 

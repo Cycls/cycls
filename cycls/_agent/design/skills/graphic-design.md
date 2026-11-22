@@ -93,8 +93,9 @@ shape (a banner puts the headline beside the object, not under it). Never reuse 
    node you might change (`headline`, `subline`, `cta`, `badge`, `hero`, `bg`). The ids you wrote are the names you
    edit by; never guess a name like `rect-27` or `text-8`. When you didn't name a part, `inspect` once and use
    the names it lists.
-2. **Look at the image and the layout check**, then make ONE `edit` with all the fixes as a list of ops. Don't
-   send one edit per op, and don't re-render: a new render makes a second file (`-2`) and loses hand edits.
+2. **Give the image the polish pass** (`design-direction`) with the layout check, then make ONE `edit` with all
+   the fixes as a list of ops. Don't send one edit per op, and don't re-render: a new render makes a second file
+   (`-2`) and loses hand edits.
 3. **Another format** of the same design is `export`, not a render.
 
 Wrong shapes that cost a refused call:
