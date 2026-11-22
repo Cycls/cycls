@@ -51,7 +51,7 @@ Then write all of it into the spec, and render once.
   - a gold inset frame on black for anything "premium";
   - one 3D emoji as decoration beside the headline;
   - three cards in a row with an icon each;
-  - a short accent bar under every title;
+  - a short accent bar under each title you set;
   - everything centred on one axis, nothing large enough to lead the eye.
 - **Two similar briefs, two designs.** Two perfume brands, two Ramadan posts, two decks for two startups do
   not share a layout. When the tool's reply says the design shares its ground, its faces or its composition with
@@ -293,10 +293,13 @@ and a conversation.
 
 ## The polish pass: look as a stranger, then refine
 
-The render comes back as an image. A first render nearly always has faults: hunt for them as a stranger would
-before you present, and if you found none, look again at the edges and the gaps. The layout check in the reply
-catches text overlapping text, text off the frame, small text and weak contrast on a flat colour; your eye
-catches the rest:
+The render comes back as an image. What you placed by hand (a post, a poster, a `custom` slide, nodes you
+added) gets the whole hunt below: a first render nearly always has faults, so look for them as a stranger would,
+and if you found none, look again at the edges and the gaps. The layout check in the reply catches text
+overlapping text, text off the frame, small text and weak contrast on a flat colour; your eye catches the rest.
+A slide or a page the tool laid out has its geometry done already: check what it says and the choices instead
+(the title makes its point, the copy keeps its budget, the layout, style and picture suit the content), and
+change those with `update_slide` or the section, not by moving its parts.
 - **Two seconds**: is the idea, and the headline, what's read first? Is there one clear thing to look at?
 - **Template smell and sameness**: could any company's logo go on it? Is it a direction's example with new
   words, one of the moves every AI tool makes, or what this workspace got last time? Push the concept, the scale

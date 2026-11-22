@@ -69,8 +69,9 @@ again.
   long deck. End on `closing`, with its `cta`, `contact` or `qr`.
 - Change the layout every slide or two. Never put three `bullets` slides in a row. For every two slides of text,
   give one of picture, number or chart (`image-left` / `image-right`, `image`, `stats`, `chart`, `quote`).
-- A slide with little on it (a title and two short points) is drawn as something else: `stats`, a big `quote`,
-  a picture slide or one statement on a `custom` slide, never a sparse list in an empty slide.
+- A slide with little on it is not a sparse list in an empty slide: its numbers go on `stats`, one claim is a
+  big statement (a `quote` style or a `custom` slide), a scene is a picture slide; otherwise fold it into the
+  slide beside it.
 - Vary how slides of one kind are drawn with a slide's `style`, so two `bullets` slides don't look alike:
   - `bullets`: `list`, `rows`, `numbers`, `cards` or `plain`;
   - `stats`: `dividers`, `ruled`, `tiles` or `plain`;
