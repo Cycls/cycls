@@ -40,6 +40,23 @@ This is what the content needs. How it looks is yours to invent for this brief.
 | letter, memo | `"cover": false`, `kind` "Letter", the body as `p` |
 | invoice, quotation | `"cover": false`, `pairs` (to / from / number / date), a `table` of lines, the total where it can't be missed |
 
+## Pages you compose yourself
+
+Not every PDF is text that flows. An activity book, a worksheet, a planner, a certificate, a menu, a programme, an
+invitation or a poster is composed page by page: `{"frames": [{"size": [1240, 1754], "fill": …, "nodes": […]}, …]}`, one
+frame a page (A4 at 150 dpi; `[1275, 1650]` for US Letter). It is one Cycls Design file: it opens in the editor, stays
+editable, and downloads as a PDF. Never leave Design for a script or HTML to get a page like this. Nothing on it is out of reach:
+
+- a curve, a wave, a torn edge, any shape that runs off the page: `svg` with a `path`;
+- a box to draw in, a sticker spot, a coupon edge: `rect` or `ellipse` with `"dash": [on, off]`;
+- a line to write on: `line` with `from`, `to` and `"dash"` (`[2, 7]` reads as dots);
+- things to count, match, colour or spot: `icon`, repeated, from any Iconify set;
+- a word search, crossword, calendar, bingo card or timetable: a grid of `rect` and `text`. Work a puzzle out with `bash`
+  first, so every word is really in it and the answer is right;
+- text meant to be faint, letters to trace or a watermark: `"asked": true` on it, so the layout check keeps its colour.
+
+These are materials. Which of them this piece uses, and what it looks like, comes from its subject and who it is for.
+
 Paper: `"size": "a4"` (default), `"letter"` for the US, `"a5"` for a booklet, `"landscape": true` for a
 dashboard-like report.
 
