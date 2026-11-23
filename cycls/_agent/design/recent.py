@@ -116,6 +116,24 @@ def _frame(fp, size, fill, nodes):
         fp["accent"] = max(accents, key=accents.get)
 
 
+def _page(doc):
+    """What a document chose for its page, as words: two PDFs with the same recipe feel the same whatever their colours."""
+    heads = doc.get("headings") if isinstance(doc.get("headings"), dict) else {}
+    theme = doc.get("theme") if isinstance(doc.get("theme"), dict) else {}
+    weight = heads.get("weight")
+    if weight is None and isinstance(theme.get("heading"), str):
+        m = _FACE_STYLES.search(theme["heading"].strip())
+        weight = (m.group(1) if m and m.group(1) else "Regular").title()
+    cover = doc.get("cover")
+    style = cover.get("style") if isinstance(cover, dict) else None
+    bare = cover is False or (isinstance(cover, str) and cover.strip().lower() == "none") or str(style or "").strip().lower() == "none"
+    bits = [f"{weight or 'the theme'}{' capitals' if heads.get('caps') else ''} headings",
+            "lines" if doc.get("lines", True) else "no lines",
+            "no cover" if bare else f"{style} cover" if style else "the look's cover",
+            f"{str(doc.get('openers') or 'plain').lower()} openers"]
+    return ", ".join(bits)
+
+
 def fingerprint(spec):
     """A prepared spec → what it looks like: {kind, ground?, accent?, faces[], look?, theme?, moves[]}."""
     fp = {"moves": set()}
@@ -133,6 +151,8 @@ def fingerprint(spec):
             fp["faces"] = [f for f in (_family(theme.get("heading")), _family(theme.get("body"))) if f]
             if theme.get("decor") in ("glow", "circles"):
                 fp["moves"].add("soft glow or big faint ellipse")
+        if kind == "document":
+            fp["page"] = _page(piece)
         for s in (piece.get("slides") or []) if kind == "deck" else []:
             if isinstance(s, dict) and isinstance(s.get("nodes"), list):
                 _frame(fp, piece.get("size"), s.get("fill"), s["nodes"])
@@ -186,6 +206,8 @@ def _line(d):
         bits.append("faces " + " / ".join(d["faces"][:2]))
     if d.get("look"):
         bits.append(f"look {d['look']}" + (f" on {d['theme']}" if d.get("theme") else ""))
+    if d.get("page"):
+        bits.append(f"page: {d['page']}")
     if d.get("moves"):
         bits.append("moves: " + ", ".join(d["moves"]))
     return f"- {d['path']} ({'; '.join(bits)})"
@@ -230,6 +252,8 @@ def shared(a, b, brand=False):
             out.append(f"its accent ({a['accent']})")
     if a.get("look") and a.get("look") == b.get("look") and a.get("theme") == b.get("theme"):
         out.append(f"its look ({a['look']} on {a.get('theme') or 'minimal-light'})")
+    if a.get("page") and a.get("page") == b.get("page"):
+        out.append(f"its page ({a['page']})")
     moves = sorted(set(a.get("moves") or []) & set(b.get("moves") or []))
     if moves:
         out.append("its " + " and ".join(moves))
@@ -256,10 +280,12 @@ def alike(root, fig_rel, fp, brand=False):
         if d.get("path") == fig_rel or _group(d.get("kind")) != _group(fp.get("kind")):
             continue
         same = shared(fp, d, brand)
-        if len(same) >= 2:
-            notes.append(f"It shares {', '.join(same[:-1])} and {same[-1]} with {d['path']} (made {_ago(d.get('at'))}). "
+        if len(same) >= 2 or any(s.startswith("its page (") for s in same):          # (the same page recipe is enough)
+            what = f"{', '.join(same[:-1])} and {same[-1]}" if len(same) > 1 else same[0]
+            how = "update_document" if fp.get("kind") == "document" else "one Design edit"
+            notes.append(f"It shares {what} with {d['path']} (made {_ago(d.get('at'))}). "
                          f"Unless it is meant to match that one (a resize, a series, \"like the last one\"), change what "
-                         f"it shares with one Design edit before you present it: a new design looks new.")
+                         f"it shares with {how} before you present it: a new design looks new.")
             break
     if "soft glow or big faint ellipse" in (fp.get("moves") or []):
         notes.append("It has a soft glow or a big faint ellipse: the decoration every AI design tool makes. Keep it "

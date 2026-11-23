@@ -519,7 +519,7 @@ _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [
 # a document's own keys (document.js), read as its own when written beside it
 _DOCUMENT_KEYS = ("title", "subtitle", "author", "date", "organization", "logo", "size", "landscape", "theme", "dir", "cover",
                   "columns", "openers", "toc", "numbered", "numbering", "figures", "header", "footer", "sections", "max_pages",
-                  "kind", "meta", "contact", "back", "footnotes", "lang", "look")
+                  "kind", "meta", "contact", "back", "footnotes", "lang", "look", "measure", "paragraphs", "align", "lines", "headings")
 
 
 _SHEET_ROWS = 2000      # max rows read from a spreadsheet

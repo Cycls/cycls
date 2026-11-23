@@ -1931,7 +1931,8 @@ def test_a_document_is_one_file_its_source_kept_in_it(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["coffee-report.fig"]   # no PDF beside it: it downloads as one
     assert calls["fmt"] == "png" and calls["scale"] == 1                      # its picture is only looked at
     # The source is kept in the file as it was written — paths, not the images' bytes.
-    assert calls["keep"] == {"kind": "document", "document": {**_DOC, "look": "editorial"}}   # its look settled
+    # (Its look settled, and its text at the page's edge with no lines, as nobody said otherwise.)
+    assert calls["keep"] == {"kind": "document", "document": {**_DOC, "look": "editorial", "measure": "full", "lines": False}}
     assert calls["keep"]["document"]["sections"][0]["blocks"][2]["image"] == "attachments/beans.png"
     assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "coffee-report.fig", "name": "coffee-report.fig"}
     m = out["_model"]
@@ -1939,6 +1940,30 @@ def test_a_document_is_one_file_its_source_kept_in_it(tmp_path, monkeypatch):
     ack = m[-1]["text"]
     assert "Document saved (3 pages)" in ack and "ONE file, coffee-report.fig" in ack
     assert "All 3 pages are attached" in ack and '"replace": true' in ack
+
+
+def test_two_pdfs_with_the_same_page_recipe_are_noticed(tmp_path):
+    from cycls._agent.design import recent
+    doc = lambda **kw: {"document": {"title": "x", "sections": [], "lines": False, "theme": {"base": "mono", "heading": "Inter Bold", "accent": "#123456"}, **kw}}
+    assert recent.fingerprint(doc())["page"] == "Bold headings, no lines, the look's cover, plain openers"
+    assert recent.remember(tmp_path, "a.fig", doc(), "document") == []
+    said = recent.remember(tmp_path, "b.fig", doc(theme={"base": "warm", "heading": "Lora Bold", "accent": "#ee8811"}), "document")
+    assert "its page (Bold headings, no lines" in said[0] and "update_document" in said[0]
+    other = doc(theme={"base": "corporate", "heading": "Sora Bold", "accent": "#11aa66"}, headings={"weight": "Light", "caps": True}, lines=True, cover={"style": "type"})
+    assert recent.remember(tmp_path, "c.fig", other, "document") == []
+    assert "page: Light capitals headings, lines, type cover" in recent.listing(tmp_path)
+
+
+def test_what_a_document_says_of_its_page_is_kept(tmp_path, monkeypatch):
+    _img(tmp_path, "attachments/beans.png", _png(1600, 900))
+    calls = _doc_render(monkeypatch)
+    said = {"measure": "center", "lines": True, "align": "justify", "headings": {"weight": "Light"}}
+    asyncio.run(_exec_design({"action": "render", "name": "asked", "spec": {"document": {**_DOC, **said}}}, _ws(tmp_path)))
+    assert {k: calls["keep"]["document"][k] for k in said} == said
+    # (Written beside the document, it is still the document's.)
+    asyncio.run(_exec_design({"action": "render", "name": "beside", "spec": {"document": _DOC, "align": "justify", "lines": True}}, _ws(tmp_path)))
+    kept = calls["keep"]["document"]
+    assert (kept["align"], kept["lines"], kept["measure"]) == ("justify", True, "full")
 
 
 def test_a_long_document_is_seen_whole_its_first_pages_and_the_rest_on_contact_sheets(tmp_path, monkeypatch):

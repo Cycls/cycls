@@ -510,6 +510,13 @@ async def _render_document(inp, workspace, name, kept=False):
             doc_in["look"] = spec_in.pop("look")
         if err := _settle_look(doc_in, "document", looked):
             return err
+        # …and its text at the page's edge with no lines, unless it says (kept in the source, so a document made before
+        # this keeps the pages it had when one of its sections changes)
+        for key in ("measure", "paragraphs", "align", "lines", "headings"):
+            if doc_in.get(key) is None and spec_in.get(key) is not None:
+                doc_in[key] = spec_in.pop(key)
+        doc_in.setdefault("measure", "full")
+        doc_in.setdefault("lines", False)
         # …and draws its theme's glow or circles on the cover only when it asks for them (kept in the source,
         # so its section changes keep the same cover; a document made before keeps what it had)
         doc_in["theme"], left = _quiet_decor(doc_in.get("theme"))
