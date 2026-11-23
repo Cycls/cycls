@@ -461,6 +461,33 @@ def person_words(messages):
     return "\n".join(out)
 
 
+# The person's latest message, what a new design is held against (brief.py), and a seed for this turn's ground.
+DESIGN_ASK = contextvars.ContextVar("design_ask", default="")
+DESIGN_SEED = contextvars.ContextVar("design_seed", default="")
+DESIGN_CHECKED = contextvars.ContextVar("design_checked", default=True)
+
+
+def person_last(messages):
+    """The person's latest message, as text."""
+    for m in reversed(messages or []):
+        said = person_words([m]) if m.get("role") == "user" else ""
+        if said.strip():
+            return said
+    return ""
+
+
+def design_checked(messages):
+    """Has this turn's new design been held against the brief once already? (Never twice: it is theirs to overrule.)"""
+    for m in reversed(messages):
+        content = m.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if m.get("role") == "user" and not any(b.get("type") == "tool_result" for b in blocks):
+            return False
+        if any(b.get("type") == "tool_result" and "Not run: check it against the brief" in str(b.get("content")) for b in blocks):
+            return True
+    return False
+
+
 # Has this turn looked up what it is about to design? Set by the loop, read by `_exec_design`: a new design is
 # held once until it has, and a search that fails or finds nothing never stops the work.
 DESIGN_RESEARCHED = contextvars.ContextVar("design_researched", default=True)
@@ -468,8 +495,10 @@ _RESEARCH_FIRST = (
     "Not run: research first. Nothing was made. Make two or three `web_search` calls now, in one message: the "
     "subject's real facts and places, how this kind of piece is done well, and what its audience expects. Then call "
     "`design` again with this design made better by what you found. Search the public subject only, never private "
-    "names or figures, and keep everything the person asked for exactly as they asked. If the search fails or "
-    "finds nothing, render anyway: this note comes once a turn.")
+    "names or figures, and keep everything the person asked for exactly as they asked: their names spelled as they "
+    "wrote them, even if a similar company turns up, and the words in their language. Put no figure, address, date or "
+    "result on it that neither they nor a source you read gave. If the search fails or finds nothing, render anyway: "
+    "this note comes once a turn.")
 
 
 def design_researched(messages, tools):

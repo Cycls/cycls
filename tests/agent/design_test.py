@@ -3303,7 +3303,7 @@ def test_a_new_design_is_held_once_a_turn_until_it_has_searched(tmp_path, monkey
         skills = asyncio.run(_exec_design({"action": "skill", "skill": "deck-design"}, _ws(tmp_path)))
     finally:
         DESIGN_RESEARCHED.reset(token)
-    assert held == _RESEARCH_FIRST
+    assert held.startswith(_RESEARCH_FIRST)
     assert "research first" not in skills
     assert "research first" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
     tools = [{"name": "web_search"}, {"name": "design"}]
@@ -3315,6 +3315,47 @@ def test_a_new_design_is_held_once_a_turn_until_it_has_searched(tmp_path, monkey
     assert design_researched([ask, use("design"), told, use("design")], tools)              # told once: never a loop
     assert design_researched([ask, use("design")], [{"name": "design"}])                    # no search here: nothing to ask
     assert not design_researched([ask, use("web_search"), {"role": "user", "content": "now another"}, use("design")], tools)
+
+
+def test_a_new_design_is_held_once_against_the_brief(tmp_path, monkeypatch):
+    from cycls._agent.design import brief
+    from cycls._agent.design.tool import DESIGN_ASK, DESIGN_CHECKED, design_checked, person_last
+    _fake_render(monkeypatch)
+    en = "Design a post for Bright Smile Dental Clinic's new branch in Jeddah"
+    arabic = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "افتتاح الفرع الجديد في جدة قريبا", "x": 0, "y": 0}]}
+    renamed = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "BRIGHT SMILE DENTAL CLINICS opens in Jeddah", "x": 0, "y": 0}]}
+    exact = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Bright Smile Dental Clinic opens in Jeddah", "x": 0, "y": 0}]}
+    assert "in English" in brief.check(arabic, en)
+    assert 'says "BRIGHT SMILE DENTAL CLINICS"' in brief.check(renamed, en)
+    assert brief.check(exact, en) is None
+    assert brief.check(arabic, en + ", in Arabic") is None                     # asked for
+    assert brief.check(exact, "صمم منشورا لعيادة الأسنان الجديدة في جدة") is not None
+    assert brief.check(arabic, "صمم منشورا لعيادة الأسنان الجديدة في جدة") is None
+    assert brief.name_drift("for Swift Cargo", "Swift Logistics and Swift Cargo") == []   # another word, not a misspelling
+    a, c = DESIGN_ASK.set(en), DESIGN_CHECKED.set(False)
+    try:
+        held = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": renamed}, _ws(tmp_path)))
+        good = asyncio.run(_exec_design({"action": "render", "name": "b", "spec": exact}, _ws(tmp_path)))
+    finally:
+        DESIGN_ASK.reset(a), DESIGN_CHECKED.reset(c)
+    assert held.startswith("Not run: check it against the brief")
+    assert "Not run" not in _text(good)
+    ask = {"role": "user", "content": en}
+    use = {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "design", "input": {}}]}
+    told = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": held}]}
+    assert not design_checked([ask, use]) and design_checked([ask, use, told, use])
+    assert not design_checked([ask, use, told, {"role": "user", "content": "another"}, use])
+    assert person_last([ask, use, told]) == en
+
+
+def test_a_ground_is_drawn_only_when_nobody_named_a_colour():
+    from cycls._agent.design import brief
+    seen = {brief.ground_hint("a post for a clinic", f"chat-{i}") for i in range(60)}
+    assert len(seen) == len(brief.GROUNDS)                                     # every kind comes up
+    assert brief.ground_hint("a post for a clinic", "x") == brief.ground_hint("a post for a clinic", "x")   # the same all turn
+    for said in ("a navy post", "use #0B1D3A", "in the same look as the last", "بلون أزرق"):
+        assert brief.ground_hint(said, "x") == ""
+    assert brief.ground_hint("a post for a clinic", "x", branded=True) == ""
 
 
 def test_a_theme_or_a_glow_the_person_named_is_kept(tmp_path):

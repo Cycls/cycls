@@ -3,7 +3,9 @@ file and comment actions in actions.py; a PowerPoint deck brought in (`import`) 
 import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from . import skill
-from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST
+from .tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SEED,
+    DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST)
+from . import brief
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec, _quiet_deck
@@ -45,16 +47,44 @@ def _nudged(out, line):
     return out
 
 
+def _spec_of(inp):
+    """A call's spec as a dict (a large nested argument may arrive as its JSON text)."""
+    spec = inp.get("spec")
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            return {}
+    return spec if isinstance(spec, dict) else {}
+
+
+async def _ground_hint(workspace):
+    """The kind of ground this turn's piece starts from, when neither the person nor a brand kit says."""
+    branded = await asyncio.to_thread(_load_brand, workspace.root)
+    return brief.ground_hint(DESIGN_HEARD.get(), DESIGN_SEED.get(), bool(branded))
+
+
 async def _exec_design(inp, workspace):
     """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). The workspace's
     own fonts (brand/fonts) reach the service first, and the call that first gives them says their family; a
     render in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
     from cycls._agent import design
-    if str(inp.get("action") or "render").lower() == "render" and DESIGN_LOADED.get() and not DESIGN_RESEARCHED.get():
-        return _RESEARCH_FIRST                                # a new design starts from what is true of its subject
+    action = str(inp.get("action") or "render").lower()
+    if action == "render" and DESIGN_LOADED.get():
+        if not DESIGN_RESEARCHED.get():                       # a new design starts from what is true of its subject
+            hint = await _ground_hint(workspace)
+            return f"{_RESEARCH_FIRST} {hint}" if hint else _RESEARCH_FIRST
+        if not DESIGN_CHECKED.get():                          # in their language, with their names as they wrote them
+            held = brief.check(_spec_of(inp), DESIGN_ASK.get())
+            if held:
+                return held
     said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))
     out = await _design_call(inp, workspace)
-    if str(inp.get("action") or "render").lower() == "render" and not DESIGN_SKILLED.get():
+    if action == "skill" and DESIGN_ASK.get():
+        hint = await _ground_hint(workspace)
+        if hint and not (isinstance(out, str) and out.startswith("Error")):
+            out = _nudged(out, hint)
+    if action == "render" and not DESIGN_SKILLED.get():
         spec = inp.get("spec") if isinstance(inp.get("spec"), dict) else inp
         want = json.dumps(["design-direction", _skill_for(spec)])
         out = _nudged(out, f"No design skill is loaded in this chat: {{\"action\": \"skill\", \"skill\": {want}}} holds the "
