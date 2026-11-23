@@ -169,8 +169,8 @@ def _svg(title, line="", agent=None, picture=None, grain=""):
             # the site's glow: its stops on a circle under the card, its grain over it
             f'<radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="600" cy="877.6" r="472.8" '
             f'gradientTransform="matrix(1 0 0 .9327 0 59.06)">{stops}</radialGradient>'
-            f'<pattern id="grain" width="200" height="200" patternUnits="userSpaceOnUse">'
-            f'<image href="data:image/png;base64,{grain}" width="200" height="200"/></pattern></defs>'
+            f'<pattern id="grain" width="500" height="500" patternUnits="userSpaceOnUse">'
+            f'<image href="data:image/png;base64,{grain}" width="500" height="500"/></pattern></defs>'
             f'<rect width="{W}" height="{H}" fill="#000"/><rect {band} fill="url(#glow)"/>'
             + (f'<rect {band} fill="url(#grain)" opacity=".25" style="mix-blend-mode:multiply"/>' if grain else "")
             + f'{_lockup(agent, rtl, (latin, display))}{texts}{work}{_mark(agent.get("logo"), mark)}</svg>')
@@ -178,12 +178,8 @@ def _svg(title, line="", agent=None, picture=None, grain=""):
 
 @functools.cache
 def _grain():
-    """The site's grain, made once: a noise filter is too slow to draw on every card."""
-    from resvg_py import svg_to_bytes
-    return base64.b64encode(bytes(svg_to_bytes(svg_string=(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><filter id="n"><feTurbulence type="fractalNoise" '
-        'baseFrequency=".8" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>'
-        '<rect width="200" height="200" filter="url(#n)"/></svg>')))).decode()
+    """The site's grain (its grain.png): black and white at random, a pixel each."""
+    return base64.b64encode((Path(__file__).parent / "grain.png").read_bytes()).decode()
 
 
 def faces(files):
@@ -206,7 +202,7 @@ async def card(title, line="", agent=None, picture=None):
     """A card as PNG bytes. `agent`: {icon, en, ar, accent, logo, and `faces`' fonts, latin, arabic}, the icon and the
     logo an SVG or a data URI; `picture`: a PNG or a JPEG."""
     from resvg_py import svg_to_bytes
-    svg = _svg(title, line, agent, picture, await asyncio.to_thread(_grain))
+    svg = _svg(title, line, agent, picture, _grain())
     own = (agent or {}).get("fonts")
     return bytes(await asyncio.to_thread(svg_to_bytes, svg_string=svg, font_dirs=FONTS + [own] if own else FONTS,
                                          width=W, height=H))
