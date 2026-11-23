@@ -1942,6 +1942,21 @@ def test_a_document_is_one_file_its_source_kept_in_it(tmp_path, monkeypatch):
     assert "All 3 pages are attached" in ack and '"replace": true' in ack
 
 
+def test_a_cream_page_nobody_asked_for_is_questioned_once():
+    from cycls._agent.design import brief
+    page = lambda fill: {"frames": [{"size": [1240, 1754], "fill": fill, "nodes": [{"type": "text", "text": "A flyer for a swim school"}]}]}
+    ask = "Make a flyer for a swim school"
+    for fill in ("#f7f3ec", "#fff7e8", "#FFFBF0", "#f8f5ee"):
+        assert "its page is cream" in brief.check(page(fill), ask)
+    for fill in ("#ffffff", "#fafafa", "#f1f3ee", "#8ad8ea", "#0f4c5c", "#fce9c0", "#fff0f5"):
+        assert brief.check(page(fill), ask) is None
+    assert "its page is cream" in brief.check({"document": {"title": "x", "theme": {"base": "editorial"}, "sections": []}}, ask)
+    assert brief.check({"document": {"title": "x", "theme": {"base": "editorial", "bg": "#ffffff"}, "sections": []}}, ask) is None
+    assert brief.check(page("#f7f3ec"), "A vintage poster on cream paper") is None           # they asked
+    assert brief.check(page("#f7f3ec"), ask, branded=True) is None                           # it is their brand's
+    assert "really is this piece's idea" in brief.check(page("#f7f3ec"), ask)
+
+
 def test_two_pdfs_with_the_same_page_recipe_are_noticed(tmp_path):
     from cycls._agent.design import recent
     doc = lambda **kw: {"document": {"title": "x", "sections": [], "lines": False, "theme": {"base": "mono", "heading": "Inter Bold", "accent": "#123456"}, **kw}}

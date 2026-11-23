@@ -48,6 +48,8 @@ frame a page (A4 at 150 dpi; `[1275, 1650]` for US Letter). It is one Cycls Desi
 editable, and downloads as a PDF. Never leave Design for a script or HTML to get a page like this. Nothing on it is out of reach:
 
 - a curve, a wave, a torn edge, any shape that runs off the page: `svg` with a `path`;
+- a large drawing, a wave or a border is its own `svg` path. An icon is a small symbol: stretched or repeated into a wave
+  or a frame, it looks broken;
 - a box to draw in, a sticker spot, a coupon edge: `rect` or `ellipse` with `"dash": [on, off]`;
 - a line to write on: `line` with `from`, `to` and `"dash"` (`[2, 7]` reads as dots);
 - things to count, match, colour or spot: `icon`, repeated, from any Iconify set;
@@ -55,6 +57,7 @@ editable, and downloads as a PDF. Never leave Design for a script or HTML to get
   first, so every word is really in it and the answer is right;
 - text meant to be faint, letters to trace or a watermark: `"asked": true` on it, so the layout check keeps its colour.
 
+Give a piece like this substance: real things to do or read, a different layout on each page, and the whole page used.
 These are materials. Which of them this piece uses, and what it looks like, comes from its subject and who it is for.
 
 Paper: `"size": "a4"` (default), `"letter"` for the US, `"a5"` for a booklet, `"landscape": true` for a

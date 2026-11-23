@@ -68,7 +68,8 @@ async def _exec_design(inp, workspace):
         if not DESIGN_RESEARCHED.get():                       # a new design starts from what is true of its subject
             return _RESEARCH_FIRST
         if not DESIGN_CHECKED.get():                          # in their language, with their names as they wrote them
-            held = brief.check(_spec_of(inp), DESIGN_ASK.get(), DESIGN_HEARD.get())
+            branded = bool(await asyncio.to_thread(_load_brand, workspace.root))
+            held = brief.check(_spec_of(inp), DESIGN_ASK.get(), DESIGN_HEARD.get(), branded)
             if held:
                 return held
     said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))

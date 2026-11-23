@@ -153,7 +153,7 @@ Finish: none, a fine grid or dot pattern at 6–10%, or a product screenshot.
 **Warm & human**: health, education, food, community, NGOs, people and HR.
 Spirit: people first; soft, honest, generous.
 Palettes, e.g.: sky `#dcecf5` + navy `#1d3557`; a forest ground `#24452f` + oat type `#efe6d8`; tomato `#d94f30` + butter
-`#fdf0c4`; lilac `#e4dcf5` + plum `#3b1e4b`; cream `#fff7ed` + terracotta `#c2410c`.
+`#fdf0c4`; lilac `#e4dcf5` + plum `#3b1e4b`.
 Faces, e.g.: "DM Serif Display", "Young Serif", "Fraunces" (soft) or "Gloock" over "DM Sans", "Nunito Sans" or
 "Outfit". Arabic: "Almarai", "Tajawal", "Baloo Bhaijaan 2" or "Harmattan".
 Compositions: a photo of people large, with type beside it; a handwritten-feel line; rounded panels; a

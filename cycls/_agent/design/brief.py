@@ -1,5 +1,6 @@
-"""A new design held against what the person asked: the language they wrote in, the names as they wrote them, and no
-place, currency or regulator they never named. Each is a question asked once: the person's request has the last word."""
+"""A new design held against what the person asked: the language they wrote in, the names as they wrote them, no
+place, currency or regulator they never named, and no cream page by habit. Each is a question asked once: the person's
+request has the last word."""
 import difflib, re
 
 _AR = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿ]")
@@ -17,6 +18,46 @@ _PLACE = re.compile(r"\b(?:saudi(?: arabia)?|riyadh|jeddah|jiddah|dammam|makkah|
 _PLACE_NAMED = re.compile(r"\b(?:SAR|SAMA|KSA)\b")     # capitals only: "sar" and "sama" are other words
 # SAR also means a suspicious activity report, so only an amount counts as the currency.
 _PLACE_CODE = re.compile(r"\b(?:SAMA|KSA)\b|\bSAR(?=\s?\d)|(?<=\d)\s?SAR\b(?!\s+[a-z])")
+
+
+# Asking for it, or for what it belongs to.
+_CREAM_ASKED = re.compile(r"cream|ivory|beige|off[- ]?white|parchment|paper|vintage|retro|sepia|kraft|ecru|linen|"
+                          r"كريمي|كريم|بيج|عاجي|ورقي|عتيق|قديم", re.I)
+_THEME_GROUNDS = {"editorial": "#f7f3ec", "warm": "#fff7ed"}     # the built-in themes on cream (themes.js)
+
+
+def _is_cream(paint):
+    """A warm off-white: #f7f3ec, #fff7e8, #fffbf0. White, a clear tint and a real colour aren't."""
+    if not isinstance(paint, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", paint):
+        return False
+    r, g, b = (int(paint[i:i + 2], 16) for i in (1, 3, 5))
+    return r >= 236 and g >= 226 and r >= g > b and 5 <= r - b <= 32
+
+
+def _theme_ground(theme):
+    if isinstance(theme, str):
+        return _THEME_GROUNDS.get(theme.strip().lower())
+    if isinstance(theme, dict):
+        return theme.get("bg") or _THEME_GROUNDS.get(str(theme.get("base") or "").strip().lower())
+    return None
+
+
+def grounds_of(spec):
+    """The grounds a spec's pages sit on."""
+    found = [_theme_ground(spec[k].get("theme")) for k in ("document", "deck") if isinstance(spec.get(k), dict)]
+    frames = [spec, *(spec.get("frames") or [])]
+    for page in spec.get("pages") or []:
+        if isinstance(page, dict):
+            frames += [page, *(page.get("frames") or [])]
+    found += [f.get("fill") for f in frames if isinstance(f, dict)]
+    return [g for g in found if g]
+
+
+def cream_ground(spec, heard):
+    """The cream a design sits on when nothing the person wrote asks for it, else None."""
+    if _CREAM_ASKED.search(heard or ""):
+        return None
+    return next((g for g in grounds_of(spec) if _is_cream(g)), None)
 
 
 def words_of(spec):
@@ -85,7 +126,7 @@ def place_added(ask, heard, words):
     return list(dict.fromkeys(found))
 
 
-def check(spec, ask, heard=None):
+def check(spec, ask, heard=None, branded=False):
     """What a new design has to put right against the brief, in words for the model, or None."""
     words = words_of(spec)
     faults = []
@@ -98,7 +139,12 @@ def check(spec, ask, heard=None):
     if added:
         faults.append(f"it brings in {', '.join(added)}, which they never mentioned: a place, a currency or a regulator comes in only "
                       f"when they name it, so take it out")
+    cream = None if branded else cream_ground(spec, f"{ask or ''}\n{heard or ''}")
+    if cream:
+        faults.append(f"its page is cream ({cream}), where AI design lands by habit, and they didn't ask for it: choose the ground "
+                      f"this subject and its audience call for, a different one from the recent designs")
     if not faults:
         return None
-    return ("Not run: check it against the brief. Nothing was made. " + "; ".join(faults) + ". Put that right and render again. "
+    last = ("If cream really is this piece's idea, render it again as it is: this note comes once a turn." if cream and len(faults) == 1 else
             "Only if they asked for it in this chat, render it again as it is: this note comes once a turn.")
+    return "Not run: check it against the brief. Nothing was made. " + "; ".join(faults) + ". Put that right and render again. " + last
