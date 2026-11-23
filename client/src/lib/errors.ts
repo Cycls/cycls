@@ -44,8 +44,14 @@ const ACCOUNT: Record<string, Key> = {
   too_many_requests: "authTooMany",
 };
 
+// The same codes said of a phone number, on the sign-up's phone step.
+const PHONE: Record<string, Key> = {
+  form_identifier_exists: "authPhoneTaken",
+  form_param_format_invalid: "authPhoneInvalid",
+};
+
 export function accountError(err: unknown, where: string): string {
   const first = (err as { errors?: { code?: string; longMessage?: string }[] })?.errors?.[0];
-  const key = first?.code && ACCOUNT[first.code];
+  const key = first?.code && ((where.startsWith("phone") && PHONE[first.code]) || ACCOUNT[first.code]);
   return key ? t(key) : failure("account_failed", err, { where, code: first?.code, detail: first?.longMessage });
 }
