@@ -1,6 +1,7 @@
 """The model's specs, decks, documents, slides and edit ops made ready for the design service.
 Every `_prepare_*` returns what to send, or an error the model can act on."""
 import json, pathlib, re, zlib
+from .tool import DESIGN_HEARD
 from ..paths import _resolve_path
 from .brand import _HEX, _contrast, _first_color, _load_brand, _norm_hex, _readable_on
 from .images import _BRAND_LOGOS, _DESIGN_IMAGES_MAX, _DESIGN_SVG_MAX, _image_slot, _place_image
@@ -287,6 +288,16 @@ def _theme_base(theme):
 _LOUD_DECOR = {"minimal-dark": "glow", "bold-gradient": "glow", "tech-dark": "glow", "warm": "circles"}
 
 
+def _asked_for_decor(base):
+    """Did the person ask for this theme by name, or for its glow or circles (and not to leave them out)?"""
+    said = DESIGN_HEARD.get().lower()
+    word = r"glow\b|توهج|توهّج|وهج" if _LOUD_DECOR[base] == "glow" else r"circles?\b|دوائر"   # (not "a glowing review")
+    if re.search(rf"(?:\b(?:no|without|remove|drop|not|don'?t\s+\w+)\s+(?:any\s+|the\s+|a\s+|its\s+)?|بدون\s+|من\s+غير\s+)(?:{word})", said):
+        return False
+    name = rf"\b{base.replace('-', '[ -]')}\b" + (r"\s+theme" if "-" not in base else "")
+    return bool(re.search(rf"\b(?:{word})|{name}", said))
+
+
 def _quiet_decor(theme):
     """A new piece's theme without its base's glow or circles, unless it asks for them → (theme, what was left
     out or None). A named theme becomes {base, decor}, which still gives the look its name gives (_look_for)."""
@@ -295,6 +306,8 @@ def _quiet_decor(theme):
     base = _theme_base(theme)
     if base not in _LOUD_DECOR or (isinstance(theme, dict) and "decor" in theme):
         return theme, None
+    if _asked_for_decor(base):                         # written in, so every look draws it (cycls-design themes.js)
+        return ({"base": base, "decor": _LOUD_DECOR[base]} if isinstance(theme, str) else {**theme, "decor": _LOUD_DECOR[base]}), None
     if isinstance(theme, str):
         return {"base": base, "decor": "none"}, _LOUD_DECOR[base]
     if isinstance(theme, dict):
@@ -306,7 +319,7 @@ def _quiet_note(what, base, left):
     one = left == "glow"
     return (f"The {what}'s theme ({base}) draws {'a soft glow' if one else 'circles'} by itself; a new {what} leaves "
             f"{'it' if one else 'them'} out (`\"decor\": \"none\"` in its theme): write `\"decor\": \"{left}\"` in the "
-            f"theme only if the concept needs {'it' if one else 'them'}.")
+            f"theme if the person asked for {'it' if one else 'them'}, or the concept needs {'it' if one else 'them'}.")
 
 
 def _quiet_deck(spec):

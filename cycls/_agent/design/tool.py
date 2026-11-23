@@ -4,6 +4,15 @@ import contextvars, re
 from .skill import SKILLS, catalog
 
 _SKILLS_TEXT = (
+    "BEFORE THE FIRST RENDER: (1) What the person asked for is the design: a colour, font, theme, style, layout, size "
+    "or reference is used exactly, even against anything below, and the words are in the language they wrote in unless they ask for another; if it will hurt, do it and say so in one line, and write \"asked\":true on that text, its `style` op or the spec so "
+    "the layout check reports it and leaves it. A "
+    "brand kit sets what they left open; past that there is no house style. (2) When this chat has `web_search`, "
+    "research every new design, and any edit that adds new content or pictures: two or three searches in one message "
+    "(the subject's real facts and places; how this kind of piece is done well), then `web_fetch` the one or two "
+    "pages that matter. Search the public subject, never private names or figures. A company found by name may be "
+    "a different one: use only what clearly ties to this person. Pictures: theirs first, then licensed ones "
+    "(`stock`, `asset`), with queries written from what you found. The `design-direction` skill has the detail.\n\n"
     "SKILLS — this tool carries its own: how to choose a look that isn't the same every time, and how to lay out "
     "each kind of work well in few calls. Before the FIRST design of a kind in a chat, load what it needs in ONE "
     "call — the look and the kind: {\"action\": \"skill\", \"skill\": [\"design-direction\", \"graphic-design\"]} "
@@ -31,7 +40,7 @@ _DESIGN_TOOL = {
         "A radial gradient: {\"gradient\":[\"#fde68a\",\"#b4530900\"],\"type\":\"radial\","
         "\"center\":[0.7,0.3],\"radius\":0.6} (centre and radius are fractions of the box). "
         "A colour may carry alpha as #rrggbbaa. A flat ground in the right colour beats an effect: a "
-        "gradient only when the concept is about light, sky, heat or motion.\n"
+        "gradient only when asked for or when the concept is about light, sky, heat or motion.\n"
         "  Node types (every node needs its `type`):\n"
         "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
         "\"font\"?:\"Playfair Display Bold\"|{\"family\":,\"style\":},\"weight\"?:100-900,\"italic\"?:bool,"
@@ -112,7 +121,7 @@ _DESIGN_TOOL = {
         "workspace made last time (the skills and each render's reply list it). The floor under that: a strong "
         "hierarchy (a big headline 72–120px, a small eyebrow ~24px — letterSpacing 4–6 on Latin capitals only — "
         "a subtitle ~32px), a tight palette (a ground + a text colour + ONE accent), generous margins (~8–10% of "
-        "the width). Not the stock AI look unless the concept needs it: a soft glow or big faint ellipse in a "
+        "the width). Not the stock AI look unless the person asks for it or the concept needs it: a soft glow or big faint ellipse in a "
         "corner, a dark field with one neon accent, a centred headline on a purple gradient, glass cards on a "
         "dark field. "
         "A pill button = a rect with radius = h/2, then a text with the SAME x, y, w, h and \"align\":\"center\", "
@@ -431,6 +440,52 @@ def design_skills_loaded(messages):
         if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"
                and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in m["content"]):
             return True
+    return False
+
+
+# What the person wrote in this chat (set by the loop): a theme they name, or its glow, is theirs to keep.
+DESIGN_HEARD = contextvars.ContextVar("design_heard", default="")
+
+
+def person_words(messages):
+    """The person's own messages, as text: not the tool results the loop hands back as user turns."""
+    out = []
+    for m in messages or []:
+        c = m.get("content")
+        if m.get("role") != "user":
+            continue
+        if isinstance(c, str):
+            out.append(c)
+        elif isinstance(c, list) and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            out += [str(b.get("text") or "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
+    return "\n".join(out)
+
+
+# Has this turn looked up what it is about to design? Set by the loop, read by `_exec_design`: a new design is
+# held once until it has, and a search that fails or finds nothing never stops the work.
+DESIGN_RESEARCHED = contextvars.ContextVar("design_researched", default=True)
+_RESEARCH_FIRST = (
+    "Not run: research first. Nothing was made. Make two or three `web_search` calls now, in one message: the "
+    "subject's real facts and places, how this kind of piece is done well, and what its audience expects. Then call "
+    "`design` again with this design made better by what you found. Search the public subject only, never private "
+    "names or figures, and keep everything the person asked for exactly as they asked. If the search fails or "
+    "finds nothing, render anyway: this note comes once a turn.")
+
+
+def design_researched(messages, tools):
+    """Is a new design clear to render: no search tool here, or this turn has searched, or been told to once?"""
+    if not any(isinstance(t, dict) and t.get("name") == "web_search" for t in tools):
+        return True
+    for m in reversed(messages):
+        content = m.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if m.get("role") == "user" and not any(b.get("type") == "tool_result" for b in blocks):
+            return False                                      # the person's message: this turn starts here
+        for b in blocks:
+            if b.get("type") in ("tool_use", "server_tool_use") and b.get("name") in ("web_search", "web_fetch"):
+                return True
+            if b.get("type") == "tool_result" and "Not run: research first" in str(b.get("content")):
+                return True
     return False
 
 

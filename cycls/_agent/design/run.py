@@ -3,7 +3,7 @@ file and comment actions in actions.py; a PowerPoint deck brought in (`import`) 
 import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from . import skill
-from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
+from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
 from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec, _quiet_deck
@@ -50,6 +50,8 @@ async def _exec_design(inp, workspace):
     own fonts (brand/fonts) reach the service first, and the call that first gives them says their family; a
     render in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
     from cycls._agent import design
+    if str(inp.get("action") or "render").lower() == "render" and DESIGN_LOADED.get() and not DESIGN_RESEARCHED.get():
+        return _RESEARCH_FIRST                                # a new design starts from what is true of its subject
     said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))
     out = await _design_call(inp, workspace)
     if str(inp.get("action") or "render").lower() == "render" and not DESIGN_SKILLED.get():

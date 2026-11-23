@@ -3293,6 +3293,50 @@ def test_a_render_in_a_chat_without_the_skills_says_which_to_load(tmp_path, monk
     assert "No design skill" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
 
 
+def test_a_new_design_is_held_once_a_turn_until_it_has_searched(tmp_path, monkeypatch):
+    from cycls._agent.design.tool import DESIGN_RESEARCHED, _RESEARCH_FIRST, design_researched
+    _fake_render(monkeypatch)
+    post = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Hi", "x": 100, "y": 100}]}
+    token = DESIGN_RESEARCHED.set(False)
+    try:
+        held = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": post}, _ws(tmp_path)))
+        skills = asyncio.run(_exec_design({"action": "skill", "skill": "deck-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    assert held == _RESEARCH_FIRST
+    assert "research first" not in skills
+    assert "research first" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
+    tools = [{"name": "web_search"}, {"name": "design"}]
+    ask = {"role": "user", "content": "make a post"}
+    use = lambda name: {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": name, "input": {}}]}
+    told = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": _RESEARCH_FIRST}]}
+    assert not design_researched([ask, use("design")], tools)
+    assert design_researched([ask, use("web_search"), use("design")], tools)
+    assert design_researched([ask, use("design"), told, use("design")], tools)              # told once: never a loop
+    assert design_researched([ask, use("design")], [{"name": "design"}])                    # no search here: nothing to ask
+    assert not design_researched([ask, use("web_search"), {"role": "user", "content": "now another"}, use("design")], tools)
+
+
+def test_a_theme_or_a_glow_the_person_named_is_kept(tmp_path):
+    from cycls._agent.design.prepare import _quiet_decor
+    from cycls._agent.design.tool import DESIGN_HEARD, person_words
+    cases = [("use the tech-dark theme exactly as it is, with its glow", "tech-dark", "glow"), ("use the tech dark theme", "tech-dark", "glow"),
+             ("a deck on cloud security", "tech-dark", "none"), ("tech-dark but no glow please", "tech-dark", "none"),
+             ("a glowing review of our year", "tech-dark", "none"), ("a warm friendly feeling", "warm", "none"),
+             ("the warm theme please", "warm", "circles"), ("بدون توهج", "tech-dark", "none"), ("مع توهج", "tech-dark", "glow")]
+    for said, theme, want in cases:
+        token = DESIGN_HEARD.set(said)
+        try:
+            assert _quiet_decor(theme)[0]["decor"] == want, said
+        finally:
+            DESIGN_HEARD.reset(token)
+    # Only what the person typed counts: a tool's result handed back as a user turn doesn't.
+    said = person_words([{"role": "user", "content": "a post"}, {"role": "assistant", "content": []},
+                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "glow"}, {"type": "text", "text": "glow"}]},
+                         {"role": "user", "content": [{"type": "text", "text": "make it blue"}]}])
+    assert said == "a post\nmake it blue"
+
+
 def test_the_skill_a_render_needs_follows_what_it_makes():
     from cycls._agent.design.run import _skill_for
     assert _skill_for({"document": {}}) == "document-design"

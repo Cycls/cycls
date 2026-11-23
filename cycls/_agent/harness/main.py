@@ -21,7 +21,7 @@ from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
 from ..design.powerpoint import DECK_SUFFIXES   # what the Design tool's `import` opens
-from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded,
+from ..design.tool import (DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SKILLED, design_called, design_researched, design_skills_loaded, person_words,
                            design_tool, design_wanted)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
@@ -856,6 +856,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 _discover(_owner_of(b.get("name") or ""))
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
+            DESIGN_RESEARCHED.set(design_researched(messages, tools_list))   # a search beside a render counts
+            DESIGN_HEARD.set(person_words(messages))
             DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]

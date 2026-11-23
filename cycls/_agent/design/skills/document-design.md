@@ -32,7 +32,7 @@ Built-in themes: `editorial`, `corporate`, `minimal-light`, `minimal-dark`, `tec
 `bold-gradient`, and the brand kit by default. They are BASES: one used as it stands looks like every document made
 from it. A theme is an object of overrides on a base, which is how the palette and faces you chose
 (design-direction) become the document's. A new document's cover and back draw no `glow` or `circles` unless the
-theme writes `"decor"` in, and the concept should give the cover its own idea instead: `{"base": "editorial", "accent": "#0f5257", "hero": "#10302f",
+theme writes `"decor"` in, and the concept should give the cover its own idea instead: `{"base": "editorial", "bg": "#ffffff", "surface": "#eef3f2", "line": "#d5e0de", "accent": "#0f5257", "hero": "#10302f",
 "heroAccent": "#e9c46a", "heading": "Fraunces Bold", "body": "Source Serif 4", "arHeading": "Amiri Bold",
 "arBody": "IBM Plex Sans Arabic"}`.
 - `hero` paints the cover, the bands and the chapter pages.
@@ -146,7 +146,7 @@ still doesn't.
 {"document": {
   "title": "Riyadh coffee market 2026", "subtitle": "Where specialty coffee grows next", "author": "Qahwa House strategy team",
   "date": "October 2026", "organization": "Qahwa House",
-  "theme": {"base": "editorial", "accent": "#0f5257", "hero": "#10302f", "heroAccent": "#e9c46a",
+  "theme": {"base": "editorial", "bg": "#ffffff", "surface": "#eef3f2", "line": "#d5e0de", "accent": "#0f5257", "hero": "#10302f", "heroAccent": "#e9c46a",
             "heading": "Fraunces Bold", "body": "Source Serif 4"},
   "look": "editorial", "cover": {"style": "full", "eyebrow": "MARKET REVIEW"},
   "sections": [

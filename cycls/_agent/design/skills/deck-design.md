@@ -19,7 +19,7 @@ Two decks in the same look with different themes are the same design recoloured.
 every other deck" comes from the look, not the colours, so choose it on purpose.
 
 Built-in themes: `minimal-light`, `minimal-dark`, `bold-gradient`, `editorial`, `corporate`, `tech-dark`,
-`warm`, `mono`, and `brand` (the workspace's brand kit, the default when one exists). They are BASES: a named theme
+`warm`, `mono`, and `brand` (the workspace's brand kit, the default when one exists). When the person names one, use it exactly as it is, and write its `decor` in when they want its glow or circles (`{"base": "tech-dark", "decor": "glow"}`): a new deck otherwise leaves them out. Otherwise they are BASES: a named theme
 used as it stands looks like every other deck made from it. Start from the one nearest your direction
 (`corporate` finance and B2B, `editorial` culture and research, `tech-dark` software, `warm` people and food, `mono`
 architecture, `bold-gradient` a launch, `minimal-light` / `minimal-dark` anything) and make it this deck's own.
@@ -30,7 +30,7 @@ become the deck's own:
   section and closing slides — `hero` may be a gradient); `accent`, `accent2`, `onAccent`; `surface` (cards,
   table bands), `line` (rules);
 - type: `heading`, `body`, `arHeading`, `arBody`;
-- `decor`: `rule`, `bar`, `glow`, `circles` or `none` (the deck's one motif); `radius` (corners). `glow` (a soft
+- `decor`: `rule`, `bar`, `glow`, `circles` or `none` (the deck's one motif; `glow` and `circles` written here are drawn in every look, `bar` only in `classic`, `bold` and `soft`); `radius` (corners). `glow` (a soft
   ellipse in a corner) and `circles` are the decoration every AI deck has: a new deck draws neither unless you
   write it in, so ask for one only when the concept is about light, sound or circles.
 
@@ -172,9 +172,9 @@ the one number and its meaning. The chart's colours come from the theme's accent
 
 ```json
 {"deck": {
-  "theme": {"base": "editorial", "bg": "#f6f1e7", "text": "#2b1d14", "muted": "#6b5b4b", "hero": "#3b2416",
-            "heroText": "#f6f1e7", "heroMuted": "#d8c7ad", "heroAccent": "#d4af37", "accent": "#9b2226",
-            "accent2": "#2d6a4f", "surface": "#ece3d3", "line": "#d9ccb6", "heading": "DM Serif Display",
+  "theme": {"base": "editorial", "bg": "#dcecf5", "text": "#2b1d14", "muted": "#6b5b4b", "hero": "#3b2416",
+            "heroText": "#ffffff", "heroMuted": "#d8c7ad", "heroAccent": "#d4af37", "accent": "#9b2226",
+            "accent2": "#2d6a4f", "surface": "#c9e0ec", "line": "#b5d2e0", "heading": "DM Serif Display",
             "body": "DM Sans", "arHeading": "Reem Kufi Bold", "arBody": "IBM Plex Sans Arabic", "decor": "rule", "radius": 6},
   "look": "editorial",
   "footer": {"text": "Qahwa House · Investor update"},
@@ -190,15 +190,15 @@ the one number and its meaning. The chart's colours come from the theme's accent
                   {"name": "Walk-ins", "values": [480, 470, 500, 510, 520, 530]}]}},
      "takeaway": {"value": "3.3×", "text": "subscriptions since April"},
      "notes": "The crossing point is the story: a recurring business, not a café chain."},
-    {"layout": "custom", "fill": "#f6f1e7", "nodes": [
+    {"layout": "custom", "fill": "#dcecf5", "nodes": [
       {"type": "text", "id": "running-head", "text": "QAHWA HOUSE · INVESTOR UPDATE", "x": 144, "y": 49, "w": 1200,
        "size": 20, "letterSpacing": 4, "font": "DM Sans Semi Bold", "color": "#6b5b4b"},
-      {"type": "rect", "id": "head-rule", "x": 144, "y": 87, "w": 1632, "h": 2, "fill": "#d9ccb6"},
+      {"type": "rect", "id": "head-rule", "x": 144, "y": 87, "w": 1632, "h": 2, "fill": "#b5d2e0"},
       {"type": "text", "id": "title", "text": "How a bag reaches a door in 36 hours", "x": 144, "y": 132, "w": 1632,
        "size": 80, "font": "DM Serif Display", "color": "#2b1d14"},
-      {"type": "rect", "id": "card-1", "x": 144, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#ece3d3"},
-      {"type": "rect", "id": "card-2", "x": 740, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#ece3d3"},
-      {"type": "rect", "id": "card-3", "x": 1336, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#ece3d3"},
+      {"type": "rect", "id": "card-1", "x": 144, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#c9e0ec"},
+      {"type": "rect", "id": "card-2", "x": 740, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#c9e0ec"},
+      {"type": "rect", "id": "card-3", "x": 1336, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#c9e0ec"},
       {"type": "line", "id": "arrow-1", "from": [600, 530], "to": [724, 530], "color": "#9b2226", "width": 4, "end": "arrow"},
       {"type": "line", "id": "arrow-2", "from": [1196, 530], "to": [1320, 530], "color": "#9b2226", "width": 4, "end": "arrow"},
       {"type": "stack", "id": "step-1", "x": 192, "y": 428, "w": 344, "gap": 18, "children": [
