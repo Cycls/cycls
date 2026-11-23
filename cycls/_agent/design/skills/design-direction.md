@@ -9,7 +9,7 @@ description: Making every design new: an idea found in the content, a concept bu
 
 **What they asked for is the design.** A colour, a font, a theme, a style, a layout, a size, a reference ("like
 this one"): use exactly that, even when it is on a list below, matches a recent design, or you would choose
-otherwise. The words on the design are in the language they wrote in, unless they ask for another: a saved preference or an
+otherwise. The words on the design are in the language they wrote in, unless they ask for another: a saved chat language or an
 earlier design is not them asking. If it will hurt (low contrast, tiny text), do it anyway and say so in one line of your reply, offering an
 alternative. A brand kit comes next and sets what they left open. Where neither says anything there is no house
 style: no ground, colour, face or layout is the default. No place is either: a country's language, style, symbols or

@@ -462,9 +462,8 @@ def person_words(messages):
     return _ATTACHED.sub("", "\n".join(out)).strip()      # a file's name isn't something they said (an Arabic name, an English brief)
 
 
-# The person's latest message, what a new design is held against (brief.py), and a seed for this turn's ground.
+# The person's latest message, what a new design is held against (brief.py).
 DESIGN_ASK = contextvars.ContextVar("design_ask", default="")
-DESIGN_SEED = contextvars.ContextVar("design_seed", default="")
 DESIGN_CHECKED = contextvars.ContextVar("design_checked", default=True)
 
 
@@ -478,13 +477,19 @@ def person_last(messages):
 
 
 def design_checked(messages):
-    """Has this turn's new design been held against the brief once already? (Never twice: it is theirs to overrule.)"""
+    """Nothing to hold: this turn was held once already (never twice: it is theirs to overrule), or the chat made a design
+    in an earlier turn, whose language and names are settled (a new size of an Arabic post asked for in English)."""
+    this_turn = True
     for m in reversed(messages):
         content = m.get("content")
         blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
-        if m.get("role") == "user" and not any(b.get("type") == "tool_result" for b in blocks):
-            return False
-        if any(b.get("type") == "tool_result" and "Not run: check it against the brief" in str(b.get("content")) for b in blocks):
+        if this_turn:
+            if m.get("role") == "user" and not any(b.get("type") == "tool_result" for b in blocks):
+                this_turn = False
+            elif any(b.get("type") == "tool_result" and "Not run: check it against the brief" in str(b.get("content")) for b in blocks):
+                return True
+        elif any(b.get("type") == "tool_use" and b.get("name") == "design"
+                 and str((b.get("input") or {}).get("action") or "render").lower() not in ("skill", "guide") for b in blocks):
             return True
     return False
 

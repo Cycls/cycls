@@ -3405,7 +3405,7 @@ def test_a_new_design_is_held_once_against_the_brief(tmp_path, monkeypatch):
     use = {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "design", "input": {}}]}
     told = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": held}]}
     assert not design_checked([ask, use]) and design_checked([ask, use, told, use])
-    assert not design_checked([ask, use, told, {"role": "user", "content": "another"}, use])
+    assert design_checked([ask, use, told, {"role": "user", "content": "another"}, use])   # that chat has its design
     assert person_last([ask, use, told]) == en
 
 
@@ -3422,17 +3422,25 @@ def test_no_place_comes_in_unless_the_person_named_it():
     assert brief.check(post("Sar and sama are words here too"), "Write about Sar and sama") is None
     assert brief.check(post("Our grandmother sings"), "A post about singing") is None
     said = brief.check(post("افتتاح الفرع الجديد في جدة قريبا"), "Design a post for our new branch")
-    assert "in English" in said and "saved preference" in said
+    assert "in English" in said and "saved chat language" in said
 
 
-def test_a_ground_is_drawn_only_when_nobody_named_a_colour():
+def test_the_brief_check_leaves_real_saudi_and_arabic_work_alone():
     from cycls._agent.design import brief
-    seen = {brief.ground_hint("a post for a clinic", f"chat-{i}") for i in range(60)}
-    assert len(seen) == len(brief.GROUNDS)                                     # every kind comes up
-    assert brief.ground_hint("a post for a clinic", "x") == brief.ground_hint("a post for a clinic", "x")   # the same all turn
-    for said in ("a navy post", "use #0B1D3A", "in the same look as the last", "بلون أزرق"):
-        assert brief.ground_hint(said, "x") == ""
-    assert brief.ground_hint("a post for a clinic", "x", branded=True) == ""
+    from cycls._agent.design.tool import design_checked
+    post = lambda text: {"nodes": [{"type": "text", "text": text}]}
+    assert brief.check(post("قهوة عربية ١٥ ريال، شاي ١٠ ريال، كيك ٢٠ ريال"), "اعمل قائمة أسعار لمطعمنا الجديد") is None
+    assert brief.check(post("اليوم الوطني السعودي، دام عزك يا وطن"), "صمم منشور لليوم الوطني لشركتنا") is None
+    assert brief.check(post("وصفة جدة العائلة الأصلية"), "اكتب بوست عن وصفة عائلية") is None
+    assert brief.check(post("We filed 41 SAR filings and reviewed every SAR in ten days"), "A report on our anti-money-laundering work") is None
+    assert "SAR" in brief.check(post("The fix costs SAR 1.2m"), "A report on our bank's audit")
+    assert brief.check(post("افتتاح الفرع الجديد قريبا في المدينة كل يوم"), "Make a story size version of tests/x/opening.fig") is None
+    ask = {"role": "user", "content": "make it a story"}
+    made = {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "design", "input": {"action": "render"}}]}
+    only_skill = {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "design", "input": {"action": "skill"}}]}
+    first = {"role": "user", "content": "a post"}
+    assert design_checked([first, made, ask, made])                            # an earlier turn made it: its language is settled
+    assert not design_checked([first, only_skill, ask, made])
 
 
 def test_a_theme_or_a_glow_the_person_named_is_kept(tmp_path):

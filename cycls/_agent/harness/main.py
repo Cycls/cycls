@@ -21,7 +21,7 @@ from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
 from ..design.powerpoint import DECK_SUFFIXES   # what the Design tool's `import` opens
-from ..design.tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SEED, DESIGN_SKILLED, design_called, design_checked, design_researched, design_skills_loaded, person_last, person_words,
+from ..design.tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SKILLED, design_called, design_checked, design_researched, design_skills_loaded, person_last, person_words,
                            design_tool, design_wanted)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
@@ -860,7 +860,6 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             DESIGN_HEARD.set(person_words(messages))
             DESIGN_ASK.set(person_last(messages))
             DESIGN_CHECKED.set(design_checked(messages))
-            DESIGN_SEED.set(f"{session.chat_id}:{DESIGN_ASK.get()}")
             DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]
