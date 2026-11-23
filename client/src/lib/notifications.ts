@@ -34,6 +34,10 @@ const PLUGINS: Record<string, (spec: PushSpec) => PushProvider | null> = {
               serviceWorkerParam: { scope: "/push/onesignal/" },
               serviceWorkerPath: ONESIGNAL_WORKER,
             });
+            // One sound at a time: while the app is in view the bell sounds, so the push stays hidden.
+            OneSignal.Notifications.addEventListener?.("foregroundWillDisplay", (e: any) => {
+              if (document.visibilityState === "visible") e?.preventDefault?.();
+            });
             resolve(OneSignal);
           } catch (e) { reject(e); }
         });

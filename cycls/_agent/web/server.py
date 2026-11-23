@@ -2,16 +2,18 @@ import asyncio, json, inspect, re, time, uuid, os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from pydantic import BaseModel, PrivateAttr
 from typing import Optional, Any
 from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
-from cycls._agent import activity, state
+from cycls._agent import activity, inbox, routines, state
 from cycls._agent.web import voice
 
 
 BRAND_TTL = 300   # how long a container serves the brand it last read from the CMS
+_HEAD = re.compile(r'__TITLE__|__DESC__|content="/og\.png"')   # what the page's head says, filled per request
 
 class PassMetadata(BaseModel):
     name: str
@@ -29,6 +31,7 @@ class Config(BaseModel):
     cms: Optional[dict] = None        # {brand: url, explore: url, token: bearer} — plain GETs, contract JSON
     analytics: Optional[list] = None  # analytics plugins: [{provider, ...}] — one event pipe, fanned out client-side
     notifications: Optional[list] = None  # push plugins: [{provider, app_id}] — the FE owns the prompt UI
+    routines: Optional[list] = None   # Web.routines: on, with these examples (docs/rfc-routines.md)
     suggestions: bool = False
     voice: bool = False                # the mic shows: set from `transcription` as the server starts
     transcription: Optional[Any] = None  # Web.voice: {model, base_url, api_key, headers}, or False; server-side
@@ -44,12 +47,14 @@ class Config(BaseModel):
     head: Optional[str] = None        # raw HTML appended to <head> (verification tags etc.)
     favicon: Optional[str] = None     # inline <svg>, data URI, or URL
     og: Optional[str] = None          # og:image URL when external; custom bytes ride _og_image
+    accent: Optional[str] = None      # the agent's colour, the glow on the cards it draws: .brand()'s, else the CMS's
     explore: Optional[list] = None    # static explore menu (contract-shaped entries)
     explore_enabled: bool = False     # FE shows the agents dropdown
     examples: Optional[list] = None   # [{label, label_ar, urls}] — resolved at GET /examples
     examples_enabled: bool = False    # FE shows the example gallery on the empty screen
     colors: Optional[dict] = None     # {primary, secondary, primary_dark, secondary_dark}
     _og_image: Optional[bytes] = PrivateAttr(default=None)  # custom og card, served at /og.png
+    _fonts: list = PrivateAttr(default_factory=list)        # .brand(fonts=)'s files, for the cards it draws
 
     def set_prod(self, prod: bool):
         self.prod = prod
@@ -127,7 +132,7 @@ class Run:
     `inner` drives the loop and is the only thing stop, budget, disconnect and
     shutdown cancel."""
 
-    def __init__(self, *, detach, workspace=None, chat_id=None, user=None, agent=None):
+    def __init__(self, *, detach, workspace=None, chat_id=None, user=None, agent=None, origin=None):
         self.queue = asyncio.Queue(QUEUE_MAX)
         self.detach, self.attached, self.reason = detach, True, None
         self.failed = False   # the encoder handles the error itself
@@ -140,6 +145,8 @@ class Run:
         self.id, self.started = uuid.uuid4().hex, time.monotonic()
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.agent, self.stepped, self.before = agent, False, None
+        self.origin, self.waiting = origin, None   # where the app is, for a push; the card it last asked with
+        self.routine = None   # a routine's run: its end goes on the routine's record, not to its owner's bell
 
     def row(self, status):
         return {"run": self.id, "status": status, "owner": _OWNER,
@@ -246,6 +253,10 @@ async def _finish(run, status, on_run):
     await _record(run, status)
     log("run", user=run.user, chat_id=run.chat_id, status=status, reason=run.reason,
         error_id=run.error_id, ms=int((time.monotonic() - run.started) * 1000))
+    if run.routine and run.workspace is not None:   # refused for the limit is a run that could not run
+        await routines.ended(run.workspace, run.routine["id"], run.chat_id, "failed" if run.waiting == "plan" else status)
+    elif not run.attached and run.user is not None and run.workspace is not None and status != "stopped":   # they had left
+        await inbox.away(run.workspace, run.user.id, run.chat_id, status, run.waiting, run.origin)
     if on_run is None: return
     try:
         row = {**run.row(status), "chat_id": run.chat_id}
@@ -301,12 +312,22 @@ def _claim(runs, key, task):
     return True
 
 
+def _app_url(request):
+    """Where the app is, as the person reached it: https behind the platform's proxy, http on this machine alone."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    return host and f"{'http' if host.split(':')[0] in ('localhost', '127.0.0.1') else 'https'}://{host}"
+
+
 async def encoder(stream, *, chat_id=None, user=None, first=False, run=None):
     if chat_id: yield sse({"type": "chat_id", "chat_id": chat_id, **({"first": True} if first else {})})
     try:
         async for item in _aiter(stream):
             if run is not None and isinstance(item, dict) and item.get("type") == "step":
                 run.stepped = True   # it called tools: the files it may have changed are recorded as it ends
+            if run is not None and isinstance(item, dict) and item.get("type") == "ui" and item.get("action") in ("ask", "confirm", "connect"):
+                run.waiting = item["action"]   # it ends on a card: a question, an OK, a connector
+            if run is not None and isinstance(item, dict) and item.get("action") == "open_plan_modal":
+                run.waiting = "plan"   # the deployment's limit refused it
             if msg := sse(item): yield msg
     except Exception as e:
         import traceback
@@ -400,8 +421,13 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     cms = config.cms or {}
     _cms_headers = {"Authorization": f"Bearer {cms['token']}"} if cms.get("token") else {}
     _static_brand = dict(config.pass_metadata or {})   # .brand() wins piece by piece; the CMS fills what's unset
+    _own_og = bool(config.og or config._og_image)       # .brand(og=) wins over the CMS's card
+    _own_accent = config.accent                          # and .brand(accent=) over its colour
 
     volume = Path(config.volume)
+    onesignal = next((p for p in config.notifications or [] if isinstance(p, dict) and p.get("provider") == "onesignal"), None)
+    if onesignal and os.environ.get("ONESIGNAL_API_KEY"):   # the server pushes too, not only the platform's campaigns
+        inbox.push_with(onesignal["app_id"], os.environ["ONESIGNAL_API_KEY"], config.name)
     # (workspace path, chat id) -> endpoint task. One run per chat per container;
     # create-only turn writes catch the cross-container pair (docs/notes/runs.md).
     runs = {}
@@ -423,6 +449,9 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         replay: bool = False       # `regenerate` / `retry`: the last saved turn runs again instead of a new one
         agent_name: str = ""       # the agent's name as the chat shows it: what it signs a Word comment with
         by: Optional[dict] = None  # in a team chat, who wrote this turn: {id, name}
+        routine: Optional[dict] = None   # a routine's run: {id, name, at} — `tell` instead of `routine`
+        routines: bool = False     # Web.routines is on: the agent may offer one
+        tz: str = ""               # the person's time zone, as their browser says
 
         model_config = {"arbitrary_types_allowed": True}
 
@@ -476,19 +505,25 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     @app.post("/chat")
     @app.post("/chat/completions")
     async def back(request: Request, user: Optional[User] = auth):
-        data = await request.json()
+        return await _chat(request, user, await request.json())
+
+    async def _chat(request, user, data, routine=None):
+        """A chat message: the person's, or a routine's run sent as its owner's (`routine`, from /routines/run alone)."""
         messages = data.get("messages")
         given = request.query_params.get("id")
         chat_id = given or f"{state.TEAM if data.get('team') is True else ''}{uuid.uuid4()}"
         api = request.url.path == "/chat/completions"   # read off the request while it exists
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
+        tz = data.get("tz") if isinstance(data.get("tz"), str) and len(data["tz"]) < 64 else ""
+        if user is not None and routine is None:   # who they are, for a routine that runs while they are away
+            await inbox.remember(user, volume, config.storage, tz)
 
         # The account's first agent use — a durable per-account marker, so the
         # activation tick fires once per user (a browser flag re-fires on
         # every new device; a per-workspace check re-fires per workspace).
         first = False
-        if user is not None and not given and data.get("post") is not True:
+        if user is not None and not given and data.get("post") is not True and routine is None:
             try:
                 first = await state.mark_first_use(user, volume, config.storage, config.workspaces)
             except Exception:
@@ -502,7 +537,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                           connectors=[t for t in (data.get("connectors") or []) if isinstance(t, str)][:10],
                           selection=_clean_selection(data.get("selection")), folder=_clean_folder(data.get("folder")),
                           app=_clean_app(data.get("app")),
-                          agent_name=_agent_name())
+                          agent_name=_agent_name(), routine=routine, routines=config.routines is not None, tz=tz)
         try: context.workspace
         except LookupError: raise HTTPException(404, "Chat not found")
         if state.is_team(chat_id) and user is not None:   # its id is the client's, which shows it before it is saved
@@ -523,7 +558,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         # whose caller is given no chat id to come back to.
         run = Run(detach=data.get("detach") is True and not api,
                   workspace=context.workspace if user is not None else None,
-                  chat_id=chat_id, user=user, agent=config.name)
+                  chat_id=chat_id, user=user, agent=config.name, origin=_app_url(request))
+        run.routine = routine
         busy = JSONResponse(status_code=409, headers={"Retry-After": "2"},
                             content={"error": "run_in_progress", "chat_id": chat_id,
                                      "detail": "This chat is still working on your last message."})
@@ -534,6 +570,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 await (state.hold if running else state.post)(run.workspace, chat_id, said, context.by)
             finally:
                 if mine: runs.pop(key, None)
+            await inbox.later(inbox.mentioned(run.workspace, chat_id, said, context.by, run.origin))
             return JSONResponse({"chat_id": chat_id, "posted": True})
         if not _claim(runs, key, run):
             return busy
@@ -566,6 +603,8 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                             "error": "chat_changed", "chat_id": chat_id,
                             "detail": "This chat changed since it was opened. Reload it to see the latest."})
                 await _record(run, "running")   # visible before the first heartbeat
+                if context.by and not context.replay:   # once, as it is taken: a replay says nothing new
+                    await inbox.later(inbox.mentioned(run.workspace, chat_id, (messages or [{}])[-1], context.by, run.origin))
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
             stream = (openai_encoder(stream) if api
                       else encoder(stream, chat_id=chat_id, user=user, first=first, run=run))
@@ -614,6 +653,53 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 break
         return JSONResponse(status_code=202, content={"stopping": True,
                                                       "taken_back": bool(row and row.get("taken_back"))})
+
+    # ---- Routines (docs/rfc-routines.md): the clock, a run, Run now ----
+
+    async def _start(origin, ws, record, chat):
+        """A routine's run, sent as a request of its own: Cloud Run gives CPU while one is open, and spreads them."""
+        async with httpx.AsyncClient(timeout=30) as client:   # its answer is not waited for: the run goes on, detached
+            async with client.stream("POST", f"{origin}/routines/run", params={"id": chat}, headers={"x-workspace": ws.ws or ""},
+                                     json={"sig": routines.signed(ws, record, chat)}) as r:
+                if r.status_code >= 300:
+                    raise RuntimeError(f"the run was refused: {r.status_code}")
+
+    @app.post("/routines/tick")
+    async def routines_tick(request: Request):
+        """The clock, every five minutes: each routine due, claimed and sent. Anyone may call it: a routine starts only
+        once its time has come, and once."""
+        if config.routines is None: raise HTTPException(404)
+        origin = _app_url(request)
+        return {"started": await routines.tick(volume, config.storage, datetime.now(timezone.utc),
+                                               lambda ws, record, chat: _start(origin, ws, record, chat))}
+
+    @app.post("/routines/run")
+    async def routines_run(request: Request):
+        """A routine's run: its owner's chat message, built from the routine's record. Only this deployment can sign one."""
+        try: sig = routines.verify((await request.json()).get("sig") or "")
+        except (ValueError, KeyError, TypeError): raise HTTPException(403, "Not a routine's run")
+        if sig["c"] != request.query_params.get("id") or (sig["w"] or "") != (request.headers.get("x-workspace") or ""):
+            raise HTTPException(403, "Not this run")
+        owner, ws = await inbox.person(sig["s"], volume, config.storage), workspace(sig["s"], volume, base=config.storage, ws=sig["w"])
+        record = await routines.get(ws, sig["r"])
+        if owner is None or record is None: raise HTTPException(404, "Gone")
+        if sig["c"] != record.get("chat") and not await state.get_meta(ws, sig["c"]):   # its own chat: named for the day, off the list
+            at = datetime.now(timezone.utc)
+            await state.put_meta(ws, sig["c"], {"id": sig["c"], "title": f"{record['name']} · {at.astimezone(ZoneInfo(record['when']['tz'])):%d/%m}",
+                                                "titleSource": "routine", "routine": record["id"],
+                                                "createdAt": at.isoformat(), "updatedAt": at.isoformat()})
+        return await _chat(request, owner, {"messages": [routines.opening(record)], "detach": True, "connectors": record["connectors"]},
+                           routine={"id": record["id"], "name": record["name"], "at": datetime.now(timezone.utc).isoformat()})
+
+    @app.post("/routines/{rid}/now")
+    async def routine_now(rid: str, request: Request, user: Any = required_auth):
+        """Run now: the run, at once, in a new chat (or the one kept), which the person opens to watch."""
+        ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces, volume, config.storage)
+        ws = workspace(user, volume, base=config.storage, ws=ws_id)
+        record, chat = await routines.now(ws, rid)
+        if record is None: raise HTTPException(404, "No such routine")
+        await _start(_app_url(request), ws, record, chat)
+        return {"chat": chat}
 
     @app.get("/config")
     async def get_config():
@@ -763,11 +849,15 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                              "image": config.og or "/og.png",
                              "inLanguage": list(config.pass_metadata or {"en": None})}).replace("</", "<\\/")
         cfg = json.dumps(config.public()).replace("</", "<\\/")
-        html = _base_html.replace("__TITLE__", escape(V["title"])).replace("__DESC__", escape(V["desc"]))
-        if config.og:
-            html = html.replace('content="/og.png"', f'content="{escape(config.og)}"')
-        html = html.replace("</head>", f'<script type="application/ld+json">{jsonld}</script>{_head}</head>')
+        html = _base_html.replace("</head>", f'<script type="application/ld+json">{jsonld}</script>{_head}</head>')
         V["html"] = html.replace("</body>", f'<script>window.__CONFIG__={cfg}</script></body>')
+
+    def _page(request, title=None, card=None):
+        """The page, its head naming `title` with `card` as its social card (the agent's own by default), the
+        card's address whole: X, LinkedIn and WhatsApp don't read one relative to the page."""
+        fill = {"__TITLE__": escape(title or V["title"]), "__DESC__": escape(V["desc"]),
+                'content="/og.png"': f'content="{escape(card or config.og or f"{request.base_url}og.png")}"'}
+        return HTMLResponse(_HEAD.sub(lambda m: fill[m[0]], V["html"]))
 
     def _brand(agent):
         merged = {}
@@ -779,6 +869,9 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                                        logo=(s.logo if s else "") or agent.get("icon_svg", ""),
                                        brand=s.brand if s else "")
         config.pass_metadata = {**_static_brand, **merged}
+        if not _own_og:   # the agent's card is its page's on the website, drawn by the CMS
+            config.og = agent.get("card") or None
+        config.accent = _own_accent or agent.get("accent") or None
         _build()
 
     _brand_at = {"t": 0.0}   # 0 means never loaded, so the first request retries instead of waiting a TTL
@@ -845,29 +938,66 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
 
     # ---- Dynamic OG images ----
 
-    from fastapi.responses import Response
+    from fastapi.responses import RedirectResponse, Response
+    from . import og
+
+    _faces = og.faces(config._fonts)   # .brand(fonts=)'s, put where the cards find them, once
+
+    def _look():
+        """The agent as its cards show it: its icon, names, colour, wordmark and fonts — .brand()'s, else the CMS's."""
+        en, ar = ((config.pass_metadata or {}).get(k) for k in ("en", "ar"))
+        return {"icon": en.logo if en else "", "en": V["og_title"], "ar": ar.name if ar and ar.name != V["og_title"] else "",
+                "accent": config.accent, "logo": en.brand if en else "", **_faces}
 
     @app.get("/og.png")
     async def og_image():
         if config._og_image:
             return Response(config._og_image, media_type="image/png")
-        from .og import generate as og_generate
-        return Response(await og_generate(V["og_title"], V["og_desc"]), media_type="image/png")
+        return Response(await og.card(V["og_desc"] or V["og_title"], agent=_look()), media_type="image/png")
+
+    _drawn = {}   # each link's card as last drawn, for ten minutes: every paste of a link is another fetch of it
+
+    @app.get("/share/{user}/{token}/card.png")
+    async def share_card(user: str, token: str, request: Request, ws: Optional[str] = None):
+        """A public link's social card, drawn as it's asked for: what it made beside its title, else its title over
+        the question. Any other link, the moment it stops being public, or one that can't be drawn, has the agent's own."""
+        from .routers import public_share, share_words
+        own = RedirectResponse(config.og or f"{request.base_url}og.png")
+        found = await public_share(user, token, ws, config.workspaces, volume, config.storage)
+        if not found:
+            return own
+        for k in [k for k, (at, _) in _drawn.items() if time.time() - at > 600]:
+            del _drawn[k]
+        key = (user, token, ws, found[2])   # renamed, it's drawn again
+        if key not in _drawn:
+            try:
+                ask, picture = await share_words(*found[:2])
+                _drawn[key] = (time.time(), await og.link(found[2], ask, picture, _look()))
+            except Exception as e:
+                log("warn", message=f"share card not drawn: {e}")
+                return own
+        return Response(_drawn[key][1], media_type="image/png", headers={"Cache-Control": "public, max-age=600"})
 
     # ---- SPA fallback routes (before static mounts) ----
 
     @app.get("/")
     @app.get("/sso-callback")
-    async def index():
+    async def index(request: Request):
         asyncio.create_task(_refresh())   # this page is served from what we have; the next one is fresh
-        return HTMLResponse(V["html"])
+        return _page(request)
 
     @app.get("/shared/{user}/{token}")
-    async def share_index(user: str, token: str):
+    async def share_index(user: str, token: str, request: Request, ws: Optional[str] = None):
         asyncio.create_task(_refresh())
-        return HTMLResponse(V["html"])
+        # A public link's page is named after what it shares, with its own card; any other link (a team's, a revoked
+        # one) is the agent's page and says nothing of it.
+        from .routers import public_share
+        found = await public_share(user, token, ws, config.workspaces, volume, config.storage)
+        if not found:
+            return _page(request)
+        return _page(request, found[2], f"{request.base_url}share/{user}/{token}/card.png" + (f"?ws={ws}" if ws else ""))
 
-    if any(isinstance(p, dict) and p.get("provider") == "onesignal" for p in (config.notifications or [])):
+    if onesignal:
         # A push service worker must come from the site's own origin; scoped
         # under /push/onesignal/ so it never intercepts the page itself.
         @app.get("/push/onesignal/OneSignalSDKWorker.js")

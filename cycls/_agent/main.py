@@ -45,7 +45,7 @@ class _Routes:
 
 class Agent(App):
     _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv", "mcp==2.1.1"]
-    _base_apt = [*App._base_apt, "fonts-noto-core",
+    _base_apt = [*App._base_apt, "fonts-noto-core", "fonts-inter",
                  "poppler-utils", "ripgrep", "jq", "curl"]
     _base_run = [f"mkdir -p {TRASH_MOUNT} {SHIMS_MOUNT}"]   # bwrap can't mkdir bind targets inside its ro root
 
@@ -69,16 +69,17 @@ class Agent(App):
         self.config = Config(
             name=name, title=web._title, pass_metadata=brand,
             auth=web._auth is not None, cms=web._cms, analytics=web._analytics,
-            notifications=web._notifications,
+            notifications=web._notifications, routines=web._routines,
             suggestions=web._suggestions, affiliate=web._affiliate, mobile_app=web._mobile_app, plans=web._plans,
             transcription=web._voice,
             max_upload=web._max_upload, workspaces=web._workspaces,
-            seo=web._seo, head=web._head, favicon=web._favicon, og=web._og_url,
+            seo=web._seo, head=web._head, favicon=web._favicon, og=web._og_url, accent=web._accent,
             colors=web._colors, explore=web._explore,
             explore_enabled=bool(web._explore or (web._cms or {}).get("explore")),
             examples=web._examples, examples_enabled=bool(web._examples or (web._cms or {}).get("examples")),
         )
         self.config._og_image = web._og_bytes
+        self.config._fonts = web._fonts
         self._iap = web._iap
         self._on_run = web._on_run
         self.connectors = web._connectors

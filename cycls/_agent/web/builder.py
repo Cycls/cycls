@@ -51,6 +51,15 @@ class OneSignal:
         self.spec = {"provider": "onesignal", "app_id": app_id}
 
 
+def _font(path) -> bytes:
+    """A font file's bytes, read at build time; a missing file or one that isn't a font fails the build."""
+    from cycls._agent.video.fonts import read
+    p = Path(path).expanduser()
+    if not p.is_file() or not read(p.read_bytes()):
+        raise ValueError(f"not a TrueType or OpenType font: {path}")
+    return p.read_bytes()
+
+
 def _asset(value: str) -> str:
     """Inline an image at build time: SVG paths as markup, PNG/JPG/WebP paths
     as data URIs (keep raster logos small — they ride the page config). Raw
@@ -75,6 +84,7 @@ class Web:
         self._cms: Optional[dict] = None
         self._analytics: Optional[list] = None
         self._notifications: Optional[list] = None
+        self._routines: Optional[list] = None
         self._on_run = None
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
@@ -93,6 +103,8 @@ class Web:
         self._og_bytes: Optional[bytes] = None
         self._og_url: Optional[str] = None
         self._favicon: Optional[str] = None
+        self._accent: Optional[str] = None
+        self._fonts: list = []
         self._colors: Optional[dict] = None
         self._connectors: list = []
 
@@ -134,14 +146,19 @@ class Web:
                                  ("examples", examples), ("token", token)) if v}
         return self._copy(_cms=cms or None)
 
-    def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None):
+    def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None,
+              accent=None, fonts=None):
         """Static branding, from code instead of a CMS. `name`, `description`,
         `logo` (the agent icon shown in the chat hero) and `brand` (the wordmark
         shown in the nav bar; falls back to the Cycls logo when unset) are per
         locale — repeat with `locale="ar"` for Arabic. `og` (social card, path
         or URL) and `favicon` apply globally. Image paths are read at build time
         (SVG inlined, PNG/JPG as data URIs), so assets don't need to ship with
-        the container."""
+        the container. The cards the agent draws for its public links (and its
+        own, without `og`) carry its icon, names and wordmark, in `accent` (the
+        colour rising from below) and `fonts`: font files, read at build time
+        too, one face for Latin and one for Arabic headlines (else Inter and
+        IBM Plex Sans Arabic) — so a licensed font ships with the agent alone."""
         cur = {**self._brand.get(locale, {})}
         if name is not None: cur["name"] = name
         if description is not None: cur["description"] = description
@@ -156,6 +173,8 @@ class Web:
                 if not p.is_file(): raise ValueError(f"og image not found: {og}")
                 updates["_og_bytes"] = p.read_bytes()
         if favicon is not None: updates["_favicon"] = _asset(favicon)
+        if accent is not None: updates["_accent"] = accent
+        if fonts is not None: updates["_fonts"] = [_font(f) for f in fonts]
         return self._copy(**updates)
 
     def colors(self, *, primary=None, secondary=None, primary_dark=None, secondary_dark=None):
@@ -271,6 +290,20 @@ class Web:
             return self._copy(_notifications=None)
         specs = [p.spec if hasattr(p, "spec") else dict(p) for p in providers]
         return self._copy(_notifications=specs or None)
+
+    def routines(self, *examples: dict):
+        """Routines (docs/rfc-routines.md): the agent does a job on its own, on a schedule, in a new chat each run. Each
+        example: {"name", "name_ar", "prompt", "prompt_ar", "icon"}, its prompt put in the message box ([a blank]
+        selected first), its icon a connector's name for its logo or one of the client's icons; with none, a few
+        general ones. Off by default."""
+        keys = ("name", "name_ar", "prompt", "prompt_ar", "icon")
+        return self._copy(_routines=[{k: str(e[k]) for k in keys if e.get(k)} for e in examples] or [
+            {"name": "News on a topic", "name_ar": "أخبار موضوع", "icon": "globe",
+             "prompt": "Every morning at 8, send me what is new about [topic].",
+             "prompt_ar": "كل صباح الساعة 8 أرسل لي الجديد عن [الموضوع]"},
+            {"name": "Weekly files summary", "name_ar": "ملخص الملفات الأسبوعي", "icon": "folder",
+             "prompt": "Every Sunday, sum up what changed in my files last week.",
+             "prompt_ar": "كل أحد لخّص لي ما تغيّر في ملفاتي خلال الأسبوع الماضي"}])
 
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""

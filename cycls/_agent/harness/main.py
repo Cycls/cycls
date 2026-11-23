@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cycls._app.db import Conflict
-from .. import connectors, spill, state
+from .. import connectors, routines, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -227,7 +227,7 @@ def _shape(block, out, ok, handlers, mcp_names):
         # A UI tool drives the client; the model gets a short ack so tool_result
         # stays a valid string. `ack` overrides the wording and never ships.
         ack = out.pop("ack", None)
-        waiting = out.get("action") in ("confirm", "connect")
+        waiting = out.get("action") in ("confirm", "connect", "routine")
         return (ack or f"Opened {out.get('name') or out.get('path') or 'the file'} for the user.",
                 [{**out, "id": block["id"]}], waiting)
     if ok and handlers and name in handlers and name not in mcp_names and not detailed(name):
@@ -562,6 +562,14 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         log("warn", user=user, chat_id=billed,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    # Routines (docs/rfc-routines.md): a run tells what it found; elsewhere, with Web.routines on, the agent offers one
+    if routine := getattr(context, "routine", None):
+        tools_list.append(routines.TELL_TOOL)
+    elif getattr(context, "routines", False) and user is not None:
+        tools_list.append(routines.ROUTINE_TOOL)
+        if tz := getattr(context, "tz", ""):
+            system_text += f"\n\nThe person's time zone is {tz}."
+    ctx = replace(ctx, routine=routine, tz=getattr(context, "tz", "") or "")
     # With Docs / Sheets on, bash keeps off the files they look after (office/guard.py).
     if office := frozenset(t["name"] for t in tools_list if t.get("name") in ("docs", "sheets")):
         ctx = replace(ctx, office=office)
@@ -595,7 +603,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     client_side = [s for s in mcp_servers or [] if not s._server_side]
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
     hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if (any(s._connector for s in client_side) or api_connectors) else set()
+    if getattr(context, "routine", None):   # a routine's run gets the connectors it works with, and no others
+        hidden |= ({s._connector.name for s in client_side if s._connector} | {o.name for o in api_connectors or ()}) \
+            - set(getattr(context, "connectors", None) or ())
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
+    direct = {}   # a connected REST connector's one tool, there from the start
+    unconnected = {}   # connectors the person has not connected, with nothing to list until they do: `find_tools` offers them
     # Every server is asked at once — one after another, each grant read and handshake added up before the
     # first model call; the results are taken in the order the servers were given.
     asked = [s for s in client_side if not (s._connector and s._connector.name in hidden)]
@@ -612,6 +625,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             raise got
         schemas, fns, names = got
         if not (server._connector and schemas):
+            if server._connector and not schemas and not await server._connector.bearer(workspace):
+                unconnected[server._connector.name] = server._connector
             _mount(server, schemas, fns, names)
             continue
         o = server._connector
@@ -634,30 +649,29 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         return next((n for n, es in deferred.items() for s, *_ in es if tool.startswith(f"{s.label}_")), None)
 
     async def _find_tools(inp, ctx):
-        hits = connectors.matches(str(inp.get("query") or ""), catalog)
+        query = str(inp.get("query") or "")
+        hits = connectors.matches(query, catalog)
         loaded = [(n, _discover(n)) for n in hits if n in deferred]
         if loaded:
             return "Loaded:\n" + "\n".join(f"- {n}: {', '.join(sorted(t))}" for n, t in loaded)
-        if hits:
-            return f"Already loaded: {', '.join(hits)}. Call those tools directly."
+        if hits:   # connected already, Outlook's mail as much as a server's tools found earlier
+            return "Already connected: " + ", ".join(f"{n} ({', '.join(direct[n])})" if n in direct else n for n in hits) + \
+                ". Call their tools directly."
+        if fit := connectors.matches(query, {n: (*connectors.copy_of(o), []) for n, o in unconnected.items()})[:3]:
+            return connectors.offer(fit)   # what the person asked for needs one they have not connected: the card
         return ("Nothing matched. You can load: " + ", ".join(sorted(deferred))) if deferred else "No connectors left to load."
 
     if deferred:   # already discovered here, or just `@`-mentioned — either way, no round-trip
         prefixes = {f"{s.label}_": n for n, es in deferred.items() for s, *_ in es}
         for name in _seen_connectors(messages, prefixes, catalog) | set(mentions or []):
             _discover(name)
-    if deferred:
-        tools_list.append(connectors.FIND_TOOLS)
-        handlers["find_tools"] = _find_tools
-        register_labels({"find_tools": lambda i: str(i.get("query") or "")}, {"find_tools": "Finding tools"},
-                        details=("find_tools",))   # the result is the model's; the step row carries it
-        system_text += "\n\nConnectors this person has connected. Their tools are not loaded yet — call " \
-                       "`find_tools` once with what you need, then call the tools it returns.\n" + \
-                       "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
     # CONN-4: a connector with a REST base and no MCP server contributes one tool — otherwise a
     # stored key is unreachable, since everything above only walks servers.
     for o in api_connectors or ():
-        if not o.api or o.servers or o.name in hidden or not await o.bearer(workspace):
+        if not o.api or o.servers or o.name in hidden:
+            continue
+        if not await o.bearer(workspace):
+            unconnected[o.name] = o
             continue
         schema, fn, label, writes = connectors.api_tool(o)
         chosen = (await connectors.permissions(workspace, o.name)).get(schema["name"])   # its one tool's Ask / Always allow / Never
@@ -668,7 +682,24 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                                                     hard=chosen == "ask", allowed=chosen == "allow")
         mcp_names.add(schema["name"])
         owners[schema["name"]] = o
+        objs[o.name], direct[o.name] = o, [schema["name"]]
+        catalog.setdefault(o.name, (*connectors.copy_of(o), []))[2].append(f'{schema["name"]} {schema.get("description") or ""}')
         register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))
+    if deferred or unconnected:
+        tools_list.append(connectors.FIND_TOOLS)
+        handlers["find_tools"] = _find_tools
+        register_labels({"find_tools": lambda i: str(i.get("query") or "")}, {"find_tools": "Finding tools"},
+                        details=("find_tools",))   # the result is the model's; the step row carries it
+    if deferred:
+        system_text += "\n\nConnectors this person has connected. Their tools are not loaded yet: call " \
+                       "`find_tools` once with what you need, then call the tools it returns.\n" + \
+                       "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
+    if ready := sorted(set(catalog) - set(deferred)):
+        system_text += "\n\nConnected, their tools already here: " + \
+                       ", ".join(f"{n} ({connectors.copy_of(objs[n])[0] or n})" for n in ready)
+    if unconnected:   # seen, so offered when a request needs one: `find_tools` answers with the card to connect it
+        system_text += "\n\nNot connected yet; when a request needs one, `find_tools` offers it to the person: " + \
+                       ", ".join(f"{n} ({connectors.copy_of(o)[0] or n})" for n, o in sorted(unconnected.items()))
 
     if any(t.get("name") == "build_app" for t in tools_list):
         if cat := await asyncio.to_thread(app_catalog, workspace.root):

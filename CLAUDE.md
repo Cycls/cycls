@@ -60,6 +60,8 @@ cycls/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── activity.py         # who made and changed each file (.files), people's faces, an org's audit log (docs/rfc-file-metadata.md)
+    ├── inbox.py            # a person's notifications across their workspaces (.inbox): `notify`, a team message's mentions and replies, the bell's read (docs/rfc-notifications.md)
+    ├── routines.py         # routines: the record (each person's, per workspace), the clock (.clock, a key per routine by its next run), a run as its owner's chat message, `routine` and `tell` (docs/rfc-routines.md)
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
@@ -172,6 +174,8 @@ tests/
 │   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once, file holds, cost
 │   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes, a chat's files
 │   ├── team_chats_test.py       # a team workspace's chats: who sees them, a message to the team alone, moving a chat there, reactions, edits, typing, unread, paging, writes at the same moment, a look that finds nothing new
+│   ├── inbox_test.py            # the inbox: a mention, a reply and @all reach who they name, never the sender, whoever had the chat open, nor twice; push words and picks; a task ended while away; read, seen, a chat opened, the newest 30
+│   ├── routines_test.py         # routines: local time across clock changes, set up only from the card, the clock starting each once, a run as its owner off the chat list, tell, three failures pausing it
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding

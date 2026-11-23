@@ -12,10 +12,14 @@ import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./can
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
 import { SearchDialog, type Kind } from "./search-dialog";
+import { InboxBell } from "./inbox";
+import { useInbox } from "../hooks/use-inbox";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, Spinner, type IconName } from "./icon";
-import { ConnectCard } from "./connect-card";
+import { ConnectContext } from "./connect-card";
+import { RoutinesContext, type Routine } from "./routine-card";
+import { RoutineDialog, RoutinesPanel, RoutinesStart } from "./routines-panel";
 import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
 import { FileActions } from "./parts/file-part";
@@ -63,7 +67,7 @@ export interface PassAgent {
   icon_svg?: string;
 }
 
-type PanelTab = "files" | "shares" | "chats" | "apps" | "trash";
+type PanelTab = "files" | "shares" | "chats" | "apps" | "trash" | "routines";
 
 export interface AccountInfo {
   user: UserInfo;
@@ -175,7 +179,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const teamWs = workspaces?.active?.type === "team";
   const [chatKind, setChatKind] = useState<"agent" | "team">("agent");
   useEffect(() => { if (chatId) setChatKind(isTeamChat(chatId) ? "team" : "agent"); }, [chatId]);
-  const inTeam = teamWs && (chatId ? isTeamChat(chatId) : chatKind === "team");
+  // "+ New routine": a new chat whose empty screen is the routines one, the agent's examples and the message box. A
+  // routine is the agent's to make, so what is sent there is a chat with the agent, whichever kind was open before.
+  const [routineStart, setRoutineStart] = useState(false);
+  const inTeam = teamWs && !routineStart && (chatId ? isTeamChat(chatId) : chatKind === "team");
   const agentNames = [meta?.name, passMetadata?.en?.name, passMetadata?.ar?.name, name].filter(Boolean).map((n) => `@${n!.toLowerCase()}`);
   const [was] = useState(() => kept.get(view));
   // A chat about to open — the one kept here, or the address's — shows as loading, never the empty screen first.
@@ -262,8 +269,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // composer. The options are shortcuts, not a constraint: typing any reply
   // answers it too.
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
-  // The agent's connect card: a tool needed an account the user hasn't linked.
-  const [connect, setConnect] = useState<{ name: string } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
@@ -296,7 +301,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   };
   useEffect(() => {   // the callback tab reports success: the card goes away, the directory refreshes
     const done = (e: MessageEvent) => {
-      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { setConnect(null); loadConnectors(); }
+      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { loadConnectors(); goOn.current(e.data.connector); }
     };
     window.addEventListener("message", done);
     return () => window.removeEventListener("message", done);
@@ -332,7 +337,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useEffect(() => {
     setFollowUp(null);
     setAsk(null);
-    setConnect(null);
     setPills([]);
     setReplyTo(null);
     queuedRef.current = [];
@@ -463,6 +467,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else if (kind === "files") openFileInCanvas(key);
     else { const app = apps.find((a) => a.slug === key); if (app) openApp(app); }
   };
+  const inbox = useInbox(api, !!account, chatId);
+  useUrlParam("ws", (at) => {   // a push's link: the chat, in its own workspace
+    const id = new URLSearchParams(window.location.search).get("id");
+    if (wsNav && at !== here) {
+      wsNav.onSwitch(at.startsWith("u-") ? null : at);
+      if (id) window.history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
+    }
+  });
   useUrlParam("file", openFileInCanvas);
   useUrlParam("app", (slug) => { const app = apps.find((a) => a.slug === slug); if (app) openApp(app); }, !appsLoading);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
@@ -496,6 +508,53 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, [messages]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmitRef = useRef<(overrideText?: string, origin?: string, extra?: SendExtra) => void>(() => {});
+  // The connect card in the agent's message: Connect signs in; once a connector its last message waits on is linked,
+  // the agent carries on by itself; Not now tells it to go on without.
+  const labelOf = (name: string) => connectorLabel(connectors?.find((c) => c.name === name) ?? { name });
+  const goOn = useRef<(name?: string) => void>(() => {});
+  goOn.current = (name) => {
+    const last = messages[messages.length - 1];
+    const waits = last?.role === "assistant" && last.parts?.some((p) => p.type === "card" && p.card?.action === "connect"
+      && ((p.card.connectors as string[] | undefined) ?? [p.card.connector]).includes(name));
+    if (name && waits && !isStreaming) handleSubmitRef.current(t("connectedGoOn").replace("{name}", labelOf(name)), "connect");
+  };
+  // A routine's card in the agent's message: Set up, Save and Delete are the person's; Run now opens the run to watch.
+  const [routineList, setRoutineList] = useState<Routine[] | null>(null);
+  const loadRoutines = useCallback(() => {
+    if (config?.routines && account) api("/routines", { silent: true }).then((r) => r.json()).then(setRoutineList).catch(() => {});
+  }, [api, config?.routines, account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadRoutines(); }, [loadRoutines]);
+  const routinesCtx = {
+    routines: routineList,
+    connectors: connectors ?? undefined,
+    make: async (r: Routine) => { await api("/routines", { method: "POST", json: r }); track("routine_set_up", { every: r.when.every }); loadRoutines(); },
+    save: async (id: string, patch: Partial<Routine>) => { await api(`/routines/${id}`, { method: "PATCH", json: patch }); loadRoutines(); },
+    remove: async (id: string) => { await api(`/routines/${id}`, { method: "DELETE" }); track("routine_deleted", {}); loadRoutines(); },
+    now: async (id: string) => {
+      const { chat: run } = await (await api(`/routines/${id}/now`, { method: "POST" })).json();
+      track("routine_run_now", {});
+      loadRoutines();
+      onLoadChat?.(run);
+    },
+    edit: (routine: Routine, onSave: (r: Routine) => Promise<void> | void) => setEditing({ routine, onSave }),
+    open: (path: string) => { openFileInCanvas(path); if (!isDesktop) setFilesOpen(false); },
+    connect: (name: string) => void connectCard.connect(name),
+  };
+  const [editing, setEditing] = useState<{ routine: Routine; onSave: (r: Routine) => Promise<void> | void } | null>(null);
+  const newRoutine = () => { onClear?.(); setRoutineStart(true); if (!isDesktop) setFilesOpen(false); };
+  const connectCard = {
+    connectors: connectors ?? undefined,
+    connect: async (name: string) => {
+      track("connector_connect_clicked", { connector: name, source: "card", chat_id: chatId });
+      if (connectors?.find((c) => c.name === name)?.kind === "key") return openConnectors("card", name);
+      const { url } = await (await api(`/connectors/${name}/authorize`, { method: "POST" })).json();
+      openAuth(url, loadConnectors);
+    },
+    skip: (names: string[]) => {
+      track("connector_dismissed", { connector: names.join(",") });
+      handleSubmitRef.current(t("goOnWithout").replace("{name}", names.map(labelOf).join(", ")), "connect");
+    },
+  };
   // Send pressed while a file uploads: held, shown, and sent by itself when the uploads finish.
   const { held: heldSend, request: holdSend, cancel: cancelHeld } = useHeldSend({
     input, attachments, send: (origin, extra) => handleSubmitRef.current(undefined, origin, extra),
@@ -610,8 +669,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           track("ui_action", { action: "ask", questions: questions.length });
         }
       } else if (ev.action === "connect" && typeof ev.connector === "string") {
-        setConnect({ name: ev.connector });
-        track("ui_action", { action: "connect", connector: ev.connector });
+        track("ui_action", { action: "connect", connector: ev.connector });   // the card is part of the agent's message
       } else if (ev.action === "confirm" && typeof ev.tool === "string") {
         track("ui_action", { action: "confirm", tool: ev.tool });   // the card itself is a part of the agent's message
       } else if (ev.action === "title" && typeof ev.title === "string" && typeof ev.chat_id === "string") {
@@ -901,6 +959,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   };
 
   const isEmpty = messages.length === 0;
+  useEffect(() => { if (!isEmpty) setRoutineStart(false); }, [isEmpty]);
 
   // Static config, then the 1h localStorage cache, then the network.
   const loadExplore = useCallback(async (): Promise<PassAgent[]> => {
@@ -1316,6 +1375,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </button>
               </>
             )}
+            {account && <InboxBell inbox={inbox} workspaces={wsNav?.items} here={here} onOpen={(i) => i.chat && openHit("chats", i.chat, i.ws)} />}
             {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} className="[&>svg]:size-4.5" />}
             {(files || account) && (
               <button
@@ -1407,7 +1467,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       <LayoutGroup>
         <LoadingBar active={chatLoading || opening} />
         {!chatLoading && !opening && (isEmpty ? (
-          examplesEnabled ? (
+          routineStart && config?.routines ? (
+            <RoutinesStart name={meta?.name} examples={config.routines} connectors={connectors ?? undefined} onUse={examples.makeLike}>
+              <InputBox {...inputProps} placeholder={t("describeRoutine")} />
+            </RoutinesStart>
+          ) : examplesEnabled ? (
             // With a gallery the empty screen is a page that scrolls: hero and
             // composer centered in the viewport, category chips and the top of
             // the cards peeking below the fold.
@@ -1457,6 +1521,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 <ConnectorsContext.Provider value={connectors ?? []}>
                 <FileActions.Provider value={fileActions}>
                 {older && <div ref={topRef} className="h-px w-full" />}
+                <ConnectContext.Provider value={connectCard}>
+                <RoutinesContext.Provider value={routinesCtx}>
                 <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{shown.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
@@ -1516,6 +1582,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
                 )}</ApprovalContext.Provider>
+                </RoutinesContext.Provider>
+                </ConnectContext.Provider>
                 </FileActions.Provider>
                 </ConnectorsContext.Provider>
                 {sharingFile && shareFileFn && (
@@ -1556,20 +1624,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     }}
                   />
                 )}
-                {connect && !ask && (
-                  <ConnectCard
-                    key={connect.name}
-                    name={connect.name}
-                    onConnect={async () => {
-                      track("connector_connect_clicked", { connector: connect.name, source: "card", chat_id: chatId });
-                      if (connectors?.find((x) => x.name === connect.name)?.kind === "key") { setConnect(null); openConnectors("card", connect.name); return; }
-                      const { url } = await (await api(`/connectors/${connect.name}/authorize`, { method: "POST" })).json();
-                      openAuth(url, loadConnectors);
-                    }}
-                    onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
-                  />
-                )}
-                {!ask && !connect && !approval && survey && !hushed && !isStreaming && (
+                {!ask && !approval && survey && !hushed && !isStreaming && (
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>
@@ -1634,6 +1689,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           </div>
         </Popover>
       )}
+      {editing && <RoutineDialog routine={editing.routine} connectors={connectors ?? undefined} onSave={editing.onSave} onClose={() => setEditing(null)} />}
       {searchOpen && (files || account) && (
         <SearchDialog
           chats={account ? chats : undefined}
@@ -1739,7 +1795,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               {railIconsOnly ? (
                 <div className="flex flex-col items-center gap-1 border-b border-border py-2">
                   {([["chats", "list", !!account], ["files", "folder", !!files],
-                     ["apps", "grid", !!files], ["shares", "link", !!account]] as const)
+                     ["apps", "grid", !!files], ["shares", "link", !!account], ["routines", "clock", !!(config?.routines && account)]] as const)
                     .filter(([, , on]) => on)
                     .map(([tab, icon]) => (
                       <button
@@ -1788,6 +1844,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                         {t("shares")}
                       </button>
                     )}
+                    {config?.routines && account && (
+                      <button
+                        onClick={() => { selectTab("routines"); loadRoutines(); }}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "routines" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {t("routines")}
+                      </button>
+                    )}
                   </div>
                   <div className="flex-1" />
                   <button
@@ -1814,6 +1878,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
                   onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
                 />
+              ) : filesTab === "routines" ? (
+                <RoutinesContext.Provider value={routinesCtx}>
+                  <RoutinesPanel routines={routineList} examples={config?.routines ?? undefined} onOpenChat={(id) => { onLoadChat?.(id); if (!isDesktop) setFilesOpen(false); }}
+                                 onNew={newRoutine} onUse={(prompt) => { newRoutine(); examples.makeLike(prompt); }} />
+                </RoutinesContext.Provider>
               ) : filesTab === "shares" ? (
                 <div className="flex flex-1 min-h-0 flex-col">
                   <div className="flex-1 overflow-y-auto pb-20">

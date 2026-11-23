@@ -160,6 +160,7 @@ export interface Message {
   edited?: string;
   deleted?: string;
   reply?: Quote;
+  routine?: { id: string; name: string; at: string };   // a routine's run began with this turn: its line, not its text
 }
 
 // A team chat's live side, read with each look at it: reactions (message id → emoji → who), who is typing, what
@@ -187,6 +188,7 @@ export interface AppConfig {
   one_tap?: boolean;
   analytics?: { provider: string; events?: string[]; [k: string]: unknown }[] | null;
   notifications?: { provider: string; [k: string]: unknown }[] | null;   // push plugins
+  routines?: { name: string; name_ar?: string; prompt: string; prompt_ar?: string; icon?: string }[] | null;   // on, with these examples
   suggestions?: boolean;
   affiliate?: string;
   mobile_app?: { ios?: string; android?: string } | null;   // store links for the phone banner
@@ -623,7 +625,7 @@ export function useChat(baseUrl: string = "") {
               if (type === "ui" && item.action) {
                 const ev = item as unknown as UIAction;
                 uiHandlerRef.current?.(ev);
-                if (ev.action !== "confirm") continue;
+                if (ev.action !== "confirm" && ev.action !== "connect" && ev.action !== "routine") continue;
                 const held = parts.findIndex((p) => p.type === "step" && p.id === ev.id);
                 if (held >= 0) parts.splice(held, 1);
                 currentPart = { type: "card", card: ev, state: "waiting" };

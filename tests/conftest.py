@@ -21,6 +21,14 @@ def _no_parser(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mentions_at_once(monkeypatch):
+    """A mention waits for whoever has the chat open, beside the request: tests tell at once, before the answer."""
+    from cycls._agent import inbox
+    monkeypatch.setattr(inbox, "HOLD", 0)
+    monkeypatch.setattr(inbox, "later", lambda job: job)
+
+
+@pytest.fixture(autouse=True)
 def _no_naming(monkeypatch):
     """A new chat's title is one more model call, which would take a scripted reply: tests name no chat, unless
     they put the real `_chat_title` back."""

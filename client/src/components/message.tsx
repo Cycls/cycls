@@ -8,6 +8,8 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { StepPart } from "./parts/step-part";
 import { ApprovalReceipt } from "./approval-card";
+import { QuickConnect } from "./connect-card";
+import { RoutineCard, type Routine } from "./routine-card";
 import { GlowStar, Star } from "./cycls-star";
 import { StepGroup } from "./parts/step-group";
 import { AgentsCard } from "./parts/agents-card";
@@ -58,8 +60,10 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       return <SourcesPart key={index} sources={part.sources || []} />;
     case "chart":
       return <ChartPart key={index} part={part} />;
-    case "card":   // a confirm card's line, where the agent asked; the card itself waits over the message box
-      return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} /> : null;
+    case "card":   // a confirm card's line, where the agent asked (the card itself waits over the message box); a connect card whole
+      return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} />
+        : part.card?.action === "connect" ? <QuickConnect key={index} card={part.card as { connector?: string; connectors?: string[] }} />
+        : part.card?.action === "routine" ? <RoutineCard key={index} card={part.card as { routine?: Routine; change?: boolean; delete?: boolean }} /> : null;
     case "step": {
       const { step, tool_name } = localStep(part);
       return (
@@ -180,6 +184,13 @@ const tool = "hover:bg-secondary text-muted-foreground hover:text-foreground fle
 // Two components, not one with an early return: a slot that turns from a person's message into a reply (a team
 // chat's reload, a page put above) must not run a different set of hooks.
 export function MessageBubble(props: BubbleProps) {
+  const routine = props.message.routine;
+  if (routine)   // a routine's run began here: a small line in place of the instruction
+    return (
+      <p className="my-3 text-center text-xs text-muted-foreground">
+        {t("routineLine")} · {routine.name} · {new Date(routine.at).toLocaleString(getLang(), { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+      </p>
+    );
   return props.message.role === "user" ? <UserBubble {...props} /> : <Reply {...props} />;
 }
 

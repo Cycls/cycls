@@ -738,12 +738,14 @@ class Session:
                    summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
                    cleared=int(marker.get("cleared", 0)),
                    next_idx=await turn_end(context.workspace, context.chat_id),
-                   replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None))
+                   replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None),
+                   routine=getattr(context, "routine", None))
 
     def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0,
-                 replay=False, by=None):
+                 replay=False, by=None, routine=None):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
         self.by = by   # a team chat's: who writes the turns added here
+        self.routine = routine   # a routine's run: its first turn says so
         self.replay = replay   # `regenerate` / `retry`: the person's turn is the last one saved, and runs again
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
         self.cleared = min(cleared, len(messages))
@@ -820,6 +822,8 @@ class Session:
             msg["selection"] = selection
         if connectors:   # @-mentioned: a replay loads them up front, as this turn did
             msg["connectors"] = list(connectors)
+        if self.routine and not internal:
+            msg["routine"] = self.routine
         self.messages.append(msg)
         # Before the meta touch: a turn with no index is recoverable (the next
         # touch_meta fills the title, add_cost and the chat-list self-heal both

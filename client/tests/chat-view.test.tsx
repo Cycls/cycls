@@ -113,3 +113,30 @@ test("back in a workspace, its chats show at once while the fresh list loads, th
   expect(screen.getByText("Launch plan")).toBeTruthy();
   expect(screen.queryByText("Hiring")).toBeNull();
 });
+
+test("in a team workspace, a routine starts as a chat with the agent, even after a team chat", async () => {
+  browser(true);
+  vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+  sessionStorage.setItem("cycls_panel", "1");
+  sessionStorage.setItem("cycls_panel_tab", "routines");
+  const sent: Record<string, unknown>[] = [];
+  global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (/\/chat(\?|$)/.test(String(url))) { sent.push(JSON.parse(String(init?.body))); return new Promise<Response>(() => {}); }
+    return json(String(url).includes("/chats/team-1") ? { title: "Launch", next: 1, run: null, messages: [{ role: "user", content: "hi", id: "m1", by: { id: "u_sara", name: "Sara" } }] } : []);
+  }) as unknown as typeof fetch;
+  const general = { id: "t-shared", name: "General", type: "team" as const, role: "admin", builtin: "general" };
+  const workspaces = { active: general, items: [general], canCreate: false, isOrgAdmin: true, orgMembers: [{ id: "u_me", name: "Mohammed" }], fetchMembers: async () => [] };
+  let chat!: ChatApi;
+  const Harness = () => { chat = useChat(""); return <Chat chat={chat} config={{ name: "super", routines: [] } as never}
+    account={{ user: { id: "u_me" }, workspaces } as never} />; };
+  render(<Harness />);
+  act(() => { void chat.loadChat("team-1"); });
+  await screen.findByText("hi");
+  fireEvent.click(await screen.findByText("New routine"));
+  const box = await screen.findByPlaceholderText("Describe a routine…");
+  fireEvent.change(box, { target: { value: "Every morning, the news on AI" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]).not.toHaveProperty("team");
+  expect(sent[0]).not.toHaveProperty("post");
+});

@@ -1,116 +1,223 @@
-"""Dynamic OG image generation — pure SVG → PNG via resvg."""
+"""Social cards in cycls.com's look, drawn per request (SVG → PNG, resvg): black, the agent's colour rising from below,
+its icon and names, a headline with a line under it, the Cycls wordmark or the agent's own logo. The agent's own card
+(/og.png), and a public link's (`link`): what it made, tilted on a grey tile beside its title, else its title over the
+question. Set in the agent's own fonts (`faces`), else Inter and IBM Plex Sans Arabic: Inter comes with the image, Plex
+from beside this file. The site's own faces are licensed, so they never ship here: an agent brings them."""
 
 import asyncio
 import base64
+import functools
+import re
+import struct
+import tempfile
 from html import escape
-import httpx
-from resvg_py import svg_to_bytes
+from pathlib import Path
 
-W, H = 1200, 630
-PAD = 80
+W, H, PAD = 1200, 630, 80
+LATIN, ARABIC = "Inter", "IBM Plex Sans Arabic"
+FONTS = ["/usr/share/fonts", str(Path(__file__).parent / "fonts")]
+DROP, DROP_AR = .26, .2   # a baseline under its line's middle, in em, where the site's faces set it (its Arabic headlines'
+                          # higher): the two cards' lines fall alike
 
 _LOGO = '<g transform="translate({x},{y}) scale({s})" fill="#fff"><path d="M 17.743 0.755 L 16.261 0.755 C 15.861 0.755 15.484 0.961 15.253 1.301 L 3.23 19.531 C 3.133 19.689 3.242 19.895 3.424 19.895 L 4.906 19.895 C 5.307 19.895 5.683 19.689 5.914 19.349 L 17.937 1.119 C 18.047 0.973 17.925 0.755 17.743 0.755 Z"/><path d="M 5.248 0 L 5.734 1.654 C 6.164 3.153 7.345 4.33 8.844 4.765 L 10.496 5.241 L 8.844 5.718 C 7.345 6.152 6.164 7.329 5.734 8.829 L 5.248 10.496 L 4.762 8.843 C 4.332 7.343 3.152 6.166 1.652 5.732 L 0 5.255 L 1.652 4.779 C 3.152 4.344 4.332 3.167 4.762 1.668 L 5.248 0 Z"/><path d="M 17.359 13.159 C 17.493 13.671 18.909 15.02 19.38 15.192 C 18.909 15.31 17.516 16.704 17.359 17.226 C 17.225 16.714 15.89 15.308 15.338 15.192 C 15.89 14.962 17.211 13.671 17.359 13.159 Z M 17.345 9.86 L 16.852 11.552 C 16.415 13.073 15.218 14.268 13.696 14.709 L 12.02 15.192 L 13.696 15.676 C 15.218 16.116 16.415 17.311 16.852 18.832 L 17.345 20.51 L 17.838 18.818 C 18.275 17.297 19.472 16.102 20.994 15.661 L 22.67 15.178 L 20.994 14.694 C 19.472 14.254 18.275 13.059 17.838 11.538 Z M 34.301 6.3 C 36.386 5.965 38.638 6.177 40.489 7.281 C 42.005 8.139 43.197 9.544 43.766 11.194 C 43.911 11.662 44.123 12.142 44.089 12.632 C 43.944 12.833 43.666 12.81 43.454 12.821 C 42.908 12.81 42.361 12.844 41.826 12.81 C 41.469 12.81 41.369 12.431 41.28 12.153 C 40.912 10.848 39.931 9.745 38.716 9.176 C 37.233 8.485 35.505 8.452 33.956 8.942 C 32.094 9.533 30.656 11.172 30.21 13.067 C 29.931 14.215 29.931 15.419 30.154 16.578 C 30.522 18.418 31.793 20.068 33.543 20.781 C 35.071 21.394 36.821 21.439 38.359 20.848 C 39.597 20.369 40.656 19.388 41.135 18.139 C 41.258 17.838 41.302 17.504 41.492 17.225 C 41.659 17.013 41.96 17.069 42.194 17.058 C 42.74 17.069 43.287 17.035 43.822 17.08 C 44.011 17.102 44.145 17.281 44.1 17.47 C 43.788 19.142 42.93 20.725 41.614 21.807 C 40.277 22.933 38.56 23.59 36.821 23.691 C 34.903 23.836 32.908 23.468 31.28 22.409 C 29.608 21.327 28.304 19.666 27.713 17.76 C 27.312 16.467 27.211 15.096 27.379 13.758 C 27.713 10.113 30.667 6.88 34.301 6.3 Z M 70.142 6.958 C 70.12 6.735 70.22 6.434 70.488 6.434 C 71.123 6.411 71.759 6.423 72.405 6.434 C 72.528 6.579 72.628 6.757 72.606 6.958 L 72.606 22.888 C 72.628 23.133 72.539 23.445 72.249 23.445 C 71.647 23.456 71.034 23.479 70.432 23.434 C 70.12 23.367 70.142 22.999 70.142 22.765 Z M 62.573 11.807 C 63.933 11.695 65.371 11.852 66.563 12.554 C 67.767 13.234 68.693 14.438 68.949 15.809 C 68.994 16.021 68.96 16.366 68.682 16.366 C 68.068 16.411 67.455 16.389 66.853 16.378 C 66.519 16.389 66.419 16.032 66.307 15.787 C 65.984 14.917 65.181 14.282 64.289 14.092 C 63.375 13.892 62.372 13.981 61.569 14.471 C 60.7 14.984 60.142 15.92 59.975 16.89 C 59.774 18.072 59.975 19.399 60.789 20.335 C 62.071 21.885 64.902 21.896 66.051 20.19 C 66.318 19.856 66.307 19.276 66.753 19.109 C 67.333 19.064 67.912 19.086 68.492 19.086 C 68.693 19.075 68.994 19.22 68.96 19.466 C 68.693 21.651 66.708 23.334 64.579 23.624 C 62.996 23.88 61.257 23.657 59.908 22.732 C 58.671 21.885 57.779 20.547 57.511 19.064 C 57.155 17.214 57.523 15.151 58.816 13.724 C 59.752 12.621 61.134 11.941 62.573 11.807 Z M 74.646 13 C 75.649 12.03 77.121 11.762 78.47 11.774 C 79.64 11.74 80.877 11.896 81.903 12.498 C 82.851 13.056 83.464 14.104 83.52 15.196 C 83.542 15.363 83.397 15.464 83.308 15.575 C 82.672 15.553 82.026 15.597 81.39 15.553 C 80.978 15.352 81.045 14.806 80.755 14.505 C 80.209 13.825 79.261 13.736 78.458 13.725 C 77.767 13.769 76.987 13.814 76.474 14.338 C 76.14 14.672 76.117 15.196 76.218 15.631 C 76.586 16.322 77.455 16.4 78.146 16.534 C 79.54 16.79 81.045 16.779 82.293 17.537 C 83.174 18.05 83.709 19.087 83.642 20.101 C 83.731 21.138 83.23 22.175 82.394 22.777 C 81.335 23.546 79.986 23.702 78.715 23.735 C 77.533 23.68 76.285 23.579 75.248 22.933 C 74.423 22.442 73.877 21.55 73.709 20.614 C 73.665 20.346 73.899 20.112 74.166 20.146 C 74.735 20.146 75.315 20.123 75.883 20.157 C 76.218 20.279 76.262 20.703 76.463 20.959 C 76.898 21.528 77.645 21.74 78.325 21.751 C 79.094 21.773 79.919 21.818 80.599 21.394 C 81.335 20.982 81.502 19.8 80.777 19.287 C 80.119 18.875 79.306 18.808 78.559 18.708 C 77.321 18.496 75.984 18.451 74.913 17.715 C 73.386 16.701 73.33 14.226 74.646 13 Z M 45.383 12.52 C 45.36 12.297 45.494 12.041 45.739 12.041 C 46.241 12.008 46.754 12.03 47.267 12.03 C 47.579 11.974 47.902 12.175 47.857 12.52 C 47.88 14.46 47.835 16.4 47.88 18.34 C 47.891 19.254 48.158 20.268 48.95 20.803 C 50.366 21.673 52.484 21.216 53.309 19.744 C 53.677 19.131 53.733 18.407 53.744 17.715 L 53.744 12.777 C 53.744 12.576 53.744 12.353 53.833 12.164 C 54.045 11.997 54.323 12.052 54.58 12.041 C 55.037 12.052 55.494 12.008 55.94 12.075 C 56.196 12.142 56.207 12.442 56.207 12.654 L 56.207 23.289 C 56.23 24.426 56.085 25.608 55.494 26.6 C 54.803 27.804 53.521 28.596 52.172 28.841 C 50.711 29.12 49.151 29.053 47.768 28.473 C 46.509 27.949 45.505 26.79 45.293 25.419 C 45.171 25.151 45.461 24.917 45.706 24.928 C 46.263 24.928 46.821 24.906 47.378 24.939 C 47.835 25.118 47.824 25.708 48.147 26.021 C 48.883 26.857 50.121 26.935 51.157 26.823 C 52.116 26.779 53.086 26.244 53.465 25.329 C 53.989 24.092 53.733 22.721 53.788 21.417 C 53.264 22.364 52.339 23.044 51.28 23.289 C 50.076 23.568 48.749 23.535 47.623 23 C 46.542 22.476 45.784 21.405 45.528 20.235 C 45.316 19.41 45.372 18.552 45.36 17.704 C 45.383 15.976 45.372 14.248 45.383 12.52 Z"/></g>'
 
-
-def _rtl(text):
-    return any(0x0590 <= ord(c) <= 0x08FF or 0xFB50 <= ord(c) <= 0xFEFF for c in text)
-
-
-def _font(text):
-    return "Noto Sans Arabic" if _rtl(text) else "Noto Sans"
+_AR = "".join(f"{chr(a)}-{chr(b)}" for a, b in ((0x590, 0x8FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)))
+RLI, PDI, TATWEEL = chr(0x2067), chr(0x2069), chr(0x640)   # RLI…PDI: an Arabic line's runs in its order, not left to right
 
 
-def _truncate(text, max_chars):
-    if not text or len(text) <= max_chars:
-        return text or ""
-    trimmed = text[:max_chars - 1].rstrip()
-    if _rtl(text):
-        return "\u2026" + trimmed
-    return trimmed + "\u2026"
+def _arabic(text):
+    return bool(re.search(f"[{_AR}]", text or ""))
 
 
-def _wrap(text, max_l1, max_l2):
-    if not text:
-        return []
-    words, line = text.split(), ""
-    for i, w in enumerate(words):
-        fit = f"{line} {w}" if line else w
-        if len(fit) > max_l1:
-            return [line or _truncate(w, max_l1), _truncate(" ".join(words[i + (not line):]), max_l2)]
-        line = fit
-    return [line]
+def _width(text, size, track=0, weight=400):
+    """About how wide a line comes out, its Latin letters `track` em closer: resvg can't say before it draws."""
+    ar = .48 if weight >= 600 else .46   # generous: a line too long runs past the site's measure
+    return size * sum(.11 if c == TATWEEL else ar if _arabic(c) else
+                      (.27 if c in " .,:;'!|" else .66 if c.isupper() else .53) + track for c in text)
 
 
-async def _avatar_data(client, url):
-    try:
-        resp = await client.get(url)
-        ct = resp.headers.get("content-type", "image/png").split(";")[0].strip()
-        if ct == "application/octet-stream":
-            ct = "image/png"
-        b64 = base64.b64encode(resp.content).decode()
-        return f"data:{ct};base64,{b64}"
-    except Exception:
-        return None
+def _lines(text, size, width, most, track=0, weight=400, even=False):
+    """`text` in at most `most` lines, broken at spaces or a file name's dashes and dots, the last cut short with an
+    ellipsis; two lines `even`ed out, as the site's headlines are."""
+    pieces = [p for p in re.findall(r"[^\s._-]*[\s._-]*", " ".join((text or "").split())) if p]
+    lines = [""]
+    for p in pieces:
+        if lines[-1] and _width((lines[-1] + p).rstrip(), size, track, weight) > width:
+            lines.append("")
+        lines[-1] += p
+    if even and len(lines) == 2:
+        cut = min(range(1, len(pieces)), key=lambda i: max(_width("".join(pieces[:i]).rstrip(), size, track, weight),
+                                                           _width("".join(pieces[i:]), size, track, weight)))
+        lines = ["".join(pieces[:cut]), "".join(pieces[cut:])]
+    if len(lines) > most:
+        lines = lines[:most]
+        while lines[-1].strip() and _width(lines[-1].rstrip() + "…", size, track, weight) > width:
+            cut = lines[-1].rstrip()
+            lines[-1] = cut.rsplit(" ", 1)[0] if " " in cut else cut[:-1]
+        lines[-1] = lines[-1].rstrip() + "…"
+    return [line.strip() for line in lines if line.strip()]
 
 
-async def generate(title, desc="", avatars=None):
-    rtl = _rtl(title) or _rtl(desc)
-    anchor = "end" if rtl else "start"
-    tx = W - PAD if rtl else PAD
-    title_font = _font(title)
-    desc_font = _font(desc) if desc else title_font
+def _text(lines, x, y, size, lh, rtl, weight=400, opacity=1, track=0, faces=(LATIN, ARABIC)):
+    """Lines from `x` (their start), the first on baseline `y`; each script in its own face, as resvg takes a font for a
+    letter from any it has rather than down a list, and only Latin drawn `track` em tighter: spacing breaks Arabic's
+    joins. The marks round Arabic stay in its run: resvg scrambles an Arabic run that a mark of its own face opens, as «."""
+    tight = f' letter-spacing="{track * size:.2f}"' if track else ""
+    out = ""
+    for i, line in enumerate(lines):
+        runs = "".join(f'<tspan font-family="{faces[1]}">{escape(r)}</tspan>' if _arabic(r) else
+                       f'<tspan font-family="{faces[0]}"{tight}>{escape(r)}</tspan>'
+                       for r in re.findall(f"[^A-Za-z]*[{_AR}][^A-Za-z]*|[^{_AR}]+", line))
+        out += (f'<text x="{x:.0f}" y="{y + i * lh:.0f}" text-anchor="{"end" if rtl else "start"}" font-size="{size}" '
+                f'font-weight="{weight}" fill="#fff" fill-opacity="{opacity}">{RLI + runs + PDI if rtl else runs}</text>')
+    return out
 
-    title_text = escape(_truncate(title, 27))
-    desc_lines = [escape(l) for l in _wrap(desc, 42, 25)] if desc else []
-    if rtl:
-        strip = str.maketrans("", "", ".,;:!?\u2026\u060c\u061b\u061f")
-        title_text = title_text.translate(strip)
-        desc_lines = [l.translate(strip) for l in desc_lines]
 
-    # Title + description
-    ty = H // 2 - 60
-    texts = f'<text x="{tx}" y="{ty}" text-anchor="{anchor}" font-family="{title_font}" font-size="70" font-weight="bold" fill="#fff">{title_text}<tspan fill-opacity="0.25">.cycls.ai</tspan></text>'
-    for i, line in enumerate(desc_lines):
-        texts += f'<text x="{tx}" y="{ty + 80 + i * 64}" text-anchor="{anchor}" font-family="{desc_font}" font-size="52" fill="#fff">{line}</text>'
+def _href(img):
+    """A picture as resvg takes it, an inline SVG made a data URI; "" for what it can't (an address: it fetches none)."""
+    img = img or ""
+    return f"data:image/svg+xml;base64,{base64.b64encode(img.encode()).decode()}" if img.startswith("<") else \
+        img if img.startswith("data:image/") else ""
 
-    # Logo
-    logo_scale = 84 / 29
-    logo_w = 83.652 * logo_scale
-    lx = PAD if rtl else W - PAD - logo_w
-    ly = H - PAD - 84
-    logo = _LOGO.format(x=lx, y=ly, s=f"{logo_scale:.3f}")
 
-    # Avatars
-    avatar_els = ""
-    if avatars:
-        av_size = 98
-        overlap = 28
-        async with httpx.AsyncClient(timeout=5, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
-            results = await asyncio.gather(*[_avatar_data(client, url) for url in avatars if url])
-        loaded = [(i, d) for i, d in enumerate(results) if d]
-        if loaded:
-            total_w = av_size + (len(loaded) - 1) * (av_size - overlap)
-            ax = W - PAD - total_w if rtl else PAD
-            ay = ly + 84 - av_size
-            defs = ""
-            imgs = ""
-            for idx, (i, data_url) in enumerate(loaded):
-                cx = ax + idx * (av_size - overlap) + av_size // 2
-                cy = ay + av_size // 2
-                r = av_size // 2
-                defs += f'<clipPath id="av{i}"><circle cx="{cx}" cy="{cy}" r="{r}"/></clipPath>'
-                imgs += f'<image href="{data_url}" x="{cx - r}" y="{cy - r}" width="{av_size}" height="{av_size}" clip-path="url(#av{i})"/>'
-            avatar_els = f"<defs>{defs}</defs>{imgs}"
+def _size(img):
+    """A PNG's or a JPEG's width and height, from its header."""
+    if img[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", img[16:24])
+    i = 2
+    while img[:2] == b"\xff\xd8" and i + 9 < len(img):
+        marker, length = img[i + 1], int.from_bytes(img[i + 2:i + 4], "big")
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            h, w = struct.unpack(">HH", img[i + 5:i + 9])
+            return w, h
+        i += 2 + length
+    return None
 
-    m = 40
-    frame = f'<rect x="{m}" y="{m}" width="{W - 2 * m}" height="{H - 2 * m}" fill="none" stroke="#fff" stroke-opacity="0.2" stroke-width="1.5"/>'
 
-    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{W}" height="{H}">
-<rect width="{W}" height="{H}" fill="#000"/>
-{frame}
-{texts}
-{logo}
-{avatar_els}
-</svg>'''
+def _work(picture, rtl):
+    """What a link made, as the gallery shows work: the page tilted on a grey tile, lying wide or standing cut off at
+    its foot, by its own shape. No shadow: on the dark tile it barely shows, and doubled the drawing's time."""
+    (w, h), (tx, ty, tw, th) = _size(picture), (56 if rtl else W - 616, 56, 560, 518)
+    wide = w > h * 1.1
+    if wide:
+        pw, ph, lift, turn = tw * .86, tw * .86 * h / w, .05, -4
+    else:
+        ph, lift, turn = th * 1.36, .1, -5
+        pw = min(ph * w / h, tw * .92)
+    cx, cy = tx + tw / 2, ty + th / 2 + lift * ph
+    kind = "png" if picture[:4] == b"\x89PNG" else "jpeg"
+    page = (f'<image href="data:image/{kind};base64,{base64.b64encode(picture).decode()}" x="{cx - pw / 2:.1f}" '
+            f'y="{cy - ph / 2:.1f}" width="{pw:.1f}" height="{ph:.1f}" preserveAspectRatio="xMidYMin slice" '
+            f'transform="rotate({turn} {cx:.1f} {cy:.1f})"/>')
+    return (f'<rect x="{tx}" y="{ty}" width="{tw}" height="{th}" rx="10" fill="#1f1f1f" stroke="#fff" stroke-opacity=".07"/>'
+            + (page if wide else f'<clipPath id="tile"><rect x="{tx}" y="{ty}" width="{tw}" height="{th}" rx="10"/></clipPath>'
+                                 f'<g clip-path="url(#tile)">{page}</g>'))   # a wide one stays inside the tile
 
-    return await asyncio.to_thread(svg_to_bytes, svg_string=svg, font_dirs=["/usr/share/fonts"], width=W, height=H)
+
+def _lockup(agent, rtl, faces):
+    """The agent's icon and its names, Arabic over English, as the site sets them: the icon first in either language,
+    the two at the card's start, the names on the icon's middle."""
+    icon = _href(agent.get("icon"))
+    names = [(n, size, weight) for n, size, weight in ((agent.get("ar"), 36, 700), (agent.get("en"), 28, 500)) if n]
+    wide = max((_width(n, size, 0, weight) for n, size, weight in names), default=-20)
+    at = W - PAD - wide if rtl else PAD + 96 * bool(icon)   # where the names start
+    x = at - 96 if rtl else PAD
+    out = (f'<clipPath id="icon"><rect x="{x:.0f}" y="72" width="76" height="76" rx="20"/></clipPath>'
+           f'<image href="{escape(icon)}" x="{x:.0f}" y="72" width="76" height="76" clip-path="url(#icon)"/>'
+           f'<rect x="{x:.0f}" y="72" width="76" height="76" rx="20" fill="none" stroke="#fff" stroke-opacity=".15"/>') if icon else ""
+    top = 110 - (sum(size for _, size, _ in names) + 6 * (len(names) - 1)) / 2
+    for n, size, weight in names:
+        out += _text([n], at, top + size * (.5 + DROP), size, 0, False, weight, faces=faces)
+        top += size + 6
+    return out
+
+
+def _mark(logo, x):
+    """The wordmark in its corner: the agent's own logo, in the box the Cycls one fills, else Cycls's."""
+    logo = _href(logo)
+    if not logo:
+        return _LOGO.format(x=x, y=H - PAD - 52, s=f"{150 / 83.652:.3f}")
+    return (f'<image href="{escape(logo)}" x="{x}" y="{H - PAD - 52}" width="150" height="52" '
+            f'preserveAspectRatio="{"xMax" if x > W / 2 else "xMin"}YMax meet"/>')
+
+
+def _svg(title, line="", agent=None, picture=None, grain=""):
+    """A card as SVG: with `picture`, the work beside its title under the lockup; else the title over its line, at
+    the card's foot as the site's are, in its sizes."""
+    agent, rtl = agent or {}, _arabic(title)
+    # the agent's Arabic face for headlines and names, its text in Plex, as on the site
+    latin, display = agent.get("latin") or LATIN, agent.get("arabic") or ARABIC
+    work = _work(picture, rtl) if picture and _size(picture) else ""
+    weight, track = (700, 0) if rtl else (500, -.03)
+    size, lh = (54 if rtl else 52, 1.4 if rtl else 1.12) if work else (66 if rtl else 62, 1.4 if rtl else 1.1)
+    heads = _lines(title, size, 470 if work else W - 2 * PAD, 3 if work else 2, track, weight, even=True)
+    small = 26 if work else 28
+    lines = _lines(line, small, 470 if work else 960, 1 if work else 3)
+    gap = 18 if work else 14 if rtl else 22
+    top = 196 if work else H - PAD - 74 - len(heads) * size * lh - (gap + len(lines) * small * 1.5 if lines else 0)
+    x, under = (W - PAD if rtl else PAD), top + len(heads) * size * lh + gap
+    texts = (_text(heads, x, top + size * (lh / 2 + (DROP_AR if rtl else DROP)), size, size * lh, rtl, weight, track=track,
+                   faces=(latin, display))
+             + _text(lines, x, under + small * (.75 + DROP), small, small * 1.5, rtl, opacity=.6 if work else .72,
+                     faces=(latin, ARABIC)))
+    mark = (W - PAD - 150 if rtl else PAD) if work else (PAD if rtl else W - PAD - 150)
+    accent = escape(agent.get("accent") or "#ffffff")
+    stops = "".join(f'<stop offset="{o}" stop-color="{accent}" stop-opacity="{a}"/>'
+                    for o, a in ((0, 1), (.05, .92), (.26, .65), (.45, .42), (.63, .24), (.78, .11), (.91, .03), (1, 0)))
+    band = 'x="127" y="436" width="946" height="194"'   # where the glow shows: grain on black is black
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}"><defs>'
+            # the site's glow: its stops on a circle under the card, its grain over it
+            f'<radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="600" cy="877.6" r="472.8" '
+            f'gradientTransform="matrix(1 0 0 .9327 0 59.06)">{stops}</radialGradient>'
+            f'<pattern id="grain" width="200" height="200" patternUnits="userSpaceOnUse">'
+            f'<image href="data:image/png;base64,{grain}" width="200" height="200"/></pattern></defs>'
+            f'<rect width="{W}" height="{H}" fill="#000"/><rect {band} fill="url(#glow)"/>'
+            + (f'<rect {band} fill="url(#grain)" opacity=".25" style="mix-blend-mode:multiply"/>' if grain else "")
+            + f'{_lockup(agent, rtl, (latin, display))}{texts}{work}{_mark(agent.get("logo"), mark)}</svg>')
+
+
+@functools.cache
+def _grain():
+    """The site's grain, made once: a noise filter is too slow to draw on every card."""
+    from resvg_py import svg_to_bytes
+    return base64.b64encode(bytes(svg_to_bytes(svg_string=(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><filter id="n"><feTurbulence type="fractalNoise" '
+        'baseFrequency=".8" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>'
+        '<rect width="200" height="200" filter="url(#n)"/></svg>')))).decode()
+
+
+def faces(files):
+    """An agent's own fonts, TrueType or OpenType bytes, put where resvg finds them, and the faces they are: {fonts: the
+    folder, latin, arabic: the families of those that don't and do draw Arabic}; {} without any."""
+    if not files:
+        return {}
+    from cycls._agent.video.fonts import read
+    found = [(f, r) for f in files if (r := read(f))]
+    if not found:
+        return {}
+    folder = tempfile.mkdtemp(prefix="cycls-fonts-")
+    for i, (f, _) in enumerate(found):
+        Path(folder, f"{i}.{'otf' if f[:4] == b'OTTO' else 'ttf'}").write_bytes(f)
+    family = lambda arabic: next((r["family"] for _, r in found if r["arabic"] == arabic), None)
+    return {"fonts": folder, **{k: v for k, v in (("latin", family(False)), ("arabic", family(True))) if v}}
+
+
+async def card(title, line="", agent=None, picture=None):
+    """A card as PNG bytes. `agent`: {icon, en, ar, accent, logo, and `faces`' fonts, latin, arabic}, the icon and the
+    logo an SVG or a data URI; `picture`: a PNG or a JPEG."""
+    from resvg_py import svg_to_bytes
+    svg = _svg(title, line, agent, picture, await asyncio.to_thread(_grain))
+    own = (agent or {}).get("fonts")
+    return bytes(await asyncio.to_thread(svg_to_bytes, svg_string=svg, font_dirs=FONTS + [own] if own else FONTS,
+                                         width=W, height=H))
+
+
+async def link(title, ask, picture, agent):
+    """A public link's card: what it made beside its title, else its title over the question. Only a chat's work says
+    the agent made it: a file shared on its own may be the person's."""
+    title, rtl = title or ask, _arabic(title or ask)
+    if picture and _size(picture):
+        line = (f"سوّاه {agent.get('ar') or agent.get('en', '')}" if rtl else f"Made with {agent.get('en', '')}") if ask else ""
+    else:
+        line = ("«{}»" if rtl else "“{}”").format(" ".join(ask.split())) if ask else ""
+    return await card(title, line, agent, picture)

@@ -283,10 +283,10 @@ web = (
 | `.auth(provider)` | Set auth provider (`cycls.Clerk()` or `cycls.JWT(...)`) |
 | `.auth(cycls.Clerk(one_tap=True))` | Google One Tap on the signed-out page: the "Continue as …" card. Needs Google enabled in Clerk with **custom credentials**, and each agent origin in that OAuth client's authorized JavaScript origins |
 | `.title(str)` | Browser tab + app title |
-| `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global |
+| `.brand(locale=, name=, description=, logo=, brand=, og=, favicon=, accent=, fonts=)` | Static branding per locale. `logo` is the agent icon (chat hero); `brand` is the wordmark shown in the nav bar (falls back to the Cycls logo when unset); `og`/`favicon` are global. The cards the agent draws for its public links (and its own, without `og`) carry its icon, names and wordmark, in `accent` (the colour rising from below) and `fonts`: font files read at build time, a Latin face and one for Arabic headlines (else Inter and IBM Plex Sans Arabic), so a licensed font ships with the agent alone |
 | `.theme(name)` | `"default"` or `"dev"` |
 | `.colors(primary=, secondary=, primary_dark=, secondary_dark=)` | Theme accent colors (any CSS color). `primary` drives highlights and active states, `secondary` chips and bubbles; the `_dark` variants override dark mode |
-| `.cms(brand=, explore=, connectors=, examples=, token=)` | Pull branding, the explore menu, the connector directory copy and/or the example gallery from any CMS: plain GET URLs returning the contract JSON (`cms.cycls.ai/site/examples/{agent}` for the gallery), optional bearer `token`. Static `.brand()`/`.explore()`/`.examples()` win, piece by piece |
+| `.cms(brand=, explore=, connectors=, examples=, token=)` | Pull branding, the explore menu, the connector directory copy and/or the example gallery from any CMS: plain GET URLs returning the contract JSON (`cms.cycls.ai/site/examples/{agent}` for the gallery), optional bearer `token`. Static `.brand()`/`.explore()`/`.examples()` win, piece by piece. A brand's `card` is the agent's social card (unless `.brand(og=)`), and its `accent` the glow on the cards the agent draws for its public links (unless `.brand(accent=)`) |
 | `.explore(*agents)` | Static explore menu (the agents dropdown): `{"name", "url", "logo"?, ...}` entries. Overrides the CMS list; with neither, the menu is hidden |
 | `.seo(title=, description=)` | Page/SEO copy when it should differ from the brand: the `<title>` tag, meta and og description |
 | `.head(html)` | Append raw HTML to `<head>` for site verification or custom meta. Repeatable |
@@ -297,7 +297,8 @@ web = (
 | `.max_upload(mb)` | Per-file upload cap in MB (default 512). Enforced server-side, pre-checked client-side |
 | `.voice(model, base_url=, api_key=, headers=)` | The model that makes the mic's recordings words, run on the server: the browser gets only the text. Any service that speaks OpenAI's audio transcriptions API, set as `cycls.LLM` is: `"groq/whisper-large-v3-turbo"` with `base_url="https://api.groq.com/openai/v1"`; the key is `api_key`, else `GROQ_API_KEY` (the vendor's) from the environment. Unset, it is `openai/gpt-4o-transcribe` whenever `OPENAI_API_KEY` is there; `False` hides the mic |
 | `.analytics(bool)` | Enable usage metrics |
-| `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md) |
+| `.notifications(cycls.OneSignal(app_id))` | Web push as a plugin; the permission card is ours, the trigger is a PostHog flag (docs/notes/engagement.md). With `ONESIGNAL_API_KEY` in the environment the server pushes too: a mention, a reply, a task that ended while its owner was away, a routine's news (docs/rfc-notifications.md) |
+| `.routines(*examples)` | Routines: the agent does a job on its own, on a schedule, each run its owner's message in a new chat (docs/rfc-routines.md). Examples `{name, name_ar, prompt, prompt_ar, icon}` start one (a few general ones without); a run is signed with `CYCLS_SECRET_KEY`; something must call `POST /routines/tick` every five minutes (examples/agents/super_new_clock.py) |
 | `.suggestions(bool)` | Prompt-starter suggestions on the empty-chat screen (default off) |
 | `.copy_public(*files)` | Static files served at `/public` |
 | `.workspaces(create="member")` | Multi-workspace mode: every user gets a personal workspace, teams are shared with role-based access, selected per request via the `X-Workspace` header. Requires `.auth(...)`. `create` sets who may create team workspaces (`"member"` or `"admin"`). See [docs/workspaces.md](workspaces.md) |
@@ -1038,7 +1039,7 @@ DELETE /files/<path>          # Delete
 POST   /share                 # Create a share link for a chat
 GET    /share                 # List share links
 DELETE /share/<token>         # Revoke
-GET    /shared/<user>/<token> # Public share page (+ /data, /file/<path>, /fork)
+GET    /shared/<user>/<token> # Public share page (+ /data, /file/<path>, /fork; /card.png: its social card)
 ```
 
 Sessions and files are per-user under `/workspace/<user_id>/`. Path traversal is blocked. State routers (chats, files, share) are only installed when auth is configured.
