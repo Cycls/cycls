@@ -202,7 +202,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       author_org_image_url: organization.imageUrl,
     }),
   } : {};
-  const handleShare = async (audience: string = "public") => await chat.share(audience, authorFields);
+  const handleShare = async (audience: string = "public", id?: string) => await chat.share(audience, authorFields, id);
 
   // The organisation's members by account id: the workspace menu's member list, and the names a
   // design's history gives a teammate's change (the sign-in token carries none).

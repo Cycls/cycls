@@ -220,7 +220,7 @@ const fileExt = (name: string) => (name.includes(".") ? name.split(".").pop()!.t
 
 const Dot = () => <span className="inline-block size-1.5 shrink-0 rounded-full bg-[#3171F6]" />;
 
-export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, onOpenInCanvas, onNewDesign, listFolders, fileInfo, onOpenChat, maxUpload, org, chatFiles }: FilesPanelProps) {
+export function Files({ entries, path, loading, onNavigate, onReload, onUpload, onUploadBatch, onMkdir, onRename, onDelete, onOpenFile, onShareFile, shareLinks, shared, onSharesChanged, onOpenInCanvas, onNewDesign, listFolders, fileInfo, onOpenChat, maxUpload, org, chatFiles }: FilesPanelProps) {
   useLang();
   const { error: toastError } = useToast();
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
@@ -248,6 +248,15 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
   // The open chat's files: a dot on each, and on each folder holding them, and those first; the filter shows them alone.
   const [onlyChat, setOnlyChat] = useState(false);
   const only = onlyChat && !!chatFiles?.length;
+  const [sharedOnly, setSharedOnly] = useState(false);   // what you shared, from any folder
+  useEffect(() => { setSharedOnly(false); }, [path]);
+  const mark = (p: string, name: string) => shared?.[p] && (
+    <button onClick={(e) => { e.stopPropagation(); setShareDialog({ path: p, name }); }} aria-label={t("share")}
+            title={t(shared[p] === "public" ? "anyoneWithLink" : "anyoneInOrg")}
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-[#3171F6] hover:bg-secondary cursor-pointer">
+      <Icon name={shared[p] === "public" ? "globe" : "org"} className="size-3.5" />
+    </button>
+  );
   const fromChat = useMemo(() => {
     const paths = (chatFiles || []).map((f) => f.path);
     return (name: string, isDir: boolean) => {
@@ -440,11 +449,11 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
       />
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4 sm:px-6">
         {/* Breadcrumb — crumbs are move drop-targets */}
         <nav className="flex items-center gap-1 text-sm min-w-0 overflow-hidden">
           <button
-            onClick={() => navigate("")}
+            onClick={() => { setSharedOnly(false); navigate(""); }}
             onDragOver={(e) => { if (isMoveDrag(e)) { e.preventDefault(); setDropDir(""); } }}
             onDragLeave={() => setDropDir((d) => (d === "" ? null : d))}
             onDrop={(e) => { if (!isMoveDrag(e)) return; e.preventDefault(); setDropDir(null); moveInto(JSON.parse(e.dataTransfer.getData(MOVE_TYPE)), ""); }}
@@ -452,7 +461,13 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
           >
             {t("workspace")}
           </button>
-          {segments.map((seg, i) => {
+          {sharedOnly && (
+            <span className="flex min-w-0 items-center gap-1">
+              <span className="text-muted-foreground/40 shrink-0">/</span>
+              <span className="flex items-center gap-1.5 truncate px-1 font-medium text-foreground"><Icon name="link" className="size-3.5 shrink-0 text-[#3171F6]" />{t("sharedFilter")}</span>
+            </span>
+          )}
+          {!sharedOnly && segments.map((seg, i) => {
             const segPath = segments.slice(0, i + 1).join("/");
             const isLast = i === segments.length - 1;
             return (
@@ -474,6 +489,12 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
 
         {/* Actions — refresh stays on the bar; the rest collapse into one menu */}
         <div className="flex items-center gap-1 shrink-0 ml-2">
+          {shared && (
+            <button onClick={() => setSharedOnly((v) => !v)} aria-pressed={sharedOnly} aria-label={t("sharedFilter")} title={t("sharedFilter")}
+                    className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${sharedOnly ? "bg-secondary text-[#3171F6]" : "text-muted-foreground hover:text-foreground hover:bg-secondary/80"}`}>
+              <Icon name="link" className="size-4" />
+            </button>
+          )}
           {!!chatFiles?.length && (
             <button onClick={() => setOnlyChat((v) => !v)} aria-pressed={only}
                     className={`flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors cursor-pointer ${only ? "border-[#3171F6]/40 bg-[#3171F6]/10 text-foreground" : "border-border text-muted-foreground hover:text-foreground"}`}>
@@ -615,8 +636,25 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
               );
             })}
 
+            {/* What you shared, from any folder, each with the folder it is in and who can open it */}
+            {sharedOnly && !only && Object.entries(shared || {}).map(([p]) => {
+              const name = p.split("/").pop()!, dir = p.slice(0, p.length - name.length);
+              return (
+                <div key={p} onClick={() => open(name, false, undefined, p)}
+                     className="flex items-center gap-3 px-4 py-2.5 sm:px-6 transition-colors cursor-pointer hover:bg-secondary/50">
+                  <FileTile name={name} className="size-8" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-foreground" title={p}>{shownName(name)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{dir || t("workspace")}</span>
+                  </div>
+                  {mark(p, name)}
+                </div>
+              );
+            })}
+            {sharedOnly && !only && !Object.keys(shared || {}).length && <p className="px-6 py-4 text-sm text-muted-foreground">{t("noShares")}</p>}
+
             {/* File list */}
-            {!only && sorted.map((entry) => {
+            {!only && !sharedOnly && sorted.map((entry) => {
               const entryPath = fullPath(entry.name);
               const isDir = entry.type === "directory";
               const isSel = selected.has(entry.name);
@@ -683,7 +721,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
                     ) : (
                       <>
                         <span className="flex items-center gap-1.5 text-sm text-foreground select-none" title={shownName(entry.name)}>
-                          {fromChat(entry.name, isDir) > 0 && <Dot />}<span className="truncate">{shownName(entry.name)}</span>
+                          {fromChat(entry.name, isDir) > 0 && <Dot />}<span className="truncate">{shownName(entry.name)}</span>{!isDir && mark(entryPath, entry.name)}
                         </span>
                         {isDir && fromChat(entry.name, true) > 0 && (
                           <span className="block truncate text-xs text-[#3171F6] select-none">{t("fromThisChatCount").replace("{n}", String(fromChat(entry.name, true)))}</span>
@@ -762,7 +800,7 @@ export function Files({ entries, path, loading, onNavigate, onReload, onUpload, 
 
       {shareDialog && onShareFile && (
         <ShareDialog
-          onClose={() => setShareDialog(null)}
+          onClose={() => { setShareDialog(null); onSharesChanged?.(); }}
           mode="file"
           subtitle={shareDialog.name}
           org={org}

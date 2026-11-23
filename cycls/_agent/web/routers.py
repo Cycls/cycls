@@ -1696,6 +1696,20 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         out.sort(key=lambda s: s.get("shared_at", ""), reverse=True)
         return out
 
+    @r.patch("/share/{token}")
+    async def change_share(token: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """Who can open it, changed: the link stays the same."""
+        audience = (await request.json()).get("audience")
+        if audience != "public" and audience != f"org:{getattr(user, 'org_id', None)}":
+            raise HTTPException(400, "audience is 'public' or your organization's")
+        row = await DB(ws).get(f"share/{token}")
+        if not row:
+            raise HTTPException(404, "No such link")
+        row = {**row, "audience": audience}
+        await DB(ws).put(f"share/{token}", row, meta={k: v for k, v in row.items() if isinstance(v, str)})
+        await _kept(activity.audit(ws, {**activity.change(ws, "shared"), "audience": audience}, row.get("path")))
+        return {"token": token, "url": _share_url(ws, token), **row}
+
     @r.delete("/share/{token}")
     async def revoke_share(token: str, ws: Workspace = ws_dep):
         row = await DB(ws).get(f"share/{token}")

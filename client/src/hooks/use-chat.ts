@@ -1001,8 +1001,8 @@ export function useChat(baseUrl: string = "") {
     author_image_url?: string;
     author_org_name?: string;
     author_org_image_url?: string;
-  } = {}) => {
-    const chatId = chatIdRef.current;
+  } = {}, id?: string) => {   // the open chat, or the one a row in the list shares
+    const chatId = id ?? chatIdRef.current;
     if (!chatId) throw new Error("No chat to share");
     let res: Response;
     try {

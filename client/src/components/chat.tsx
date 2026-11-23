@@ -68,7 +68,7 @@ export interface PassAgent {
   icon_svg?: string;
 }
 
-type PanelTab = "files" | "shares" | "chats" | "apps" | "trash" | "routines";
+type PanelTab = "files" | "chats" | "apps" | "trash" | "routines";
 
 export interface AccountInfo {
   user: UserInfo;
@@ -134,6 +134,8 @@ export interface FilesPanelProps {
   onOpenChat?: (id: string) => void;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   shareLinks?: ShareLinks;   // what's already shared, for the Share popover
+  shared?: Record<string, string>;   // a shared file's path → who can open it, for its mark
+  onSharesChanged?: () => void;
   onOpenInCanvas?: (path: string, name: string) => void;
   maxUpload?: number;   // per-file cap (MB) for the client pre-check
   org?: { id: string; name: string } | null;
@@ -156,7 +158,7 @@ const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: 
 
 export function Chat({ chat, onShare, files, account, config, view = "" }: {
   chat: ChatApi;
-  onShare?: (audience: string) => Promise<string>;
+  onShare?: (audience: string, id?: string) => Promise<string>;   // the open chat, or the one named
   files?: FilesPanelProps;
   account?: AccountInfo | null;
   config?: AppConfig | null;
@@ -249,8 +251,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       return next;
     });
   }, []);
-  const [filesTab, setFilesTab] = useState<PanelTab>(() =>
-    (sessionStorage.getItem("cycls_panel_tab") as PanelTab) || (account ? "chats" : "files"));
+  const [filesTab, setFilesTab] = useState<PanelTab>(() => {
+    const kept = sessionStorage.getItem("cycls_panel_tab");
+    return kept && kept !== "shares" ? kept as PanelTab : account ? "chats" : "files";   // Shares is a tab no more
+  });
   // The agent's `suggest` tool offers ONE follow-up message at a time — a
   // chip above the composer; click sends it, ArrowUp pulls it in to edit.
   const [followUp, setFollowUp] = useState<string | null>(null);
@@ -489,7 +493,11 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useUrlParam("file", openFileInCanvas);
   useUrlParam("app", (slug) => { const app = apps.find((a) => a.slug === slug); if (app) openApp(app); }, !appsLoading);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
-  const [sharesLoading, setSharesLoading] = useState(false);
+  // What this person has shared, for the marks in Chats and Files: a chat's id or a file's path → who can open it.
+  const loadShares = () => { if (onListShares && account) onListShares().then(setShares).catch(() => {}); };
+  const sharedOf = (kind: "chat" | "file") =>
+    Object.fromEntries(shares.filter((s) => s.path.startsWith(`${kind}/`)).map((s) => [s.path.slice(kind.length + 1), s.audience || "public"]));
+  const [sharingChat, setSharingChat] = useState<{ id: string; title: string } | null>(null);
   const [chats, setChats] = useState<ChatRow[]>(was?.chats ?? []);
   useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden, chats, members }); },
     [view, chatId, canvasTabs, canvasActive, canvasHidden, chats, members]);
@@ -999,12 +1007,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const selectTab = (tab: PanelTab) => {
     setFilesTab(tab);
     sessionStorage.setItem("cycls_panel_tab", tab);
+    if (tab === "chats" || tab === "files") loadShares();
     if (tab === "chats" && onListChats) {
       setChatsLoading(true);
       onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
-    } else if (tab === "shares" && onListShares) {
-      setSharesLoading(true);
-      onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
     } else if (tab === "files" && files) {
       files.onNavigate(files.path);
       loadTrash();   // footer count; listing is also the 30-day sweep
@@ -1235,7 +1241,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     find: async (path) => ((await onListShares()) as (ShareLink & { path?: string })[])
       .filter((s) => s.path === path && s.token && s.url),
     revoke: (token) => onDeleteShare(token),
-  }), [onListShares, onDeleteShare]);
+    change: async (token, audience) => { await api(`/share/${token}`, { method: "PATCH", json: { audience } }); },
+  }), [onListShares, onDeleteShare, api]);
   // Escape closes the side pane only when nothing inside it handled the key (useEscape).
   useEscapeFallback(closeRight, rightOpen);
 
@@ -1345,7 +1352,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
-                {onShare && !isStreaming && (
+                {onShare && !isStreaming && !isTeamChat(chatId) && (
                   <>
                     <button
                       onClick={() => setShareOpen((o) => !o)}
@@ -1358,12 +1365,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     </button>
                     {shareOpen && (
                       <ShareDialog
-                        onClose={() => setShareOpen(false)}
+                        onClose={() => { setShareOpen(false); loadShares(); }}
+                        subtitle={chats.find((c) => c.id === chatId)?.title || ""}
                         org={org}
                         onShare={onShare}
                         path={chatId ? `chat/${chatId}` : undefined}
                         links={shareLinks}
-                        onManageShares={account ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
                       />
                     )}
                   </>
@@ -1601,17 +1608,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </ConnectContext.Provider>
                 </FileActions.Provider>
                 </ConnectorsContext.Provider>
-                {sharingFile && shareFileFn && (
-                  <ShareDialog
-                    onClose={() => setSharingFile(null)}
-                    mode="file"
-                    subtitle={sharingFile.split("/").pop()}
-                    org={files?.org}
-                    onShare={(audience) => shareFileFn(sharingFile, audience)}
-                    path={`file/${sharingFile}`}
-                    links={shareLinks}
-                  />
-                )}
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
@@ -1716,6 +1712,27 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           onClose={() => setSearchOpen(false)}
         />
       )}
+      {sharingFile && shareFileFn && (
+        <ShareDialog
+          onClose={() => { setSharingFile(null); loadShares(); }}
+          mode="file"
+          subtitle={apps.find((a) => a.entry === sharingFile)?.name || sharingFile.split("/").pop()}
+          org={files?.org}
+          onShare={(audience) => shareFileFn(sharingFile, audience)}
+          path={`file/${sharingFile}`}
+          links={shareLinks}
+        />
+      )}
+      {sharingChat && onShare && (
+        <ShareDialog
+          onClose={() => { setSharingChat(null); loadShares(); }}
+          subtitle={sharingChat.title}
+          org={org}
+          onShare={(audience) => onShare(audience, sharingChat.id)}
+          path={`chat/${sharingChat.id}`}
+          links={shareLinks}
+        />
+      )}
       {settingsOpen && account && (
         <SettingsDialog account={account} workspace={settingsWs} onClose={() => setSettingsOpen(false)}
                         onOpenConnectors={connectors?.length ? () => { setSettingsOpen(false); openConnectors("settings"); } : undefined}
@@ -1810,7 +1827,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               {railIconsOnly ? (
                 <div className="flex flex-col items-center gap-1 border-b border-border py-2">
                   {([["chats", "list", !!account], ["files", "folder", !!files],
-                     ["apps", "grid", !!files], ["shares", "link", !!account], ["routines", "clock", !!(config?.routines && account)]] as const)
+                     ["apps", "grid", !!files], ["routines", "clock", !!(config?.routines && account)]] as const)
                     .filter(([, , on]) => on)
                     .map(([tab, icon]) => (
                       <button
@@ -1851,14 +1868,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                         {t("apps")}
                       </button>
                     )}
-                    {account && (
-                      <button
-                        onClick={() => selectTab("shares")}
-                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                      >
-                        {t("shares")}
-                      </button>
-                    )}
                     {config?.routines && account && (
                       <button
                         onClick={() => { selectTab("routines"); loadRoutines(); }}
@@ -1880,7 +1889,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} chatFiles={chatFiles} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
+                <Files {...files} chatFiles={chatFiles} shareLinks={shareLinks} shared={sharedOf("file")} onSharesChanged={loadShares} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
                        onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
@@ -1888,6 +1897,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   apps={apps}
                   loading={appsLoading}
                   onOpen={(a) => { openApp(a); if (!isDesktop) setFilesOpen(false); }}
+                  onShare={shareFileFn ? (a) => setSharingFile(a.entry) : undefined}
                   onRename={files ? (a, name) => { void updateApp(a, { name }); } : undefined}
                   onSetIcon={files ? (a, icon) => { void updateApp(a, { icon }); } : undefined}
                   onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
@@ -1898,73 +1908,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   <RoutinesPanel routines={routineList} examples={config?.routines ?? undefined} onOpenChat={(id) => { onLoadChat?.(id); if (!isDesktop) setFilesOpen(false); }}
                                  onNew={newRoutine} onUse={(prompt) => { newRoutine(); examples.makeLike(prompt); }} />
                 </RoutinesContext.Provider>
-              ) : filesTab === "shares" ? (
-                <div className="flex flex-1 min-h-0 flex-col">
-                  <div className="flex-1 overflow-y-auto pb-20">
-                    {sharesLoading ? (
-                      <LoadingBar />
-                    ) : shares.length === 0 ? (
-                      <EmptyState
-                        icon={<Icon name="link" className="size-full" strokeWidth={1.5} />}
-                        title={t("noShares")}
-                        subtitle={t("noSharesSub")}
-                      />
-                    ) : (
-                      <div className="divide-y divide-border">
-                        {shares.map((s) => {
-                          const isChat = s.path.startsWith("chat/");
-                          const audienceLabel = s.audience === "public"
-                            ? t("anyoneWithLink")
-                            : (org && s.audience === `org:${org.id}`) ? org.name : "Org";
-                          return (
-                          <div key={s.token} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
-                            onClick={() => window.open(s.url, "_blank")}
-                          >
-                            <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                              <span className="text-muted-foreground"><Icon name={isChat ? "chat" : "doc"} strokeWidth={1.5} /></span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <span dir="auto" className="text-sm text-foreground truncate block text-left">{s.title || t("untitled")}</span>
-                              <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
-                            </div>
-                            <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
-                              {formatShortDate(s.shared_at)}
-                            </span>
-                            {onDeleteShare && (
-                              <div className="relative shrink-0">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSharesLoading(true);
-                                    onDeleteShare(s.token).then(() => {
-                                      setShares((prev) => prev.filter((x) => x.token !== s.token));
-                                    }).finally(() => setSharesLoading(false));
-                                  }}
-                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
-                                  aria-label="Delete share"
-                                >
-                                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.181 8.68a4 4 0 00-5.34.638l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.34-.638l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
-                                  </svg>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
               ) : filesTab === "chats" ? (
                 <ChatsPanel
                   chats={chats}
+                  shared={sharedOf("chat")}
+                  onShare={onShare ? (id, title) => setSharingChat({ id, title }) : undefined}
                   loading={chatsLoading}
                   activeId={chatId}
                   kind={teamWs ? chatKind : undefined}
                   agent={meta?.name || name || ""}
                   onKind={setChatKind}
+                  onNewTeam={() => { setChatKind("team"); setRoutineStart(false); onClear(); if (!isDesktop) setFilesOpen(false); setTimeout(() => textareaRef.current?.focus(), 0); }}
                   onMoveToTeam={teamWs && onMoveToTeam ? (id) => {
                     onMoveToTeam(id).then((moved) => {
                       setChats((prev) => prev.map((x) => (x.id === id ? { ...x, id: moved, team: true } : x)));
@@ -2049,20 +2003,23 @@ function formatShortDate(iso: string) {
   return new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
-function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTeam, onLoad, onDelete, onRename, onToggleFavorite }: {
+function ChatsPanel({ chats, shared, onShare, loading, activeId, kind, agent, onKind, onNewTeam, onMoveToTeam, onLoad, onDelete, onRename, onToggleFavorite }: {
   chats: ChatRow[];
+  shared?: Record<string, string>;   // a shared chat's id → who can open it
+  onShare?: (id: string, title: string) => void;
   loading: boolean;
   activeId?: string | null;
   kind?: "agent" | "team";   // a team workspace's: which chats the list shows
   agent: string;
   onKind: (k: "agent" | "team") => void;
+  onNewTeam?: () => void;
   onMoveToTeam?: (id: string) => void;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => Promise<void>;
   onToggleFavorite: (id: string, on: boolean) => Promise<void>;
 }) {
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [view, setView] = useState<"all" | "favorites" | "shared">("all");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
@@ -2082,11 +2039,11 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
     );
   }
 
-  const visible = favoritesOnly ? listed.filter((c) => c.favoritedAt) : listed;
+  const visible = view === "favorites" ? listed.filter((c) => c.favoritedAt) : view === "shared" && !team ? listed.filter((c) => shared?.[c.id]) : listed;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center gap-2 px-4 sm:px-6 py-2 border-b border-border">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 sm:px-6">
         {kind && (
           <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
             {(["agent", "team"] as const).map((k) => (
@@ -2098,20 +2055,31 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
             ))}
           </div>
         )}
-        <button
-          onClick={() => setFavoritesOnly((v) => !v)}
-          className={`ms-auto flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors cursor-pointer ${favoritesOnly ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50"}`}
-          aria-label="Favorites only"
-        >
-          <Star filled={favoritesOnly} className="size-3.5" />
-          {t("favorites")}
-        </button>
+        {team && onNewTeam && (
+          <button onClick={onNewTeam} title={t("newTeamChat")} aria-label={t("newTeamChat")}
+                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors cursor-pointer hover:bg-secondary/80 hover:text-foreground">
+            <Icon name="plus" className="size-4" />
+          </button>
+        )}
+        <div className="ms-auto flex items-center gap-1">
+          <button onClick={() => setView((v) => (v === "favorites" ? "all" : "favorites"))} aria-pressed={view === "favorites"} title={t("favorites")} aria-label={t("favorites")}
+                  className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${view === "favorites" ? "bg-secondary text-yellow-500" : "text-muted-foreground hover:bg-secondary/80 hover:text-foreground"}`}>
+            <Star filled={view === "favorites"} className="size-4" />
+          </button>
+          {!team && (
+            <button onClick={() => setView((v) => (v === "shared" ? "all" : "shared"))} aria-pressed={view === "shared"} title={t("sharedFilter")} aria-label={t("sharedFilter")}
+                    className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${view === "shared" ? "bg-secondary text-[#3171F6]" : "text-muted-foreground hover:bg-secondary/80 hover:text-foreground"}`}>
+              <Icon name="link" className="size-4" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto divide-y divide-border pb-20">
         {listed.length === 0 && (
           <EmptyState icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
                       title={t(team ? "noTeamChats" : "noChats")} subtitle={t(team ? "noTeamChatsSub" : "noChatsSub")} />
         )}
+        {view === "shared" && !team && !visible.length && !!listed.length && <p className="px-6 py-4 text-sm text-muted-foreground">{t("noShares")}</p>}
         {visible.map((s) => {
           const isFav = !!s.favoritedAt;
           return (
@@ -2151,6 +2119,13 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
                   </span>
                 )}
               </div>
+              {shared?.[s.id] && (
+                <button onClick={(e) => { e.stopPropagation(); onShare?.(s.id, s.title || ""); }}
+                        title={t(shared[s.id] === "public" ? "anyoneWithLink" : "anyoneInOrg")} aria-label={t("share")}
+                        className="flex size-6 shrink-0 items-center justify-center rounded-md text-[#3171F6] hover:bg-secondary cursor-pointer">
+                  <Icon name={shared[s.id] === "public" ? "globe" : "org"} className="size-3.5" />
+                </button>
+              )}
               {s.mention ? <span className="shrink-0 rounded-full bg-foreground px-1.5 text-[11px] font-semibold leading-5 text-background">@</span>
                 : s.unread && <span className="size-2 shrink-0 rounded-full bg-foreground" />}
               <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -2172,6 +2147,7 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
                   <DropdownMenu
                     onClose={() => setMenuOpen(null)}
                     items={[
+                      ...(onShare && !s.team ? [{ label: t("share"), onClick: () => onShare(s.id, s.title || "") }] : []),
                       { label: t("rename"), onClick: () => setRenaming(s.id) },
                       ...(onMoveToTeam && !s.team ? [{ label: t("moveToTeam"), onClick: () => onMoveToTeam(s.id) }] : []),
                       { label: t("delete"), danger: true, onClick: () => onDelete(s.id) },

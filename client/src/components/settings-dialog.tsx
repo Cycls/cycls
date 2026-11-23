@@ -22,11 +22,12 @@ import { useToast } from "../lib/toast";
 import { useApi } from "../hooks/use-api";
 import { track } from "../lib/analytics";
 
-type Tab = "general" | "notifications" | "account" | "organization" | "members" | "workspaces" | "audit" | "billing" | "security" | "help";
+type Tab = "general" | "notifications" | "sharedLinks" | "account" | "organization" | "members" | "workspaces" | "audit" | "billing" | "security" | "help";
 
 const TAB_ICONS: Record<Tab, React.ReactNode> = {
   general: <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28zM15 12a3 3 0 11-6 0 3 3 0 016 0z" />,
   notifications: <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />,
+  sharedLinks: <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />,
   account: <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a9 9 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z" />,
   organization: <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />,
   members: <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />,
@@ -63,7 +64,7 @@ export function SettingsDialog({ account, workspace, onClose, onOpenConnectors, 
   const isAdmin = !inOrg || membership?.role === "org:admin";
 
   const tabs: Tab[] = [
-    "account", "general", "notifications",
+    "account", "general", "notifications", "sharedLinks",
     ...(inOrg ? ["organization" as Tab, "members" as Tab] : []),
     ...(inOrg && account.workspaces ? ["workspaces" as Tab] : []),
     ...(inOrg && isAdmin ? ["audit" as Tab] : []),   // an organization's admins only
@@ -128,6 +129,7 @@ export function SettingsDialog({ account, workspace, onClose, onOpenConnectors, 
             <h2 className="font-display mb-4 hidden text-lg font-semibold text-foreground sm:block">{t(tab)}</h2>
             {tab === "general" && <GeneralTab onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />}
             {tab === "notifications" && <NotificationsTab />}
+            {tab === "sharedLinks" && <SharedLinksTab org={account.activeOrg?.name} />}
             {tab === "account" && <AccountTab account={account} />}
             {tab === "organization" && <OrganizationTab account={account} isAdmin={isAdmin} />}
             {tab === "members" && <MembersTab isAdmin={isAdmin} />}
@@ -710,6 +712,49 @@ function GeneralTab({ onOpenConnectors, onOpenSkills }: { onOpenConnectors?: () 
     <ToolsSection />
     <MemorySection />
     </>
+  );
+}
+
+// Every link this person made, newest first: what it opens, who can open it, Copy, and Stop sharing. Each is also
+// managed where it lives, from its mark in Chats or Files; here many go at once.
+function SharedLinksTab({ org }: { org?: string }) {
+  const { api } = useApi();
+  const [links, setLinks] = useState<{ token: string; url: string; path: string; title?: string; audience?: string; shared_at?: string }[] | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  useEffect(() => { api("/share", { silent: true }).then((r) => r.json()).then(setLinks).catch(() => setLinks([])); }, [api]);
+  const stop = (token: string) => {
+    setLinks((l) => l?.filter((x) => x.token !== token) ?? l);
+    api(`/share/${token}`, { method: "DELETE" }).catch(() => {});
+  };
+  const copy = (token: string, url: string) => {
+    navigator.clipboard?.writeText(/^https?:/.test(url) ? url : `${window.location.origin}${url}`)
+      .then(() => { setCopied(token); setTimeout(() => setCopied(null), 1500); }, () => {});
+  };
+  if (!links) return <LoadingBar />;
+  if (!links.length) return <p className="text-sm text-muted-foreground">{t("noShares")}</p>;
+  return (
+    <ListCard>
+      {links.map((s) => {
+        const inOrg = !!s.audience?.startsWith("org:");
+        return (
+          <div key={s.token} className="flex items-center gap-3 px-4 py-3">
+            <Icon name={s.path.startsWith("chat/") ? "chat" : "doc"} className="size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-foreground"><bdi>{s.title || t("untitled")}</bdi></p>
+              <p className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+                <Icon name={inOrg ? "org" : "globe"} className="size-3 shrink-0" />
+                {inOrg ? `${t("anyoneInOrg")} ${org || ""}` : t("anyoneWithLink")}{s.shared_at ? ` · ${fmtDate(s.shared_at)}` : ""}
+              </p>
+            </div>
+            <button onClick={() => copy(s.token, s.url)} aria-label={t("copyLink")} title={t("copyLink")}
+                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground">
+              <Icon name={copied === s.token ? "check" : "copy"} className="size-4" />
+            </button>
+            <button onClick={() => stop(s.token)} className="shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs text-red-600 hover:bg-red-500/10">{t("stopSharing")}</button>
+          </div>
+        );
+      })}
+    </ListCard>
   );
 }
 

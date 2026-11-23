@@ -510,6 +510,17 @@ def test_share_url_carries_ws_and_resolves(tmp_path):
     assert client.get(f"/share/org_1:user_1/{body['token']}/data").status_code == 404
 
 
+def test_who_can_open_a_link_changes_and_the_link_stays(tmp_path):
+    client = _client(tmp_path)
+    client.put("/chats/c1", json={"title": "Mine"})
+    made = client.post("/share", json={"path": "chat/c1", "audience": "public"}).json()
+    changed = client.patch(f"/share/{made['token']}", json={"audience": "org:org_1"}).json()
+    assert changed["url"] == made["url"] and changed["audience"] == "org:org_1"
+    assert [(s["token"], s["audience"]) for s in client.get("/share").json()] == [(made["token"], "org:org_1")]
+    assert client.patch(f"/share/{made['token']}", json={"audience": "org:someone_else"}).status_code == 400
+    assert client.patch("/share/nope", json={"audience": "public"}).status_code == 404
+
+
 def test_share_bare_link_falls_back_to_personal(tmp_path):
     client = _client(tmp_path)
     client.put("/chats/c1", json={"title": "Mine"})          # personal workspace
