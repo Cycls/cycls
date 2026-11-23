@@ -10,7 +10,7 @@ _EXPORTS = {
     "._app": ("app", "App", "AppleIAP", "Clerk", "GCP", "JWT", "User",
               "Sandbox", "SandboxResult", "DB", "Workspace"),
     "._agent": ("LLM", "MCP", "OAuth2", "Key", "Endpoint", "env", "agent", "Agent", "events", "to_ui"),
-    "._agent.web": ("Web", "PostHog", "GTM", "OneSignal"),
+    "._agent.web": ("Web", "PostHog", "GTM", "OneSignal", "WebPush"),
     "._agent.logs": ("log",),
 }
 

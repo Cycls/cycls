@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chime } from "../lib/chime";
+import { askPush } from "../lib/notifications";
 
 // What concerns the person, from every workspace they are in (GET /inbox).
 export interface InboxItem {
@@ -19,9 +20,10 @@ type Api = (path: string, init?: RequestInit & { silent?: boolean; json?: unknow
 
 const EVERY = 15000;
 
-// The bell's side: how many came since it was last opened, read every 15 seconds while the app is in view and as a
-// chat opens (opening it read what the bell had about it), and the list when it opens. Something new sounds once,
-// unless it is about the chat in front of the person: that is read as it comes.
+// The bell's side: how many came since it was last opened, read every 15 seconds while the app is in view, as a chat
+// opens (opening it read what the bell had about it) and as a push arrives, and the list when it opens. Something new
+// sounds once while the app is in view, unless it is about the chat in front of the person: that is read as it comes.
+// A first mention is a moment to ask for push.
 export function useInbox(api: Api, on: boolean, chatOpen?: string | null) {
   const [items, setItems] = useState<InboxItem[]>([]);
   const [unread, setUnread] = useState(0);
@@ -36,7 +38,8 @@ export function useInbox(api: Api, on: boolean, chatOpen?: string | null) {
     if (heard.current !== null && newest && newest.at > heard.current) {
       if (newest.chat && newest.chat === here.current && document.hasFocus())
         unread = (await (await api("/inbox/seen", { method: "POST", json: { chat: newest.chat }, silent: true })).json()).unread ?? unread;
-      else chime();
+      else if (document.visibilityState === "visible") chime();
+      if (newest.kind === "mention" || newest.kind === "reply") askPush("mention");
     }
     heard.current = newest?.at ?? heard.current ?? "";
     setUnread(unread);
@@ -48,6 +51,14 @@ export function useInbox(api: Api, on: boolean, chatOpen?: string | null) {
     const id = setInterval(() => { if (document.visibilityState === "visible") look().catch(() => {}); }, EVERY);
     return () => clearInterval(id);
   }, [on, look, chatOpen]);
+
+  useEffect(() => {   // a push just came: the bell looks now (the app's worker says so)
+    if (!on || typeof navigator === "undefined" || !navigator.serviceWorker) return;
+    const got = (e: MessageEvent) => { if (e.data?.type === "cycls:push") look().catch(() => {}); };
+    navigator.serviceWorker.addEventListener("message", got);
+    navigator.serviceWorker.startMessages?.();
+    return () => navigator.serviceWorker.removeEventListener("message", got);
+  }, [on, look]);
 
   const open = useCallback(async () => {
     const r = await (await api("/inbox", { silent: true })).json();

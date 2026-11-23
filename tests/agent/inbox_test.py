@@ -1,7 +1,7 @@
 """The inbox: one per person across their workspaces. A team message tells whoever it names, @all every member, and
 whoever wrote the message it answers; never its sender, nor whoever had the chat open, and a replay never twice. The
 bell reads it and marks it read, and opening a chat reads what it had about that chat."""
-import asyncio
+import asyncio, json
 
 from cycls._agent import activity, inbox, state
 from cycls._app.auth import User
@@ -138,3 +138,116 @@ def test_opening_a_chat_reads_what_the_bell_had_about_it(tmp_path, monkeypatch):
     got = bell.get("/inbox", headers=omar).json()
     assert got["unread"] == 1 and len(got["items"]) == 2   # still in the list
     assert bell.post("/inbox/seen", json={"chat": other}, headers=omar).json() == {"ok": True, "unread": 0}   # the one in front
+
+
+def test_web_push_is_encrypted_as_rfc_8291_says():
+    """The RFC's own worked example, byte for byte: its keys, its salt, its watermelon."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cycls._agent import webpush as w
+    mine = ec.derive_private_key(int.from_bytes(w.unb64("yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw"), "big"), ec.SECP256R1())
+    keys = {"p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+            "auth": "BTBZMqHH6r4Tts7J_aSIgg"}
+    body = w.encrypt(keys, b"When I grow up, I want to be a watermelon", mine=mine, salt=w.unb64("DGv6ra1nlYgDCS1FRnbzlw"))
+    assert w.b64(body) == ("DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6Tl"
+                           "zAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN")
+
+
+def _browser():
+    """A browser's push keys, as its subscription gives them, and how it reads what it is sent."""
+    import os as _os
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cycls._agent import webpush as w
+    me, auth = ec.generate_private_key(ec.SECP256R1()), _os.urandom(16)
+    mine = me.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+
+    def read(body):
+        salt, n = body[:16], body[20]
+        theirs, sealed = body[21:21 + n], body[21 + n:]
+        kdf = lambda s, info, ikm, size: HKDF(algorithm=hashes.SHA256(), length=size, salt=s, info=info).derive(ikm)
+        ikm = kdf(auth, b"WebPush: info\x00" + mine + theirs,
+                  me.exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), theirs)), 32)
+        plain = AESGCM(kdf(salt, b"Content-Encoding: aes128gcm\x00", ikm, 16)).decrypt(
+            kdf(salt, b"Content-Encoding: nonce\x00", ikm, 12), sealed, None)
+        return json.loads(plain[:plain.rindex(b"\x02")])
+    return {"p256dh": w.b64(mine), "auth": w.b64(auth)}, read
+
+
+def _our_key(monkeypatch):
+    import os as _os
+    from cycls._agent import webpush as w
+    monkeypatch.setattr(w, "_KEY", {})
+    w.use(w.b64(_os.urandom(31) + b"\x01"))
+    return w
+
+
+def test_a_browser_turned_on_gets_its_push_in_its_language_and_one_gone_is_dropped(tmp_path, monkeypatch):
+    import httpx, jwt
+    w = _our_key(monkeypatch)
+    ws_id = _team(tmp_path)
+    bell = _routers(tmp_path)
+    keys, read = _browser()
+    omar = {"X-Test-User": "omar", "Origin": "https://super.test"}
+    device = {"endpoint": "https://push.example/omar-1", "keys": keys, "lang": "ar", "expirationTime": None}
+    assert bell.post("/devices", json=device, headers=omar).json() == {"ok": True}
+    assert bell.post("/devices", json={**device, "endpoint": "http://not-https"}, headers=omar).status_code == 400
+    sent, answer = [], [201]
+
+    async def post(self, url, content=None, headers=None, json=None):
+        sent.append((url, content, headers))
+        return httpx.Response(answer[0])
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    team = state.team_chats(workspace(SARA, tmp_path, base=f"file://{tmp_path}", ws=ws_id))
+    asyncio.run(inbox.notify(team, ["omar"], "mention", name="Sara", by="sara", chat="team-1", text="slide 4?"))
+    [(url, body, headers)] = sent
+    assert url == "https://push.example/omar-1" and headers["Content-Encoding"] == "aes128gcm"
+    token, key = headers["Authorization"].removeprefix("vapid t=").split(", k=")
+    assert key == w.public() and jwt.decode(token, options={"verify_signature": False})["aud"] == "https://push.example"
+    said = read(body)
+    assert said["title"] == "إشارة إليك من Sara" and said["url"] == f"https://super.test/?ws={ws_id}&id=team-1"
+    assert "slide" not in str(said)   # who and what, never the message
+    answer[0] = 410   # the browser unsubscribed: its push service says so, and it is dropped
+    asyncio.run(inbox.notify(team, ["omar"], "mention", name="Sara", by="sara", chat="team-1"))
+    sent.clear()
+    asyncio.run(inbox.notify(team, ["omar"], "mention", name="Sara", by="sara", chat="team-1"))
+    assert sent == []
+
+
+def test_with_our_own_web_push_onesignal_reaches_phones_only(tmp_path, monkeypatch):
+    import httpx
+    ws_id = _team(tmp_path)
+    sent = []
+
+    async def post(self, url, json=None, headers=None, content=None):
+        sent.append(json)
+        return httpx.Response(200, json={"id": "x"})
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.setattr(inbox, "_PUSH", {"app_id": "app-1", "key": "os_v2_test", "agent": "super"})
+    team = state.team_chats(workspace(SARA, tmp_path, base=f"file://{tmp_path}", ws=ws_id))
+    asyncio.run(inbox.notify(team, ["omar"], "mention", name="Sara", by="sara", chat="team-1"))
+    assert "isAnyWeb" not in sent[-1]   # OneSignal alone: the web too
+    _our_key(monkeypatch)
+    asyncio.run(inbox.notify(team, ["omar"], "mention", name="Sara", by="sara", chat="team-1"))
+    assert sent[-1]["isAnyWeb"] is False and sent[-1]["isChromeWeb"] is False and sent[-1]["include_aliases"] == {"external_id": ["omar"]}
+
+
+def test_the_app_gets_our_public_key_and_the_worker_only_with_a_key(tmp_path, monkeypatch):
+    import os as _os
+    from fastapi.testclient import TestClient
+    import cycls._agent.web.server as server
+    from cycls._agent import webpush as w
+    from cycls._agent.web.server import Config
+    from tests.agent.web_test import THEME_PATH
+
+    async def agent(context):
+        yield "hi"
+    monkeypatch.setattr(w, "_KEY", {})
+    plain = TestClient(server.web(agent, Config(public_path=THEME_PATH, notifications=[{"provider": "webpush"}])))
+    assert plain.get("/config").json()["notifications"] == [{"provider": "webpush"}] and plain.get("/push/sw.js").status_code != 200
+    monkeypatch.setenv("VAPID_PRIVATE_KEY", w.b64(_os.urandom(31) + b"\x01"))
+    keyed = TestClient(server.web(agent, Config(public_path=THEME_PATH, notifications=[{"provider": "webpush"}])))
+    assert keyed.get("/config").json()["notifications"] == [{"provider": "webpush", "key": w.public()}]
+    worker = keyed.get("/push/sw.js")
+    assert worker.headers["content-type"].startswith("application/javascript") and "showNotification" in worker.text

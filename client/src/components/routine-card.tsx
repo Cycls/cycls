@@ -6,6 +6,7 @@ import { ConnectorIcon, connectorLabel, type Connector } from "./connectors-dial
 import { TypeTile } from "./example-filters";
 import { tileExt } from "./canvas-utils";
 import { t, getLang } from "../lib/i18n";
+import { askPush } from "../lib/notifications";
 import { cn } from "../lib/utils";
 
 export type When = { every: "once" | "day" | "days" | "month"; days?: string[]; day?: number; date?: string; time: string; tz: string };
@@ -164,7 +165,7 @@ export function RoutineCard({ card }: { card: { routine?: Routine; change?: bool
             </p>
             <button onClick={() => setDone("cancelled")} disabled={busy} className={`${button} text-muted-foreground hover:bg-secondary hover:text-foreground`}>{t("cancel")}</button>
             <button disabled={busy || missing.length > 0}
-                    onClick={card.delete ? go(() => remove(r.id), "deleted") : card.change ? go(() => save(r.id, r), "saved") : go(() => make(r))}
+                    onClick={card.delete ? go(() => remove(r.id), "deleted") : card.change ? go(() => save(r.id, r), "saved") : go(async () => { await make(r); askPush("routine"); })}
                     className={`${button} ${card.delete ? "bg-red-600 text-white" : "bg-foreground text-background"} hover:opacity-80`}>
               {t(card.delete ? "delete" : card.change ? "save" : "setUp")}
             </button>

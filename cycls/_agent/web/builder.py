@@ -51,6 +51,14 @@ class OneSignal:
         self.spec = {"provider": "onesignal", "app_id": app_id}
 
 
+class WebPush:
+    """Push provider: Web Push from the agent's own server, to the browsers people turn it on in. No provider: the key
+    pair is VAPID_PRIVATE_KEY's (docs/rfc-notifications.md, Devices). Listed first, it reaches the browsers; a phone
+    app's provider after it (cycls.OneSignal) reaches phones only."""
+    def __init__(self):
+        self.spec = {"provider": "webpush"}
+
+
 def _font(path) -> bytes:
     """A font file's bytes, read at build time; a missing file or one that isn't a font fails the build."""
     from cycls._agent.video.fonts import read
@@ -283,7 +291,7 @@ class Web:
         return self._copy(_on_run=fn)
 
     def notifications(self, *providers):
-        """Push notifications as plugins (cycls.OneSignal). The SDK owns the
+        """Push notifications as plugins (cycls.WebPush, cycls.OneSignal). The SDK owns the
         prompt UI and the subscription handshake; who gets pushed, and when,
         is the platform's job. Empty or False disables."""
         if providers in ((), (False,)):

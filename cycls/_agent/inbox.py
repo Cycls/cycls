@@ -8,7 +8,7 @@ import httpx
 
 from cycls._app.auth import User
 from cycls._app.db import DB, workspace
-from cycls._agent import activity, state
+from cycls._agent import activity, state, webpush
 from cycls._agent.logs import log
 
 KEEP = 30   # a bell shows what is recent; the chats keep the rest
@@ -55,20 +55,68 @@ async def notify(ws, people, kind, *, name=None, origin=None, **item):
         except Exception as e:
             log("warn", message=f"inbox: {kind} for {pid} not kept: {type(e).__name__}: {e}"[:300])
     to = [p for p in await asyncio.gather(*(one(p) for p in set(people))) if p]
-    if to and _PUSH:
-        await _push(to, row, name, origin)
+    if to:
+        await asyncio.gather(*([_push(to, row, name, origin)] if _PUSH else []),
+                             *(_browsers(p, row, name, ws) for p in to) if webpush.public() else ())
+
+
+def _words(row, name):
+    """What a push says, in English and Arabic: who and what, never the message."""
+    return tuple(s.replace("{name}", name or n) for s, n in zip(_SAID[row.get("state") or row["kind"]], ("Someone", "شخص")))
+
+
+def _opens(row):
+    return "&".join(f"{k}={v}" for k, v in (("ws", row.get("ws")), ("id", row.get("chat"))) if v)
+
+
+async def _browsers(pid, row, name, ws):
+    """Each browser they turned push on in, by Web Push: in its language, opening the chat where it lives. One the push
+    service says is gone is dropped."""
+    words, at = dict(zip(("en", "ar"), _words(row, name))), _opens(row)
+    try:
+        devices = await _devices(pid, ws.volume, ws.base).get("devices") or []
+        for origin in {d["origin"] for d in devices}:
+            mine = [d for d in devices if d["origin"] == origin]
+            gone = await webpush.send(mine, lambda d: {"title": words.get(d.get("lang"), words["en"]), "tag": row["id"],
+                                                        "ws": row.get("ws"), "chat": row.get("chat"),
+                                                        "url": f"{origin}/?{at}" if at else f"{origin}/"}, origin)
+            if gone:
+                await state._change(_devices(pid, ws.volume, ws.base), "devices", lambda ds: [d for d in ds or [] if d["endpoint"] not in gone], [])
+    except Exception as e:
+        log("warn", message=f"web push for {pid}: {type(e).__name__}: {e}"[:300])
+
+
+def _devices(pid, volume, base):
+    return _db(pid, pid, volume, base)   # a person's devices are theirs, whichever organization they are in
+
+
+async def add_device(user, volume, base, sub, origin):
+    """This browser, to push to: its push address and keys, its language and where the app is. The newest 10 are kept."""
+    row = {"endpoint": str(sub["endpoint"]), "keys": {k: str(sub["keys"][k]) for k in ("p256dh", "auth")},
+           "lang": "ar" if sub.get("lang") == "ar" else "en", "origin": origin, "at": datetime.now(timezone.utc).isoformat()}
+    if not row["endpoint"].startswith("https://") or len(row["endpoint"]) > 1000 or not origin:
+        raise ValueError("not a push address")
+    await state._change(_devices(user.id, volume, base), "devices",
+                        lambda ds: [row, *[d for d in ds or [] if d["endpoint"] != row["endpoint"]]][:10], [])
+
+
+async def drop_device(user, volume, base, endpoint):
+    """Push turned off in this browser, or its person signed out there."""
+    await state._change(_devices(user.id, volume, base), "devices",
+                        lambda ds: [d for d in ds or [] if d["endpoint"] != endpoint], [])
 
 
 async def _push(pids, row, name, origin):
     """One OneSignal call for everyone: the words in English and Arabic (the device picks), where it opens on a phone
-    and in a browser, and the item's id so a retry never sends twice."""
-    en, ar = (s.replace("{name}", name or n) for s, n in zip(_SAID[row.get("state") or row["kind"]], ("Someone", "شخص")))
+    and in a browser, and the item's id so a retry never sends twice. With our own Web Push on, phones only."""
+    en, ar = _words(row, name)
     chat, ws = row.get("chat"), row.get("ws")
-    at = "&".join(f"{k}={v}" for k, v in (("ws", ws), ("id", chat)) if v)
+    at = _opens(row)
     body = {"app_id": _PUSH["app_id"], "include_aliases": {"external_id": sorted(pids)}, "target_channel": "push",
             "contents": {"en": en, "ar": ar}, "idempotency_key": str(uuid.uuid5(uuid.NAMESPACE_URL, row["id"])),
             "data": {"path": f"/agent/{_PUSH['agent']}" + (f"?chat={chat}" + (f"&ws={ws}" if ws else "") if chat else "")},
-            **({"web_url": f"{origin}/?{at}"} if origin else {})}
+            **({"web_url": f"{origin}/?{at}"} if origin else {}),
+            **({"isAnyWeb": False, "isChromeWeb": False, "isFirefox": False, "isSafari": False} if webpush.public() else {})}
     scheme = "Key" if _PUSH["key"].startswith("os_v2") else "Basic"
     try:
         async with httpx.AsyncClient(timeout=10) as client:

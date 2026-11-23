@@ -2843,6 +2843,20 @@ def inbox_router(user_dep, volume, base):
         chat = (await request.json() if await request.body() else {}).get("chat")
         return {"ok": True, "unread": await inbox.seen(user, volume, base, chat if isinstance(chat, str) else None)}
 
+    @r.post("/devices")
+    async def add_device(request: Request, user: Any = user_dep):
+        """This browser, to push to (Web Push): its subscription, its language, and where the app is, as it says."""
+        try:
+            await inbox.add_device(user, volume, base, await request.json(), request.headers.get("origin"))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise HTTPException(400, "Not a push subscription")
+        return {"ok": True}
+
+    @r.delete("/devices")
+    async def drop_device(request: Request, user: Any = user_dep):
+        await inbox.drop_device(user, volume, base, str((await request.json()).get("endpoint") or ""))
+        return {"ok": True}
+
     @r.get("/notifications")
     async def get_picks(user: Any = user_dep):
         """How each kind reaches you away from the app: `push` or `off`."""

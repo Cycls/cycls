@@ -2,7 +2,7 @@
 
 **Status**: proposed (2026-11-22), revised 2026-11-23: the routine shown on a card to confirm before it is made, its
 instruction written to stand alone, runs a few minutes early, and for each routine the connectors and files it works
-with, and a new chat for each run (the default) or one chat kept. Built through step 4, on the testbed; not released.
+with, and a new chat for each run (the default) or one chat kept. Built through step 5, on the testbed; not released.
 Takes over the follows first drafted in
 docs/rfc-notifications.md: new tenders or a law's changes are one routine among others, so there is one list, one
 record and one runner.
@@ -345,7 +345,7 @@ For both RFCs, each step on the testbed before the next:
 3. The two connector fixes, with the quick-connect card.
 4. The routine, the clock, `routine` and `tell`, the card, the tab, a routine's page, the dialog, the examples and Run
    now.
-5. Our own devices and Web Push in the browser (docs/rfc-notifications.md, Devices).
+5. Our own devices and Web Push in the browser (docs/rfc-notifications.md, Devices), and asking for push on by default.
 6. Email over SMTP. Monafasaty moves onto it, then Haseef's law changes.
 7. The phone app on our own devices; OneSignal goes.
 8. Teammates as recipients, then anyone, from the owner's Outlook.

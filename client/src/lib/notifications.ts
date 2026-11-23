@@ -1,8 +1,11 @@
 // Push notifications as plugins (docs/notes/engagement.md). The SDK owns the
 // permission prompt and the subscription handshake; who gets pushed, and when,
 // is the platform's job. Providers come from Web().notifications(...).
+import { getLang } from "./i18n";
+
 export type PushSpec = { provider: string } & Record<string, unknown>;
 export type PushStatus = "unsupported" | "default" | "granted" | "denied";
+type Api = (path: string, init?: RequestInit & { silent?: boolean; json?: unknown }) => Promise<Response>;
 
 type PushProvider = {
   name: string;
@@ -11,7 +14,13 @@ type PushProvider = {
   /** Attach the signed-in user, so the platform can target by id. */
   identify(id: string): void;
   reset(): void;
+  /** The app can talk to its server: a browser that already said yes hands its subscription over. */
+  ready?(): void;
 };
+
+let api: Api | null = null;
+const keyBytes = (b64: string) =>
+  Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0));
 
 const ONESIGNAL_SDK = "https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js";
 // Served by the agent itself (server.py) — a service worker must come from the
@@ -19,6 +28,36 @@ const ONESIGNAL_SDK = "https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.
 const ONESIGNAL_WORKER = "push/onesignal/OneSignalSDKWorker.js";
 
 const PLUGINS: Record<string, (spec: PushSpec) => PushProvider | null> = {
+  // Our own Web Push (docs/rfc-notifications.md, Devices): the app's worker, subscribed with the server's public key,
+  // the subscription handed to the server, which pushes to it itself. No vendor script.
+  webpush: (spec) => {
+    const key = typeof spec.key === "string" ? spec.key : "";
+    if (!key || typeof navigator === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+    const subscribe = async () => {
+      if (pushStatus() !== "granted" || !api) return;
+      const reg = await navigator.serviceWorker.register("/push/sw.js", { scope: "/push/" });
+      const ours = keyBytes(key);
+      let sub = await reg.pushManager.getSubscription();
+      const theirs = sub?.options.applicationServerKey;
+      if (sub && !(theirs && new Uint8Array(theirs).every((b, i) => b === ours[i]))) { await sub.unsubscribe(); sub = null; }   // a new key
+      sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: ours });
+      await api("/devices", { method: "POST", json: { ...sub.toJSON(), lang: getLang() }, silent: true });
+    };
+    return {
+      name: "webpush",
+      async request() {
+        await Notification.requestPermission();
+        await subscribe().catch(() => {});
+        return pushStatus();
+      },
+      identify() { void subscribe().catch(() => {}); },
+      reset() {
+        void navigator.serviceWorker.getRegistration("/push/").then((r) => r?.pushManager.getSubscription())
+          .then((s) => s?.unsubscribe()).catch(() => {});
+      },
+      ready() { void subscribe().catch(() => {}); },
+    };
+  },
   onesignal: (spec) => {
     // Loaded lazily: nothing from the vendor ships until a subscription is
     // wanted — on Allow, or on load for a user who already granted it.
@@ -102,6 +141,22 @@ export const requestPush = (): Promise<PushStatus> =>
   provider ? provider.request() : Promise.resolve(pushStatus());
 export const identifyPush = (id: string) => provider?.identify(id);
 export const resetPush = () => provider?.reset();
+/** How the provider reaches the app's own server (the signed-in `api`). */
+export function setPushApi(fn: Api | null) {
+  api = fn;
+  if (fn) provider?.ready?.();
+}
+
+// A moment that earns the question: a routine just set up, a first mention. Each asks once on this device, and only
+// while the browser hasn't been asked; the card shows its own words for it.
+export function askPush(why: "routine" | "mention") {
+  if (!provider || pushStatus() !== "default") return;
+  try {
+    if (localStorage.getItem(`cycls_ask_${why}`)) return;
+    localStorage.setItem(`cycls_ask_${why}`, "1");
+  } catch { /* private mode: ask anyway */ }
+  window.dispatchEvent(new CustomEvent("cycls:ask-push", { detail: why }));
+}
 
 /** What the browser said, as the event vocabulary: allowed / denied / dismissed. */
 export const answerResult = (s: PushStatus) =>

@@ -78,11 +78,12 @@ them (if the SDK fails to load, the browser's prompt still records the
 answer). Not now rests the card 14 days. Settings shows *Turn on* for anyone
 who changed their mind and *Blocked* with the hint when the browser said no.
 
-When the card shows is the flags provider's call: the `notification_prompt`
-flag's rollout and conditions decide who, its payload
-`{ "immediate": true, "snooze_days": 0 }` lifts the floor or changes the
-rest. Without a flags provider the card shows after the first finished turn
-to anyone the browser hasn't asked yet.
+The card is on by default: after the first finished turn, to anyone the
+browser hasn't asked yet. The `notification_prompt` flag's payload
+`{ "immediate": true, "snooze_days": 0 }` lifts that floor or changes the
+rest. Two moments ask in their own words, once each on a device and even
+after a Not now: a routine just set up, and a first mention
+(docs/rfc-notifications.md).
 
 The vendor SDK is lazy: nothing ships until a subscription is wanted — on
 Allow, or on load for a user who already granted permission, so the

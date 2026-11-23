@@ -3,7 +3,8 @@
 **Status**: proposed (2026-11-19), revised 2026-11-22: what a person follows became routines (docs/rfc-routines.md),
 and Settings gets a Notifications tab with a picker for each kind. Revised 2026-11-23: no provider is a dependency. We
 keep each person's devices and push to them by the standards (Web Push in a browser, APNs and FCM on a phone), and
-email goes over SMTP. Steps 1 and 2 built, on the testbed, through OneSignal; the rest waits.
+email goes over SMTP. Steps 1 to 3 built, on the testbed: browsers by our own Web Push, phones still through
+OneSignal, and asking for push on by default. Email waits.
 Built beside it, because a notification needs it: replies in team chats (a reply tells the person it answers, as an @
 does), and each team turn led by its author when the model reads it (it used to follow the turn, so a run of turns read
 each name as the next one's).
@@ -29,6 +30,7 @@ are two ways of delivering that same record.
 | What a push says | **Who and what** ("Omar mentioned you"), never the message: a lock screen is seen by others, and the rest is in the bell |
 | Email | **Over SMTP**, the standard every provider speaks, so changing provider is a setting. Routines by default; mentions and replies offered, off until the person turns them on |
 | The email address | The verified sign-in address, never one typed in chat |
+| Asking | **On by default** where push is set up: our card first, the browser's own prompt only after Allow (a browser asks once). After the first finished task; then, in their own words and even after a Not now, right after a routine is set up and at a first mention, each once on a device. Not now waits 14 days |
 | Read | Opening the bell reads everything in it; opening a chat, on any device, reads what it has about that chat |
 | Kept | The newest 30: a bell shows what is recent, and the chats keep the rest |
 | Already there | A mention waits 10 seconds; whoever has read the message by then had the chat open, and is not told |
@@ -105,15 +107,17 @@ show it while the app is in front. When the app is not in view, the push brings 
 
 Each person's devices are one record, `devices`, in their own store (`{person}/.inbox`), not an organization's:
 whichever organization they are in when they allow notifications, a push from any of them reaches the same devices.
-Each is `{id, kind, address and keys or token, lang, added}`:
+Each is `{endpoint, keys, lang, origin, at}` for a browser (a phone's token, later):
 
-- a **browser**: the page asks permission, registers the app's service worker, subscribes it with our VAPID public key,
-  and sends the subscription (an address at the browser's push service and two keys) to `POST /devices`;
+- a **browser**: the page asks permission, registers the app's service worker (`/push/sw.js`, scoped to `/push/`, with
+  no fetch handler), subscribes it with our VAPID public key (in `/config`), and sends the subscription (an address at
+  the browser's push service and two keys) to `POST /devices`, with where the app is as its `Origin` says;
 - a **phone**: the app asks permission and sends its token (APNs on an iPhone, FCM on Android) to `POST /devices`.
 
-Only the signed-in person adds their own devices, so no one can receive another's pushes. `DELETE /devices/{id}` when
-they turn push off on that device or sign out there, and a send the push service answers with gone (404, 410) drops
-it. The newest 10 are kept.
+Only the signed-in person adds their own devices, so no one can receive another's pushes. Signing out unsubscribes the
+browser (`DELETE /devices` takes one away by its address), and a send the push service answers with gone (404, 410)
+drops it. The newest 10 are kept. With our own Web Push on, OneSignal is told to reach phones only (`isAnyWeb` and the
+browsers' flags off), so a browser never gets the same push twice.
 
 Senders are plugins, one for each kind of device: `Web().notifications(cycls.WebPush(), cycls.APNs(...),
 cycls.FCM(...))`. Web Push needs no provider at all: the message is encrypted to the browser's keys and signed with
@@ -147,7 +151,7 @@ With routines', in one order: docs/rfc-routines.md, Build order.
 1. The inbox, `notify`, the bell, the sound and the Notifications tab, for mentions and replies.
 2. Push from the server, and a task that ended while its owner was away. Built through OneSignal.
 3. Our own devices and Web Push: the browser's subscription to `POST /devices`, the service worker, `cycls.WebPush`.
-   Browsers leave OneSignal; the phone stays on it until step 5.
+   Browsers leave OneSignal; the phone stays on it until step 5. Built, with asking for push on by default.
 4. Email over SMTP: routines (docs/rfc-routines.md), and mentions and replies for those who turn it on.
 5. The phone app: its token to `POST /devices`, `cycls.APNs` and `cycls.FCM`. OneSignal goes.
 

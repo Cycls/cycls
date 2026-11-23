@@ -51,6 +51,7 @@ import { useEscapeFallback } from "../hooks/use-escape";
 import { useHeldSend, uploading } from "../hooks/use-held-send";
 import { SUGGESTIONS } from "./suggestions-data";
 import { ExamplesGallery, useExampleComposer } from "./examples";
+import { setPushApi } from "../lib/notifications";
 import { AskCard, type AskQuestion } from "./ask-card";
 import { Surfaces } from "./surfaces";
 import { SurveyStrip, useSurvey } from "./survey-strip";
@@ -468,6 +469,16 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else { const app = apps.find((a) => a.slug === key); if (app) openApp(app); }
   };
   const inbox = useInbox(api, !!account, chatId);
+  // Push: the provider reaches our server as the signed-in person, and a notification clicked opens its chat here.
+  useEffect(() => { setPushApi(account ? api : null); }, [api, account?.user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const openRef = useRef(openHit);
+  openRef.current = openHit;
+  useEffect(() => {
+    if (!navigator.serviceWorker) return;
+    const got = (e: MessageEvent) => { if (e.data?.type === "cycls:open" && e.data.chat) openRef.current("chats", e.data.chat, e.data.ws); };
+    navigator.serviceWorker.addEventListener("message", got);
+    return () => navigator.serviceWorker.removeEventListener("message", got);
+  }, []);
   useUrlParam("ws", (at) => {   // a push's link: the chat, in its own workspace
     const id = new URLSearchParams(window.location.search).get("id");
     if (wsNav && at !== here) {

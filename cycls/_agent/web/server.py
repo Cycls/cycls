@@ -8,7 +8,7 @@ from typing import Optional, Any
 from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
-from cycls._agent import activity, inbox, routines, state
+from cycls._agent import activity, inbox, routines, state, webpush
 from cycls._agent.web import voice
 
 
@@ -312,6 +312,30 @@ def _claim(runs, key, task):
     return True
 
 
+_PUSH_WORKER = """
+self.addEventListener("push", (e) => {
+  const n = e.data ? e.data.json() : {};
+  e.waitUntil((async () => {
+    const wins = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    wins.forEach((w) => w.postMessage({ type: "cycls:push" }));
+    const seen = wins.some((w) => w.visibilityState === "visible");
+    await self.registration.showNotification(n.title || "", { tag: n.tag, silent: seen, data: n });
+    if (seen) (await self.registration.getNotifications({ tag: n.tag })).forEach((x) => x.close());
+  })());
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const n = e.notification.data || {};
+  e.waitUntil((async () => {
+    const [w] = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (!w) return clients.openWindow(n.url || "/");
+    await w.focus();
+    w.postMessage({ type: "cycls:open", ws: n.ws, chat: n.chat });
+  })());
+});
+"""
+
+
 def _app_url(request):
     """Where the app is, as the person reached it: https behind the platform's proxy, http on this machine alone."""
     host = request.headers.get("x-forwarded-host") or request.headers.get("host")
@@ -428,6 +452,10 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     onesignal = next((p for p in config.notifications or [] if isinstance(p, dict) and p.get("provider") == "onesignal"), None)
     if onesignal and os.environ.get("ONESIGNAL_API_KEY"):   # the server pushes too, not only the platform's campaigns
         inbox.push_with(onesignal["app_id"], os.environ["ONESIGNAL_API_KEY"], config.name)
+    web_push = next((p for p in config.notifications or [] if isinstance(p, dict) and p.get("provider") == "webpush"), None)
+    if web_push and os.environ.get("VAPID_PRIVATE_KEY"):   # our own Web Push: the browsers subscribe with its public half
+        webpush.use(os.environ["VAPID_PRIVATE_KEY"])
+        web_push["key"] = webpush.public()
     # (workspace path, chat id) -> endpoint task. One run per chat per container;
     # create-only turn writes catch the cross-container pair (docs/notes/runs.md).
     runs = {}
@@ -1004,6 +1032,13 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         async def onesignal_worker():
             return FastAPIResponse('importScripts("https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js");\n',
                                    media_type="application/javascript")
+
+    if web_push and web_push.get("key"):
+        # The worker shows a push, and opens its chat on a click; with no fetch handler it never touches the page. While
+        # the app is in view it shows it silently and closes it at once (a browser must show every push): the bell sounds.
+        @app.get("/push/sw.js")
+        async def push_worker():
+            return FastAPIResponse(_PUSH_WORKER, media_type="application/javascript")
 
     # ---- Static mounts (must be last) ----
 
