@@ -445,6 +445,7 @@ def design_skills_loaded(messages):
 
 # What the person wrote in this chat (set by the loop): a theme they name, or its glow, is theirs to keep.
 DESIGN_HEARD = contextvars.ContextVar("design_heard", default="")
+_ATTACHED = re.compile(r"\[(?:Attached:|The user attached)[^\]]*\]")
 
 
 def person_words(messages):
@@ -458,7 +459,7 @@ def person_words(messages):
             out.append(c)
         elif isinstance(c, list) and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
             out += [str(b.get("text") or "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
-    return "\n".join(out)
+    return _ATTACHED.sub("", "\n".join(out)).strip()      # a file's name isn't something they said (an Arabic name, an English brief)
 
 
 # The person's latest message, what a new design is held against (brief.py), and a seed for this turn's ground.

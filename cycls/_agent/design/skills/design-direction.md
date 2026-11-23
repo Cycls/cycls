@@ -1,6 +1,6 @@
 ---
 name: design-direction
-description: Making every design new: an idea found in the content, a concept built on it, a direction taken as a starting point (editorial, Swiss, bold type, luxury, tech, warm, playful, Gulf heritage, corporate, quiet, raw, retro print, data-led, collage), a palette and type pair made for this piece, a composition and one signature detail — never one recipe for everything, and never what this workspace just made. For any design: a post, a deck, a document. Also how to show two or three directions in one call.
+description: Making every design new: an idea found in the content, a concept built on it, a direction taken as a starting point (editorial, Swiss, bold type, luxury, tech, warm, playful, a place's own heritage, corporate, quiet, raw, retro print, data-led, collage), a palette and type pair made for this piece, a composition and one signature detail — never one recipe for everything, and never what this workspace just made. For any design: a post, a deck, a document. Also how to show two or three directions in one call.
 ---
 
 # design-direction — a new idea for every piece, then render once
@@ -11,7 +11,9 @@ description: Making every design new: an idea found in the content, a concept bu
 this one"): use exactly that, even when it is on a list below, matches a recent design, or you would choose
 otherwise. The words on the design are in the language they wrote in, unless they ask for another. If it will hurt (low contrast, tiny text), do it anyway and say so in one line of your reply, offering an
 alternative. A brand kit comes next and sets what they left open. Where neither says anything there is no house
-style: no ground, colour, face or layout is the default. Mark what they asked for so the layout check reports it and leaves it:
+style: no ground, colour, face or layout is the default. No place is either: a country's language, style, symbols or
+references come in only when the person writes in that language, asks for them, or the subject is about that place.
+Where they or their company are based is no reason. Mark what they asked for so the layout check reports it and leaves it:
 `"asked": true` on that text, on its `style` op in an edit, or at the top of the spec (beside `deck` or `document`)
 for a whole piece.
 
@@ -26,7 +28,7 @@ when this chat has `web_search`. A restyle, a move or a size change needs none. 
 3. Pictures, in this order: the person's own photos, which go into the design even if the brief doesn't mention them
    (any format, any size, as `src`: don't convert them first), unless they say a picture is only a reference to follow;
    a link they gave; their brand kit; then licensed pictures: a `"stock"` query written
-   from what you found ("Jeddah corniche at dusk", not "city"), the media library (`asset`), or, when this chat has
+   from what you found ("container port at dusk", not "city"), the media library (`asset`), or, when this chat has
    the `stock-images` skill, Wikimedia for named places, with its credit kept. Search results are text, so a picture
    on another site is neither seen nor placed. If the piece needs their real logo or photo and the workspace doesn't
    have it, ask for it.
@@ -46,7 +48,7 @@ own DESIGN paragraph, the examples in this skill used as recipes, and the moves 
 (below). Before the first render of a piece, take five decisions. Take them in your head, not as a message to the
 user, and with no extra call beyond the research:
 
-1. **The idea**: what the viewer should feel or do within two seconds, in one sentence ("Ramadan hours, felt
+1. **The idea**: what the viewer should feel or do within two seconds, in one sentence ("our new hours, felt
    as calm and generous").
 2. **The concept**: the visual idea that only THIS content could have. Find it in the subject's own world, its
    objects, its materials, its places, its numbers, its words. A logistics report laid out along a route line; a
@@ -89,14 +91,14 @@ Then write all of it into the spec, and render once.
   - three cards in a row with an icon each;
   - a short accent bar under each title you set;
   - everything centred on one axis, nothing large enough to lead the eye.
-- **Two similar briefs, two designs.** Two perfume brands, two Ramadan posts, two decks for two startups do
+- **Two similar briefs, two designs.** Two perfume brands, two holiday posts, two decks for two startups do
   not share a layout. When the tool's reply says the design shares its ground, its faces or its composition with
   an earlier one that it isn't meant to match, change that with one `edit` before presenting.
 
 ## Directions
 
 Each gives where it fits and its spirit, then example palettes, example faces (Latin, then Arabic), compositions
-that suit it, and finishes (from the media library). Mix and depart: a direction is a mood, not a template.
+that suit it, and finishes (from the media library). Mix and depart: a direction is a mood, not a template. The Arabic faces are for text that is in Arabic.
 
 **Editorial**: food, culture, reports, thought leadership, premium services.
 Spirit: a magazine that respects the reader: type first, generous paper, a confident headline.
@@ -126,7 +128,7 @@ Compositions: words filling 80–90% of the width; words stacked and set at diff
 along the edge; type repeated into a pattern.
 Finish: none.
 
-**Luxury**: perfume, jewellery, real estate, hotels, VIP invitations, a premium Ramadan.
+**Luxury**: perfume, jewellery, real estate, hotels, VIP invitations.
 Spirit: restraint. Space is the luxury, and the material is the colour.
 Palettes, e.g.: near-black `#0e0e0e` + champagne `#c9a45c`; ivory `#f3efe6` + espresso `#2a1d15` (light luxury);
 bottle green `#0f2a24` + brass `#b08d57`; blush `#ead8cf` + plum `#3b1e2b`; the product's own colour, deep, with cream.
@@ -167,12 +169,13 @@ Compositions: big rounded blocks; a sticker or badge turned a little (`"rotation
 curve of stacked words; a character made of shapes.
 Finish: one or two 3D emoji used as characters (not decoration), or an illustration.
 
-**Gulf heritage**: National Day, Founding Day, Ramadan, Eid, culture, tourism, coffee, dates, local food.
-Spirit: rooted and contemporary, never a souvenir.
+**A place's own heritage**: only when the brief is about that place, its culture or its occasion (a national day, a
+religious festival, its food), never because of where the person or the company is. A coffee post is not a Gulf post.
+Spirit: rooted and contemporary, never a souvenir: its colours, patterns and letterforms. For a Gulf subject:
 Palettes, e.g.: sand `#e9dcc3` + date brown `#4a2c1d` + Sadu red `#9b2226`; palm green `#2d6a4f` + gold `#b08d57`; for
 National Day the flag's green `#006c35` with white; Ramadan nights navy `#0b1d3a` + gold + cream; Ramadan dawn in
 apricot `#f6c49b` + rose `#c96f6f` + indigo; Eid in mint and white.
-Faces: Arabic first. "Reem Kufi", "El Messiri", "Aref Ruqaa" (one short line), "Rakkas", "Kufam" or "Amiri" for
+Faces: when the piece is in Arabic, Arabic first. "Reem Kufi", "El Messiri", "Aref Ruqaa" (one short line), "Rakkas", "Kufam" or "Amiri" for
 display, with "IBM Plex Sans Arabic", Almarai or "Noto Kufi Arabic" for text. The Latin partner: "Cormorant Garamond",
 "DM Serif Display" or a clean sans.
 Compositions: right-anchored or centred; an ornament band; a tall pill-shaped window (a rect with `radius` half its
@@ -230,10 +233,10 @@ colour block.
 Finish: paper texture, tape-like rects.
 
 **Choosing.** Take the feeling the brief names literally (premium → luxury, fun → playful, serious →
-corporate, Swiss, editorial or data-led). The occasion outranks the industry: a bank's Ramadan post is Gulf
-heritage, in the bank's colours. Young audiences take bold, playful, raw or retro print; executives take corporate,
-Swiss, editorial or data-led. When two fit, take the one this workspace used least recently. For an Arabic
-audience, set the Arabic first and choose its face before the Latin one. Pieces that belong together (a carousel, a
+corporate, Swiss, editorial or data-led). The occasion outranks the industry: a bank's holiday post follows the
+holiday, in the bank's colours. Young audiences take bold, playful, raw or retro print; executives take corporate,
+Swiss, editorial or data-led. When two fit, take the one this workspace used least recently. When the piece
+is in Arabic, choose its Arabic face before the Latin one. Pieces that belong together (a carousel, a
 campaign, one deck) share ONE direction; pieces that don't, shouldn't all share the same one.
 
 **A deck or a document** takes its direction twice: as its `theme` (the palette and the type pair: write your own
@@ -242,7 +245,7 @@ with a brand kit, `"brand"` or none: the kit's colours and faces, never copied i
 and as its `look`, how its slides or pages are composed. The look matters more, because two themes in one look are
 the same layout recoloured. Editorial → `editorial`. Swiss, data-led → `swiss`. Bold type, raw → `bold`. Luxury,
 quiet minimal → `minimal` (or `editorial`). Tech → `swiss` (or `bold` for a launch). Warm & human → `soft`.
-Playful, retro print → `soft` or `bold`. Gulf heritage → `editorial` or `soft`. Corporate → `swiss` (or `classic` when
+Playful, retro print → `soft` or `bold`. A place's heritage → `editorial` or `soft`. Corporate → `swiss` (or `classic` when
 the user wants it plain). Collage → `editorial` with custom slides. Always write the look out: without one, the tool
 guesses from the title, which is a fallback, not a direction. The concept then goes into the slides: a custom
 title slide, a section slide made for it, the signature move repeated with variation.
@@ -309,7 +312,7 @@ title slide, a section slide made for it, the signature move repeated with varia
 - **Turned badge**: a short word on a pill or circle — the text in the shape's box with `"valign": "center"` —
   and `"rotation": -8` on both.
 - **Giant mark**: a quotation mark or numeral in the accent at 300+ px, behind the text at opacity 0.15 (faint, so unchecked).
-- **Editorial header**: thin rules and small caps on one line ("ISSUE 04 —— RIYADH —— 2026").
+- **Editorial header**: thin rules and small caps on one line ("ISSUE 04 —— SPRING —— 2026").
 - **Vertical word**: one word turned 90° (`"rotation": 90`) running up the frame's edge.
 - **Overprint**: a shape or word twice, 6–10 px apart, in two inks, the top one at opacity 0.85.
 - **Colour block**: a solid rect of the accent covering part of a photo, the headline set on it.
@@ -364,7 +367,7 @@ The concept: the coffee arrives before seven, so the post is the delivery slip. 
 ```json
 {"size": "post-portrait", "fill": "#e4572e", "nodes": [
   {"type": "rect", "id": "slip", "x": 150, "y": 120, "w": 780, "h": 1110, "fill": "#ffffff", "stroke": "#2b2118", "strokeWeight": 2},
-  {"type": "text", "id": "header", "text": "QAHWA HOUSE — DELIVERY SLIP No. 0612", "x": 200, "y": 170, "w": 680, "size": 22,
+  {"type": "text", "id": "header", "text": "CORNER ROAST — DELIVERY SLIP No. 0612", "x": 200, "y": 170, "w": 680, "size": 22,
    "letterSpacing": 4, "font": "Courier Prime Bold", "color": "#2b2118"},
   {"type": "line", "id": "rule-1", "x": 200, "y": 222, "w": 680, "h": 2, "fill": "#2b2118"},
   {"type": "stack", "id": "copy", "x": 200, "y": 300, "w": 680, "gap": 28, "children": [
@@ -374,7 +377,7 @@ The concept: the coffee arrives before seven, so the post is the delivery slip. 
      "size": 34, "lineHeight": 48, "font": "Courier Prime", "color": "#2b2118"}]},
   {"type": "text", "id": "time", "text": "06:45", "x": 200, "y": 930, "w": 680, "size": 200, "font": "Shrikhand",
    "color": "#e4572e", "opacity": 0.9, "rotation": -4},
-  {"type": "text", "id": "cta", "text": "qahwa.house/subscribe  →", "x": 200, "y": 1150, "w": 680, "size": 30,
+  {"type": "text", "id": "cta", "text": "cornerroast.co/subscribe  →", "x": 200, "y": 1150, "w": 680, "size": 30,
    "font": "Courier Prime Bold", "color": "#2b2118"}
 ]}
 ```

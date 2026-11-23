@@ -3437,6 +3437,13 @@ def test_a_theme_or_a_glow_the_person_named_is_kept(tmp_path):
                          {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "glow"}, {"type": "text", "text": "glow"}]},
                          {"role": "user", "content": [{"type": "text", "text": "make it blue"}]}])
     assert said == "a post\nmake it blue"
+    # A file's name isn't their words: an Arabic filename on an English brief doesn't make the design Arabic.
+    from cycls._agent.design import brief
+    from cycls._agent.design.tool import person_last
+    ask = person_last([{"role": "user", "content": [{"type": "text", "text": "[Attached: attachments/1-قهوة عربية.webp]"},
+                                                     {"type": "text", "text": "Make a post for Coffee Day on 3 March"}]}])
+    assert ask == "Make a post for Coffee Day on 3 March"
+    assert "in English" in brief.check({"nodes": [{"type": "text", "text": "قهوة من أرضنا وكرم من طبعنا"}]}, ask)
 
 
 def test_the_skill_a_render_needs_follows_what_it_makes():

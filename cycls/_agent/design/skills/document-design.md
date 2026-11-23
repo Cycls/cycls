@@ -144,8 +144,8 @@ still doesn't.
 
 ```json
 {"document": {
-  "title": "Riyadh coffee market 2026", "subtitle": "Where specialty coffee grows next", "author": "Qahwa House strategy team",
-  "date": "October 2026", "organization": "Qahwa House",
+  "title": "City coffee market 2026", "subtitle": "Where specialty coffee grows next", "author": "Corner Roast strategy team",
+  "date": "October 2026", "organization": "Corner Roast",
   "theme": {"base": "editorial", "bg": "#ffffff", "surface": "#eef3f2", "line": "#d5e0de", "accent": "#0f5257", "hero": "#10302f", "heroAccent": "#e9c46a",
             "heading": "Fraunces Bold", "body": "Source Serif 4"},
   "look": "editorial", "cover": {"style": "full", "eyebrow": "MARKET REVIEW"},
@@ -163,5 +163,5 @@ still doesn't.
         "rows": [["Al Narjis", "41,000", "6", "1.5"], ["Al Arid", "28,000", "3", "1.1"], ["Qurtubah", "35,000", "7", "2.0"], ["Al Yasmin", "52,000", "14", "2.7"]]},
        "title": "Households and specialty cafés by district", "caption": "Under two cafés per 10,000 households marks a gap."},
       {"callout": {"title": "Recommendation", "text": "Open in Al Narjis and Al Arid first: the deepest gaps, and rents a third below Al Yasmin's.", "tone": "key"}, "style": "fill"},
-      {"note": "Sources: GASTAT household counts 2025; Qahwa House café census, September 2026."}]}]}}
+      {"note": "Sources: national household survey 2025; Corner Roast café census, September 2026."}]}]}}
 ```

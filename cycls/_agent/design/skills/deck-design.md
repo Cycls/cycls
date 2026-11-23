@@ -177,9 +177,9 @@ the one number and its meaning. The chart's colours come from the theme's accent
             "accent2": "#2d6a4f", "surface": "#c9e0ec", "line": "#b5d2e0", "heading": "DM Serif Display",
             "body": "DM Sans", "arHeading": "Reem Kufi Bold", "arBody": "IBM Plex Sans Arabic", "decor": "rule", "radius": 6},
   "look": "editorial",
-  "footer": {"text": "Qahwa House · Investor update"},
+  "footer": {"text": "Corner Roast · Investor update"},
   "slides": [
-    {"layout": "title", "eyebrow": "INVESTOR UPDATE · Q3 2026", "title": "Specialty coffee, now in every district of Riyadh",
+    {"layout": "title", "eyebrow": "INVESTOR UPDATE · Q3 2026", "title": "Specialty coffee, now in every district of the city",
      "subtitle": "Where we are, and where the next round takes us", "notes": "Thank everyone; one line on why we are here."},
     {"layout": "stats", "title": "A quarter of firsts", "items": [{"value": "14", "label": "branches open"},
      {"value": "38%", "label": "growth on Q2"}, {"value": "4.8", "label": "average rating"}],
@@ -191,7 +191,7 @@ the one number and its meaning. The chart's colours come from the theme's accent
      "takeaway": {"value": "3.3×", "text": "subscriptions since April"},
      "notes": "The crossing point is the story: a recurring business, not a café chain."},
     {"layout": "custom", "fill": "#dcecf5", "nodes": [
-      {"type": "text", "id": "running-head", "text": "QAHWA HOUSE · INVESTOR UPDATE", "x": 144, "y": 49, "w": 1200,
+      {"type": "text", "id": "running-head", "text": "CORNER ROAST · INVESTOR UPDATE", "x": 144, "y": 49, "w": 1200,
        "size": 20, "letterSpacing": 4, "font": "DM Sans Semi Bold", "color": "#6b5b4b"},
       {"type": "rect", "id": "head-rule", "x": 144, "y": 87, "w": 1632, "h": 2, "fill": "#b5d2e0"},
       {"type": "text", "id": "title", "text": "How a bag reaches a door in 36 hours", "x": 144, "y": 132, "w": 1632,
@@ -217,5 +217,5 @@ the one number and its meaning. The chart's colours come from the theme's accent
     {"layout": "quote", "style": "panel", "quote": "It is the first coffee subscription that tastes like the café.",
      "author": "Noura Al-Harbi", "role": "Subscriber since March", "notes": "Read it, pause."},
     {"layout": "closing", "title": "Fourteen districts down, forty to go", "subtitle": "Raising SAR 12M to open the next 26 branches",
-     "cta": "Read the plan", "contact": "invest@qahwa.house", "notes": "The ask, then questions."}]}}
+     "cta": "Read the plan", "contact": "invest@cornerroast.co", "notes": "The ask, then questions."}]}}
 ```

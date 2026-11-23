@@ -128,23 +128,20 @@ Wrong shapes that cost a refused call:
 ]}
 ```
 
-## Example: an Arabic Ramadan post, 1080 × 1350
+## Example: a post written in Arabic, 1080 × 1350
 
-This shows the mechanics of an Arabic post (anchored right, an Arabic face, a pattern band). It is not the look to
-use for Ramadan: navy, gold and a crescent is what every Ramadan post has. Find the concept in this brand's own
-Ramadan (its hours, its product at iftar, the dawn, the table) and give it its own palette and layout.
+Only for a piece that is in Arabic. This shows the mechanics (anchored right, an Arabic face, a band across the top),
+not a look to copy.
 
 ```json
-{"size": "post-portrait", "fill": {"gradient": ["#0b1d3a", "#132c55"], "angle": 90}, "nodes": [
-  {"type": "pattern", "id": "band", "asset": "moroccan", "color": "#d4af37", "opacity": 0.14, "x": 0, "y": 0, "w": 1080, "h": 300},
-  {"type": "rect", "id": "band-rule", "x": 0, "y": 300, "w": 1080, "h": 3, "fill": "#d4af37"},
-  {"type": "image", "id": "moon", "asset": "crescent moon", "x": 96, "y": 380, "w": 260},
+{"size": "post-portrait", "fill": "#0f4c5c", "nodes": [
+  {"type": "rect", "id": "band", "x": 0, "y": 0, "w": 1080, "h": 300, "fill": "#ffd166"},
   {"type": "stack", "id": "copy", "x": 304, "y": 700, "w": 680, "gap": 26, "align": "end", "children": [
-    {"type": "text", "id": "headline", "text": "رمضان كريم", "size": 150, "lineHeight": 190, "font": "Reem Kufi Bold",
-     "color": "#f5ecd7", "align": "right"},
-    {"type": "text", "id": "subline", "text": "مواعيدنا في الشهر الفضيل: من التاسعة مساءً حتى الثالثة فجرًا",
-     "size": 40, "lineHeight": 66, "font": "IBM Plex Sans Arabic", "color": "#d9cfb8", "align": "right"},
-    {"type": "text", "id": "brand", "text": "بيت القهوة", "size": 34, "font": "IBM Plex Sans Arabic Bold",
-     "color": "#d4af37", "align": "right"}]}
+    {"type": "text", "id": "headline", "text": "مواعيدنا الجديدة", "size": 120, "lineHeight": 160, "font": "Noto Kufi Arabic Bold",
+     "color": "#ffffff", "align": "right"},
+    {"type": "text", "id": "subline", "text": "نفتح كل يوم من التاسعة صباحًا حتى التاسعة مساءً",
+     "size": 40, "lineHeight": 66, "font": "IBM Plex Sans Arabic", "color": "#d7e7ea", "align": "right"},
+    {"type": "text", "id": "brand", "text": "المكتبة العامة", "size": 34, "font": "IBM Plex Sans Arabic Bold",
+     "color": "#ffd166", "align": "right"}]}
 ]}
 ```
