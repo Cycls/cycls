@@ -75,7 +75,7 @@ async def _exec_design(inp, workspace):
             hint = await _ground_hint(workspace)
             return f"{_RESEARCH_FIRST} {hint}" if hint else _RESEARCH_FIRST
         if not DESIGN_CHECKED.get():                          # in their language, with their names as they wrote them
-            held = brief.check(_spec_of(inp), DESIGN_ASK.get())
+            held = brief.check(_spec_of(inp), DESIGN_ASK.get(), DESIGN_HEARD.get())
             if held:
                 return held
     said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))

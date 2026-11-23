@@ -3409,6 +3409,22 @@ def test_a_new_design_is_held_once_against_the_brief(tmp_path, monkeypatch):
     assert person_last([ask, use, told]) == en
 
 
+def test_no_place_comes_in_unless_the_person_named_it():
+    from cycls._agent.design import brief
+    post = lambda text: {"nodes": [{"type": "text", "text": text}]}
+    held = brief.check(post("The fix costs SAR 1.2m and meets SAMA rules"), "Make a report on a bank audit")
+    assert "SAR" in held and "SAMA" in held and "never mentioned" in held
+    assert "Riyadh" in brief.check(post("Now open in Riyadh"), "Make a post for our new shop")
+    assert brief.check(post("The fix costs $1.2m"), "Make a report on a bank audit") is None
+    assert brief.check(post("Now open in Jeddah"), "A post for our branch in Jeddah") is None
+    assert brief.check(post("Saudi Coffee Day"), "A post for Saudi Coffee Day") is None
+    assert brief.check(post("Costs SAR 40"), "make it shorter", "A price list for our Riyadh shop\nmake it shorter") is None
+    assert brief.check(post("Sar and sama are words here too"), "Write about Sar and sama") is None
+    assert brief.check(post("Our grandmother sings"), "A post about singing") is None
+    said = brief.check(post("افتتاح الفرع الجديد في جدة قريبا"), "Design a post for our new branch")
+    assert "in English" in said and "saved preference" in said
+
+
 def test_a_ground_is_drawn_only_when_nobody_named_a_colour():
     from cycls._agent.design import brief
     seen = {brief.ground_hint("a post for a clinic", f"chat-{i}") for i in range(60)}

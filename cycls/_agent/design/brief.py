@@ -14,6 +14,10 @@ _COLOURS = re.compile(r"#[0-9a-f]{3,8}\b|\b(?:black|white|navy|blue|red|green|ye
                       r"beige|cream|teal|turquoise|grey|gray|brown|maroon|violet|lilac|colou?rs?|palette|theme|same look|"
                       r"like the last|dark|light mode)\b|أسود|أبيض|أزرق|أحمر|أخضر|أصفر|ذهبي|بني|وردي|بنفسجي|رمادي|لون|ألوان",
                       re.I)
+_AR_EDGE_L, _AR_EDGE_R = r"(?<![؀-ۿ])", r"(?![؀-ۿ])"
+_PLACE = re.compile(r"\b(?:saudi(?: arabia)?|riyadh|jeddah|jiddah|dammam|makkah|mecca|madinah|riyals?|vision 2030)\b|"
+                    + _AR_EDGE_L + r"(?:السعودية|السعودي|الرياض|جدة|ريال|مكة|المدينة المنورة)" + _AR_EDGE_R, re.I)
+_PLACE_CODE = re.compile(r"\b(?:SAR|SAMA|KSA)\b")     # capitals only: "sar" and "sama" are other words
 GROUNDS = ("pure white", "black or a very deep dark", "one full, saturated colour", "a deep colour (forest, navy, oxblood, plum)",
            "a clear pale tint with real colour in it", "a large photo, full bleed")
 
@@ -70,19 +74,31 @@ def name_drift(ask, words):
     return out
 
 
-def check(spec, ask):
+def place_added(heard, words):
+    """The Saudi places, currency or bodies a design names when nothing the person wrote does. No place is the default."""
+    if _PLACE.search(heard or "") or _PLACE_CODE.search(heard or ""):
+        return []
+    found = [m.group(0) for m in _PLACE.finditer(words)] + [m.group(0) for m in _PLACE_CODE.finditer(words)]
+    return list(dict.fromkeys(found))
+
+
+def check(spec, ask, heard=None):
     """What a new design has to put right against the brief, in words for the model, or None."""
     words = words_of(spec)
     faults = []
     gap = language_gap(ask, words)
     if gap:
-        faults.append(f"the person wrote in {gap[0]} and this design is in {gap[1]}: write its words in {gap[0]}, unless they asked "
-                      f"for {gap[1]}")
+        faults.append(f"the person wrote in {gap[0]} and this design is in {gap[1]}: write its words in {gap[0]}. A saved preference, "
+                      f"a workspace file or an earlier design is not them asking for {gap[1]}")
     faults += [f"they call it \"{name}\" and this design says \"{got}\": use their name exactly" for name, got in name_drift(ask, words)]
+    added = place_added(f"{ask or ''}\n{heard or ''}", words)
+    if added:
+        faults.append(f"it brings in {', '.join(added)}, which they never mentioned: a place, a currency or a regulator comes in only "
+                      f"when they name it, so take it out")
     if not faults:
         return None
     return ("Not run: check it against the brief. Nothing was made. " + "; ".join(faults) + ". Put that right and render again. "
-            "If it is what they asked for, render it again as it is: this note comes once a turn.")
+            "Only if they asked for it in this chat, render it again as it is: this note comes once a turn.")
 
 
 def ground_hint(heard, seed, branded=False):
