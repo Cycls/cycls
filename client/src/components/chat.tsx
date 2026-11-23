@@ -1575,18 +1575,22 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     </Fragment>
                   );
                 })}
-                {team && live.typing.length > 0 && (
-                  <div className="flex w-full max-w-3xl items-end gap-2.5 px-6 pb-2" role="status"
-                       title={live.typing.length === 1 ? t("isTyping").replace("{name}", live.typing[0].name || t("someone"))
-                         : t("areTyping").replace("{names}", live.typing.map((p) => p.name || t("someone")).join(", "))}>
-                    <span className="flex shrink-0">
-                      {live.typing.slice(0, 3).map((p, i) => (
-                        <span key={p.id} className="rounded-full ring-2 ring-background" style={{ marginInlineStart: i ? -10 : 0 }}><Face c={{ by: p, at: "" }} size={28} /></span>
-                      ))}
-                    </span>
-                    <span className="flex h-9 items-center gap-1 rounded-3xl bg-secondary px-4">
-                      {[0, 1, 2].map((i) => <span key={i} className="size-1.5 rounded-full bg-muted-foreground animate-[typing_1.2s_infinite]" style={{ animationDelay: `${i * 0.15}s` }} />)}
-                    </span>
+                {team && (   // its place is kept while no one types: someone starting or stopping never moves the chat
+                  <div className="flex h-11 w-full max-w-3xl items-end px-6 pb-2">
+                    {live.typing.length > 0 && (
+                      <div className="flex items-end gap-2.5" role="status"
+                           title={live.typing.length === 1 ? t("isTyping").replace("{name}", live.typing[0].name || t("someone"))
+                             : t("areTyping").replace("{names}", live.typing.map((p) => p.name || t("someone")).join(", "))}>
+                        <span className="flex shrink-0">
+                          {live.typing.slice(0, 3).map((p, i) => (
+                            <span key={p.id} className="rounded-full ring-2 ring-background" style={{ marginInlineStart: i ? -10 : 0 }}><Face c={{ by: p, at: "" }} size={28} /></span>
+                          ))}
+                        </span>
+                        <span className="flex h-9 items-center gap-1 rounded-3xl bg-secondary px-4">
+                          {[0, 1, 2].map((i) => <span key={i} className="size-1.5 rounded-full bg-muted-foreground animate-[typing_1.2s_infinite]" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
                 {(runStatus === "interrupted" || messages[messages.length - 1]?.parts?.some((p) => p.type === "callout" && p.code === "cut_off"))
