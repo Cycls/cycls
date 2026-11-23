@@ -2,8 +2,10 @@
 camera file of any size becomes a picture the renderer takes, the right way up, sized so that many of them fit in one
 request. A link the person gave is fetched into the workspace; a picture from anywhere else on the web is not placed.
 Pillow does the converting (pillow-heif for HEIC): without them a file the renderer takes as it is still works."""
-import asyncio, hashlib, io, pathlib, re
+import asyncio, hashlib, io, pathlib, re, threading
 from urllib.parse import urlsplit
+
+_DECODING = threading.BoundedSemaphore(2)   # large photos opened at once: several chats can't add up to a memory spike
 
 MAX_FILE = 64 * 1024 * 1024          # what is read at all
 MAX_PIXELS = 110_000_000             # a 108 MP phone photo; past that a file is refused, not decoded
@@ -60,7 +62,8 @@ def cap_for(obj):
     return max(FLOOR, min(CAP, BUDGET // max(count, 1)))
 
 
-def _open(data, name):
+def _open(data, name, long=LONG):
+    """A picture decoded and brought down to `long` before anything else copies it: a 50 MP photo is 150 MB open."""
     pil = _pil()
     if not pil:
         raise ValueError(f"{name} isn't a PNG, JPEG, WebP or GIF, and this service can't convert it: save it as a JPEG")
@@ -70,9 +73,11 @@ def _open(data, name):
         if im.width * im.height > MAX_PIXELS:
             raise ValueError(f"{name} is {im.width}×{im.height}, too large to open: save a smaller copy")
         if im.format == "JPEG":
-            im.draft("RGB", (LONG, LONG))        # decoded near the size it is kept at
+            im.draft("RGB", (long, long))        # decoded near the size it is kept at
         im.seek(0)
         im.load()
+        if max(im.size) > long:
+            im.thumbnail((long, long), Image.LANCZOS, reducing_gap=2.0)
         return ImageOps.exif_transpose(im), Image
     except ValueError:
         raise
@@ -80,7 +85,52 @@ def _open(data, name):
         raise ValueError(f"{name} can't be read as a picture ({type(e).__name__})") from e
 
 
+def _is_srgb(icc):
+    """Is this colour profile sRGB? (One that can't be read is left alone.)"""
+    try:
+        from PIL import ImageCms
+        return "srgb" in ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(io.BytesIO(icc))).lower()
+    except (ImportError, OSError, ValueError, TypeError):
+        return True
+    except Exception:                            # ImageCms.PyCMSError
+        return True
+
+
+def _srgb(im):
+    """A photo in a wider colour space (an iPhone's Display P3, a print CMYK) as sRGB, so that it keeps its colours once
+    the profile is gone. Without a profile, or when it can't be converted, as it is."""
+    icc = im.info.get("icc_profile")
+    if not icc or _is_srgb(icc):
+        return im
+    try:
+        from PIL import ImageCms
+        alpha = im.getchannel("A") if "A" in im.getbands() else None
+        base = im if im.mode == "CMYK" else im.convert("RGB")
+        out = ImageCms.profileToProfile(base, ImageCms.ImageCmsProfile(io.BytesIO(icc)), ImageCms.createProfile("sRGB"), outputMode="RGB")
+        if alpha is not None:
+            out.putalpha(alpha)
+        return out
+    except Exception:                            # ImportError, OSError, ImageCms.PyCMSError: the colours as written
+        return im
+
+
+def _needs_baking(data):
+    """Is this picture stored turned, or in a wider colour space? Not every export reads either, so both are written in."""
+    pil = _pil()
+    if not pil:
+        return False
+    try:
+        im = pil[0].open(io.BytesIO(data))
+        if im.getexif().get(0x0112, 1) != 1:
+            return True
+        icc = im.info.get("icc_profile")
+        return bool(icc) and not _is_srgb(icc)
+    except Exception:                            # it isn't for this check to refuse a file
+        return False
+
+
 def _encode(im, cap, Image):
+    im = _srgb(im)
     alpha = im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
     im = im.convert("RGBA" if alpha else "RGB")
     if alpha and im.getchannel("A").getextrema()[0] == 255:
@@ -109,31 +159,31 @@ def _encode(im, cap, Image):
 
 def ready(data, dims, cap=CAP, name="the picture"):
     """`data` as bytes the renderer takes: unchanged when it already fits, else converted and sized. Raises ValueError."""
-    if dims and all(dims) and len(data) <= cap and max(dims) <= LONG:
+    if dims and all(dims) and len(data) <= cap and max(dims) <= LONG and not _needs_baking(data):
         return data
-    try:
-        im, Image = _open(data, name)
-    except ValueError:
-        if dims and all(dims):                   # no converter here, or one it can't open: sent as it is, if it fits
-            if len(data) <= AS_IT_IS:
-                return data
-            raise ValueError(f"{name} is {len(data) / 2**20:.1f} MB, over the {AS_IT_IS >> 20} MB a design takes as it is: "
-                             f"save a smaller copy") from None
-        raise
-    return _encode(im, cap, Image)
+    with _DECODING:
+        try:
+            im, Image = _open(data, name)
+        except ValueError:
+            if dims and all(dims):               # no converter here, or one it can't open: sent as it is, if it fits
+                if len(data) <= AS_IT_IS:
+                    return data
+                raise ValueError(f"{name} is {len(data) / 2**20:.1f} MB, over the {AS_IT_IS >> 20} MB a design takes as it is: "
+                                 f"save a smaller copy") from None
+            raise
+        return _encode(im, cap, Image)
 
 
 def preview(data, name="the picture"):
     """(a JPEG small enough to show the model, its media type). Raises ValueError."""
-    im, Image = _open(data, name)
-    im = im.convert("RGBA")
-    ground = Image.new("RGBA", im.size, (255, 255, 255, 255))
-    ground.alpha_composite(im)
-    im = ground.convert("RGB")
-    im.thumbnail((PREVIEW_LONG, PREVIEW_LONG), Image.LANCZOS)
-    out = io.BytesIO()
-    im.save(out, "JPEG", quality=85, optimize=True)
-    return out.getvalue(), "image/jpeg"
+    with _DECODING:
+        im, Image = _open(data, name, PREVIEW_LONG)
+        im = _srgb(im).convert("RGBA")
+        ground = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        ground.alpha_composite(im)
+        out = io.BytesIO()
+        ground.convert("RGB").save(out, "JPEG", quality=85, optimize=True)
+        return out.getvalue(), "image/jpeg"
 
 
 def _given(url, heard):

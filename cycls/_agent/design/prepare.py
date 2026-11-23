@@ -52,7 +52,7 @@ def _frame_size(fr):
     raise ValueError(f"`size` {s!r} isn't a size — use [W, H] or a preset ({', '.join(_DESIGN_SIZES)})")
 
 
-def _prepare_spec(spec, brand, root=None):
+def _prepare_spec(spec, brand, root=None, photo_cap=None):
     """A spec made safe to render — sizes resolved, untyped nodes typed (the renderer drops them),
     images placed, brand defaults filled, never over a colour set — on a copy → (spec, error, notes)."""
     if isinstance(spec.get("deck"), dict):
@@ -63,7 +63,7 @@ def _prepare_spec(spec, brand, root=None):
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
     filled, branded_fonts, image_bytes = 0, 0, 0
-    photo_cap = photos.cap_for(spec)                      # however many photos there are, they all fit
+    photo_cap = photo_cap or photos.cap_for(spec)         # however many photos there are, they all fit
     shapes = []                 # notes on nodes reinterpreted, once each
     first_size = None
     for i, fr in enumerate(frames, 1):
@@ -428,7 +428,7 @@ def _brand_theme(brand):
     return theme
 
 
-def _prepare_deck(spec, brand, root):
+def _prepare_deck(spec, brand, root, photo_cap=None):
     """A deck of layouts made ready for the service (cycls-design layouts.js): size resolved, image
     slots read, the brand kit as theme when there is one → (spec, error, notes)."""
     spec = json.loads(json.dumps(spec))
@@ -465,7 +465,7 @@ def _prepare_deck(spec, brand, root):
         notes.append("The deck has no `theme`, so it is minimal-light, the default — a theme of its own goes in the "
                      "deck: {\"deck\": {\"theme\": \"editorial\" or {\"base\": …, \"accent\": …, \"heading\": …}, \"slides\": […]}}.")
 
-    photo_cap = photos.cap_for(deck)
+    photo_cap = photo_cap or photos.cap_for(deck)
 
     def slot(value):
         nonlocal total
@@ -728,6 +728,7 @@ def _prepare_ops(ops, root):
     if not isinstance(ops, list):
         return None, "Error: `ops` must be a list of operations."
     ops = json.loads(json.dumps(ops))
+    photo_cap = photos.cap_for(ops)                       # one edit may bring many photos: they all fit in its request
     for k, op in enumerate(ops, 1):
         if not isinstance(op, dict) or not op.get("op"):
             return None, f"Error: op {k} must be an object with an `op` (set_text, style, move, …)."
@@ -739,14 +740,14 @@ def _prepare_ops(ops, root):
         if op["op"] == "replace_image":
             probe = {"src": op.pop("src", None), "w": 1, "h": 1}
             try:
-                _place_image(probe, root)
+                _place_image(probe, root, photo_cap)
             except ValueError as e:
                 return None, f"Error: op {k}: {e}"
             op["image"] = probe["image"]
         elif op["op"] == "add":
             if not isinstance(op.get("node"), dict):
                 return None, f"Error: op {k}: `add` needs a `node` (a spec node, e.g. a text or a stack)."
-            spec, err, _ = _prepare_spec({"size": [_NO_FRAME, _NO_FRAME], "nodes": [op["node"]]}, None, root)
+            spec, err, _ = _prepare_spec({"size": [_NO_FRAME, _NO_FRAME], "nodes": [op["node"]]}, None, root, photo_cap)
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["node"] = spec["nodes"][0]
@@ -754,7 +755,7 @@ def _prepare_ops(ops, root):
             if not isinstance(op.get("spec"), dict) or op["spec"].get("deck") or op["spec"].get("pages"):
                 return None, (f"Error: op {k}: `page_add` needs `spec` — the page's design, "
                               f"{{size, fill, nodes}} (or a carousel's {{frames}}).")
-            spec, err, _ = _prepare_spec(op["spec"], _load_brand(root) if root else None, root)
+            spec, err, _ = _prepare_spec(op["spec"], _load_brand(root) if root else None, root, photo_cap)
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["spec"] = spec
@@ -794,12 +795,12 @@ def _mend_json_tail(text):
         return None
 
 
-def _prepare_slide(slide, settings, root):
+def _prepare_slide(slide, settings, root, photo_cap=None):
     """One slide prepared as a deck's are → (slide, deck settings with images resolved, error)."""
     if not isinstance(slide, dict) or not (slide.get("layout") or isinstance(slide.get("nodes"), list)):
         return None, None, ('Error: `slide` is a layout slide ({"layout": "bullets", "title": …, "bullets": […]}) '
                             'or a hand-built one ({"nodes": […], "fill"?}).')
-    spec, err, _ = _prepare_deck({"deck": {**settings, "slides": [slide]}}, None, root)
+    spec, err, _ = _prepare_deck({"deck": {**settings, "slides": [slide]}}, None, root, photo_cap)
     if err:
         return None, None, err
     deck = spec["deck"]

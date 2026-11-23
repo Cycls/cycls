@@ -23,7 +23,9 @@ when this chat has `web_search`. A restyle, a move or a size change needs none. 
    one or two pages that matter, a site or link the person gave first.
 2. Take from it the real facts and names; the subject's objects, places and words, which is where the concept comes
    from; and exactly what the pictures should show.
-3. Pictures, in this order: the person's own files and brand kit; then licensed pictures: a `"stock"` query written
+3. Pictures, in this order: the person's own photos, which go into the design even if the brief doesn't mention them
+   (any format, any size, as `src`: don't convert them first), unless they say a picture is only a reference to follow;
+   a link they gave; their brand kit; then licensed pictures: a `"stock"` query written
    from what you found ("Jeddah corniche at dusk", not "city"), the media library (`asset`), or, when this chat has
    the `stock-images` skill, Wikimedia for named places, with its credit kept. Search results are text, so a picture
    on another site is neither seen nor placed. If the piece needs their real logo or photo and the workspace doesn't

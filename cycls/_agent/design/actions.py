@@ -236,8 +236,11 @@ async def _exec_slides(action, inp, workspace, name):
                 slide[k] = inp[k]
         return slide
 
-    def slide_op(kind, extra, slide):
-        slide, resolved, err = _prepare_slide(dict(slide), settings, root)
+    from . import photos
+    photo_cap = photos.cap_for(many or [inp.get("slide")])  # several slides added at once all fit in one request
+
+    async def slide_op(kind, extra, slide):
+        slide, resolved, err = await asyncio.to_thread(_prepare_slide, dict(slide), settings, root, photo_cap)
         if err:
             raise ValueError(err.removeprefix("Error: "))
         return {"op": kind, **extra, "slide": slide, "deck": resolved}
@@ -245,7 +248,7 @@ async def _exec_slides(action, inp, workspace, name):
     try:
         if action == "add_slide":
             at = number("at") if inp.get("at") is not None else None
-            ops = [slide_op("slide_add", {} if at is None else {"at": at + i}, slide)
+            ops = [await slide_op("slide_add", {} if at is None else {"at": at + i}, slide)
                    for i, slide in enumerate(many or [given()])]
             n = len(ops)
             what = (("Slide added" if n == 1 else f"{n} slides added")
@@ -253,7 +256,7 @@ async def _exec_slides(action, inp, workspace, name):
         elif action == "update_slide":
             index = number("number")
             if inp.get("slide") is not None:
-                op, what = slide_op("slide_update", {"index": index}, given()), f"Slide {index + 1} rebuilt"
+                op, what = await slide_op("slide_update", {"index": index}, given()), f"Slide {index + 1} rebuilt"
             else:
                 meta = {k: inp[k] for k in ("notes", "title", "transition") if inp.get(k) is not None}
                 if not meta:
