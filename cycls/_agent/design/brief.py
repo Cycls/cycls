@@ -90,5 +90,7 @@ def ground_hint(heard, seed, branded=False):
     if branded or _COLOURS.search(heard or ""):
         return ""
     at = int(hashlib.sha256(str(seed).encode("utf-8")).hexdigest(), 16) % len(GROUNDS)
-    return (f"They named no colours, so start this piece from this ground: {GROUNDS[at]}, written as the frame's `fill` or the "
-            f"theme's `bg`, unless its subject plainly calls for another.")
+    how = ("a `stock` picture at the frame's full size, first in its nodes" if "photo" in GROUNDS[at]
+           else "written as the frame's `fill` or the theme's `bg`")
+    return (f"They named no colours, so start this piece from this ground: {GROUNDS[at]}, {how}, unless its subject plainly "
+            f"calls for another.")

@@ -1,6 +1,7 @@
 """A design's pictures: workspace images placed in a spec or a layout's slot, and the size bounds."""
 import base64, struct
 from ..paths import _resolve_path
+from . import photos
 
 
 # renders the model QAs, bounded like `read`
@@ -77,7 +78,16 @@ def _no_such_image(src, root):
     return f"image {src!r} does not exist in the workspace"
 
 
-def _place_image(n, root):
+def _photo(path, src, cap):
+    """A workspace picture of any common kind and size as bytes the renderer takes. Raises ValueError with the fix."""
+    if (size := path.stat().st_size) > photos.MAX_FILE:
+        raise ValueError(f"image {src!r} is {size / 2**20:.1f} MB, over the {photos.MAX_FILE >> 20} MB a design can open — "
+                         f"save a smaller copy and use that")
+    raw = path.read_bytes()
+    return photos.ready(raw, _image_size(raw), cap or photos.CAP, f"image {src!r}")
+
+
+def _place_image(n, root, cap=None):
     """An image node's `src` → its bytes in their final box (`fit` cover or contain; the renderer's FIT
     distorts), in place → the byte count. Raises ValueError with the fix."""
     src = n.get("src")
@@ -89,12 +99,11 @@ def _place_image(n, root):
     path = _resolve_path(src, root)
     if not path.is_file():
         raise ValueError(_no_such_image(src, root))
-    if (size := path.stat().st_size) > _DESIGN_IMAGE_MAX:
-        raise ValueError(f"image {src!r} is {size / 2**20:.1f} MB, over the {_DESIGN_IMAGE_MAX >> 20} MB "
-                         f"a design takes — save a smaller copy (longest side ~2000px) and use that")
-    data = path.read_bytes()
+    if path.suffix.lower() == ".svg":
+        raise ValueError(f"image {src!r} is an SVG: use an svg node for it, or convert it to PNG first")
+    data = _photo(path, src, cap)
     if not (dims := _image_size(data)) or not all(dims):
-        raise ValueError(f"image {src!r} isn't a PNG, JPEG, WebP or GIF (convert an SVG to PNG first)")
+        raise ValueError(f"image {src!r} isn't a picture this service can read")
     (iw, ih), w, h = dims, n.get("w"), n.get("h")
     if not w and not h:
         raise ValueError(f"image {src!r} needs `w` and/or `h` (the other follows its {iw}×{ih} aspect)")
@@ -114,7 +123,7 @@ def _place_image(n, root):
 _BRAND_LOGOS = ("logo.svg", "logo.png", "logo.webp", "logo.jpg", "logo.jpeg")
 
 
-def _image_slot(src, root):
+def _image_slot(src, root, cap=None):
     """A deck's image slot (a path, or {src, focus}) → ({image|svg, src, …}, bytes read). Raises ValueError."""
     focus = None
     if isinstance(src, dict):
@@ -131,11 +140,10 @@ def _image_slot(src, root):
         if size > _DESIGN_SVG_MAX:
             raise ValueError(f"{src} is over {_DESIGN_SVG_MAX >> 10} KB — use a simpler SVG (or a PNG)")
         return {"svg": path.read_text(encoding="utf-8", errors="replace"), "src": src}, size
-    if size > _DESIGN_IMAGE_MAX:
-        raise ValueError(f"image {src!r} is {size / 2**20:.1f} MB, over the {_DESIGN_IMAGE_MAX >> 20} MB a design takes")
-    data = path.read_bytes()
+    data = _photo(path, src, cap)
+    size = len(data)
     if not _image_size(data):
-        raise ValueError(f"image {src!r} isn't a PNG, JPEG, WebP, GIF or SVG")
+        raise ValueError(f"image {src!r} isn't a picture this service can read")
     slot = {"image": base64.b64encode(data).decode(), "src": src}
     if (natural := _image_size(data)):
         slot["w"], slot["h"] = natural                      # a document sizes a picture from its own shape

@@ -1,6 +1,7 @@
 """Phase 3 — the Design tool: the cycls-design service client, the tool executor,
 gating, and label. Pure logic — no service is contacted (httpx mocked). The live
 render is proven separately against the real cycls-design service."""
+import io
 import asyncio
 import base64
 import json
@@ -858,11 +859,11 @@ def test_image_errors_name_the_fix(tmp_path, monkeypatch):
     assert "workspace file" in err({"w": 10})                                       # no src
     assert "does not exist" in err({"src": "nope.png", "w": 10})
     assert "escapes" in err({"src": "../../etc/passwd", "w": 10})                   # traversal
-    assert "save it into the workspace" in err({"src": "https://x.com/a.png", "w": 10})
+    assert "didn't come from the person" in err({"src": "https://x.com/a.png", "w": 10})
     assert "SVG" in err({"src": "logo.svg", "w": 10})
     assert "w` and/or `h" in err({"src": "p.png"})
     assert "cover or contain" in err({"src": "p.png", "w": 10, "fit": "stretch"})
-    monkeypatch.setattr("cycls._agent.design.images._DESIGN_IMAGE_MAX", 8)
+    monkeypatch.setattr("cycls._agent.design.photos.MAX_FILE", 8)
     assert "smaller copy" in err({"src": "p.png", "w": 10})
     assert calls == {}                                                             # none reached the service
 
@@ -3315,6 +3316,66 @@ def test_a_new_design_is_held_once_a_turn_until_it_has_searched(tmp_path, monkey
     assert design_researched([ask, use("design"), told, use("design")], tools)              # told once: never a loop
     assert design_researched([ask, use("design")], [{"name": "design"}])                    # no search here: nothing to ask
     assert not design_researched([ask, use("web_search"), {"role": "user", "content": "now another"}, use("design")], tools)
+
+
+def test_any_photo_becomes_one_the_renderer_takes(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    from cycls._agent.design import photos
+    from cycls._agent.design.images import _image_size
+    from cycls._agent.tools import _exec_read
+    def saved(im, fmt, **kw):
+        out = io.BytesIO()
+        im.save(out, fmt, **kw)
+        return out.getvalue()
+    im = Image.new("RGB", (400, 200), (200, 30, 30))
+    small = saved(im, "JPEG")
+    assert photos.ready(small, _image_size(small)) == small                    # what fits is left as it is
+    for fmt in ("BMP", "TIFF"):
+        made = photos.ready(saved(im, fmt), None)
+        assert _image_size(made) == (400, 200)
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    turned = saved(im.rotate(90, expand=True), "JPEG", exif=exif)
+    big = photos.ready(turned, _image_size(turned), cap=10)                    # re-made: the right way up
+    assert _image_size(big) == (400, 200)
+    wide = Image.effect_noise((5000, 2500), 60).convert("RGB")
+    raw = saved(wide, "JPEG", quality=95)
+    made = photos.ready(raw, _image_size(raw), cap=600 * 1024)
+    assert len(made) <= 600 * 1024 and max(_image_size(made)) <= photos.LONG
+    clear = saved(Image.new("RGBA", (400, 200), (0, 0, 0, 0)), "TIFF")
+    assert photos.ready(clear, None)[:4] == b"\x89PNG"                          # transparency stays
+    with pytest.raises(ValueError, match="can't be read"):
+        photos.ready(b"not a picture", None)
+    assert photos.cap_for({"nodes": [{"src": "a.jpg"}]}) == photos.CAP
+    assert photos.cap_for({"frames": [{"src": f"{i}.jpg"} for i in range(30)]}) == photos.BUDGET // 30
+    assert photos.cap_for({"frames": [{"src": f"{i}.jpg"} for i in range(500)]}) == photos.FLOOR
+    (tmp_path / "scan.tiff").write_bytes(saved(im, "TIFF"))
+    shown = asyncio.run(_exec_read({"path": "scan.tiff"}, str(tmp_path)))
+    assert shown[0]["type"] == "image" and shown[0]["source"]["media_type"] == "image/jpeg"
+
+
+def test_a_picture_at_a_link_must_come_from_the_person(tmp_path, monkeypatch):
+    from cycls._agent.design import photos
+    png = _png(10, 10)
+    got = []
+    async def fake(url):
+        got.append(url)
+        return png
+    monkeypatch.setattr(photos, "_download", fake)
+    url = "https://cdn.acme.com/team.png"
+    spec = {"nodes": [{"type": "image", "src": url}, {"type": "image", "src": url}]}
+    assert "didn't come from the person" in asyncio.run(photos.links(json.loads(json.dumps(spec)), str(tmp_path), "a post about acme"))
+    assert "didn't come from the person" in asyncio.run(photos.links(json.loads(json.dumps(spec)), str(tmp_path), "see https://notacme.com/x"))
+    assert got == []
+    placed = json.loads(json.dumps(spec))
+    assert asyncio.run(photos.links(placed, str(tmp_path), "our site is https://www.acme.com/about")) is None
+    assert placed["nodes"][0]["src"] == placed["nodes"][1]["src"] and placed["nodes"][0]["src"].startswith("attachments/links/")
+    assert (tmp_path / placed["nodes"][0]["src"]).read_bytes() == png and got == [url]    # fetched once
+    async def page(url):
+        return b"<html>not a picture</html>"
+    monkeypatch.setattr(photos, "_download", page)
+    other = {"nodes": [{"type": "image", "src": "https://acme.com/page"}]}
+    assert "isn't a picture" in asyncio.run(photos.links(other, str(tmp_path), "https://acme.com/page"))
 
 
 def test_a_new_design_is_held_once_against_the_brief(tmp_path, monkeypatch):

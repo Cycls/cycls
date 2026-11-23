@@ -2,6 +2,7 @@
 Every `_prepare_*` returns what to send, or an error the model can act on."""
 import json, pathlib, re, zlib
 from .tool import DESIGN_HEARD
+from . import photos
 from ..paths import _resolve_path
 from .brand import _HEX, _contrast, _first_color, _load_brand, _norm_hex, _readable_on
 from .images import _BRAND_LOGOS, _DESIGN_IMAGES_MAX, _DESIGN_SVG_MAX, _image_slot, _place_image
@@ -62,6 +63,7 @@ def _prepare_spec(spec, brand, root=None):
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
     filled, branded_fonts, image_bytes = 0, 0, 0
+    photo_cap = photos.cap_for(spec)                      # however many photos there are, they all fit
     shapes = []                 # notes on nodes reinterpreted, once each
     first_size = None
     for i, fr in enumerate(frames, 1):
@@ -130,7 +132,7 @@ def _prepare_spec(spec, brand, root=None):
                     n["x"], n["y"] = n.get("x") or 0, n.get("y") or 0
                     n["w"], n["h"] = W - n["x"], H - n["y"]
                 try:
-                    image_bytes += _place_image(n, root)
+                    image_bytes += _place_image(n, root, photo_cap)
                 except ValueError as e:
                     return f"Error: {e}"
                 if image_bytes > _DESIGN_IMAGES_MAX:
@@ -463,9 +465,11 @@ def _prepare_deck(spec, brand, root):
         notes.append("The deck has no `theme`, so it is minimal-light, the default — a theme of its own goes in the "
                      "deck: {\"deck\": {\"theme\": \"editorial\" or {\"base\": …, \"accent\": …, \"heading\": …}, \"slides\": […]}}.")
 
+    photo_cap = photos.cap_for(deck)
+
     def slot(value):
         nonlocal total
-        resolved, n = _image_slot(value, root)
+        resolved, n = _image_slot(value, root, photo_cap)
         total += n
         if total > _DESIGN_IMAGES_MAX:
             raise ValueError(f"the deck's images total over {_DESIGN_IMAGES_MAX >> 20} MB — use smaller copies "
@@ -638,11 +642,13 @@ def _prepare_document(spec, brand, root):
                      f"read as the document's own — {'it goes' if len(moved) == 1 else 'they go'} inside it: "
                      f"{{\"document\": {{\"title\": …, \"sections\": […]}}}}.")
 
+    photo_cap = photos.cap_for(doc)
+
     def slot(value):
         nonlocal total
         if isinstance(value, dict) and (isinstance(value.get("image"), str) or isinstance(value.get("svg"), str)):
             return value                                      # resolved already
-        resolved, n = _image_slot(value, root)
+        resolved, n = _image_slot(value, root, photo_cap)
         total += n
         if total > _DESIGN_IMAGES_MAX:
             raise ValueError(f"the document's images total over {_DESIGN_IMAGES_MAX >> 20} MB — use smaller copies "
