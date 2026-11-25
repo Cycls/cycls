@@ -1,6 +1,6 @@
 ---
 name: graphic-design
-description: Single-frame visuals and sets of them — social posts, carousels, stories, posters, ads, banners, thumbnails, invitations, certificates, covers — sizes and safe areas, a copy budget, ten compositions with coordinates, Arabic posts, campaigns in several sizes; and how to make one in two or three calls (name every part, one render, one edit, never a guessed name).
+description: Single-frame visuals and sets of them — social posts, carousels, stories, posters, ads, banners, thumbnails, invitations, certificates, covers — sizes and safe areas, a copy budget, ten compositions placed with pins (no x / y worked out), Arabic posts, campaigns in several sizes; and how to make one in two or three calls (name every part, one render, one edit, never a guessed name).
 ---
 
 # graphic-design — one frame, read in two seconds
@@ -31,17 +31,22 @@ A visual is read, not studied. Count the words before the render:
 
 If the user's text is longer, the rest goes in the caption you write with it, not on the image.
 
-## Ten common compositions (coordinates for 1080 × 1350, margin 96)
+## Ten common compositions (1080 × 1350)
 
 These are the mechanics of the usual layouts, not a menu to pick from every time: `design-direction` has more,
 and the concept should suggest the layout (a menu as a receipt, a route as a line). When this workspace made a
 post in one of these recently, take another, or make your own.
 
-1. **Type poster**: the headline fills 80–90% of the width, set from y ≈ 300, and a small line plus CTA sit at
-   the foot. Use it when the message is a few words.
+Place every block with a `pin` — `"pin": "top-left"`, `"bottom-left"`, `"center"`, `"bottom-right"` … — and
+let it sit inside the margin: no x / y worked out, no arithmetic about where the next block starts. A pinned
+block stays pinned through an edit, so a bigger headline is one `style` op. Keep x / y for a deliberate effect:
+a word or photo cut by the edge, a full-bleed photo or band, a scrim.
+
+1. **Type poster**: a stack pinned `left` (or `top-left`) whose headline fills the width, and a small line plus
+   CTA in a stack pinned `bottom-left`. Use it when the message is a few words.
 2. **Photo + scrim**: a full-bleed image first, then a rect from y 600 to 1350 with fill
-   `{"gradient": ["#00000000", "#000000d9"], "angle": 90}`, then a text stack anchored at the bottom
-   (`"anchor": "bottom"`, y 1254). Use it for places, food, people and events.
+   `{"gradient": ["#00000000", "#000000d9"], "angle": 90}`, then a text stack pinned `bottom-left`.
+   Use it for places, food, people and events.
 3. **Split**: a photo over the top 55% (0, 0, 1080, 740) and a colour panel under it holding the copy, or
    left / right halves on a landscape frame. Use it for a product with an explanation.
 4. **Hero object**: one 3D object (300–400 px) at the upper right, overlapping the headline's corner, with the
@@ -63,8 +68,8 @@ post in one of these recently, take another, or make your own.
 
 ## Arabic
 
-- Anchor right: a text box with `"align": "right"` and a `w`, placed with x = frameW − margin − w. A stack takes
-  `"align": "end"`.
+- Pin it right: a stack pinned `top-right`, `right` or `bottom-right` sets its text to the right edge (`"align":
+  "end"`), with no x worked out.
 - Use an Arabic face (see `design-direction`), set ~10–15% larger than Latin would be, with no letterSpacing.
 - Mirror the composition: the object goes on the left when the text is on the right.
 - A bilingual post sets the Arabic line first and larger, with the English smaller beneath it, each in its own face.
@@ -89,7 +94,7 @@ shape (a banner puts the headline beside the object, not under it). Never reuse 
 
 ## Working fast: two or three calls for a post
 
-1. **One render with everything in it**: the direction decided, every text in a stack, and an `id` on every
+1. **One render with everything in it**: the direction decided, every text in a pinned stack, and an `id` on every
    node you might change (`headline`, `subline`, `cta`, `badge`, `hero`, `bg`). The ids you wrote are the names you
    edit by; never guess a name like `rect-27` or `text-8`. When you didn't name a part, `inspect` once and use
    the names it lists.
@@ -103,8 +108,8 @@ Wrong shapes that cost a refused call:
 - An image needs `w` or `h` (a texture with neither fills the frame).
 - A library picture is named with `asset`, never by a guessed path under attachments/assets/.
 - An SVG logo goes in an svg node (`{"type": "svg", "src": "brand/logo.svg"}`), never an image node.
-- A label ON a shape (a button, a badge, a date chip) is the shape, then a text with the SAME x, y, w, h and
-  `"align": "center"`, `"valign": "center"`, both outside any stack. Never put them in a stack: it sets its
+- A label ON a shape (a button, a badge, a date chip) is the shape, then a text with the SAME `pin` (or x, y), w, h
+  and `"align": "center"`, `"valign": "center"`, both outside any stack. Never put them in a stack: it sets its
   children side by side or one under the next, never on top of each other, and a child's own x / y isn't read.
 - A node may not START past the right or bottom edge. A word cut by the edge on purpose starts inside, or at a
   negative x / y, and is faint (alpha 30% or less, e.g. `#ffffff26`): the layout check leaves faint text alone.
@@ -115,28 +120,28 @@ Wrong shapes that cost a refused call:
 {"size": "post-portrait", "fill": "#ff4d00", "nodes": [
   {"type": "text", "id": "giant", "text": "LAUNCH", "x": -30, "y": 1020, "w": 1400, "size": 360, "font": "Anton",
    "color": "#ffffff26"},
-  {"type": "image", "id": "hero", "asset": "rocket premium", "x": 660, "y": 96, "w": 330},
-  {"type": "stack", "id": "copy", "x": 96, "y": 300, "w": 888, "gap": 30, "children": [
+  {"type": "image", "id": "hero", "asset": "rocket premium", "pin": "top-right", "w": 330},
+  {"type": "stack", "id": "copy", "pin": "left", "gap": 30, "children": [
     {"type": "text", "id": "eyebrow", "text": "NEW · 21 OCTOBER", "size": 26, "letterSpacing": 6, "font": "Inter Bold", "color": "#1a0a00"},
     {"type": "text", "id": "headline", "text": "Ship in a day, not a quarter.", "size": 150, "lineHeight": 142,
      "font": "Anton", "color": "#ffffff"},
     {"type": "text", "id": "subline", "text": "Cycls turns a function into a product your customers can use.",
      "size": 34, "lineHeight": 48, "font": "Inter Medium", "color": "#1a0a00"}]},
-  {"type": "rect", "id": "cta-pill", "x": 96, "y": 850, "w": 330, "h": 84, "radius": 42, "fill": "#1a0a00"},
-  {"type": "text", "id": "cta", "text": "Start free", "x": 96, "y": 850, "w": 330, "h": 84, "valign": "center",
+  {"type": "rect", "id": "cta-pill", "pin": "bottom-left", "w": 330, "h": 84, "radius": 42, "fill": "#1a0a00"},
+  {"type": "text", "id": "cta", "text": "Start free", "pin": "bottom-left", "w": 330, "h": 84, "valign": "center",
    "align": "center", "size": 32, "font": "Inter Bold", "color": "#ffffff"}
 ]}
 ```
 
 ## Example: a post written in Arabic, 1080 × 1350
 
-Only for a piece that is in Arabic. This shows the mechanics (anchored right, an Arabic face, a band across the top),
+Only for a piece that is in Arabic. This shows the mechanics (pinned right, an Arabic face, a band across the top),
 not a look to copy.
 
 ```json
 {"size": "post-portrait", "fill": "#0f4c5c", "nodes": [
   {"type": "rect", "id": "band", "x": 0, "y": 0, "w": 1080, "h": 300, "fill": "#ffd166"},
-  {"type": "stack", "id": "copy", "x": 304, "y": 700, "w": 680, "gap": 26, "align": "end", "children": [
+  {"type": "stack", "id": "copy", "pin": "bottom-right", "w": 680, "gap": 26, "children": [
     {"type": "text", "id": "headline", "text": "مواعيدنا الجديدة", "size": 120, "lineHeight": 160, "font": "Noto Kufi Arabic Bold",
      "color": "#ffffff", "align": "right"},
     {"type": "text", "id": "subline", "text": "نفتح كل يوم من التاسعة صباحًا حتى التاسعة مساءً",
