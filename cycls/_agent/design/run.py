@@ -58,6 +58,44 @@ def _spec_of(inp):
     return spec if isinstance(spec, dict) else {}
 
 
+_NOW_ACTIONS = ("render", "edit", "script", "import", "inspect", "update_slide", "add_slide")
+_NOW_MAX = 6_000
+
+
+def _chat_design(messages):
+    """The design this chat last made or changed — the `name` its latest Design call gave — else None."""
+    for m in reversed(messages or []):
+        content = m.get("content")
+        for b in reversed(content) if isinstance(content, list) else []:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"):
+                continue
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            if str(inp.get("action") or "render").lower() in _NOW_ACTIONS and isinstance(inp.get("name"), str) and inp["name"].strip():
+                return inp["name"]
+    return None
+
+
+async def design_now(messages, root, folder="", subject=None):
+    """The design this chat is working on, as it is NOW → a line for the person's message, or None. Read from its
+    file on every message, so the agent never works on a design it no longer remembers (old tool results are
+    cleared after a pause, and the render it saw went with them) or on one changed by hand since: it names the
+    parts as they are, and an edit needs no `inspect` first."""
+    name = _chat_design(messages)
+    if not name:
+        return None
+    stem = _find_design(root, name, folder)
+    fig = pathlib.Path(root) / f"{stem}.fig"
+    if not await asyncio.to_thread(fig.is_file):
+        return None
+    from cycls._agent import design
+    o = await asyncio.wait_for(design.outline(await asyncio.to_thread(fig.read_bytes), user_id=subject), 8)
+    text = _outline_text(f"{stem}.fig", o["frames"], o["pages"], o["page"])
+    if len(text) > _NOW_MAX:
+        text = text[:_NOW_MAX] + " …"
+    return ("[The design this chat is working on, as it is now (read from its file, with any change made by hand in "
+            f"the editor). Change it with ONE `edit` by these names; no `inspect` needed.\n{text}]")
+
+
 async def _exec_design(inp, workspace):
     """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). The workspace's
     own fonts (brand/fonts) reach the service first, and the call that first gives them says their family; a
@@ -65,7 +103,11 @@ async def _exec_design(inp, workspace):
     from cycls._agent import design
     action = str(inp.get("action") or "render").lower()
     if action == "render" and DESIGN_LOADED.get():
-        if not DESIGN_RESEARCHED.get():                       # a new design starts from what is true of its subject
+        # A new design starts from what is true of its subject. A design made again (its file is there: `replace`,
+        # or a variant beside it) was researched when it was first made: an edit's re-render was held as new and
+        # sent the agent to search for nothing, then render the same spec again.
+        remade = (pathlib.Path(workspace.root) / f"{_stem_of(inp.get('name') or 'design', DESIGN_FOLDER.get())}.fig").is_file()
+        if not DESIGN_RESEARCHED.get() and not remade:
             return _RESEARCH_FIRST
         if not DESIGN_CHECKED.get():                          # in their language, with their names as they wrote them
             branded = bool(await asyncio.to_thread(_load_brand, workspace.root))

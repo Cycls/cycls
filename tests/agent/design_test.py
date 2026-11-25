@@ -3347,6 +3347,14 @@ def test_a_new_design_is_held_once_a_turn_until_it_has_searched(tmp_path, monkey
     assert held.startswith(_RESEARCH_FIRST)
     assert "research first" not in skills
     assert "research first" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
+    # A design made again (an edit's re-render) was researched when it was first made: never held.
+    token = DESIGN_RESEARCHED.set(False)
+    try:
+        again = asyncio.run(_exec_design({"action": "render", "name": "b", "replace": True, "spec": post}, _ws(tmp_path)))
+        variant = asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    assert "research first" not in _text(again) and "research first" not in _text(variant)
     tools = [{"name": "web_search"}, {"name": "design"}]
     ask = {"role": "user", "content": "make a post"}
     use = lambda name: {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": name, "input": {}}]}
@@ -3633,3 +3641,27 @@ def test_a_workspace_remembers_its_designs_and_a_render_like_one_of_them_says_so
     assert recent.alike(tmp_path, "x.fig", fp, brand=True) is None
     # nothing remembered: nothing listed
     assert recent.listing(tmp_path / "elsewhere") == ""
+
+
+def test_every_message_brings_the_design_as_it_is_now(tmp_path, monkeypatch):
+    """The design a chat works on is read from its file with each message — the agent's old view of it may have been
+    cleared, or the person changed it by hand — so an edit names its parts as they are, with no inspect first."""
+    from cycls._agent.design.run import design_now
+
+    async def outline(fig, user_id=None, page=None, full=False, sheets=False):
+        assert fig == b"FIG"
+        return {"frames": [{"slide": 0, "name": "Post", "size": [1080, 1080],
+                            "nodes": [{"name": "headline", "type": "text", "text": "First time at the wheel?",
+                                       "x": 86, "y": 610, "w": 908, "h": 248}]}], "pages": [], "page": ""}
+    monkeypatch.setattr("cycls._agent.design.outline", outline)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "post.fig").write_bytes(b"FIG")
+    used = lambda inp: {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "design", "input": inp}]}
+    chat = [{"role": "user", "content": "make a post"}, used({"action": "render", "name": "tests/post", "spec": {}}),
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "[Old tool result cleared]"}]}]
+    line = asyncio.run(design_now(chat, str(tmp_path)))
+    assert line.startswith("[The design this chat is working on") and "tests/post.fig" in line
+    assert "headline" in line and "ONE `edit`" in line
+    assert asyncio.run(design_now([{"role": "user", "content": "hi"}], str(tmp_path))) is None      # no design in the chat
+    gone = [*chat[:1], used({"action": "render", "name": "tests/elsewhere", "spec": {}})]
+    assert asyncio.run(design_now(gone, str(tmp_path))) is None                                       # its file isn't there

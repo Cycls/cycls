@@ -159,8 +159,10 @@ the one number and its meaning. The chart's colours come from the theme's accent
 
 1. **One render for the whole deck**: theme, every slide, notes and footer. Never build it slide by slide.
    Use `"format": "pptx"` when it will be presented or edited in PowerPoint; other formats come later from `export`.
-2. **Every slide comes back to you.** Give each one the polish pass (`design-direction`), then fix what's off
-   without rendering again:
+2. **Every slide comes back to you.** Look at them all together, give the deck the polish pass
+   (`design-direction`), then fix what's off on EVERY slide in ONE `edit` (each op with its `frame`) — never one
+   edit per slide or per problem. Look at what it changed and stop unless a fault is still there: two rounds at
+   most. "Could be better" is not a fault. Without rendering again:
    - wording or style on a slide: ONE `edit`, ops with `frame` (the slide index from 0) and the node's name
      (layouts name their parts: `title`, `subtitle`, `eyebrow`, `stat-1` …; `inspect` lists them);
    - a slide rebuilt: `update_slide` {number from 1, slide};

@@ -520,6 +520,15 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
+        if "Design" in allowed_tools and design_configured():
+            # The design this chat works on, read from its file now: what the agent saw of it may have been cleared.
+            try:
+                from ..design.run import design_now
+                if line := await design_now(session.messages, workspace.root, getattr(context, "folder", "") or "",
+                                            getattr(workspace, "subject", None)):
+                    content = _with_line(content, line)
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"design outline not added: {type(e).__name__}: {e}")
         app = getattr(context, "app", "")
         if app and isinstance(app, str) and (line := await asyncio.to_thread(_open_app_line, workspace.root, app)):
             content = _with_line(content, line)
