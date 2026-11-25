@@ -58,6 +58,40 @@ def _spec_of(inp):
     return spec if isinstance(spec, dict) else {}
 
 
+# A request to MAKE a design (not one that only mentions a report or a PDF): its guide comes with the message.
+_MAKE = re.compile(r"\b(design|make|create|build|draft|produce|prepare|put together|turn\b.{0,40}\binto)\b", re.I)
+_MAKE_AR = ("صمم", "صمّم", "سو لي", "سوّ لي", "سوي لي", "اعمل", "أنشئ", "انشئ", "جهز", "جهّز", "حضر", "اصنع", "ابغى", "أبغى", "أبي")
+_DECK = re.compile(r"\b(slides?|deck|presentation|pitch|powerpoint|pptx|keynote)\b", re.I)
+_DECK_AR = ("عرض تقديمي", "شرائح", "شريحة", "بوربوينت", "باوربوينت")
+_DOC = re.compile(r"\b(report|proposal|white ?paper|newsletter|cv|resume|résumé|booklet|handbook|guide|document|e-?book)\b", re.I)
+_DOC_AR = ("تقرير", "مقترح", "سيرة ذاتية", "السيرة الذاتية", "كتيب", "دليل")
+
+
+async def design_preload(messages, text, root, subject=None):
+    """The person asks for a design and this chat has no Design skill yet → the skills it will load, given with their
+    message (with the list of what this workspace made lately, and — when the turn hasn't searched — the note to
+    search first), else None. The agent spent its first turn of every design asking for them."""
+    from .tool import _DESIGN_WORDS, _DESIGN_WORDS_AR, design_skills_loaded
+    text = str(text or "")
+    if design_skills_loaded(messages):
+        return None
+    wants = _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR) or ".fig" in text
+    if not wants or not (_MAKE.search(text) or any(w in text for w in _MAKE_AR)):
+        return None
+    kind = ("deck-design" if _DECK.search(text) or any(w in text for w in _DECK_AR)
+            else "document-design" if _DOC.search(text) or any(w in text for w in _DOC_AR) else "graphic-design")
+    loaded = skill.load(["design-direction", kind])
+    if loaded.startswith("Error"):
+        return None
+    made = await asyncio.to_thread(recent.listing, root)
+    parts = [f"[The Design skills for this request, loaded for you — design-direction and {kind}; no `skill` call "
+             f"needed (load another only if the piece turns out to be another kind).]", loaded]
+    if made:
+        parts.append(made)
+    parts.append(_SEARCH_NOW)
+    return "\n\n".join(parts)
+
+
 _NOW_ACTIONS = ("render", "edit", "script", "import", "inspect", "update_slide", "add_slide")
 _NOW_MAX = 6_000
 

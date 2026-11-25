@@ -184,6 +184,83 @@ def _with_line(content, line):
     return [*blocks, {"type": "text", "text": line}]
 
 
+_FIRST_MAX = 8_000     # the memory index given with a first task; a longer one is cut, the rest a `database get` away
+_TOP_MAX = 40          # entries of the workspace's top level
+
+
+def _first_given(messages):
+    """Has a turn of this chat already been given the person's memory (`_first_task_context`)?"""
+    for m in messages:
+        c = m.get("content")
+        if m.get("role") == "user" and isinstance(c, list) and any(
+                isinstance(b, dict) and str(b.get("text", "")).startswith("[Your memory of this person") for b in c):
+            return True
+    return False
+
+
+async def _first_task_context(workspace):
+    """What the system prompt's "first real task" step fetched with tool calls before any work could start: the
+    person's memory index (an organisation's `organization.md` too) and the workspace's top level, as lines."""
+    out = []
+    try:
+        index = await state.memory_db(workspace).get("memory/index") if getattr(workspace, "subject", None) else None
+    except Exception:
+        index = None
+    if isinstance(index, str) and index.startswith('"'):   # a model that put its markdown as a JSON string
+        try:
+            index = json.loads(index)
+        except ValueError:
+            pass
+    if isinstance(index, (dict, list)):
+        index = json.dumps(index, ensure_ascii=False)
+    index = str(index or "").strip()
+    if index:
+        cut = len(index) > _FIRST_MAX
+        out.append("[Your memory of this person — `memory/index`, read for you as this chat starts; it stays in your "
+                   "context, so don't fetch it again. Get a detail key only when the task needs it."
+                   + (" It is cut here: `database get` it for the rest." if cut else "") + "]\n" + index[:_FIRST_MAX])
+    else:
+        out.append("[Your memory of this person: `memory/index` is empty — nothing is saved about them yet, "
+                   "so there is nothing to fetch.]")
+    root = Path(workspace.root)
+
+    def top():
+        org = ""
+        ws = str(getattr(workspace, "ws", "") or "")
+        if ws and not ws.startswith("u-") and (f := root / "organization.md").is_file():
+            org = f.read_text(encoding="utf-8", errors="replace")[:4_000]
+        rows = []
+        for e in root.iterdir():
+            if e.name.startswith("."):
+                continue
+            try:
+                rows.append((e.stat().st_mtime, e.name + ("/" if e.is_dir() else "")))
+            except OSError:
+                continue
+        rows.sort(reverse=True)
+        return org, [n for _, n in rows]
+
+    org, names = await asyncio.to_thread(top)
+    if org:
+        out.append("[Your memory of this person — their organisation's `organization.md`, read for you (its top):]\n"
+                   + org)
+    more = f" … and {len(names) - _TOP_MAX} more" if len(names) > _TOP_MAX else ""
+    out.append("[This workspace's top level as this chat starts, newest first — no need to list it again; look "
+               "inside a folder only when the request needs it: "
+               + (", ".join(names[:_TOP_MAX]) + more if names else "empty") + "]")
+    return out
+
+
+def _calendar(now=None):
+    """Today and the two weeks after it, by weekday, for the system prompt: the agent ran `date -d "next thursday"`
+    in a shell before it could put a date on a design."""
+    from datetime import timedelta
+    now = now or datetime.now(timezone.utc)
+    days = ", ".join(f"{d:%a} {d.day} {d:%b}" for d in (now + timedelta(days=i) for i in range(1, 15)))
+    return (f"Calendar (UTC): today is {now:%A} {now.day} {now:%B %Y}. The next 14 days: {days}. "
+            "Read a weekday’s date from here (“next Thursday”, “this Saturday”) — no tool needed.")
+
+
 def _with_selection(content, sel):
     """The person's design selection as a text block for the model (the chat shows a chip)."""
     def node(n):
@@ -439,7 +516,8 @@ def _said(messages, most=3):
             continue
         c = m.get("content")
         text = c if isinstance(c, str) else " ".join(
-            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text"
+            and not b.get("text", "").startswith(state.GIVEN))   # memory or a design's outline: not what they said
         if text := " ".join(text.split()):
             out.append(text[:500])
         if len(out) == most:
@@ -520,15 +598,34 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
+        working = None   # the design this chat already works on: a change to it needs no skills
         if "Design" in allowed_tools and design_configured():
             # The design this chat works on, read from its file now: what the agent saw of it may have been cleared.
             try:
                 from ..design.run import design_now
-                if line := await design_now(session.messages, workspace.root, getattr(context, "folder", "") or "",
-                                            getattr(workspace, "subject", None)):
+                if line := (working := await design_now(session.messages, workspace.root, getattr(context, "folder", "") or "",
+                                            getattr(workspace, "subject", None))):
                     content = _with_line(content, line)
             except Exception as e:
                 log("warn", user=user, chat_id=session.chat_id, message=f"design outline not added: {type(e).__name__}: {e}")
+        # What every first task fetched with its own tool calls before it could start — the person's memory index
+        # and the workspace's top level, on a chat's first message; a design's skills, on a request to make one —
+        # given with the message, so the agent's first turn is the task (a design's first 2–3 turns were fetching).
+        typed = state.user_text({"content": content})   # what they wrote: not a file's contents, nor a line added
+        # a greeting is answered with no memory ("Zero tools for conversation"): the first turn with a task gets it
+        if not _first_given(session.messages) and (len(typed.split()) >= 3 or incoming.get("attachments")):
+            try:
+                for given in await _first_task_context(workspace):
+                    content = _with_line(content, given)
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"first-task context not added: {type(e).__name__}: {e}")
+        if "Design" in allowed_tools and design_configured() and not working and not selection:
+            try:
+                from ..design.run import design_preload
+                if block := await design_preload(session.messages, typed, workspace.root, getattr(workspace, "subject", None)):
+                    content = _with_line(content, block)
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"design skills not given: {type(e).__name__}: {e}")
         app = getattr(context, "app", "")
         if app and isinstance(app, str) and (line := await asyncio.to_thread(_open_app_line, workspace.root, app)):
             content = _with_line(content, line)
@@ -692,6 +789,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
 
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
+    system_text += "\n\n" + _calendar()
     window = context_window or DEFAULT_WINDOW
     trigger, keep = min(window * COMPACT_AT, window - max_tokens - COMPACT_BUFFER), int(window * KEEP_RECENT)
     tokens_since_compact = 0

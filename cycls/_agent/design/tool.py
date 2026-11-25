@@ -455,12 +455,20 @@ DESIGN_SKILLED = contextvars.ContextVar("design_skilled", default=True)
 
 
 def design_skills_loaded(messages):
-    """Has this chat loaded any of the Design tool's skills?"""
+    """Has this chat loaded any of the Design tool's skills — by a `skill` call, or given with a message
+    (design.run.design_preload)?"""
     for m in messages:
-        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+        content = m.get("content")
+        if m.get("role") == "user":
+            texts = [content] if isinstance(content, str) else [
+                b.get("text") or "" for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+            if any('<design-skill name="' in t for t in texts):
+                return True
+            continue
+        if m.get("role") != "assistant" or not isinstance(content, list):
             continue
         if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"
-               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in m["content"]):
+               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in content):
             return True
     return False
 
