@@ -267,6 +267,35 @@ _refused = {}       # url -> deadline: an OAuth server that would not list for s
 _rechecks = {}      # url -> the task asking it again
 
 
+def warm(servers):
+    """At boot, on a deployed server (K_REVISION): the tool lists that are the same whoever asks — a server with
+    no connector, or one that lists (or refuses) anonymously — fetched in the background, so a fresh server's
+    first turn finds them. That turn waited ~2.1 s for them (super-dev, 2026-11-25); most people have connected
+    nothing, so theirs is the anonymous list. A key or a per-person address is the person's: asked in their turn."""
+    import threading
+    todo = [s for s in servers or () if not getattr(s, "_server_side", False) and getattr(s, "_url", None)
+            and not ((o := getattr(s, "_connector", None)) and (o.kind == "key" or o.addressed))]
+    if not os.environ.get("K_REVISION") or not todo:
+        return
+
+    async def one(server):
+        try:
+            await server.tools(token=None)
+        except Exception:
+            if server._connector:   # as a turn would have found it: off until it lists
+                _refused[server._url] = time.monotonic() + REFUSED_TTL
+
+    async def every():
+        await asyncio.wait_for(asyncio.gather(*(one(s) for s in todo)), 60)
+
+    def run():
+        try:
+            asyncio.run(every())
+        except Exception:
+            pass
+    threading.Thread(target=run, name="warm-connectors", daemon=True).start()
+
+
 def _recheck(server, at, url):
     """A server that refused to list anonymously is asked again behind the turn once its wait is over: asked
     before it, a turn ten minutes on waited for the slowest refusal (super-dev, 2026-11-25). Until it answers it

@@ -37,6 +37,45 @@ def _tool(name):
     return SimpleNamespace(name=name, description="", input_schema={"type": "object"})
 
 
+def test_a_server_restoring_the_agent_makes_its_client_and_fetches_the_lists_everyone_shares(monkeypatch):
+    """The agent reaches its server pickled: `.model()` never runs there, `__setstate__` does."""
+    import cloudpickle
+    from cycls._agent import connectors as c
+    from tests.agent.connectors_test import _google
+
+    class Thread:   # runs its work at once, so the test sees it done
+        def __init__(self, target, name, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+    monkeypatch.setattr(threading, "Thread", Thread)
+    monkeypatch.setattr(providers, "_warming", set())
+    made = []
+    monkeypatch.setattr(providers, "_client_for", lambda vendor, **kw: made.append((vendor, kw)))
+    m._discovered.clear()
+    c._refused.clear()
+
+    async def listing(url, headers):
+        if "refuses" in url:
+            raise RuntimeError("401")
+        return [_tool("search")]
+    monkeypatch.setattr(m, "_list", listing)
+    llm = (cycls.LLM().model("openrouter/deepseek/deepseek-v4.1-flash").base_url("https://openrouter.ai/api/v1")
+           .api_key("k").mcp(cycls.MCP("https://tools.example/mcp"),
+                             cycls.MCP("https://refuses.example/mcp").connector(_google())))
+    shipped = cloudpickle.dumps(llm)
+    monkeypatch.delenv("K_REVISION", raising=False)
+    cloudpickle.loads(shipped)
+    assert made == [] and not m._discovered                                    # not off a server
+    monkeypatch.setenv("K_REVISION", "super-dev-00042")
+    cloudpickle.loads(shipped)
+    assert made == [("openrouter", {"base_url": "https://openrouter.ai/api/v1", "api_key": "k", "headers": None})]
+    assert [t.name for t in m._discovered[("https://tools.example/mcp", None)][1]] == ["search"]
+    assert c._refused["https://refuses.example/mcp"] > time.monotonic()        # off until it lists, as a turn finds it
+    c._refused.clear()
+
+
 def test_an_expired_tool_list_answers_the_turn_and_is_asked_again_behind_it(monkeypatch):
     m._discovered.clear()
     server = cycls.MCP("https://tools.example/mcp")

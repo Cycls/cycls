@@ -52,11 +52,21 @@ class LLM:
 
     def __setstate__(self, state):
         """Unpickled where the agent runs, at boot: the skills it ships are known before its first turn, so the
-        Skills tab lists them on a fresh instance too."""
+        Skills tab lists them on a fresh instance too; and the model's client and the connector lists that are
+        the same for everyone are made in the background, so a fresh server's first turn doesn't wait for them
+        (each does nothing off a deployed server)."""
         self.__dict__.update(state)
         if state.get("_skills"):
             from ..tools import skills
             skills.configure(state["_skills"])
+        model = state.get("_model")
+        if isinstance(model, str) and "/" in model:
+            from .providers import warm
+            warm(model.split("/", 1)[0], client=True, base_url=state.get("_base_url"),
+                 api_key=state.get("_api_key"), headers=state.get("_headers"))
+        if state.get("_mcp"):
+            from .. import connectors
+            connectors.warm(state["_mcp"])
 
     # ---- Fluent builders ----
 

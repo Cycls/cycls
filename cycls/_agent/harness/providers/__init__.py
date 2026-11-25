@@ -69,21 +69,27 @@ _clients: dict = {}  # config key → reused SDK client. Construction is ~1s (ht
 _warming: set = set()
 
 
-def warm(vendor: str):
-    """Load a vendor's SDK in the background as the agent is defined, on a deployed server only (Cloud Run sets
-    K_REVISION). `import openai` was ~2.3 s of a server's first turn, before anything else in it could start
-    (super-dev `prelude` log, 2026-11-25). Python's import lock makes it safe: a turn that needs the SDK first
-    waits for this import to finish, never imports it twice. Not where tests run: they swap a fake SDK into
-    sys.modules, which a load finishing beside them could race."""
-    import os, sys, threading, importlib
+def warm(vendor: str, *, client=False, base_url=None, api_key=None, headers=None):
+    """Load a vendor's SDK in the background — and with `client`, make the client a turn will use — on a deployed
+    server only (Cloud Run sets K_REVISION). `import openai` and its client were ~2.3 s of a server's first turn,
+    before anything else in it could start (super-dev `prelude` log, 2026-11-25). Python's import lock makes it
+    safe: a turn that needs the SDK first waits for this import to finish, never imports it twice; a client made
+    twice is one spare. Not where tests run: they swap a fake SDK into sys.modules, which a load finishing beside
+    them could race."""
+    import os, threading, importlib
     name = "anthropic" if vendor == "anthropic" else "openai"
-    if not os.environ.get("K_REVISION") or name in _warming or name in sys.modules:
+    key = (name, client, base_url, api_key, tuple(sorted(headers.items())) if headers else None)
+    if not os.environ.get("K_REVISION") or key in _warming:
         return
-    _warming.add(name)
+    _warming.add(key)
 
     def load():
-        try: importlib.import_module(name)
-        except Exception: pass   # not installed: the turn that needs it says so, as before
+        try:
+            importlib.import_module(name)
+            if client:
+                _client_for(vendor, base_url=base_url, api_key=api_key, headers=headers)
+        except Exception:
+            pass   # not installed, or no key yet: the turn that needs it says so, as before
     threading.Thread(target=load, name=f"warm-{name}", daemon=True).start()
 
 
