@@ -2548,6 +2548,30 @@ def test_the_editor_opening_gives_the_workspaces_own_fonts_first(tmp_path, monke
     assert sent == ["sha", "file"]   # once: its sha256, then the file the service never had
 
 
+
+def test_the_brand_kit_carries_a_font_key_for_the_workspaces_own_fonts(tmp_path, monkeypatch):
+    """The design service gives a font a workspace added (often a bought one) only to an editor holding a key that
+    names its file. The brand kit carries one, signed with DESIGN_SECRET, even when the kit is font files alone."""
+    import base64, hashlib, hmac, json, time
+
+    async def _post(path, body, user_id=None):
+        return {"ok": True, "family": "Brand Sans", "style": "Bold"}
+    monkeypatch.setattr("cycls._agent.design.client._post", _post)
+    monkeypatch.setattr("cycls._agent.design.client._given", {})
+    monkeypatch.setenv("DESIGN_SECRET", "s3cret")
+    client = _ws_routers_client(tmp_path)
+    _seed(tmp_path, {"brand/fonts/Brand-Bold.otf": b"OTTO brand", "brand/fonts/readme.txt": b"not a font"})
+    brand = client.get("/brand").json()["brand"]
+    assert not brand["colors"] and brand["fonts"] == {"heading": None, "body": None}
+    body, sig = brand["fontKey"].split(".")
+    pad = lambda s: s + "=" * (-len(s) % 4)
+    assert base64.urlsafe_b64decode(pad(sig)) == hmac.new(b"s3cret", body.encode(), hashlib.sha256).digest()
+    claim = json.loads(base64.urlsafe_b64decode(pad(body)))
+    assert claim["s"] == [hashlib.sha256(b"OTTO brand").hexdigest()]
+    assert time.time() < claim["e"] <= time.time() + 24 * 3600 + 5
+    monkeypatch.delenv("DESIGN_SECRET")
+    assert client.get("/brand").json() == {"brand": None}   # no secret, no key: nothing to hand the editor
+
 # ---- office module: the office-render /v1/convert client ----
 
 def test_office_convertible_and_configured(monkeypatch):

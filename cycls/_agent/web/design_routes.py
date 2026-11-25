@@ -394,15 +394,18 @@ def design_router(ws_dep, user_dep, changed):
     @r.get("/brand")
     async def brand(ws: Workspace = ws_dep):
         """The workspace brand kit's colours and fonts for the design editor, or null. The editor asks for it as
-        it opens a design, so the workspace's own fonts reach the design service first."""
+        it opens a design, so the workspace's own fonts reach the design service first. `fontKey`: the key the
+        design service asks for before it gives the editor a font this workspace added (design.font_key)."""
+        from cycls._agent.design import font_key
         from cycls._agent.design.brand import _brand_palette, _load_brand
         await _give_fonts(ws.root, getattr(ws, "subject", None))
         colors = await asyncio.to_thread(_brand_palette, ws.root)
         kit = await asyncio.to_thread(_load_brand, ws.root) or {}
         fonts = {"heading": kit.get("heading"), "body": kit.get("body")}
-        if not colors and not any(fonts.values()):
+        key = await asyncio.to_thread(font_key, ws.root)
+        if not colors and not any(fonts.values()) and not key:
             return {"brand": None}
-        return {"brand": {"colors": colors, "fonts": fonts}}
+        return {"brand": {"colors": colors, "fonts": fonts, **({"fontKey": key} if key else {})}}
 
     # ---- A design's earlier versions (cycls/_agent/versions.py) ----
 
