@@ -23,7 +23,9 @@ export type CatalogApp = {
 };
 
 const H4 = "mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground";
-const PILL = "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-medium transition hover:opacity-80 disabled:cursor-default disabled:opacity-40";
+const PILL = "inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition hover:opacity-80 disabled:cursor-default disabled:opacity-60";
+// While an install or update runs: the button turns, and says so.
+const Spin = () => <span aria-hidden className="size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />;
 const SOLID = cn(PILL, "bg-foreground text-background");
 const LINE = cn(PILL, "border border-border text-foreground");
 
@@ -87,7 +89,7 @@ function AppPreview({ api, a, admin, busy, onInstall, onClose }: {
           <p className="truncate text-sm font-medium text-foreground"><bdi>{appName(a)}</bdi></p>
           <p className="truncate text-[11px] text-muted-foreground">{t("previewAppNote")}</p>
         </div>
-        {a.state === "available" && admin && <button disabled={busy} onClick={onInstall} className={SOLID}>{t("installApp")}</button>}
+        {a.state === "available" && admin && <button disabled={busy} onClick={onInstall} className={SOLID}>{busy && <Spin />}{busy ? t("installingApp") : t("installApp")}</button>}
         <button onClick={onClose} aria-label={t("close")} className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground"><Icon name="x" className="size-4" /></button>
       </div>
       {html !== null && <iframe srcDoc={html} sandbox="allow-scripts" title={appName(a)} className="min-h-0 w-full flex-1 border-0 bg-background" />}
@@ -150,10 +152,14 @@ function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (e
     try {
       await api(`/apps/${what}`, { method: "POST", json: { slug: a.slug } });
       track("app_catalog_action", { app: a.slug, action: what });
+      // The server said it is done: show it now. A list read right after may come from an instance whose
+      // file cache has not seen the change yet, and would put the card back on Install.
+      const state = what === "uninstall" ? "available" : "installed";
+      setData((d) => d && { ...d, apps: d.apps.map((x) => (x.slug === a.slug ? { ...x, state } : x)) });
       onChanged?.();
       if (what === "install") onOpen(`apps/${a.slug}/index.html`, appName(a));
-    } catch { /* the api's own toast says what failed */ }
-    finally { setBusy(null); load(); }
+    } catch { load(); /* the api's own toast says what failed */ }
+    finally { setBusy(null); }
   };
 
   const q = query.trim().toLowerCase();
@@ -192,8 +198,10 @@ function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (e
             {!has && <button onClick={() => setPeek(a)} className={LINE}>{t("previewApp")}</button>}
             {has && <button onClick={() => onOpen(`apps/${a.slug}/index.html`, appName(a))} className={LINE}>{t("open")}</button>}
             {has && admin && <button disabled={busy === a.slug} onClick={() => act(a, "uninstall")} className={LINE} aria-label={`${t("remove")} ${appName(a)}`}>{t("remove")}</button>}
-            {a.state === "update" && admin && <button disabled={busy === a.slug} onClick={() => act(a, "update")} className={SOLID}>{t("updateApp")}</button>}
-            {a.state === "available" && admin && <button disabled={busy === a.slug} onClick={() => act(a, "install")} className={SOLID}>{t("installApp")}</button>}
+            {a.state === "update" && admin && <button disabled={busy === a.slug} onClick={() => act(a, "update")} className={SOLID}>
+              {busy === a.slug && <Spin />}{busy === a.slug ? t("updatingApp") : t("updateApp")}</button>}
+            {a.state === "available" && admin && <button disabled={busy === a.slug} onClick={() => act(a, "install")} className={SOLID}>
+              {busy === a.slug && <Spin />}{busy === a.slug ? t("installingApp") : t("installApp")}</button>}
           </span>
         </div>
       </div>
@@ -241,9 +249,10 @@ function Browse({ api, onOpen, onChanged, section = "" }: { api: Api; onOpen: (e
 // preview, Get installs it (admins): the app opens and the panel lists it. Games and templates come last.
 const rank = (a: CatalogApp) => (a.section === "games" ? 2 : a.category === "Templates" ? 1 : 0);
 
-export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback, title }: {
+export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback, title, installed }: {
   api: Api; onOpen: (entry: string, name: string) => void; onChanged?: () => void; onSeeAll?: () => void; fallback: ReactNode;
-  title?: string;   // under installed apps: what the shelves are ("Discover")
+  title?: string;        // under installed apps: what the shelves are ("Discover")
+  installed?: string[];  // the slugs the panel already lists
 }) {
   const [data, setData] = useState<{ apps: CatalogApp[]; admin: boolean } | null>(null);
   const [peek, setPeek] = useState<CatalogApp | null>(null);
@@ -256,6 +265,7 @@ export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback, tit
     try {
       await api("/apps/install", { method: "POST", json: { slug: a.slug } });
       track("app_catalog_action", { app: a.slug, action: "install", source: "shelves" });
+      setData((d) => d && { ...d, apps: d.apps.map((x) => (x.slug === a.slug ? { ...x, state: "installed" } : x)) });   // done: off the shelf now
       onChanged?.();
       onOpen(`apps/${a.slug}/index.html`, appName(a));
     } catch { /* the api's own toast says what failed */ }
@@ -264,7 +274,7 @@ export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback, tit
   if (!data) return null;
   const shelves = new Map<string, CatalogApp[]>();
   for (const a of [...data.apps].sort((x, y) => rank(x) - rank(y))) {
-    if (a.state !== "available") continue;
+    if (a.state !== "available" || installed?.includes(a.slug)) continue;   // the panel's own list: a stale catalog read can't put it back
     const k = a.section === "games" ? t("games") : category(a) || t("allApps");
     shelves.set(k, [...(shelves.get(k) ?? []), a]);
   }
@@ -292,7 +302,8 @@ export function CatalogShelves({ api, onOpen, onChanged, onSeeAll, fallback, tit
                     {about(a) && <p className="truncate text-[11px] text-muted-foreground"><bdi>{about(a)}</bdi></p>}
                   </div>
                   {data.admin && <button disabled={busy === a.slug} onClick={() => void install(a)}
-                    className="shrink-0 cursor-pointer rounded-full bg-secondary px-3 py-1 text-[11px] font-semibold text-primary hover:opacity-80 disabled:opacity-40">{t("getApp")}</button>}
+                    className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full bg-secondary px-3 py-1 text-[11px] font-semibold text-primary hover:opacity-80 disabled:opacity-70">
+                    {busy === a.slug ? <Spin /> : t("getApp")}</button>}
                 </div>
               </div>
             ))}

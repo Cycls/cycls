@@ -48,6 +48,23 @@ describe("the Apps section", () => {
     expect(card("tasks").getByText(/Work · 789 KB/)).toBeTruthy();
   });
 
+  it("says it is installing, then shows Open — even when the list read next still says Install", async () => {
+    let done!: () => void;
+    const base = fakeApi();   // its list never changes: a stale read from another instance
+    const api = vi.fn(async (path: string, init?: { method?: string; json?: unknown }) => {
+      if (path === "/apps/install") await new Promise<void>((r) => { done = r; });
+      return (base.api as unknown as (p: string, i?: unknown) => Promise<Response>)(path, init);
+    }) as unknown as Parameters<typeof AppsCatalog>[0]["api"];
+    const { container } = render(<AppsCatalog api={api} onOpen={() => {}} />);
+    const card = () => within(container.querySelector('[data-app="crm"]') as HTMLElement);
+    fireEvent.click(await screen.findByText("Install"));
+    expect(await card().findByText("Installing…")).toBeTruthy();
+    done();
+    // the card moves to the installed apps: a new node, so look it up again each time
+    await waitFor(() => expect(card().getByText("Open")).toBeTruthy());
+    expect(card().queryByText("Install")).toBeNull();
+  });
+
   it("installs, then opens the app in the canvas", async () => {
     const { api, calls } = fakeApi();
     const onOpen = vi.fn(), onChanged = vi.fn();

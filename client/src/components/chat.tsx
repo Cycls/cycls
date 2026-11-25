@@ -241,6 +241,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       .then((d) => setAppTheme(normalizeAppTheme(d?.theme) ?? normalizeAppTheme(d?.default)))
       .catch(() => setAppTheme(null));
   }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // After an install: now, and again a moment later — the next list may come from an instance whose file
+  // cache has not seen the new app yet.
+  const refreshAppsTwice = () => { void refreshApps(); window.setTimeout(() => void refreshApps(), 3000); };
   const openConnectors = (source: string, name?: string, tab?: "skills" | "apps") => {
     track("connector_directory_opened", { source, tab: tab ?? "connectors" });
     loadConnectors();
@@ -1116,7 +1119,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           onAsk={(text) => { setInput(text); textareaRef.current?.focus(); }}
           apps={config?.apps_catalog ? {
             onOpen: (entry, appName) => openFileInCanvas(entry, appName),
-            onChanged: () => void refreshApps(),
+            onChanged: refreshAppsTwice,
           } : undefined}
         />
       )}
@@ -1674,7 +1677,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   catalog={account && config?.apps_catalog ? {
                     api,
                     onOpen: (entry, appName) => { openFileInCanvas(entry, appName); if (!isDesktop) setFilesOpen(false); },
-                    onChanged: () => void refreshApps(),
+                    onChanged: refreshAppsTwice,
                   } : undefined}
                 />
               ) : filesTab === "shares" ? (

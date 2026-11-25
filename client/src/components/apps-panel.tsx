@@ -104,9 +104,9 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
               </div>
             ))}
           </div>
-          {/* the rest of the store below what is installed; read again when that changes (the key) */}
+          {/* the rest of the store below what is installed (what the panel lists stays off the shelves) */}
           {catalog && <div className="border-t border-border">
-            <CatalogShelves key={apps.map((a) => a.slug).join(",")} {...catalog} onSeeAll={onBrowse} title={t("discover")} fallback={null} />
+            <CatalogShelves {...catalog} installed={apps.map((a) => a.slug)} onSeeAll={onBrowse} title={t("discover")} fallback={null} />
           </div>}
         </>)}
       </div>
