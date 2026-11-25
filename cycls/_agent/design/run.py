@@ -4,7 +4,7 @@ import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from . import skill
 from .tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED,
-    DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST, _SEARCH_NOW)
+    DESIGN_GIVEN, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST, _SEARCH_NOW)
 from . import brief
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
@@ -58,9 +58,15 @@ def _spec_of(inp):
     return spec if isinstance(spec, dict) else {}
 
 
-# A request to MAKE a design (not one that only mentions a report or a PDF): its guide comes with the message.
-_MAKE = re.compile(r"\b(design|make|create|build|draft|produce|prepare|put together|turn\b.{0,40}\binto)\b", re.I)
-_MAKE_AR = ("صمم", "صمّم", "سو لي", "سوّ لي", "سوي لي", "اعمل", "أنشئ", "انشئ", "جهز", "جهّز", "حضر", "اصنع", "ابغى", "أبغى", "أبي")
+# A request to MAKE a new design — "Design an Instagram post", "make me a 6-slide deck", "صمم بوستر" — and not a
+# question about one, a change to one ("make the headline bigger", a `.fig` named), or another tool's work (a reel,
+# an Excel report): its skills come with the message.
+_MAKE = re.compile(r"\b(?:design|make|create|build|draft|produce|prepare|put together)\s+(?:me\s+|us\s+|for\s+(?:me|us)\s+)?"
+                   r"(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|some|\d+)\b", re.I)
+_MAKE_AR = ("صمم", "صمّم", "سو لي", "سوّ لي", "سوي لي", "اعمل لي", "أنشئ", "انشئ", "جهز لي", "جهّز لي", "اصنع")
+_NOT_DESIGN = re.compile(r"\b(?:reels?|videos?|clips?|animat\w*|gifs?|mp4|excel|spreadsheets?|sheets?|xlsx|csv|word|docx|"
+                         r"google docs?|emails?|e-mails?|apps?|websites?|landing pages?|code|scripts?)\b|\w\.\w{2,4}\b", re.I)
+_NOT_DESIGN_AR = ("فيديو", "ريل", "إكسل", "اكسل", "وورد", "جدول بيانات", "تطبيق", "موقع")
 _DECK = re.compile(r"\b(slides?|deck|presentation|pitch|powerpoint|pptx|keynote)\b", re.I)
 _DECK_AR = ("عرض تقديمي", "شرائح", "شريحة", "بوربوينت", "باوربوينت")
 _DOC = re.compile(r"\b(report|proposal|white ?paper|newsletter|cv|resume|résumé|booklet|handbook|guide|document|e-?book)\b", re.I)
@@ -75,8 +81,10 @@ async def design_preload(messages, text, root, subject=None):
     text = str(text or "")
     if design_skills_loaded(messages):
         return None
-    wants = _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR) or ".fig" in text
+    wants = _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR)
     if not wants or not (_MAKE.search(text) or any(w in text for w in _MAKE_AR)):
+        return None
+    if _NOT_DESIGN.search(text) or any(w in text for w in _NOT_DESIGN_AR):   # a file named, or another tool's work
         return None
     kind = ("deck-design" if _DECK.search(text) or any(w in text for w in _DECK_AR)
             else "document-design" if _DOC.search(text) or any(w in text for w in _DOC_AR) else "graphic-design")
@@ -192,7 +200,12 @@ async def _design_call(inp, workspace):
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
     if asked == "skill":                                    # text only: it runs on the short form too, and loads the whole
-        text = skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name"))
+        want = inp.get("skill") if inp.get("skill") is not None else inp.get("name")
+        names, given = skill.asked_names(want), DESIGN_GIVEN.get()
+        if names and all(n in given for n in names):        # came with the person's message: not their text again
+            return (f"Already loaded: {', '.join(names)} came with the person's message in this chat (\"[The Design "
+                    "skills for this request…]\") — read them there and go on. Nothing was made or changed.")
+        text = skill.load([n for n in names if n not in given] or want)
         if text.startswith("Error"):
             return text
         made = await asyncio.to_thread(recent.listing, workspace.root)   # what's new is new against these

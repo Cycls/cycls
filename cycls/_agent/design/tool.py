@@ -473,6 +473,25 @@ def design_skills_loaded(messages):
     return False
 
 
+# The skills given with a message in this chat (set by the loop): a `skill` call for them is answered in a line, not
+# with their whole text again. Only these: a skill a call returned may since have been cleared from an old result.
+DESIGN_GIVEN = contextvars.ContextVar("design_given", default=frozenset())
+_GIVEN_SKILL = re.compile(r'<design-skill name="([\w-]+)">')
+
+
+def design_skills_given(messages):
+    """The names of the Design skills given with the person's messages in this chat (design.run.design_preload)."""
+    names = set()
+    for m in messages:
+        content = m.get("content")
+        if m.get("role") != "user" or not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text" and str(b.get("text", "")).startswith("[The Design skills"):
+                names.update(_GIVEN_SKILL.findall(b["text"]))
+    return frozenset(names)
+
+
 # What the person wrote in this chat (set by the loop): a theme they name, or its glow, is theirs to keep.
 DESIGN_HEARD = contextvars.ContextVar("design_heard", default="")
 _ATTACHED = re.compile(r"\[(?:Attached:|The user attached)[^\]]*\]")

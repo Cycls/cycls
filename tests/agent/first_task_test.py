@@ -83,3 +83,39 @@ def test_the_calendar_names_each_weekday():
     cal = _calendar(datetime(2026, 11, 25, 9, tzinfo=timezone.utc))
     assert "today is Wednesday 25 November 2026" in cal
     assert "Thu 26 Nov" in cal and "Wed 9 Dec" in cal and "Thu 10 Dec" not in cal
+
+
+def test_a_memory_that_cant_be_read_is_not_called_empty(tmp_path, monkeypatch):
+    """Told "empty", the agent may write a new index over the one it couldn't read."""
+    ws = _ws(tmp_path)
+    ws.root.mkdir(parents=True, exist_ok=True)
+    class Broken:
+        async def get(self, key, default=None):
+            raise OSError("503")
+    monkeypatch.setattr(state, "memory_db", lambda ws: Broken())
+    first = asyncio.run(_first_task_context(ws))[0]
+    assert "could not be read" in first and "empty" not in first and "never write a new index" in first
+
+
+def test_requests_that_get_no_skills(tmp_path):
+    for text in ("What do you think of this design?", "Edit the design file", "make the headline bigger in designs/x.fig",
+                 "Make a 10-second reel for Instagram", "Create an Excel report", "Make the poster darker",
+                 "سوّ لي فيديو إعلاني لافتتاح مقهى"):
+        assert asyncio.run(design_preload([], text, str(tmp_path))) is None, text
+    assert asyncio.run(design_preload([], "make me a poster for the 5K", str(tmp_path)))
+
+
+def test_a_skill_call_for_skills_the_message_brought_is_a_line(tmp_path):
+    from cycls._agent.design.run import _exec_design
+    from cycls._agent.design.tool import DESIGN_GIVEN, design_skills_given
+    post = asyncio.run(design_preload([], "Design an Instagram post for our pottery workshop", str(tmp_path)))
+    chat = [{"role": "user", "content": [{"type": "text", "text": "Design an Instagram post"}, {"type": "text", "text": post}]}]
+    assert design_skills_given(chat) == {"design-direction", "graphic-design"}
+    DESIGN_GIVEN.set(design_skills_given(chat))
+    try:
+        again = asyncio.run(_exec_design({"action": "skill", "skill": ["design-direction", "graphic-design"]}, tmp_path))
+        assert again.startswith("Already loaded") and "<design-skill" not in again
+        more = asyncio.run(_exec_design({"action": "skill", "skill": ["design-direction", "deck-design"]}, tmp_path))
+        assert '<design-skill name="deck-design">' in more and '<design-skill name="design-direction">' not in more
+    finally:
+        DESIGN_GIVEN.set(frozenset())

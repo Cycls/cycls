@@ -22,7 +22,7 @@ from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
 from ..design.powerpoint import DECK_SUFFIXES   # what the Design tool's `import` opens
 from ..design.tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SKILLED, design_called, design_checked, design_researched, design_skills_loaded, person_last, person_words,
-                           design_tool, design_wanted)
+                           design_tool, design_wanted, DESIGN_GIVEN, design_skills_given)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
 from ..office.client import offered as office_offered
@@ -204,8 +204,9 @@ async def _first_task_context(workspace):
     out = []
     try:
         index = await state.memory_db(workspace).get("memory/index") if getattr(workspace, "subject", None) else None
-    except Exception:
-        index = None
+    except Exception as e:   # not "empty": told so, the agent may write a new index over the one it couldn't read
+        log("warn", message=f"memory index not read for the first task: {type(e).__name__}: {e}")
+        index = False
     if isinstance(index, str) and index.startswith('"'):   # a model that put its markdown as a JSON string
         try:
             index = json.loads(index)
@@ -213,8 +214,11 @@ async def _first_task_context(workspace):
             pass
     if isinstance(index, (dict, list)):
         index = json.dumps(index, ensure_ascii=False)
-    index = str(index or "").strip()
-    if index:
+    index = index if index is False else str(index or "").strip()
+    if index is False:
+        out.append("[Your memory of this person could not be read as this chat starts — `database get` "
+                   "`memory/index` once yourself before the task, and never write a new index in its place.]")
+    elif index:
         cut = len(index) > _FIRST_MAX
         out.append("[Your memory of this person — `memory/index`, read for you as this chat starts; it stays in your "
                    "context, so don't fetch it again. Get a detail key only when the task needs it."
@@ -609,23 +613,27 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             except Exception as e:
                 log("warn", user=user, chat_id=session.chat_id, message=f"design outline not added: {type(e).__name__}: {e}")
         # What every first task fetched with its own tool calls before it could start — the person's memory index
-        # and the workspace's top level, on a chat's first message; a design's skills, on a request to make one —
-        # given with the message, so the agent's first turn is the task (a design's first 2–3 turns were fetching).
+        # and the workspace's top level, on a chat's first turn with a task; a design's skills, on a request to make
+        # one — given with the message, so the agent's first turn is the task (a design's first 2–3 turns fetched).
         typed = state.user_text({"content": content})   # what they wrote: not a file's contents, nor a line added
-        # a greeting is answered with no memory ("Zero tools for conversation"): the first turn with a task gets it
-        if not _first_given(session.messages) and (len(typed.split()) >= 3 or incoming.get("attachments")):
+        block = None
+        if "Design" in allowed_tools and design_configured() and not working and not selection:
+            try:
+                from ..design.run import design_preload
+                block = await design_preload(session.messages, typed, workspace.root, getattr(workspace, "subject", None))
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"design skills not given: {type(e).__name__}: {e}")
+        # The person's chat only (an agent's brief is the parent's task), with the `database` tool the memory is
+        # read by. A greeting is answered with none ("Zero tools for conversation"): the first turn with a task gets it.
+        if (me is None and "DataBase" in allowed_tools and not _first_given(session.messages)
+                and (block or len(typed.split()) >= 3 or incoming.get("attachments"))):
             try:
                 for given in await _first_task_context(workspace):
                     content = _with_line(content, given)
             except Exception as e:
                 log("warn", user=user, chat_id=session.chat_id, message=f"first-task context not added: {type(e).__name__}: {e}")
-        if "Design" in allowed_tools and design_configured() and not working and not selection:
-            try:
-                from ..design.run import design_preload
-                if block := await design_preload(session.messages, typed, workspace.root, getattr(workspace, "subject", None)):
-                    content = _with_line(content, block)
-            except Exception as e:
-                log("warn", user=user, chat_id=session.chat_id, message=f"design skills not given: {type(e).__name__}: {e}")
+        if block:
+            content = _with_line(content, block)
         app = getattr(context, "app", "")
         if app and isinstance(app, str) and (line := await asyncio.to_thread(_open_app_line, workspace.root, app)):
             content = _with_line(content, line)
@@ -965,6 +973,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             seen = set()
             DESIGN_RESEARCHED.set(design_researched(messages, tools_list))   # a search beside a render counts
             DESIGN_HEARD.set(person_words(messages))
+            DESIGN_GIVEN.set(design_skills_given(messages))
             DESIGN_ASK.set(person_last(messages))
             DESIGN_CHECKED.set(design_checked(messages))
             DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
