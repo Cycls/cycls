@@ -1,19 +1,23 @@
 """cycls.MCP — a remote MCP server the agent connects to.
 
 Client-side by default: the harness speaks Streamable HTTP itself, discovers
-tools once (cached DISCOVERY_TTL seconds per url and token) and opens a
+tools once (cached DISCOVERY_TTL seconds per url and token, then asked again
+behind the turn that finds it expired) and opens a
 session only when a tool is called — so every provider gets MCP, and a turn
 that uses no server costs nothing. `.server_side()` hands the server to the
 Anthropic connector instead: fewer hops, one deploy-time bearer, anthropic/*
 only. Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
 """
-import time
+import asyncio, time
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from .connectors import not_connected
 
 DISCOVERY_TTL = 600
+STALE_FOR = 86_400   # past its deadline, a list still answers a turn while it is asked again, for at most this long
 _discovered = {}   # (url, token) -> (deadline, [Tool])
+_refreshing = set()   # keys being asked again behind a turn
+_background = set()   # their tasks, held so they aren't collected mid-flight
 _prompts = {}      # (url, token) -> (deadline, [Prompt])
 
 
@@ -157,10 +161,31 @@ class MCP:
         if not (at := self._at(url)):
             return []
         key = (at, token or self._token)
-        hit = _discovered.get(key)
-        if not hit or hit[0] < time.monotonic():
-            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, await _list(at, self._headers(token)))
+        hit, now = _discovered.get(key), time.monotonic()
+        if hit and hit[0] < now <= hit[0] + STALE_FOR:
+            self._refresh(key, at, token)   # this turn takes the list it has; the next one, the new list
+        elif not hit or hit[0] < now:
+            _discovered[key] = hit = (now + DISCOVERY_TTL, await _list(at, self._headers(token)))
         return [t for t in hit[1] if not self._allow or t.name in self._allow]
+
+    def _refresh(self, key, at, token):
+        """Ask the server for its tools again behind the turn: every turn after the list expired waited for the
+        slowest server's handshake, ~2.3 s, whether it used a connector or not (super-dev, 2026-11-25). A server
+        that can't answer loses its list, so the next turn asks it itself and says so, as before."""
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+        async def again():
+            try:
+                _discovered[key] = (time.monotonic() + DISCOVERY_TTL, await _list(at, self._headers(token)))
+            except Exception:
+                _discovered.pop(key, None)
+            finally:
+                _refreshing.discard(key)
+        task = asyncio.create_task(again())
+        _background.add(task)
+        task.add_done_callback(_background.discard)
 
     async def discover(self, token=None, url=None):
         """(schemas, handlers, names) for this server's tools, prefixed `{name}_`."""

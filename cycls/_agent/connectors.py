@@ -264,20 +264,40 @@ def gated(fn, tool, label, connector, classify=None, hard=False, allowed=False, 
 
 REFUSED_TTL = 600   # as long as a discovery is kept (mcp.DISCOVERY_TTL)
 _refused = {}       # url -> deadline: an OAuth server that would not list for someone not connected
+_rechecks = {}      # url -> the task asking it again
+
+
+def _recheck(server, at, url):
+    """A server that refused to list anonymously is asked again behind the turn once its wait is over: asked
+    before it, a turn ten minutes on waited for the slowest refusal (super-dev, 2026-11-25). Until it answers it
+    stays off; once it lists, the next turn has its tools."""
+    if (t := _rechecks.get(at)) and not t.done():
+        return
+
+    async def again():
+        try:
+            await server.discover(token=None, url=url)
+            _refused.pop(at, None)
+        except Exception:
+            _refused[at] = time.monotonic() + REFUSED_TTL
+    _rechecks[at] = asyncio.create_task(again())
 
 
 async def tools_for(server, ws):
     """One server's tools for the caller: discovered with their grant, then their policy — `never` drops a tool,
     `ask` gates it. A key connector with no key contributes nothing, silently; an OAuth server still lists
-    anonymously so the connect card can appear. One that refused is not asked again for REFUSED_TTL: most
-    people have connected nothing, and six refused handshakes in a row were ~3.5 s before every turn."""
+    anonymously so the connect card can appear. One that refused is not asked again for REFUSED_TTL, and then
+    behind a turn (`_recheck`): most people have connected nothing, and six refused handshakes in a row were
+    ~3.5 s before every turn."""
     o = server._connector
     token = await o.bearer(ws) if o else None
     url = await o.endpoint(ws) if o and o.addressed else None
     if o and o.kind == "key" and token is None and url is None:
         return [], {}, {}
     at = url or getattr(server, "_url", None)
-    if o and token is None and at and _refused.get(at, 0) > time.monotonic():
+    if o and token is None and at and at in _refused:
+        if _refused[at] <= time.monotonic():   # asked again behind this turn, not before it
+            _recheck(server, at, url)
         return [], {}, {}
     try:
         schemas, fns, names = await server.discover(token=token, url=url)

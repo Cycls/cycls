@@ -60,7 +60,11 @@ class LLM:
 
     # ---- Fluent builders ----
 
-    def model(self, name):          return self._copy(_model=name)
+    def model(self, name):
+        if isinstance(name, str) and "/" in name:   # its SDK loads while the server starts, not in a first turn
+            from .providers import warm
+            warm(name.split("/", 1)[0])
+        return self._copy(_model=name)
     def system(self, text):         return self._copy(_system=text)
     def tools(self, tools):         return self._copy(_tools=list(tools))
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))

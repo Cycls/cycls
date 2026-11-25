@@ -66,6 +66,25 @@ class Provider(Protocol):
 # ---- Client routing ----
 
 _clients: dict = {}  # config key → reused SDK client. Construction is ~1s (httpx + TLS).
+_warming: set = set()
+
+
+def warm(vendor: str):
+    """Load a vendor's SDK in the background as the agent is defined, on a deployed server only (Cloud Run sets
+    K_REVISION). `import openai` was ~2.3 s of a server's first turn, before anything else in it could start
+    (super-dev `prelude` log, 2026-11-25). Python's import lock makes it safe: a turn that needs the SDK first
+    waits for this import to finish, never imports it twice. Not where tests run: they swap a fake SDK into
+    sys.modules, which a load finishing beside them could race."""
+    import os, sys, threading, importlib
+    name = "anthropic" if vendor == "anthropic" else "openai"
+    if not os.environ.get("K_REVISION") or name in _warming or name in sys.modules:
+        return
+    _warming.add(name)
+
+    def load():
+        try: importlib.import_module(name)
+        except Exception: pass   # not installed: the turn that needs it says so, as before
+    threading.Thread(target=load, name=f"warm-{name}", daemon=True).start()
 
 
 def _client_for(vendor: str, *, base_url, api_key, headers=None):

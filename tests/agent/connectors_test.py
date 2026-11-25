@@ -369,7 +369,8 @@ def test_discovery_is_silent_for_an_unconnected_server_that_only_lists_for_the_s
 
 def test_a_refusal_to_list_anonymously_is_remembered_until_the_person_connects(tmp_path):
     """Six OAuth servers refusing someone who had connected nothing cost ~3.5 s before every super-dev
-    turn. A refusal is remembered for REFUSED_TTL; connecting asks again at once; so does its expiry."""
+    turn. A refusal is remembered for REFUSED_TTL; connecting asks again at once; its expiry asks again behind
+    the turn, which doesn't wait for it."""
     from cycls._app.auth import User
     ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
     server = SimpleNamespace(_connector=_google(), _url="https://refuses/mcp", discover=AsyncMock(side_effect=RuntimeError("401")))
@@ -377,8 +378,27 @@ def test_a_refusal_to_list_anonymously_is_remembered_until_the_person_connects(t
     assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})
     assert server.discover.await_count == 1                                              # the next turn did not ask
     c._refused["https://refuses/mcp"] = time.monotonic() - 1                             # remembered long enough
+
+    async def expired():
+        got = await c.tools_for(server, ws)
+        asked_before = server.discover.await_count
+        await c._rechecks["https://refuses/mcp"]
+        return got, asked_before
+    got, asked_before = asyncio.run(expired())
+    assert got == ([], {}, {}) and asked_before == 1                                     # the turn went on without it
+    assert server.discover.await_count == 2                                              # asked behind it
+    assert c._refused["https://refuses/mcp"] > time.monotonic()                          # still refusing: remembered again
+    server.discover = AsyncMock(return_value=([], {}, {}))
+    c._refused["https://refuses/mcp"] = time.monotonic() - 1
+
+    async def lists_now():
+        await c.tools_for(server, ws)
+        await c._rechecks["https://refuses/mcp"]
+    asyncio.run(lists_now())
+    assert "https://refuses/mcp" not in c._refused                                       # it lists: the next turn has it
+    server.discover = AsyncMock(side_effect=RuntimeError("401"))
     asyncio.run(c.tools_for(server, ws))
-    assert server.discover.await_count == 2
+    assert server.discover.await_count == 1
     asyncio.run(credentials.put(ws, "google", {"access_token": "t", "refresh_token": "r", "expires_at": time.time() + 3600}))
     server.discover = AsyncMock(return_value=([], {}, {}))
     asyncio.run(c.tools_for(server, ws))                                                 # connected: asked with the grant
