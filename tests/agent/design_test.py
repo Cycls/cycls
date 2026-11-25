@@ -3665,3 +3665,21 @@ def test_every_message_brings_the_design_as_it_is_now(tmp_path, monkeypatch):
     assert asyncio.run(design_now([{"role": "user", "content": "hi"}], str(tmp_path))) is None      # no design in the chat
     gone = [*chat[:1], used({"action": "render", "name": "tests/elsewhere", "spec": {}})]
     assert asyncio.run(design_now(gone, str(tmp_path))) is None                                       # its file isn't there
+
+
+def test_loading_the_design_instructions_says_to_search_first_in_a_turn_that_has_not(tmp_path, monkeypatch):
+    """The agent planned a whole post before it searched, then planned it again: where the instructions are loaded in
+    a turn that hasn't searched, it is told to search first and plan once."""
+    from cycls._agent.design.tool import DESIGN_RESEARCHED, _SEARCH_NOW
+    token = DESIGN_RESEARCHED.set(False)
+    try:
+        before = asyncio.run(_exec_design({"action": "skill", "skill": "graphic-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    token = DESIGN_RESEARCHED.set(True)
+    try:
+        after = asyncio.run(_exec_design({"action": "skill", "skill": "graphic-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    assert _SEARCH_NOW in before and "Search FIRST" in before
+    assert "Search FIRST" not in after

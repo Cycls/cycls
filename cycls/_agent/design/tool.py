@@ -57,7 +57,7 @@ _DESIGN_TOOL = {
         "    image   {\"type\":\"image\",\"src\":\"attachments/photo.jpg\",\"x\":,\"y\":,\"w\"?:,\"h\"?:,"
         "\"fit\"?:\"cover|contain\",\"radius\"?:,\"opacity\"?:,\"shadow\"?:}\n"
         "    stack   {\"type\":\"stack\",\"pin\":\"top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right\" "
-        "(or \"x\":,\"y\":),\"margin\"?:,\"w\"?:,\"gap\"?:24,\"direction\"?:\"vertical|horizontal\","
+        "(or \"x\":,\"y\":),\"in\"?:\"<card id>\",\"margin\"?:,\"w\"?:,\"gap\"?:24,\"direction\"?:\"vertical|horizontal\","
         "\"align\"?:\"start|center|end\",\"anchor\"?:\"top|center|bottom\",\"children\":[nodes without x/y]}\n"
         "    icon    {\"type\":\"icon\",\"name\":\"lucide:rocket\",\"x\":,\"y\":,\"size\":64,\"color\"?:}  any Iconify icon "
         "(sets: lucide, tabler, mdi, ph, heroicons, ri…)\n"
@@ -94,7 +94,12 @@ _DESIGN_TOOL = {
         "each other (a button, a badge). A pinned part STAYS pinned: when an edit makes something in it bigger or "
         "longer, a block pinned to the bottom grows upwards and stays on the margin, and nothing else moves. So "
         "\"a bigger headline\" is the one op style {node:\"headline\", size:120} — never move the other parts to "
-        "make room. A pinned part you `move` is placed by hand from then on.\n"
+        "make room. A pinned part you `move` is placed by hand from then on. `in` pins it inside a card, a panel "
+        "or a band instead of the frame (\"in\": \"card-1\", an `id` built before it), in that part's own margin "
+        "(8% of its short side) — a card's copy is pinned in the card, so nothing in it is placed by hand either.\n"
+        "  DECORATION that needs many positions — rings, rays, ticks, a circle or row of dots, a grid of marks — is ONE "
+        "`svg` node (circles, lines; ticks are one circle with a dashed stroke), pinned or placed as one piece, or a "
+        "`pattern`: never positions worked out one by one, in your head or with a script.\n"
         "  An image is any photo IN the workspace (an upload, a file you made or saved, brand/logo.png): "
         "JPEG, PNG, WebP, GIF, a phone's HEIC, AVIF, BMP or TIFF, at any size — `src` is its path. `src` may also be "
         "a link the person gave you. Use the photos they bring, where they belong in the piece. Or NAME a photo to find: \"stock\":\"coffee beans on wood\" in place of `src` "
@@ -158,7 +163,9 @@ _DESIGN_TOOL = {
         "crowding an edge, text too small, low contrast on what's behind it). Text too small, and a colour "
         "that doesn't read on a plain colour behind it, it puts right by itself and says so; fix what "
         "else it lists before you present. Don't work out positions, contrast or minimum text sizes in your "
-        "head — the check measures them after the render; fix what it reports, all in one edit.\n"
+        "head — the check measures them after the render; fix what it reports, all in one edit. Look at a first "
+        "render ONCE: when the check reports nothing and you see no fault (cut, overlapping, unreadable, off its "
+        "margin, a typo), present it — no touch-up round for taste; \"could be better\" is not a fault.\n"
         "  RTL: for Arabic / Hebrew pin the block to the right (`top-right`, `right`, `bottom-right`), which "
         "sets its text `align` to the right edge — never the small `x` you'd use for left-aligned English (that "
         "runs the text off the right edge). Shaping, bidi "
@@ -518,6 +525,13 @@ _RESEARCH_FIRST = (
     "wrote them, even if a similar company turns up, and the words in their language. Put no figure, address, date or "
     "result on it that neither they nor a source you read gave. If the search fails or finds nothing, render anyway: "
     "this note comes once a turn.")
+
+# Said where the design instructions are loaded, in a turn that hasn't searched: the agent planned a whole post
+# (49 s, its coordinates and all) and only then searched, and planned it again from what it found.
+_SEARCH_NOW = (
+    "Search FIRST, before you plan this design: make your two or three `web_search` calls now, in one message (the "
+    "subject's real facts, how this kind of piece is done well), then plan it ONCE from what you found. A new design "
+    "rendered before a search is held anyway, so a plan made before the search is made twice.")
 
 
 def design_researched(messages, tools):

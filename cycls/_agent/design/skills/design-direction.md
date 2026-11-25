@@ -333,10 +333,10 @@ and a conversation.
 
 ## The polish pass: look as a stranger, then refine
 
-The render comes back as an image. What you placed by hand (a post, a poster, a `custom` slide, nodes you
-added) gets the whole hunt below: a first render nearly always has faults, so look for them as a stranger would,
-and if you found none, look again at the edges and the gaps. The layout check in the reply catches text
-overlapping text, text off the frame, small text and weak contrast on a flat colour; your eye catches the rest.
+The render comes back as an image. Look at it ONCE, as a stranger would, for FAULTS — the list below. The
+layout check in the reply catches text overlapping text, text off the frame, small text and weak contrast on a
+flat colour; your eye catches the rest. No fault, and the check reports nothing: present it as it is — no
+touch-up round, no second look.
 A slide or a page the tool laid out has its geometry done already: check what it says and the choices instead
 (the title makes its point, the copy keeps its budget, the layout, style and picture suit the content), and
 change those with `update_slide` or the section, not by moving its parts.
@@ -356,10 +356,10 @@ change those with `update_slide` or the section, not by moving its parts.
   no headline line ending on one word alone.
 - **Copy**: no typo, no placeholder words, nothing over the copy budget.
 
-Then refine what is there and add nothing: make parts bigger or smaller, align them, cut one. Another shape,
-glow or ornament does not rescue a weak composition. Fix everything in ONE `edit` holding all the ops. The
-edit shows you what it changed: look at that, and stop unless a fault is still there. "Could be better" is not
-a fault.
+A fault you found: refine what is there and add nothing — make parts bigger or smaller, align them, cut one.
+Another shape, glow or ornament does not rescue a weak composition. Fix every fault in ONE `edit` holding all the
+ops. The edit shows you what it changed: look at that, and stop unless a fault is still there. "Could be better"
+is not a fault, and a taste you'd tweak is not either: the person asks for changes, and each costs them a wait.
 
 ## A worked example: a café's subscription post, 1080 × 1350
 
@@ -367,18 +367,19 @@ The concept: the coffee arrives before seven, so the post is the delivery slip. 
 
 ```json
 {"size": "post-portrait", "fill": "#e4572e", "nodes": [
-  {"type": "rect", "id": "slip", "x": 150, "y": 120, "w": 780, "h": 1110, "fill": "#ffffff", "stroke": "#2b2118", "strokeWeight": 2},
-  {"type": "text", "id": "header", "text": "CORNER ROAST — DELIVERY SLIP No. 0612", "x": 200, "y": 170, "w": 680, "size": 22,
-   "letterSpacing": 4, "font": "Courier Prime Bold", "color": "#2b2118"},
-  {"type": "line", "id": "rule-1", "x": 200, "y": 222, "w": 680, "h": 2, "fill": "#2b2118"},
-  {"type": "stack", "id": "copy", "x": 200, "y": 300, "w": 680, "gap": 28, "children": [
-    {"type": "text", "id": "headline", "font": "Shrikhand", "size": 118, "lineHeight": 122, "color": "#00838f",
+  {"type": "rect", "id": "slip", "pin": "center", "w": 780, "h": 1110, "fill": "#ffffff", "stroke": "#2b2118", "strokeWeight": 2},
+  {"type": "stack", "id": "masthead", "pin": "top-left", "in": "slip", "margin": 50, "gap": 22, "children": [
+    {"type": "text", "id": "header", "text": "CORNER ROAST — DELIVERY SLIP No. 0612", "size": 22,
+     "letterSpacing": 4, "font": "Courier Prime Bold", "color": "#2b2118"},
+    {"type": "line", "id": "rule-1", "w": 680, "h": 2, "fill": "#2b2118"}]},
+  {"type": "stack", "id": "copy", "pin": "left", "in": "slip", "margin": 50, "gap": 28, "children": [
+    {"type": "text", "id": "headline", "font": "Shrikhand", "size": 96, "lineHeight": 100, "color": "#00838f",
      "runs": [{"text": "At your door "}, {"text": "before seven.", "color": "#e4572e"}]},
     {"type": "text", "id": "subline", "text": "Single-origin beans, roasted every Sunday. One bag a week, cancel any time.",
-     "size": 34, "lineHeight": 48, "font": "Courier Prime", "color": "#2b2118"}]},
-  {"type": "text", "id": "time", "text": "06:45", "x": 200, "y": 930, "w": 680, "size": 200, "font": "Shrikhand",
-   "color": "#e4572e", "opacity": 0.9, "rotation": -4},
-  {"type": "text", "id": "cta", "text": "cornerroast.co/subscribe  →", "x": 200, "y": 1150, "w": 680, "size": 30,
-   "font": "Courier Prime Bold", "color": "#2b2118"}
+     "size": 30, "lineHeight": 44, "font": "Courier Prime", "color": "#2b2118"}]},
+  {"type": "text", "id": "time", "text": "06:45", "pin": "bottom-right", "in": "slip", "margin": 110, "size": 120,
+   "font": "Shrikhand", "color": "#e4572e", "opacity": 0.9, "rotation": -6},
+  {"type": "text", "id": "cta", "text": "cornerroast.co/subscribe  →", "pin": "bottom-left", "in": "slip", "margin": 50,
+   "size": 30, "font": "Courier Prime Bold", "color": "#2b2118"}
 ]}
 ```

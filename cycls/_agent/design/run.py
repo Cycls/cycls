@@ -4,7 +4,7 @@ import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from . import skill
 from .tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED,
-    DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST)
+    DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST, _SEARCH_NOW)
 from . import brief
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
@@ -163,11 +163,13 @@ async def _design_call(inp, workspace):
             return text
         made = await asyncio.to_thread(recent.listing, workspace.root)   # what's new is new against these
         text = f"{text}\n\n{made}" if made else text
-        return text if DESIGN_LOADED.get() else f"{text}\n\n{_GUIDE_LOADED}"
+        text = text if DESIGN_LOADED.get() else f"{text}\n\n{_GUIDE_LOADED}"
+        return text if DESIGN_RESEARCHED.get() else f"{text}\n\n{_SEARCH_NOW}"
     if not DESIGN_LOADED.get():
         if asked == "guide":
             made = await asyncio.to_thread(recent.listing, workspace.root)
-            return f"{_GUIDE_LOADED}\n\n{made}" if made else _GUIDE_LOADED
+            text = f"{_GUIDE_LOADED}\n\n{made}" if made else _GUIDE_LOADED
+            return text if DESIGN_RESEARCHED.get() else f"{text}\n\n{_SEARCH_NOW}"
         return _GUIDE_NOT_RUN
     if asked == "guide":
         return ("Design's instructions are already loaded — they are this tool's description. Call it with "
