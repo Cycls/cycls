@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cycls._app.db import Conflict
-from .. import connectors, spill, state
+from .. import connectors, prelude, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -253,16 +253,6 @@ async def _first_task_context(workspace):
                "inside a folder only when the request needs it: "
                + (", ".join(names[:_TOP_MAX]) + more if names else "empty") + "]")
     return out
-
-
-def _calendar(now=None):
-    """Today and the two weeks after it, by weekday, for the system prompt: the agent ran `date -d "next thursday"`
-    in a shell before it could put a date on a design."""
-    from datetime import timedelta
-    now = now or datetime.now(timezone.utc)
-    days = ", ".join(f"{d:%a} {d.day} {d:%b}" for d in (now + timedelta(days=i) for i in range(1, 15)))
-    return (f"Calendar (UTC): today is {now:%A} {now.day} {now:%B %Y}. The next 14 days: {days}. "
-            "Read a weekday’s date from here (“next Thursday”, “this Saturday”) — no tool needed.")
 
 
 def _with_selection(content, sel):
@@ -564,17 +554,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                instructions="AGENT.md", skills=[], price=None, context_window=None,
                extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=(),
                team=None, me=None):
+    prelude.mark("agent function")   # the deployment's own code before it calls run (Super: its usage count)
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
+    prelude.mark("provider")
     if max_tokens is None: max_tokens = DEFAULT_MAX_TOKENS
     workspace = context.workspace
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
+    prelude.mark("chat history read")
     # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
     modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
+    prelude.mark("settings read")
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
         allowed_tools = [t for t in allowed_tools if t not in off]
     # The video service's URL alone does not switch Video on: an agent that admits anyone who signs
@@ -596,6 +590,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
                                 transcribe="Transcribe" in allowed_tools and transcribe_configured(),
                                 chat_id=session.chat_id, design="Design" in allowed_tools and design_configured())
+        prelude.mark("message prepared")
         if mentions:
             titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                       for s in mcp_servers or [] if s._connector}
@@ -612,6 +607,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     content = _with_line(content, line)
             except Exception as e:
                 log("warn", user=user, chat_id=session.chat_id, message=f"design outline not added: {type(e).__name__}: {e}")
+        prelude.mark("design outline")
         # What every first task fetched with its own tool calls before it could start — the person's memory index
         # and the workspace's top level, on a chat's first turn with a task; a design's skills, on a request to make
         # one — given with the message, so the agent's first turn is the task (a design's first 2–3 turns fetched).
@@ -623,6 +619,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 block = await design_preload(session.messages, typed, workspace.root, getattr(workspace, "subject", None))
             except Exception as e:
                 log("warn", user=user, chat_id=session.chat_id, message=f"design skills not given: {type(e).__name__}: {e}")
+        prelude.mark("design skills")
         # The person's chat only (an agent's brief is the parent's task), with the `database` tool the memory is
         # read by. A greeting is answered with none ("Zero tools for conversation"): the first turn with a task gets it.
         if (me is None and "DataBase" in allowed_tools and not _first_given(session.messages)
@@ -632,6 +629,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                     content = _with_line(content, given)
             except Exception as e:
                 log("warn", user=user, chat_id=session.chat_id, message=f"first-task context not added: {type(e).__name__}: {e}")
+        prelude.mark("memory and listing")
         if block:
             content = _with_line(content, block)
         app = getattr(context, "app", "")
@@ -639,6 +637,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             content = _with_line(content, line)
         await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
+        prelude.mark("message saved")
     messages = session.messages
     # A new chat is named from the person's words while the reply is made, so naming never holds the reply up;
     # a greeting alone waits for more to name it by.
@@ -652,6 +651,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                                                      session=session.chat_id))
             _NAMING.add(naming)
             naming.add_done_callback(_NAMING.discard)
+    prelude.mark("chat meta")
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
     if instructions:
@@ -662,6 +662,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             yield _user_warn(user, session.chat_id,
                              f"Couldn't load {instructions} — your instructions weren't applied this turn.",
                              f"couldn't load {instructions}: {e}")
+    prelude.mark("instructions")
     skill_catalog = None
     if skills is not None:
         try:
@@ -672,6 +673,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             log("warn", user=user, chat_id=billed, message=f"skills unavailable this turn: {e}")
         if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
         ctx = replace(ctx, skills=skill_catalog)
+    prelude.mark("skills")
     for _ in vendor_skips(allowed_tools, vendor, web_search):
         log("warn", user=user, chat_id=billed,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
@@ -689,6 +691,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     DESIGN_FOLDER.set(getattr(context, "folder", "") or "")
     # Video is short in every request until the chat uses it; its contract joins it then (ondemand).
     demand = await ondemand.start(tools_list, messages)
+    prelude.mark("tools built")
     if skill_catalog is not None and not any(t.get("name") == "skill" for t in tools_list):   # even with none yet: it is how the first is made
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
@@ -709,11 +712,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     client_side = [s for s in mcp_servers or [] if not s._server_side]
     # An org admin's switch and the person's own resolve the same way here: the tools never enter the turn.
     hidden = (await connectors.blocked(workspace) | await connectors.off(workspace)) if (any(s._connector for s in client_side) or api_connectors) else set()
+    prelude.mark("connector settings")
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
     # Every server is asked at once — one after another, each grant read and handshake added up before the
     # first model call; the results are taken in the order the servers were given.
     asked = [s for s in client_side if not (s._connector and s._connector.name in hidden)]
     found = await asyncio.gather(*(connectors.tools_for(s, workspace) for s in asked), return_exceptions=True)
+    prelude.mark("connector tools")
     for server, got in zip(asked, found):
         if isinstance(got, Exception):
             said, label = _server_said(got), server._name or server._url
@@ -783,6 +788,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         mcp_names.add(schema["name"])
         owners[schema["name"]] = o
         register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))
+    prelude.mark("key connectors")
 
     if any(t.get("name") == "build_app" for t in tools_list):
         if cat := await asyncio.to_thread(app_catalog, workspace.root):
@@ -795,9 +801,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                             "live, with the credential attached server-side:\n"
                             + "\n".join(f"- {o.name}: {o.api}" for o in apis))
 
+    prelude.mark("apps")
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
-    system_text += "\n\n" + _calendar()
     window = context_window or DEFAULT_WINDOW
     trigger, keep = min(window * COMPACT_AT, window - max_tokens - COMPACT_BUFFER), int(window * KEEP_RECENT)
     tokens_since_compact = 0
@@ -862,6 +868,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if (last.get("at") and (datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() > COLD_AFTER
             and await session.clear(keep, window * CLEAR_COLD)):
         yield compacted(1, "cold", last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0))
+    prelude.mark("history trimmed")
 
     repeats = {}   # (tool, input, result) → times this run
     idle = False   # the turn ended with agents still working
@@ -877,6 +884,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             turn = None
             partial_text = ""
             turn_t0 = time.monotonic()
+            if me is None and (spent := prelude.take()):   # where the time before this first call went
+                log("prelude", user=user, chat_id=billed, ms=spent[1], steps=spent[0])
             try:
                 async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()),
                                                    max_tokens=max_tokens, **request()):

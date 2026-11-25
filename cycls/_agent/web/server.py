@@ -7,7 +7,7 @@ from typing import Optional, Any
 from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
-from cycls._agent import activity, state
+from cycls._agent import activity, prelude, state
 from cycls._agent.web import voice
 
 
@@ -476,13 +476,16 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     @app.post("/chat")
     @app.post("/chat/completions")
     async def back(request: Request, user: Optional[User] = auth):
+        prelude.start()   # sign-in is checked before this: its time is not counted
         data = await request.json()
+        prelude.mark("request read")
         messages = data.get("messages")
         given = request.query_params.get("id")
         chat_id = given or f"{state.TEAM if data.get('team') is True else ''}{uuid.uuid4()}"
         api = request.url.path == "/chat/completions"   # read off the request while it exists
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
+        prelude.mark("workspace found")
 
         # The account's first agent use — a durable per-account marker, so the
         # activation tick fires once per user (a browser flag re-fires on
@@ -493,6 +496,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 first = await state.mark_first_use(user, volume, config.storage, config.workspaces)
             except Exception:
                 first = False
+        prelude.mark("first use")
 
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
                           workspace_id=ws_id,
@@ -562,7 +566,9 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                         return JSONResponse(status_code=409, content={
                             "error": "chat_changed", "chat_id": chat_id,
                             "detail": "This chat changed since it was opened. Reload it to see the latest."})
+                prelude.mark("run record read")
                 await _record(run, "running")   # visible before the first heartbeat
+                prelude.mark("run record written")
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)
             stream = (openai_encoder(stream) if api
                       else encoder(stream, chat_id=chat_id, user=user, first=first, run=run))

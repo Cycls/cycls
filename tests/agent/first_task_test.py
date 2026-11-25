@@ -1,11 +1,11 @@
 """What a first task fetched with its own tool calls before it could start is given with the message: the person's
-memory index, the workspace's top level, a design request's skills, and the calendar. A new design spent its first
+memory index, the workspace's top level, and a design request's skills. A new design spent its first
 2–3 turns on these (measured on super-dev, 2026-11-25)."""
 import asyncio, json
-from datetime import datetime, timezone
+
 
 from cycls._agent import state
-from cycls._agent.harness.main import _calendar, _first_given, _first_task_context
+from cycls._agent.harness.main import _first_given, _first_task_context
 from cycls._agent.design.run import design_preload
 from cycls._agent.design.tool import design_skills_loaded
 from cycls._app.db import workspace
@@ -78,11 +78,6 @@ def test_no_skills_for_a_question_or_a_chat_that_has_them(tmp_path):
                                               "input": {"action": "skill", "skill": ["design-direction"]}}]}]
     assert asyncio.run(design_preload(had, "Design another poster", str(tmp_path))) is None
 
-
-def test_the_calendar_names_each_weekday():
-    cal = _calendar(datetime(2026, 11, 25, 9, tzinfo=timezone.utc))
-    assert "today is Wednesday 25 November 2026" in cal
-    assert "Thu 26 Nov" in cal and "Wed 9 Dec" in cal and "Thu 10 Dec" not in cal
 
 
 def test_a_memory_that_cant_be_read_is_not_called_empty(tmp_path, monkeypatch):
