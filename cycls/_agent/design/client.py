@@ -295,12 +295,20 @@ async def export_page(fig, page, fmt="png", scale=2, width=None, user_id=None):
     return base64.b64decode(data["image_base64"]), _pages(data), str(data.get("page") or "")
 
 
-async def _export(fig, fmt, scale, width, user_id, every, page):
+async def export_slide(fig, slide, fmt="png", scale=2, user_id=None):
+    """One slide of a deck (its number from 1) as a picture → bytes; one past the last raises RuntimeError."""
+    data = await _export(fig, fmt, scale, None, user_id, False, None, slide=slide)
+    return base64.b64decode(data["image_base64"])
+
+
+async def _export(fig, fmt, scale, width, user_id, every, page, slide=None):
     body = _paged({"fig": base64.b64encode(fig).decode(), "format": fmt, "scale": scale}, page)
     if width:
         body["width"] = width
     if every:
         body["every"] = True
+    if slide:
+        body["slide"] = int(slide)
     return await _post("/export", body, user_id)
 
 

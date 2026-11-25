@@ -2985,6 +2985,26 @@ def test_export_of_a_deck_is_one_file_or_an_image_a_slide_and_of_a_page_that_pag
     assert 'page "Story"' in _text(out)
 
 
+def test_one_slide_of_a_deck_exports_alone_and_page_1_of_a_deck_is_its_first_slide(tmp_path, monkeypatch):
+    # To look at a deck's cover the agent asked for `page: 1`, which failed (a deck is one page of slides), and then
+    # exported all five slides to see one (super-dev, 2026-11-25).
+    _deck(tmp_path, monkeypatch, slides=3)
+    asked = []
+
+    async def _export_slide(fig, slide, fmt="png", scale=2, user_id=None):
+        asked.append((slide, fmt))
+        return f"S{slide}".encode()
+    monkeypatch.setattr("cycls._agent.design.export_slide", _export_slide)
+    out = asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "png", "slide": 2}, _ws(tmp_path)))
+    assert asked == [(2, "png")] and (tmp_path / "pitch-slide-2.png").read_bytes() == b"S2" and "(slide 2)" in _text(out)
+    asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "png", "page": 1}, _ws(tmp_path)))
+    assert asked[-1] == (1, "png")
+    whole = asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "pdf", "slide": 2}, _ws(tmp_path)))
+    assert whole.startswith("Error") and "the whole deck" in whole
+    assert "a slide's number" in asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "png", "slide": "x"},
+                                                           _ws(tmp_path)))
+
+
 def test_a_design_is_renamed_on_its_own(tmp_path, monkeypatch):
     _deck(tmp_path, monkeypatch)
     (tmp_path / "pitch.pptx").write_bytes(b"PPTX")                          # an export made earlier: a file of its own

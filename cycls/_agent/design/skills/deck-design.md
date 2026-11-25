@@ -120,12 +120,15 @@ mood on every slide.
 
 ## Custom slides
 
-`{"layout": "custom", "fill": "#…", "nodes": [ … ]}` is a frame you place by hand, and it gets no decor, footer
-or page number. Keep the deck's grid so it doesn't look pasted in. On a 1920 × 1080 slide the margins are 144 and
-1776, the content stays above y 950, and the title is in the theme's heading font, placed as the look places it:
+`{"layout": "custom", "fill": "#…", "nodes": [ … ], "footer": true}` is a frame you place by hand, and it gets no
+decor. With `"footer": true` (in a deck that has a footer, always) it gets the deck's running head and page number,
+exactly where every other slide has them — never draw your own: a hand-drawn one came out differently ("THE MODEL",
+"04" in a deck numbered "2", "3"). Keep their band free: in `editorial` the head sits at y 49 over a rule at y 87;
+in the other looks the footer runs along y ≈ 1014. Keep the deck's grid so it doesn't look pasted in. On a
+1920 × 1080 slide the margins are 144 and 1776, the content stays above y 950, and the title is in the theme's
+heading font, placed as the look places it:
 - `classic`: the title at y 92, 64 px; with `decor: "rule"`, a 2 px rule in the `line` colour at y ≈ 222;
-- `editorial`: a running head — the footer text in 20 px capitals (`letterSpacing` 4, the `muted` colour) at
-  y 49 — over a 2 px `line` rule at y 87; the title at y 132, 80 px;
+- `editorial`: the title at y 132, 80 px, under the running head;
 - `swiss`: a 5 px rule in the text colour at y 58 from 144 to 1776; the title in the column x 144, w 490 from
   y 92, 54 px; the content in x 706 to 1776, from y 92;
 - `bold`: the title at y 92, 88 px; `soft`: centred (x 144, w 1632, `"align": "center"`) at y 92, 64 px;

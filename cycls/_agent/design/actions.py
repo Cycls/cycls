@@ -334,6 +334,20 @@ async def _exec_design_file(action, inp, workspace, name):
         fig = await asyncio.to_thread(fig_path.read_bytes)
         scale, page = inp.get("scale") or 2, str(inp.get("page") or "").strip() or None
         where, said = "", ""
+        # One slide of a deck as a picture, by its number from 1. "page 1" of a deck means its first slide: a deck is
+        # one page of slides, and that call failed, so all five were exported to look at the cover (2026-11-25).
+        slide = inp.get("slide")
+        if slide is None and page and page.isdigit() and fmt not in _DECK_EXTS:
+            pages = (await design.outline(fig, user_id=subject)).get("pages") or []
+            if page not in [p.get("name") if isinstance(p, dict) else str(p) for p in pages]:
+                slide, page = page, None
+        try:
+            slide = int(slide) if slide is not None and str(slide).strip() else None
+        except ValueError:
+            return f"Error: `slide` is a slide's number, from 1 — not {slide!r}."
+        if slide is not None and (slide < 1 or fmt in _DECK_EXTS):
+            return ("Error: `slide` exports one slide as a picture (png, jpg, webp or svg), numbered from 1; a pdf or pptx "
+                    "is the whole deck.")
         try:
             # A deck imported from PowerPoint goes back into the file it came from (powerpoint.py).
             from cycls._agent.design.powerpoint import original_for, written_said
@@ -341,6 +355,9 @@ async def _exec_design_file(action, inp, workspace, name):
             if original:
                 data, written = await design.export_back(fig, original, scale=scale, user_id=subject)
                 outs, said = [(f"{name}.{fmt}", data)], written_said(written)
+            elif slide:
+                outs = [(f"{name}-slide-{slide}.{fmt}", await design.export_slide(fig, slide, fmt=fmt, scale=scale, user_id=subject))]
+                where = f" (slide {slide})"
             elif page:
                 data, pages, page_name = await design.export_page(fig, page, fmt=fmt, scale=scale, user_id=subject)
                 outs = [(f"{name}-{page_name}.{fmt}", data)]
