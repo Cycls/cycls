@@ -18,7 +18,7 @@ from .export import export_pdf
 ACTIONS = ("read", "edit", "create", "comments", "export")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
        "insert_cols", "delete_cols", "add_sheet", "rename_sheet", "delete_sheet", "freeze", "column_width",
-       "sort", "set_direction", "note", "define_name")
+       "row_height", "page_setup", "sort", "set_direction", "note", "define_name")
 _MAX_OPS = 200
 
 SHEETS_TOOL = {
@@ -33,6 +33,12 @@ SHEETS_TOOL = {
         "- create: a new workbook at `path` (`target` names the first sheet, `rtl` for Arabic; an Arabic name or "
         "Arabic values make it right to left unless rtl is false), then `ops`.\n"
         "- note puts a note on a cell (`text`; empty removes it); define_name names a range (`name`, `target`).\n"
+        "- Printing: every read, and every edit that changes the layout, says how the sheet prints (pages, scale, "
+        "how full) and which "
+        "cells' text does not fit as it prints (cut by its row, broken inside a word, ### numbers). Fix it here: "
+        "page_setup (target the sheet: paper, orientation, scale or fit_width / fit_height, margins, center, "
+        "print_area, repeat_rows), row_height and column_width (pixels, or auto: true to fit the text). Read the "
+        "reply, not a PDF.\n"
         "- comments: what people wrote on the workbook's cells, every thread; with `number` (the # in the list) "
         "answer it (`reply`) and close or reopen it (`resolve`). read lists the open ones too.\n"
         "- export: the workbook as a PDF beside it (budget.xlsx → budget.pdf), as it prints, for when the person "
@@ -79,6 +85,21 @@ SHEETS_TOOL = {
                         "rows": {"type": "integer", "description": "freeze: rows frozen at the top"},
                         "cols": {"type": "integer", "description": "freeze: columns frozen at the start"},
                         "width": {"type": "integer", "description": "column_width: pixels"},
+                        "height": {"type": "integer", "description": "row_height: pixels (20 is Excel's usual row)"},
+                        "auto": {"type": "boolean", "description": "row_height / column_width: fit each to its text instead of a size"},
+                        "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"],
+                                  "description": "page_setup"},
+                        "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "page_setup"},
+                        "scale": {"type": "integer", "description": "page_setup: percent, 10–400 (turns fitting off)"},
+                        "fit_width": {"type": "integer", "description": "page_setup: pages wide (0: as many as it takes); "
+                                                                         "with fit_height, fits the sheet to pages"},
+                        "fit_height": {"type": "integer", "description": "page_setup: pages tall (0: as many as it takes)"},
+                        "margins": {"type": "string", "description": "page_setup: narrow, normal, wide, or one length such as 1cm"},
+                        "center": {"type": "string", "enum": ["horizontal", "vertical", "both", "none"], "description": "page_setup"},
+                        "gridlines": {"type": "boolean", "description": "page_setup: print the gridlines"},
+                        "print_area": {"type": "string", "description": "page_setup: the range that prints, e.g. A1:R16 (\"\" for all)"},
+                        "repeat_rows": {"type": "string", "description": "page_setup: rows printed at the top of every page, e.g. 2:3 (\"\" for none)"},
+                        "repeat_columns": {"type": "string", "description": "page_setup: columns printed on every page, e.g. A:B"},
                         "column": {"type": "string", "description": "sort: the column to sort by, e.g. C"},
                         "ascending": {"type": "boolean", "description": "sort: false for largest first"},
                         "rtl": {"type": "boolean", "description": "set_direction: true right-to-left, false left-to-right"},
@@ -113,7 +134,11 @@ SHEETS_PROMPT = (
     "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
     "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
     "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
-    "person's open editor. A PDF of the workbook, when the person asks for one, is `sheets` export. "
+    "person's open editor. How a workbook prints is in every `sheets` read and layout edit's reply (pages, scale, the "
+    "text that does not fit): set it with page_setup, row_height and column_width (auto fits them to the text) "
+    "and trust that reply; never export or convert a copy to look at it. Change a layout only when the person asks "
+    "about printing or how the sheet looks. A PDF of the workbook, when the person "
+    "asks for one, is `sheets` export, once, when the work is done. "
     "Rows a query, a tool or a script produced go in with set_values `from` (their "
     ".csv or .json file), never retyped into `values`: typing is for what exists nowhere else (the person's "
     "own figures, assumptions, labels) or a few cells, and a typed figure from a document or a page says "
