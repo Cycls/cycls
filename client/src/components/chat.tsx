@@ -169,7 +169,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
-  const { error: toastError, info: toastInfo, undo: toastUndo } = useToast();
+  const { error: toastError, info: toastInfo, undo: toastUndo, action: toastAction } = useToast();
   const isAr = lang === "ar";
   // logo and brand inherit from en; name/description stay per-locale.
   const _active = passMetadata?.[isAr ? "ar" : "en"];
@@ -891,7 +891,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         .then((url) => saveBlob(url, design ? `${shownName(name)}.pdf` : name)).catch(() => {});
     },
     share: shareFileFn ? (path: string) => setSharingFile(path) : undefined,
-  } : null, [openFileLoud, shareFileFn]);
+    save: files?.writeNew ? (path: string, text: string) => {
+      files.writeNew!(path, text)
+        .then((saved) => toastAction(t("savedTo").replace("{name}", saved), t("open"), () => openFileInCanvas(saved, saved.split("/").pop() || saved)))
+        .catch(() => toastError(t("saveFailed")));
+    } : undefined,
+  } : null, [openFileLoud, shareFileFn, files?.writeNew, toastAction, toastError, openFileInCanvas]);
   const resolveMedia = useMemo(() => (openFileQuiet ? (p: string) => openFileQuiet(p, true) : undefined), [openFileQuiet]);
 
   // Newest step on the transcript — a run this tab never streamed still has one.

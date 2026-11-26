@@ -2382,6 +2382,15 @@ def test_a_tool_can_send_several_ui_events():
         [{"type": "ui", "action": "c", "id": "t2"}]
 
 
+def test_a_chart_of_labels_a_tool_sends_is_kept_for_the_reload():
+    from cycls._agent.harness.main import _kept
+    chart = {"type": "chart", "id": "t1", "kind": "column", "title": "Sales", "prefix": "SAR ", "short": True,
+             "data": {"labels": ["Jan", "Feb"], "series": [{"name": "Sales", "values": [120, 150], "color": "#3171F6"}, "junk"]}}
+    assert _kept(chart) == {**chart, "data": {"labels": ["Jan", "Feb"], "series": [{"name": "Sales", "values": [120, 150], "color": "#3171F6"}]}}
+    assert _kept({"type": "chart", "id": "t2", "data": {"labels": ["Jan"], "series": [{"name": "no values"}]}}) is None
+    assert _kept({"type": "chart", "id": "t3", "series": [{"kind": "line", "data": [["2026-01-01", 1]]}]})["series"]   # a time series, as before
+
+
 def test_a_file_a_tool_opens_stands_in_the_chat_and_is_kept():
     """A two-channel tool that opens a file gets the canvas tool's card, under its own id. The transcript keeps
     that card and the tool's sources, bounded, since `ui` events never reach it: a reload shows both."""

@@ -4,7 +4,11 @@ import { Icon } from "../icon";
 import { t } from "../../lib/i18n";
 
 // What a file's card does besides open: given by the chat that owns the file, so a shared view has none.
-export const FileActions = createContext<{ download: (path: string) => void; share?: (path: string) => void } | null>(null);
+export const FileActions = createContext<{
+  download: (path: string) => void;
+  share?: (path: string) => void;
+  save?: (path: string, text: string) => void;   // a new file under a free name, beside any of the same name
+} | null>(null);
 
 // A file's tile, the same in the chat, the Files panel and on cycls.ai: its tint and its kind ("pdf", "design",
 // "video"), a longer word set smaller to fit.

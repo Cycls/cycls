@@ -134,6 +134,7 @@ Yield these from app functions:
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
 - `{"type": "image", "src": "...", "alt": "...", "caption": "..."}` - pictures side by side make a grid; a workspace picture opens in the canvas
+- `{"type": "chart", "kind": "column|bar|stacked|line|area|pie|donut|treemap", "title": ..., "data": {"labels": [...], "series": [{"name": ..., "values": [...]}]}}` - drawn in SVG in the chat, no library (parts/data-chart.tsx), saved to files, as a PNG or a CSV; a reply draws the same from a ```chart block, and a time series (`series` of `[time, value]` rows, candles) is drawn with Lightweight Charts. A reply's ```flowchart block (`nodes`, `edges`, `direction`) is laid out and drawn the same way (parts/flow-chart.tsx)
 - `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin, and by any tool as `_ui` with optional `label`, `quote`, `status`, `note`; they survive a reload
 - `{"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}` - a limit, sent with a reply: a line over the composer in its last fifth; the reply that uses the last of it opens the plans as it ends (once a period on each device), and a reply refused for it is a thank-you note
 - `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history (also `open_canvas`, `suggest`, `ask` — see docs/tutorial.md)

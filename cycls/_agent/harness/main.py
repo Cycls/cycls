@@ -243,7 +243,19 @@ _CHART_POINTS = 5_000   # per series: about 20 years of daily closes, or weeks o
 
 
 def _chart(ev):
-    """A chart part as the transcript keeps it: its series bounded to their latest points, so a reload draws it again."""
+    """A chart part as the transcript keeps it, bounded, so a reload draws it again: labels and their values (the chat
+    draws column, bar, stacked, line, area, pie and donut itself), or a time series to its latest points."""
+    data = ev.get("data")
+    if isinstance(data, dict) and isinstance(data.get("labels"), list):
+        series = [{**({"name": str(s["name"])[:120]} if "name" in s else {}), "values": s["values"][:200],
+                   **({"color": s["color"]} if isinstance(s.get("color"), str) else {})}
+                  for s in (data.get("series") or ())[:8] if isinstance(s, dict) and isinstance(s.get("values"), list)]
+        if not series:
+            return None
+        look = {k: ev[k][:12] for k in ("kind", "prefix", "suffix") if isinstance(ev.get(k), str)}
+        look |= {k: ev[k] for k in ("short", "values") if isinstance(ev.get(k), bool)}
+        text = {k: v[:n] for k, n in _CHART.items() if isinstance(v := ev.get(k), str)}
+        return {"type": "chart", "id": ev.get("id"), **text, **look, "data": {"labels": data["labels"][:200], "series": series}}
     series = [{**{k: s[k] for k in ("name", "kind", "pane", "color") if k in s}, "data": s["data"][-_CHART_POINTS:]}
               for s in (ev.get("series") or ())[:8] if isinstance(s, dict) and isinstance(s.get("data"), list)]
     if not series:

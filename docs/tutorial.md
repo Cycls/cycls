@@ -149,6 +149,31 @@ yield {"type": "table", "row": ["web-1", "Online", "45%"]}
 yield {"type": "table", "row": ["web-2", "Online", "62%"]}
 ```
 
+### Charts
+
+Labels and their values, drawn in the chat itself (no library): `column`, `bar` (horizontal), `stacked`, `line`,
+`area`, `pie`, `donut` and `treemap`. A tool can return the same dict and it stays in the chat after a reload. The
+agent's replies draw one too, from a fenced block of the same JSON with the language `chart`. A person can draw it
+another way, see it as a table, and save it to their files, as a picture or as its numbers (CSV).
+
+```python
+yield {"type": "chart", "kind": "column", "title": "Sales by month", "prefix": "SAR ", "short": True,
+       "data": {"labels": ["Jan", "Feb", "Mar"],
+                "series": [{"name": "Riyadh", "values": [120000, 150000, 90000]},
+                           {"name": "Jeddah", "values": [80000, 95000, 110000]}]}}
+```
+
+A reply draws a flowchart (a process, an org chart, a mind map) from a fenced block with the language `flowchart`,
+laid out in the chat, also with no library:
+
+```json
+{"title": "Refund request", "direction": "down",
+ "nodes": [{"id": "a", "label": "Request arrives", "shape": "start"},
+           {"id": "b", "label": "Within 14 days?", "shape": "decision"},
+           {"id": "c", "label": "Refund", "shape": "end"}],
+ "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c", "label": "Yes"}]}
+```
+
 ### Callouts, status, images
 
 ```python
