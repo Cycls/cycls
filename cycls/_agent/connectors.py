@@ -269,33 +269,61 @@ def gated(fn, tool, label, connector, classify=None, hard=False, allowed=False, 
     return call
 
 
-REFUSED_TTL = 600   # as long as a discovery is kept (mcp.DISCOVERY_TTL)
+REFUSED_TTL = 600   # a refusal is asked again after this, behind a turn
 _refused = {}       # url -> deadline: an OAuth server that would not list for someone not connected
+_behind = set()     # work started beside a turn, held until it ends
+
+
+def behind(job):
+    """Run `job` beside the turn instead of before it."""
+    task = asyncio.get_running_loop().create_task(job)
+    _behind.add(task)
+    task.add_done_callback(_behind.discard)
+    return task
+
+
+async def _anonymous(server, url, at):
+    """What a server lists for someone not connected; a refusal is noted for everyone here who isn't."""
+    try:
+        found = await server.discover(token=None, url=url)
+    except Exception:
+        if at: _refused[at] = time.monotonic() + REFUSED_TTL
+        return [], {}, {}
+    _refused.pop(at, None)
+    return found
+
+
+async def warm(server):
+    """Ask a server before any turn does. A key connector, or a per-person address, has nothing to show without one."""
+    o = server._connector
+    if not o:
+        await server.discover()
+    elif o.kind != "key" and server._url not in _refused:
+        await _anonymous(server, None, server._url)
 
 
 async def tools_for(server, ws):
-    """One server's tools for the caller: discovered with their grant, then their policy — `never` drops a tool,
-    `ask` gates it. A key connector with no key contributes nothing, silently; an OAuth server still lists
-    anonymously so the connect card can appear. One that refused is not asked again for REFUSED_TTL: most
-    people have connected nothing, and six refused handshakes in a row were ~3.5 s before every turn."""
+    """One server's tools for the caller, and whether they hold a token for it: discovered with their grant, then
+    their policy — `never` drops a tool, `ask` gates it. A key connector with no key contributes nothing, silently;
+    an OAuth server still lists anonymously so the connect card can appear. A refusal is asked again behind a turn,
+    never in front of one: most people have connected nothing, and six refusals in a row were ~3.5 s a turn."""
     o = server._connector
     token = await o.bearer(ws) if o else None
     url = await o.endpoint(ws) if o and o.addressed else None
     if o and o.kind == "key" and token is None and url is None:
-        return [], {}, {}
+        return [], {}, {}, False
     at = url or getattr(server, "_url", None)
-    if o and token is None and at and _refused.get(at, 0) > time.monotonic():
-        return [], {}, {}
-    try:
+    if o and token is None:
+        if at in _refused:
+            if _refused[at] < time.monotonic():
+                _refused[at] = time.monotonic() + REFUSED_TTL   # one re-ask at a time
+                behind(_anonymous(server, url, at))
+            return [], {}, {}, False
+        schemas, fns, names = await _anonymous(server, url, at)
+    else:
         schemas, fns, names = await server.discover(token=token, url=url)
-    except Exception:
-        if o and token is None:   # a server that only lists for the signed-in: nothing, until they connect
-            if at:
-                _refused[at] = time.monotonic() + REFUSED_TTL
-            return [], {}, {}
-        raise
     if not o or not schemas:
-        return schemas, fns, names
+        return schemas, fns, names, bool(token)
     chosen = await permissions(ws, o.name)
     found = {f"{server.label}_{t.name}": t for t in await server.tools(token, url)}
     modes = {k: mode(server, t, chosen) for k, t in found.items()}
@@ -308,7 +336,7 @@ async def tools_for(server, ws):
         return f
     return ([s for s in schemas if modes.get(s["name"]) != "never"],
             {k: policy(k, f) for k, f in fns.items() if modes.get(k) != "never"},
-            names)
+            names, bool(token))
 
 
 def api_schema(o):

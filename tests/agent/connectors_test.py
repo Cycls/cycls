@@ -207,11 +207,11 @@ def test_tool_permissions_read_write_and_gate_the_turn(tmp_path):
     schemas = [{"name": "drive_search_files"}, {"name": "drive_create_file"}]
     names = {"drive_search_files": "drive · search_files", "drive_create_file": "drive · create_file"}
     server.discover = AsyncMock(return_value=(schemas, {"drive_search_files": run, "drive_create_file": run}, names))
-    kept, fns, _ = asyncio.run(c.tools_for(server, ws))
+    kept, fns, *_ = asyncio.run(c.tools_for(server, ws))
     assert [s["name"] for s in kept] == ["drive_create_file"]                # never: gone from the turn
     assert asyncio.run(fns["drive_create_file"](None, ToolContext(None, ws))) == "ran"   # allow: runs
     asyncio.run(c.set_permissions(ws, "google", {}))
-    kept, fns, _ = asyncio.run(c.tools_for(server, ws))
+    kept, fns, *_ = asyncio.run(c.tools_for(server, ws))
     assert asyncio.run(fns["drive_create_file"]({"name": "q3.xlsx"}, ToolContext(None, ws))) == "ran"   # auto: a write runs
     card = asyncio.run(fns["drive_create_file"]({"name": "q3.xlsx"}, ToolContext(None, ws, auto=False)))
     assert (card["action"], card["tool"], card["connector"], card["args"]) == ("confirm", "drive_create_file", "google", {"name": "q3.xlsx"})   # manual: the card
@@ -219,7 +219,7 @@ def test_tool_permissions_read_write_and_gate_the_turn(tmp_path):
     assert asyncio.run(fns["drive_create_file"]({"name": "q3.xlsx"}, ok)) == "ran"                     # approved: this call
     assert asyncio.run(fns["drive_create_file"]({"name": "q4.xlsx"}, ok))["action"] == "confirm"        # not another
     asyncio.run(c.set_permissions(ws, "google", {"drive_create_file": "ask"}))
-    _, fns, _ = asyncio.run(c.tools_for(server, ws))
+    _, fns, *_ = asyncio.run(c.tools_for(server, ws))
     assert asyncio.run(fns["drive_create_file"]({"name": "q3.xlsx"}, ToolContext(None, ws)))["action"] == "confirm"   # the person said ask: auto defers
 
 
@@ -232,7 +232,7 @@ def test_auto_still_pauses_for_a_destructive_tool(tmp_path):
     server = SimpleNamespace(label="drive", _connector=_google(), _writes=None, tools=AsyncMock(return_value=tools),
                              discover=AsyncMock(return_value=([{"name": "drive_create_file"}, {"name": "drive_delete_file"}],
                                                               {"drive_create_file": run, "drive_delete_file": run}, {"drive_create_file": "c", "drive_delete_file": "d"})))
-    _, fns, _ = asyncio.run(c.tools_for(server, ws))
+    _, fns, *_ = asyncio.run(c.tools_for(server, ws))
     assert asyncio.run(fns["drive_create_file"]({"name": "a"}, ToolContext(None, ws))) == "ran"
     assert asyncio.run(fns["drive_delete_file"]({"name": "a"}, ToolContext(None, ws)))["action"] == "confirm"
     assert c.destructive(SimpleNamespace(name="update_row", annotations=SimpleNamespace(destructive_hint=True)))   # the server's word
@@ -268,10 +268,10 @@ def test_discovery_uses_the_callers_grant_and_skips_a_keyless_key_connector(tmp_
     ph = c.Key("posthog")
     found = ([{"name": "posthog_s"}], {"posthog_s": 1}, {"posthog_s": "n"})
     server = SimpleNamespace(_connector=ph, label="posthog", _writes=None, tools=AsyncMock(return_value=[]), discover=AsyncMock(return_value=found))
-    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})                       # no key: nothing, and no error
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {}, False)                # no key: nothing, and no error
     server.discover.assert_not_awaited()
     asyncio.run(credentials.put(ws, "posthog", {"key": "phx_1"}))
-    assert asyncio.run(c.tools_for(server, ws)) == found
+    assert asyncio.run(c.tools_for(server, ws)) == (*found, True)
     server.discover.assert_awaited_with(token="phx_1", url=None)
     gs = SimpleNamespace(_connector=_google(), discover=AsyncMock(return_value=([], {}, {})))
     asyncio.run(c.tools_for(gs, ws))
@@ -361,28 +361,46 @@ def test_discovery_is_silent_for_an_unconnected_server_that_only_lists_for_the_s
     ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
     g = _google()
     server = SimpleNamespace(_connector=g, discover=AsyncMock(side_effect=RuntimeError("401")))
-    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {}, False)
     asyncio.run(credentials.put(ws, "google", {"access_token": "t", "refresh_token": "r", "expires_at": time.time() + 3600}))
     with pytest.raises(RuntimeError):                                                    # connected and still failing: say so
         asyncio.run(c.tools_for(server, ws))
 
 
-def test_a_refusal_to_list_anonymously_is_remembered_until_the_person_connects(tmp_path):
-    """Six OAuth servers refusing someone who had connected nothing cost ~3.5 s before every super-dev
-    turn. A refusal is remembered for REFUSED_TTL; connecting asks again at once; so does its expiry."""
+def test_a_refusal_is_asked_again_behind_a_turn_never_in_front_of_one(tmp_path):
+    """Six OAuth servers refusing someone who had connected nothing cost ~3.5 s before every super-dev turn. A
+    refusal is noted; past the note the turn still goes on at once, and the server is asked again behind it.
+    Connecting asks with the grant at once."""
     from cycls._app.auth import User
     ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
     server = SimpleNamespace(_connector=_google(), _url="https://refuses/mcp", discover=AsyncMock(side_effect=RuntimeError("401")))
-    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})
-    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {}, False)
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {}, False)
     assert server.discover.await_count == 1                                              # the next turn did not ask
-    c._refused["https://refuses/mcp"] = time.monotonic() - 1                             # remembered long enough
-    asyncio.run(c.tools_for(server, ws))
-    assert server.discover.await_count == 2
+
+    async def turn():
+        got = await c.tools_for(server, ws)
+        assert server.discover.await_count == 1                                          # the turn did not wait for it
+        await asyncio.gather(*c._behind)
+        return got
+    c._refused["https://refuses/mcp"] = time.monotonic() - 1                             # the note ran out
+    assert asyncio.run(turn()) == ([], {}, {}, False)
+    assert server.discover.await_count == 2 and c._refused["https://refuses/mcp"] > time.monotonic()   # asked, noted again
     asyncio.run(credentials.put(ws, "google", {"access_token": "t", "refresh_token": "r", "expires_at": time.time() + 3600}))
     server.discover = AsyncMock(return_value=([], {}, {}))
-    asyncio.run(c.tools_for(server, ws))                                                 # connected: asked with the grant
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {}, True)                     # connected: asked with the grant
     server.discover.assert_awaited_once_with(token="t", url=None)
+
+
+def test_warm_up_asks_before_the_first_turn_and_skips_a_key_connector(tmp_path):
+    from cycls._app.auth import User
+    ws = workspace(User(id="u1"), tmp_path, base=f"file://{tmp_path}")
+    oauth = SimpleNamespace(_connector=_google(), _url="https://refuses/mcp", discover=AsyncMock(side_effect=RuntimeError("401")))
+    key = SimpleNamespace(_connector=c.Key("posthog"), _url="https://ph/mcp", discover=AsyncMock())
+    asyncio.run(c.warm(oauth)); asyncio.run(c.warm(oauth)); asyncio.run(c.warm(key))   # a page loaded again: known
+    key.discover.assert_not_awaited()                                                    # nothing to show without a key
+    assert asyncio.run(c.tools_for(oauth, ws)) == ([], {}, {}, False)
+    assert oauth.discover.await_count == 1                                               # the first turn did not ask
 
 
 def test_a_server_that_lists_anonymously_is_not_taken_for_a_refusal(tmp_path):
@@ -619,7 +637,7 @@ def test_a_pasted_link_can_be_the_credential(tmp_path):
     server = SimpleNamespace(_connector=zid, label="zid", _writes=None,
                              tools=AsyncMock(return_value=[]), discover=AsyncMock(return_value=found))
     assert zid.kind == "key"                                   # the directory already knows how to draw this
-    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {})   # no link yet: nothing, and no error
+    assert asyncio.run(c.tools_for(server, ws)) == ([], {}, {}, False)   # no link yet: nothing, and no error
     server.discover.assert_not_awaited()
 
     for bad in ("https://evil.example/mcp", "http://mcp.zid.sa/s/a", "https://evil-zid.sa/s/a",
@@ -627,7 +645,7 @@ def test_a_pasted_link_can_be_the_credential(tmp_path):
         assert zid.validate(bad), bad                          # a link from anywhere else is refused
     assert zid.validate("https://mcp.zid.sa/s/abc") is None    # any subdomain of theirs is fine
     asyncio.run(credentials.put(ws, "zid", {"key": "https://mcp.zid.sa/s/abc"}))
-    assert asyncio.run(c.tools_for(server, ws)) == found
+    assert asyncio.run(c.tools_for(server, ws)) == (*found, False)   # a link, not a token
     server.discover.assert_awaited_with(token=None, url="https://mcp.zid.sa/s/abc")   # addressed, never sent
     assert asyncio.run(zid.bearer(ws)) is None
 

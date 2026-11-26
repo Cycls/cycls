@@ -635,9 +635,9 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             continue
         if isinstance(got, BaseException):   # cancelled: the turn is going away
             raise got
-        schemas, fns, names = got
+        schemas, fns, names, granted = got
         if not (server._connector and schemas):
-            if server._connector and not schemas and not await server._connector.bearer(workspace):
+            if server._connector and not schemas and not granted:
                 unconnected[server._connector.name] = server._connector
             _mount(server, schemas, fns, names)
             continue
@@ -785,11 +785,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                              "Long-chat compression failed — this chat may hit its length limit sooner.",
                              f"compaction failed: {ce}")
 
-    # Back after a pause the provider cache is gone, so stubbing now costs no miss.
+    # Back after a pause the provider cache is gone, so stubbing now costs no miss — if the last call read enough.
     last = next((m["usage"] for m in reversed(messages) if m.get("usage")), {})
+    read = last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0)
     if (last.get("at") and (datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() > COLD_AFTER
-            and await session.clear(keep, window * CLEAR_COLD)):
-        yield compacted(1, "cold", last.get("input", 0) + last.get("cached", 0) + last.get("cache_create", 0))
+            and read > window * CLEAR_COLD and await session.clear(keep, window * CLEAR_COLD)):
+        yield compacted(1, "cold", read)
 
     repeats = {}   # (tool, input, result) → times this run
     idle = False   # the turn ended with agents still working

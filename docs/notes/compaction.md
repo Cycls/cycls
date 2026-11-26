@@ -10,7 +10,7 @@ The rest is the conversation, and it only grows. Four layers keep it bounded:
 | layer | when | model call | code |
 | --- | --- | --- | --- |
 | cap at ingest | as a tool result or attachment arrives | no | `_exec_read`, `spill.spill` |
-| a tool's newest pictures | every call: the newest four stay, a line for each older one | no | `compact.recent` |
+| a tool's newest pictures | every call: the newest six stay, a line for each older one | no | `compact.recent` |
 | clear (tier 1) | past the trigger, or when a run starts after a pause | no | `Session.clear`, `compact.clear` |
 | summarize (tier 2) | past the trigger when clearing frees too little, or on overflow | yes | `Session.compact`, `compact.compact` |
 
@@ -42,7 +42,8 @@ so the only defence is not letting it in.
 ## A tool's newest pictures
 
 A picture a tool returns (a design's render or sheet, a page, a browser screenshot, a `read`
-of an image) stays in the model's view while it is among the newest four (`PICTURES`). A line
+of an image) stays in the model's view while it is among the newest six (`PICTURES`; four until
+2026-11-26). A line
 stands in for each older one, `[picture: seen when it came back]`, in the model's view only
 (`compact.recent`, applied by `Session.context()`); the transcript keeps the picture.
 Pictures the person attached stay.
@@ -61,7 +62,7 @@ and went on to fix what it saw, on Modal and Crusoe alike. Four cost little ther
 chat's first token came in 1.4 s on Crusoe with one picture, 1.4 s with three, 2.3 s with all
 thirteen (Modal: 1.6, 2.5 and 3.6 s).
 
-The cache: when a picture drops out of the four, the host reads again what came after it, a
+The cache: when a picture drops out of the six, the host reads again what came after it, a
 few steps rather than the chat.
 
 ## The model's own thinking
@@ -72,15 +73,16 @@ and sends it back in that field on every later call, to the model that wrote it 
 (`usage.model`). DeepSeek with tools expects every earlier turn's reasoning (its own API refuses
 a request without it); pi and DeepSeek's own harness keep it the same way. Without it, each
 step started its thinking over. Claude's thinking was always kept; thinking without a signature
-never reaches Claude. Tier 1 clearing empties old turns' thinking along with their tool results.
+never reaches Claude. Clearing keeps it whole: until 2026-11-26 tier 1 emptied old turns' thinking with
+their tool results, and a design chat back from a pause redid what it had already decided.
 
 ## When the loop looks
 
 `fold()` in `_run` (`harness/main.py`) runs before every model call and once more after
 the loop ends. It reads the last call's measured input (`input + cached + cache_create`)
 and does nothing unless that is past the trigger and more than two messages follow
-`first_kept`. Before the first call, a chat whose last call was over 20 minutes ago also
-gets a tier-1 clear at a lower bar — see [what it costs](#what-it-costs).
+`first_kept`. Before the first call, a chat whose last call was over 20 minutes ago, and read more
+than that lower bar (measured, not estimated), also gets a tier-1 clear at the lower bar — see [what it costs](#what-it-costs).
 
 | | formula | super (1M, `max_tokens` 131k) | 128k window, 8k out |
 | --- | --- | --- | --- |
@@ -103,8 +105,7 @@ model with:
 - tool results → `[Old tool result cleared]`
 - string tool arguments over 1,000 characters (an app's code, an edit's text) →
   `[Old input cleared]`
-- an OpenAI-compatible model's thinking → empty, so it is not sent (Claude's is signed and
-  stays whole)
+- the model's own thinking stays whole, Claude's (signed) and an OpenAI-compatible model's alike
 
 Paths, commands and short arguments stay, so the model still knows what it did and the
 file ledger still finds files. A loaded skill's result is never stubbed: it is the skill's
@@ -272,9 +273,10 @@ with edited tool inputs in old turns), OpenRouter, Moonshot, Fireworks.
 - **Modal K3 sometimes misses on an identical repeat** — likely a request reaching another
   container. Production still averages 95% cached.
 - **A failed summary is logged without its cause** — `ok=false`, but not why.
-- **The estimate is `chars / 4`.** Good enough to place cuts; base64 images are
-  overcounted badly (a 1 MB image estimates ~330k tokens and bills ~1.5k). Each
-  assistant turn stores its measured `usage`, which could replace it.
+- **The estimate is `chars / 4`, a picture at 1,600 tokens** (`PICTURE_TOKENS`). Until 2026-11-26 a
+  picture's base64 counted as text: a 20-render design chat estimated 2.0M tokens against ~33k, and
+  a pause cleared it down to its last two renders. Each assistant turn stores its measured `usage`,
+  which could replace the estimate.
 - **Only string arguments are stubbed**; long nested arguments stay.
 - **The end-of-run summary holds the stream open.** A fully detached one needs CPU
   after the response ends, which Cloud Run throttles — see [runs.md](runs.md).

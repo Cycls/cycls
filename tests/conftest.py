@@ -9,8 +9,11 @@ def _reset_provisioned():
     """Org names repeat across tests with fresh tmp_paths — clear the
     once-per-org provisioning cache."""
     from cycls._agent import connectors, state
+    from cycls._agent.harness import llm
     state._provisioned.clear()
     connectors._refused.clear()   # servers that refused to list anonymously, remembered per process
+    llm._booted.clear()           # an LLM a test unpickled would be warmed up — over the network — by the next app
+    llm._warmed = float("-inf")
 
 
 @pytest.fixture(autouse=True)

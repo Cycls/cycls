@@ -2619,3 +2619,69 @@ def test_a_render_says_which_skill_to_load_until_the_chat_has_loaded_one(agent_e
     assert len(said) == 3
     assert '"skill": ["design-direction", "graphic-design"]' in said[0]
     assert "No design skill" not in said[1] and "No design skill" not in said[2]
+
+
+def test_a_turn_reads_each_connectors_grant_once(agent_env):
+    """Whether the person holds a grant is read once a turn per connector. It was read again, one connector after
+    another, for each that listed nothing: fourteen storage reads before super's first model call."""
+    from cycls._agent import mcp as m, credentials
+    ws, ctx = agent_env
+    m._discovered.clear()
+    reads, find = [], credentials.find
+    async def counted(w, name):
+        reads.append(name)
+        return await find(w, name)
+    client, calls = _capturing_client([_make_response([_text_block("ok")])])
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(side_effect=RuntimeError("401"))), \
+         patch.object(credentials, "find", counted), patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(_google())])))
+    assert reads.count("google") == 1
+    system = calls[0]["system"][-1]["text"] if isinstance(calls[0]["system"], list) else calls[0]["system"]
+    assert "google (Google Drive)" in system                                           # still offered: not connected
+
+
+def test_a_picture_weighs_what_the_model_reads_not_its_base64():
+    """A picture counts as PICTURE_TOKENS in the size estimate. Its base64 read as text weighed tens of thousands,
+    so a few design renders made a chat look full, and a pause cleared most of it."""
+    from cycls._agent.harness.compact import _tokens, PICTURE_TOKENS
+    picture = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A" * 400_000}}
+    result = [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "slide 1"}, picture]}]
+    assert PICTURE_TOKENS <= _tokens(result) < PICTURE_TOKENS + 100
+
+
+def test_clearing_keeps_the_models_own_thinking():
+    """A cleared turn keeps its thinking whole, an OpenAI-compatible model's too: why the model built what it built
+    outlives the results it read. Its tool results and long arguments still go."""
+    from cycls._agent.harness.compact import clear
+    thought = {"type": "thinking", "thinking": "Gold headline on navy; the logo stays bottom-left.", "field": "reasoning"}
+    old = [{"role": "assistant", "content": [thought, {"type": "tool_use", "id": "t1", "name": "edit",
+                                                       "input": {"path": "f", "new": "n" * 5_000}}]},
+           {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r" * 9_000}]}]
+    cleared = clear(old)
+    assert cleared[0]["content"][0] == thought
+    assert cleared[0]["content"][1]["input"] == {"path": "f", "new": "[Old input cleared]"}
+    assert cleared[1]["content"][0]["content"] == "[Old tool result cleared]"
+
+
+def test_a_chat_of_pictures_back_after_a_pause_is_not_cleared(agent_env):
+    """A design chat, a render every step, back after a pause: its pictures count at what the model reads, so
+    stubbing would free little and nothing is cleared. Counted as text, the same chat lost all but its last turns."""
+    from datetime import datetime, timedelta, timezone
+    from cycls._agent.state import append_messages, get_compaction
+    ws, ctx = agent_env
+    render = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "A" * 400_000}}
+    history = []
+    for i in range(20):
+        history += [{"role": "user", "content": f"slide {i}"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "design", "input": {"op": "render"}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": [render]}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]
+    history[-1]["usage"] = {"input": 2_000, "cached": 400_000, "at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()}
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, history, 0))
+    mock_client = MagicMock()
+    mock_client.messages.stream = lambda **kw: FakeStream(_make_response([_text_block("Done")]))
+    with _mock_anthropic(mock_client):
+        items = asyncio.run(_drain(_run(context=ctx)))
+    _providers._clients.clear()
+    assert not [i for i in items if isinstance(i, dict) and i.get("action") == "compacted"]
+    assert not (asyncio.run(get_compaction(ctx.workspace, ctx.chat_id)) or {}).get("cleared")

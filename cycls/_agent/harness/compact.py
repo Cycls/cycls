@@ -11,6 +11,7 @@ CLEAR_COLD = 0.1          # ... and this share after a pause, when the provider 
 COLD_AFTER = 1_200        # idle seconds until the cache is mostly gone (K3: 94% cached at 5–10 min, 19% at 20–40)
 COMPACT_BUFFER = 30_000   # headroom past input + max_tokens
 SUMMARY_TIMEOUT = 300     # seconds before the summary counts as failed
+PICTURE_TOKENS = 1_600    # what a model reads a picture as (Claude up to ~1.6k, the DeepSeek hosts ~1k), whatever its base64 weighs
 
 _SUMMARY_REQUEST = (
     "Summarize the conversation above following the structured format. "
@@ -32,8 +33,19 @@ def prefix(summary):
 
 
 def _tokens(content):
-    """~4 chars/token estimate over the JSON form — sizes cuts, never bills."""
-    return len(content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)) // 4
+    """~4 chars/token over the JSON form, a picture at PICTURE_TOKENS (its base64 is not text) — sizes cuts, never bills."""
+    if isinstance(content, str): return len(content) // 4
+    pictures = 0
+
+    def bare(x):
+        nonlocal pictures
+        if isinstance(x, list): return [bare(v) for v in x]
+        if not isinstance(x, dict): return x
+        if x.get("type") == "image":
+            pictures += 1
+            return None
+        return {k: bare(v) for k, v in x.items()}
+    return len(json.dumps(bare(content), default=str, ensure_ascii=False)) // 4 + pictures * PICTURE_TOKENS
 
 
 def _is_tool_result(m):
@@ -79,18 +91,17 @@ def _ledger(messages):
 
 
 def _stub(b):
+    """What a cleared turn shows the model. Its own thinking stays whole: emptied, it redid what it had decided."""
     t = isinstance(b, dict) and b.get("type")
     if t == "tool_result": return {**b, "content": "[Old tool result cleared]"}
     if t == "tool_use":   # long arguments (an app's code, an edit's text) go too; paths and commands stay
         return {**b, "input": {k: "[Old input cleared]" if isinstance(v, str) and len(v) > 1_000 else v
                                for k, v in (b.get("input") or {}).items()}}
-    if t == "thinking" and "signature" not in b:   # an OpenAI-compatible model's; Claude's is signed and stays whole
-        return {**b, "thinking": ""}
     return b
 
 
 SEEN = "[picture: seen when it came back]"
-PICTURES = 4   # a tool's newest pictures that stay in the model's view
+PICTURES = 6   # a tool's newest pictures that stay in the model's view
 
 
 def recent(messages, keep=PICTURES):

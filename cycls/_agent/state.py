@@ -758,7 +758,7 @@ class Session:
 
     def context(self):
         """The model's view: the summary (once compacted) standing in for the folded
-        prefix, tool results and thinking before `cleared` stubbed, a tool's newest
+        prefix, tool results and long arguments before `cleared` stubbed, a tool's newest
         pictures only, the rest verbatim."""
         from .harness.compact import prefix, clear, recent
         k = max(self.first_kept, self.cleared)

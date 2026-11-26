@@ -3629,3 +3629,19 @@ def test_files_serve_a_composition_as_the_player(tmp_path, monkeypatch):
     listing = client.get("/files", params={"path": "videos"}).json()
     rows = listing if isinstance(listing, list) else listing.get("files") or listing.get("entries") or []
     assert any(e.get("name") == "reel.video.html" and e.get("kind") == "composition" for e in rows), listing
+
+
+def test_the_first_turn_is_readied_as_the_instance_starts_and_whenever_a_client_loads(monkeypatch):
+    """The web page and /config (which the phone asks) mean a message is coming: the model's client, a connection
+    and the connectors' tool lists are readied then, and when the instance starts."""
+    from fastapi.testclient import TestClient
+    import cycls._agent.web.server as server
+    calls = []
+    monkeypatch.setattr(server, "warm_up", lambda: calls.append(1))
+
+    async def dummy_agent(context):
+        yield "test"
+    with TestClient(web(dummy_agent, Config(public_path=THEME_PATH, auth=False))) as client:
+        assert len(calls) == 1                                                         # the instance started
+        client.get("/config"); client.get("/")
+    assert len(calls) == 3

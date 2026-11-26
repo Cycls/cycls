@@ -9,6 +9,7 @@ from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
 from cycls._agent import activity, inbox, routines, state, webpush
+from cycls._agent.harness.llm import warm_up
 from cycls._agent.web import voice
 
 
@@ -506,6 +507,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
 
     @asynccontextmanager
     async def _lifespan(app):
+        warm_up()   # the first turn's client, connection and connectors, readied as the instance starts
         yield
         # SIGTERM: hypercorn drives this, and Cloud Run allows 10s. Cancel the
         # loops, then let the supervisors finish their unwind and checkpoints.
@@ -732,6 +734,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     @app.get("/config")
     async def get_config():
         asyncio.create_task(_refresh())
+        warm_up()   # a client is loading the app (the phone asks here, the web page below): a message is coming
         return config.public()
 
     # The mic: our transcription engines first when they are set (ElevenLabs and/or the cycls-transcribe
@@ -1012,6 +1015,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     @app.get("/sso-callback")
     async def index(request: Request):
         asyncio.create_task(_refresh())   # this page is served from what we have; the next one is fresh
+        warm_up()
         return _page(request)
 
     @app.get("/shared/{user}/{token}")

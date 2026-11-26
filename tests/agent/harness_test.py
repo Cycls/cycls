@@ -643,8 +643,8 @@ def test_openai_thinking_is_kept_and_goes_back_to_its_own_model():
 
 
 def test_thinking_from_another_model_never_reaches_claude():
-    """Claude refuses thinking without a signature: an OpenAI-compatible model's is dropped on the way, and
-    clearing old turns empties it. Claude's own, signed, stays whole."""
+    """Claude refuses thinking without a signature: an OpenAI-compatible model's is dropped on the way. Clearing
+    old turns keeps both whole — the model that wrote it still reads it."""
     from cycls._agent.harness.providers.anthropic import AnthropicProvider
     from cycls._agent.harness.compact import clear
     theirs = {"type": "thinking", "thinking": "Page 1 looks right.", "field": "reasoning"}
@@ -656,7 +656,8 @@ def test_thinking_from_another_model_never_reaches_claude():
             {"role": "assistant", "content": [ours, done]}]
     out = AnthropicProvider(None, "claude-x")._to_messages(msgs)
     assert [m["content"] for m in out[1:]] == [[done], [ours, done]]
-    assert [b["thinking"] for m in clear(msgs[1:]) for b in m["content"] if b["type"] == "thinking"] == ["", "", "Fine."]
+    assert [b["thinking"] for m in clear(msgs[1:]) for b in m["content"] if b["type"] == "thinking"] == \
+        ["Page 1 looks right.", "Page 1 looks right.", "Fine."]
 
 
 def test_web_fetch_strips_html_to_text(monkeypatch):
@@ -1374,3 +1375,44 @@ def test_only_a_slug_is_taken_as_the_open_app():
     assert _clean_app("burn-up_2") == "burn-up_2"
     for bad in ("", "../x", "a/b", "Burnup", "x" * 65, 3, None):
         assert _clean_app(bad) == ""
+
+
+# ---- warm-up: the first turn's client and connectors, readied before it ----
+
+def test_a_client_keeps_idle_connections_and_warm_opens_one(monkeypatch):
+    """The SDKs drop an idle connection after 5 s: one opened as the app loads would be gone before the person
+    sends. `warm` imports the SDK, builds the client the turn will use, and opens a connection in its pool."""
+    import openai
+    from unittest.mock import AsyncMock
+    from cycls._agent.harness import providers as P
+    made, real = {}, openai.DefaultAsyncHttpxClient
+    monkeypatch.setattr(openai, "DefaultAsyncHttpxClient", lambda **kw: made.update(kw) or real(**kw))
+    monkeypatch.setattr(P, "_clients", {})
+    c = P._client_for("openrouter", base_url="https://h.example/v1", api_key="k")
+    assert made["limits"].keepalive_expiry == P.KEEPALIVE
+    monkeypatch.setattr(c._client, "head", head := AsyncMock())
+    asyncio.run(P.warm("openrouter/x/y", base_url="https://h.example/v1", api_key="k"))
+    assert P._client_for("openrouter", base_url="https://h.example/v1", api_key="k") is c     # the turn's own client
+    assert head.await_args.args == ("https://h.example/v1/",)
+
+
+def test_warm_up_readies_what_the_agent_shipped_at_most_once_a_minute(monkeypatch):
+    """What is unpickled at boot is what the first turn would build: its client, and the tool lists of the
+    servers the harness asks itself (not those handed to the vendor)."""
+    import pickle
+    from cycls._agent import connectors
+    from cycls._agent.harness import llm as L, providers
+    seen = []
+    async def client(model, **kw): seen.append(("client", model, kw["base_url"]))
+    async def server(s): seen.append(("server", s._url))
+    monkeypatch.setattr(providers, "warm", client)
+    monkeypatch.setattr(connectors, "warm", server)
+    agent = cycls.LLM().model("openrouter/x/y").base_url("https://h.example/v1").mcp(
+        cycls.MCP("https://a.example/mcp"), cycls.MCP("https://b.example/mcp").server_side())
+    pickle.loads(pickle.dumps(agent))                                                  # as the instance boots
+
+    async def boot():
+        L.warm_up(); L.warm_up()                                                       # the page asked too: once
+        await asyncio.gather(*connectors._behind)
+    asyncio.run(boot())
+    assert seen == [("client", "openrouter/x/y", "https://h.example/v1"), ("server", "https://a.example/mcp")]

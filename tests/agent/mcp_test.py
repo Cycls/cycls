@@ -110,3 +110,29 @@ def test_guidance_and_the_write_classifier_ride_the_copy():
     fn = lambda tool, args: False
     s = m.MCP("https://x/mcp").guidance("Use call execute-sql directly.").writes(fn)
     assert (s._guidance, s._writes) == ("Use call execute-sql directly.", fn)
+
+
+def test_an_old_tool_list_serves_the_turn_while_a_new_one_is_fetched_behind_it():
+    import time
+    s, key = m.MCP("https://x/mcp"), ("https://x/mcp", None)
+    m._discovered[key] = (time.monotonic() - 1, [_tool("old")])                       # past DISCOVERY_TTL
+
+    async def turn():
+        got = await s.tools()
+        if behind := list(m._asking.values()): await asyncio.wait(behind)
+        return got
+    with patch.object(m, "_list", AsyncMock(return_value=[_tool("new")])):
+        assert [t.name for t in asyncio.run(turn())] == ["old"]                       # nobody waited for the handshake
+    assert [t.name for t in m._discovered[key][1]] == ["new"]                          # the next turn gets it
+    m._discovered[key] = (time.monotonic() - 1, [_tool("old")])
+    with patch.object(m, "_list", AsyncMock(side_effect=RuntimeError("down"))):
+        asyncio.run(turn())
+    assert key not in m._discovered                                                    # failing now: the next turn asks, and says why
+
+
+def test_a_turn_and_the_warm_up_share_one_handshake():
+    s = m.MCP("https://x/mcp")
+    with patch.object(m, "_list", AsyncMock(return_value=[_tool("t")])) as ls:
+        async def both(): return await asyncio.gather(s.tools(), s.tools())
+        a, b = asyncio.run(both())
+    assert ls.await_count == 1 and [t.name for t in a] == [t.name for t in b] == ["t"]

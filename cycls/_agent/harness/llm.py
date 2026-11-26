@@ -52,8 +52,9 @@ class LLM:
 
     def __setstate__(self, state):
         """Unpickled where the agent runs, at boot: the skills it ships are known before its first turn, so the
-        Skills tab lists them on a fresh instance too."""
+        Skills tab lists them on a fresh instance too, and `warm_up` knows what to ready."""
         self.__dict__.update(state)
+        _booted.append(self)
         if state.get("_skills"):
             from ..tools import skills
             skills.configure(state["_skills"])
@@ -243,3 +244,34 @@ class LLM:
                 yield ev
         finally:
             if team: await team.close()
+
+
+_booted = []         # the LLMs unpickled where the agent runs: what `warm_up` readies before a first turn
+_warmed = float("-inf")
+
+
+def warm_up():
+    """Ready a first turn, beside whatever asked: each booted LLM's client with a connection open, its connectors'
+    tool lists or refusals. Called as the instance starts and whenever a client loads the app; once a minute at most."""
+    import time
+    from .. import connectors
+    global _warmed
+    if not _booted or time.monotonic() - _warmed < 60:
+        return
+    _warmed = time.monotonic()
+    connectors.behind(_warm())
+
+
+async def _warm():
+    import asyncio, importlib
+    from . import providers
+    from .. import connectors
+    from ..logs import log
+    servers = [s for llm in _booted for s in llm._mcp if not s._server_side]
+    if servers:   # off the event loop: importing the MCP client is the slow part of a first discovery
+        await asyncio.to_thread(importlib.import_module, "mcp.client.streamable_http")
+    for r in await asyncio.gather(*(providers.warm(l._model, base_url=l._base_url, api_key=l._api_key, headers=l._headers)
+                                    for l in _booted if l._model),
+                                  *(connectors.warm(s) for s in servers), return_exceptions=True):
+        if isinstance(r, Exception):
+            log("warn", message=f"warm-up: {type(r).__name__}: {r}")

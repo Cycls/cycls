@@ -1,20 +1,36 @@
 """cycls.MCP — a remote MCP server the agent connects to.
 
 Client-side by default: the harness speaks Streamable HTTP itself, discovers
-tools once (cached DISCOVERY_TTL seconds per url and token) and opens a
-session only when a tool is called — so every provider gets MCP, and a turn
-that uses no server costs nothing. `.server_side()` hands the server to the
-Anthropic connector instead: fewer hops, one deploy-time bearer, anthropic/*
-only. Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
+tools once (kept per url and token, refreshed behind a turn past DISCOVERY_TTL)
+and opens a session only when a tool is called — so every provider gets MCP,
+and a turn that uses no server costs nothing. `.server_side()` hands the server
+to the Anthropic connector instead: fewer hops, one deploy-time bearer,
+anthropic/* only. Immutable fluent, like cycls.LLM / cycls.Web / cycls.Image.
 """
-import time
+import asyncio, time
 from contextlib import asynccontextmanager
 from typing import List, Optional
-from .connectors import not_connected
+from .connectors import behind, not_connected
 
 DISCOVERY_TTL = 600
 _discovered = {}   # (url, token) -> (deadline, [Tool])
 _prompts = {}      # (url, token) -> (deadline, [Prompt])
+_asking = {}       # (url, token) -> the discovery under way: a turn and the warm-up share one handshake
+
+
+def _ask(key, at, headers):
+    """The discovery under way for this address and token, else a new one."""
+    if not (task := _asking.get(key)):
+        task = _asking[key] = behind(_list(at, headers))
+        task.add_done_callback(lambda t: _settle(key, t))
+    return task
+
+
+def _settle(key, task):
+    _asking.pop(key, None)
+    if task.cancelled(): return
+    if task.exception(): _discovered.pop(key, None)   # the next turn asks again, and can say why
+    else: _discovered[key] = (time.monotonic() + DISCOVERY_TTL, task.result())
 
 
 @asynccontextmanager
@@ -152,15 +168,18 @@ class MCP:
         return self._name or "mcp"
 
     async def tools(self, token=None, url=None):
-        """This server's tools (the SDK objects), discovered once per address and token and cached;
-        `.allow()` applied. A per-person address keys its own entry, so nobody reads another's catalog."""
+        """This server's tools (the SDK objects), kept per address and token, so nobody reads another's catalog;
+        past DISCOVERY_TTL the kept list serves the turn while a new one is fetched behind it. `.allow()` applied."""
         if not (at := self._at(url)):
             return []
         key = (at, token or self._token)
-        hit = _discovered.get(key)
-        if not hit or hit[0] < time.monotonic():
-            _discovered[key] = hit = (time.monotonic() + DISCOVERY_TTL, await _list(at, self._headers(token)))
-        return [t for t in hit[1] if not self._allow or t.name in self._allow]
+        if not (hit := _discovered.get(key)):
+            found = await asyncio.shield(_ask(key, at, self._headers(token)))
+        else:
+            found = hit[1]
+            if hit[0] < time.monotonic():
+                _ask(key, at, self._headers(token))
+        return [t for t in found if not self._allow or t.name in self._allow]
 
     async def discover(self, token=None, url=None):
         """(schemas, handlers, names) for this server's tools, prefixed `{name}_`."""

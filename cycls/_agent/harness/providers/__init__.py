@@ -66,6 +66,7 @@ class Provider(Protocol):
 # ---- Client routing ----
 
 _clients: dict = {}  # config key → reused SDK client. Construction is ~1s (httpx + TLS).
+KEEPALIVE = 300      # idle seconds a connection stays open (the SDK's default: 5), so one opened as the app loads is still there
 
 
 def _client_for(vendor: str, *, base_url, api_key, headers=None):
@@ -77,11 +78,22 @@ def _client_for(vendor: str, *, base_url, api_key, headers=None):
         if headers: kw["default_headers"] = headers
         c = anthropic.AsyncAnthropic(**kw)
     else:
-        import openai
-        c = openai.AsyncOpenAI(base_url=base_url, api_key=api_key,
+        import httpx, openai
+        pool = openai.DefaultAsyncHttpxClient(limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100,
+                                                                  keepalive_expiry=KEEPALIVE))
+        c = openai.AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=pool,
                                **({"default_headers": headers} if headers else {}))
     _clients[key] = c
     return c
+
+
+async def warm(model, *, base_url=None, api_key=None, headers=None):
+    """A first turn's client before the turn: its SDK imported off the event loop, built, a connection opened."""
+    import asyncio, importlib
+    vendor = model.split("/", 1)[0]
+    await asyncio.to_thread(importlib.import_module, "anthropic" if vendor == "anthropic" else "openai")
+    c = _client_for(vendor, base_url=base_url, api_key=api_key, headers=headers)
+    await c._client.head(str(c.base_url), timeout=10)   # no key sent; any answer leaves the connection in the pool
 
 
 def make_provider(model: str, *, client=None, base_url=None, api_key=None,
