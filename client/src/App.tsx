@@ -19,7 +19,7 @@ import { dark } from "@clerk/ui/themes";
 import { arCheckout } from "./lib/clerk-ar";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
-import { markSignup, detectSignup, startSignup, needsPhone, PHONE_COUNTRIES, bySms, toE164, latinDigits } from "./lib/signup";
+import { markSignup, detectSignup, startSignup, needsPhone, PHONE_COUNTRIES, toE164, latinDigits } from "./lib/signup";
 import { onFreePlan } from "./lib/commerce";
 import { accountError } from "./lib/errors";
 import { IconButton } from "./components/icon";
@@ -692,7 +692,7 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
               </h1>
               <p className="text-muted-foreground text-sm mt-1.5">
                 {step === "phone" ? t("addPhone")
-                  : step === "phone_code" ? t(bySms(sentTo) ? "phoneCodeSent" : "phoneCodeSentWhatsApp").replace("{phone}", `⁦${sentTo}⁩`)
+                  : step === "phone_code" ? t("phoneCodeSent").replace("{phone}", `⁦${sentTo}⁩`)
                   : t("signInToContinue")}
               </p>
             </div>

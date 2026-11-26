@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { markSignup, detectSignup, startSignup, needsPhone, toE164, latinDigits, PHONE_COUNTRIES, bySms } from "../src/lib/signup";
+import { markSignup, detectSignup, startSignup, needsPhone, toE164, latinDigits, PHONE_COUNTRIES } from "../src/lib/signup";
 
 const track = vi.fn();
 vi.mock("../src/lib/analytics", () => ({ track: (...a: unknown[]) => track(...a) }));
@@ -83,13 +83,11 @@ describe("the phone step, only when Clerk waits on the phone alone", () => {
     expect(toE164("966", "00971501234567")).toBe("+971501234567");
   });
 
-  it("offers every country, each once, and texts Saudi numbers while the rest get WhatsApp", () => {
+  it("offers every country, each once, with its dialing code", () => {
     const regions = PHONE_COUNTRIES.map(([r]) => r);
     expect(regions.length).toBeGreaterThan(200);
     expect(new Set(regions).size).toBe(regions.length);
     expect(Object.fromEntries(PHONE_COUNTRIES)).toMatchObject({ SA: "966", AE: "971", EG: "20", US: "1", CA: "1", GB: "44" });
-    expect(bySms("+966551234567")).toBe(true);
-    expect(bySms("+971501234567")).toBe(false);
   });
 
   it("reads the digits an Arabic keyboard types, in a number and in a code", () => {

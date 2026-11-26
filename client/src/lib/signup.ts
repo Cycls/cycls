@@ -50,10 +50,9 @@ const CODES = "AF93 AX358 AL355 DZ213 AS1684 AD376 AO244 AI1264 AG1268 AR54 AM37
   + "SY963 TW886 TJ992 TZ255 TH66 TL670 TG228 TK690 TO676 TT1868 TN216 TR90 TM993 TC1649 TV688 VI1340 UG256 UA380 AE971 GB44 "
   + "US1 UY598 UZ998 VU678 VA39 VE58 VN84 WF681 EH212 YE967 ZM260 ZW263";
 
-/** The phone step's countries, [region, dialing code]. Saudi numbers get the code by SMS, every other by WhatsApp
- *  (the relay's SMS_COUNTRIES, kept in step). */
+/** The phone step's countries, [region, dialing code]. The SMS relay sends Saudi numbers from the Cycls sender, the
+ *  rest through Twilio. */
 export const PHONE_COUNTRIES = CODES.split(" ").map((t) => [t.slice(0, 2), t.slice(2)] as const);
-export const bySms = (number: string) => number.startsWith("+966");
 
 /** Arabic-Indic and Persian digits as 0–9: what an Arabic keyboard types into a number or a code. */
 export const latinDigits = (s: string) => s.replace(/[٠-٩۰-۹]/g, (d) => String(d.charCodeAt(0) & 15));
