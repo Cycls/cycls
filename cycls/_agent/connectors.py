@@ -87,8 +87,15 @@ def _mac(body, key=None):
 
 def not_connected(name):
     """What a tool returns when no grant resolves: the connect card for the user, a stop for the model."""
-    return {"type": "ui", "action": "connect", "connector": name,
-            "ack": f"{name} is not connected. A card is asking the user to connect it — end your turn now."}
+    return offer([name])
+
+
+def offer(names):
+    """The connect card for the ones that fit, in the agent's message (`connector`, the first, for a client that shows
+    one); the model is told to end its turn."""
+    return {"type": "ui", "action": "connect", "connector": names[0], "connectors": list(names),
+            "ack": f"{', '.join(names)} {'is' if len(names) == 1 else 'are'} not connected. A card is asking the user "
+                   f"to connect {'it' if len(names) == 1 else 'one'} — end your turn now."}
 
 
 def _orgdb(ws):
@@ -449,18 +456,20 @@ def index_line(o, count):
 
 
 def matches(query, catalog):
-    """Connector names whose tools answer *query*, best first. `catalog` is name -> (title, description, [tool text])."""
+    """Connector names whose tools answer *query*, best first; one the query names comes alone. `catalog` is name ->
+    (title, description, [tool text])."""
     q = (query or "").lower()
     words = {w for w in re.findall(r"[a-z0-9]+", q) if len(w) > 2}
-    scored = {}
+    scored, named = {}, set()
     for name, (title, desc, tools) in catalog.items():
         hay = " ".join([name, title or "", desc or "", *tools]).lower()
         score = sum(1 for w in words if w in hay)
         if name in q or (title and title.lower() in q):
             score += 5
+            named.add(name)
         if score:
             scored[name] = score
-    return sorted(scored, key=lambda n: -scored[n])
+    return sorted(named or scored, key=lambda n: -scored[n])
 
 
 class Connector:

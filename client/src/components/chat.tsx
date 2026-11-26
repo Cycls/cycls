@@ -4,18 +4,22 @@ import { CommentsContext, type CommentsApi, type CommentsHost } from "../lib/com
 import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useId } from "react";
 import { motion, LayoutGroup, AnimatePresence } from "framer-motion";
 import { useStickToBottom } from "use-stick-to-bottom";
-import { MessageBubble } from "./message";
+import { MessageBubble, quoteName } from "./message";
 import { Files, InlineInput, DropdownMenu } from "./files";
 import { Canvas, type CanvasFile } from "./canvas";
 import { APP_DATA_EVENT, TURN_END_EVENT, appScope } from "./app-bridge";
 import { editWorkingPath, ext, isDesignEditor, saveBlob, shownName } from "./canvas-utils";
 import { AppsPanel } from "./apps-panel";
 import { TrashView, type TrashRow } from "./trash-view";
-import { SearchDialog } from "./search-dialog";
+import { SearchDialog, type Kind } from "./search-dialog";
+import { InboxBell } from "./inbox";
+import { useInbox } from "../hooks/use-inbox";
 import { useApps, type AppInfo } from "../hooks/use-apps";
 import { Popover } from "./popover";
 import { Icon, IconButton, Spinner, type IconName } from "./icon";
-import { ConnectCard } from "./connect-card";
+import { ConnectContext } from "./connect-card";
+import { RoutinesContext, type Routine } from "./routine-card";
+import { RoutineDialog, RoutinesPanel, RoutinesStart } from "./routines-panel";
 import { ApprovalCard, ApprovalContext, waitingCard, type Answer } from "./approval-card";
 import { ConnectorsContext } from "./parts/tool-call";
 import { FileActions } from "./parts/file-part";
@@ -28,8 +32,8 @@ import { ShareDialog, type ShareLink, type ShareLinks } from "./share-dialog";
 import { PricingCards } from "./pricing-cards";
 import { UserMenu, type UserInfo, type PlanInfo } from "./user-menu";
 import { SettingsDialog } from "./settings-dialog";
-import { TeamPeople, WorkspaceMenu, type WorkspacesMenu } from "./workspace-switcher";
-import { isTeamChat, type Attachment, type ChatApi, type Message, type AppConfig, type SendExtra, type Part, type Connection } from "../hooks/use-chat";
+import { TeamPeople, WorkspaceMenu, type People, type WorkspacesMenu } from "./workspace-switcher";
+import { isTeamChat, type Attachment, type ChatApi, type Message, type AppConfig, type SendExtra, type Part, type Connection, type Quote } from "../hooks/use-chat";
 import { UpgradeContext, UsageLine, nearLimit, usedUp, firstTime, useLimitOpensPlans } from "./usage";
 import type { BrandKit, DesignVersion, FetchVersioned, FileChange, FileEntry, FileInfo, OfficeEditorApi, VideoEditorApi, WriteFile } from "../hooks/use-files";
 import { designCommandDetail, designSelection, detachDesignEditorsUnder, flushAllDesignEditors, flushDesignEditor, flushDesignEditorsUnder, type DesignHost, type DesignLive, type DesignSelection } from "./design-editor-view";
@@ -47,7 +51,8 @@ import { usePaneWidth } from "../hooks/use-pane-width";
 import { useEscapeFallback } from "../hooks/use-escape";
 import { useHeldSend, uploading } from "../hooks/use-held-send";
 import { SUGGESTIONS } from "./suggestions-data";
-import { ExamplesGallery } from "./examples";
+import { ExamplesGallery, useExampleComposer } from "./examples";
+import { setPushApi } from "../lib/notifications";
 import { AskCard, type AskQuestion } from "./ask-card";
 import { Surfaces } from "./surfaces";
 import { SurveyStrip, useSurvey } from "./survey-strip";
@@ -64,7 +69,7 @@ export interface PassAgent {
   icon_svg?: string;
 }
 
-type PanelTab = "files" | "shares" | "chats" | "apps" | "trash";
+type PanelTab = "files" | "chats" | "apps" | "trash" | "routines";
 
 export interface AccountInfo {
   user: UserInfo;
@@ -130,6 +135,8 @@ export interface FilesPanelProps {
   onOpenChat?: (id: string) => void;
   onShareFile?: (path: string, audience: string) => Promise<string>;
   shareLinks?: ShareLinks;   // what's already shared, for the Share popover
+  shared?: Record<string, string>;   // a shared file's path → who can open it, for its mark
+  onSharesChanged?: () => void;
   onOpenInCanvas?: (path: string, name: string) => void;
   maxUpload?: number;   // per-file cap (MB) for the client pre-check
   org?: { id: string; name: string } | null;
@@ -145,23 +152,25 @@ interface Queued {
 }
 
 const RAIL_ICON_W = 44;   // folded rail: icon strip only
-// Switching workspace remounts Chat: each one keeps the chat and canvas tabs it had open, for when it's back.
-const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean }>();
+type ChatRow = { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean };
+// Switching workspace remounts Chat: each one keeps what it showed — the open chat, the canvas tabs, the chat list, its
+// people — and shows it again at once when it's back, while the fresh copy loads.
+const kept = new Map<string, { chat: string | null; tabs: CanvasFile[]; active: string | null; hidden: boolean; chats: ChatRow[]; members: People["members"] }>();
 
 export function Chat({ chat, onShare, files, account, config, view = "" }: {
   chat: ChatApi;
-  onShare?: (audience: string) => Promise<string>;
+  onShare?: (audience: string, id?: string) => Promise<string>;   // the open chat, or the one named
   files?: FilesPanelProps;
   account?: AccountInfo | null;
   config?: AppConfig | null;
-  view?: string;   // the org and workspace, which `kept` is keyed by
+  view?: string;   // the account, org and workspace, which `kept` is keyed by
 }) {
   const { messages, isStreaming, attached, runStatus, runStartedAt, chatLoading, chatId, markCard, send: onSend, retry: onRetry, connection, reconnect: onReconnect, regenerate: onRegenerate, stop: onStop, clear: onClear, listShares: onListShares, deleteShare: onDeleteShare, listChats: onListChats, loadChat: onLoadChat, deleteChat: onDeleteChat, moveToTeam: onMoveToTeam, older, loadOlder: onLoadOlder, live, react: onReact, rewrite: onRewrite, typing: onTyping, renameChat: onRenameChat, setFavorite: onSetFavorite, uploadFile, authHeaders, api, setUIHandler, setRestoreHandler } = chat;
   const { user, plan, freePlan, org, activeOrg, orgs, onSignOut, onManageAccount, onCreateOrg, onManageOrg, onSwitchOrg, workspaces } = account ?? ({} as Partial<AccountInfo>);
   const { name, pass_metadata: passMetadata, voice, suggestions, examples_enabled: examplesEnabled } = config ?? {};
 
   const lang = useLang();
-  const { error: toastError, info: toastInfo, undo: toastUndo } = useToast();
+  const { error: toastError, info: toastInfo, undo: toastUndo, action: toastAction } = useToast();
   const isAr = lang === "ar";
   // logo and brand inherit from en; name/description stay per-locale.
   const _active = passMetadata?.[isAr ? "ar" : "en"];
@@ -174,10 +183,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const teamWs = workspaces?.active?.type === "team";
   const [chatKind, setChatKind] = useState<"agent" | "team">("agent");
   useEffect(() => { if (chatId) setChatKind(isTeamChat(chatId) ? "team" : "agent"); }, [chatId]);
-  const inTeam = teamWs && (chatId ? isTeamChat(chatId) : chatKind === "team");
+  // "+ New routine": a new chat whose empty screen is the routines one, the agent's examples and the message box. A
+  // routine is the agent's to make, so what is sent there is a chat with the agent, whichever kind was open before.
+  const [routineStart, setRoutineStart] = useState(false);
+  const inTeam = teamWs && !routineStart && (chatId ? isTeamChat(chatId) : chatKind === "team");
   const agentNames = [meta?.name, passMetadata?.en?.name, passMetadata?.ar?.name, name].filter(Boolean).map((n) => `@${n!.toLowerCase()}`);
+  const [was] = useState(() => kept.get(view));
+  // A chat about to open — the one kept here, or the address's — shows as loading, never the empty screen first.
+  const [opening, setOpening] = useState(() => !!(was?.chat || (account && new URLSearchParams(window.location.search).has("id"))));
+  useEffect(() => { if (chatLoading) setOpening(false); }, [chatLoading]);
   // The team workspace's people: on General everyone in the org but those it lists, elsewhere those it lists.
-  const [members, setMembers] = useState<{ id: string; name: string; image?: string; you?: boolean }[]>([]);
+  const [members, setMembers] = useState<People["members"]>(was?.members ?? []);
   useEffect(() => {
     const w = workspaces?.active;
     if (w?.type !== "team") { setMembers([]); return; }
@@ -236,8 +252,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       return next;
     });
   }, []);
-  const [filesTab, setFilesTab] = useState<PanelTab>(() =>
-    (sessionStorage.getItem("cycls_panel_tab") as PanelTab) || (account ? "chats" : "files"));
+  const [filesTab, setFilesTab] = useState<PanelTab>(() => {
+    const kept = sessionStorage.getItem("cycls_panel_tab");
+    return kept && kept !== "shares" ? kept as PanelTab : account ? "chats" : "files";   // Shares is a tab no more
+  });
   // The agent's `suggest` tool offers ONE follow-up message at a time — a
   // chip above the composer; click sends it, ArrowUp pulls it in to edit.
   const [followUp, setFollowUp] = useState<string | null>(null);
@@ -257,8 +275,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // composer. The options are shortcuts, not a constraint: typing any reply
   // answers it too.
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
-  // The agent's connect card: a tool needed an account the user hasn't linked.
-  const [connect, setConnect] = useState<{ name: string } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
@@ -291,7 +307,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   };
   useEffect(() => {   // the callback tab reports success: the card goes away, the directory refreshes
     const done = (e: MessageEvent) => {
-      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { setConnect(null); loadConnectors(); }
+      if (e.origin === window.location.origin && e.data?.type === "cycls:connected") { loadConnectors(); goOn.current(e.data.connector); }
     };
     window.addEventListener("message", done);
     return () => window.removeEventListener("message", done);
@@ -327,8 +343,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   useEffect(() => {
     setFollowUp(null);
     setAsk(null);
-    setConnect(null);
     setPills([]);
+    setReplyTo(null);
     queuedRef.current = [];
     setQueued([]);
     heldRef.current = false;
@@ -345,16 +361,14 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // Typing hushes every surface — prompt, tip, survey — until the next turn.
   const [hushed, setHushed] = useState(false);
   useEffect(() => { setHushed(false); }, [turnsDone]);
-  const [was] = useState(() => kept.get(view));
   const [canvasTabs, setCanvasTabs] = useState<CanvasFile[]>(was?.tabs ?? []);
   const [canvasActive, setCanvasActive] = useState<string | null>(was?.active ?? null);
   const [canvasHidden, setCanvasHidden] = useState(was?.hidden ?? false);
-  useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden }); },
-    [view, chatId, canvasTabs, canvasActive, canvasHidden]);
   // "Add selection": the visible design's selection, and the one attached to the draft.
   const activeDesign = canvasHidden ? null : (canvasActive ?? canvasTabs[canvasTabs.length - 1]?.path ?? null);
   const [designSel, setDesignSel] = useState<DesignSelection | null>(null);
   const [attachedSel, setAttachedSel] = useState<DesignSelection | null>(null);
+  const [replyTo, setReplyTo] = useState<Quote | null>(null);   // a team chat's message the next one answers
   useEffect(() => {
     setDesignSel(activeDesign ? designSelection(activeDesign) : null);
     const onSelection = (e: Event) => {
@@ -445,15 +459,52 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     else { sessionStorage.removeItem("cycls_settings"); setSettingsWs(null); }
   }, []);
   const wsNav = workspaces && { ...workspaces, onManage: (id: string) => { setSettingsWs(id); setSettingsOpen(true); } };
-  // A team chat's people: top right on a computer, under the workspace in the menu on a phone.
+  // A team workspace's people, at the top in every chat of it, not only its team chats, on a phone too.
   const ws = workspaces?.active;
-  const people = team && members.length > 0 && ws ? { members, agent: team.agent, logo: team.logo, ws,
+  const people = teamWs && members.length > 0 && ws ? { members, ws,
     onManage: ["owner", "admin"].includes(ws.role ?? "") ? () => wsNav!.onManage(ws.id) : undefined } : undefined;
+  // A search hit in another workspace: that workspace opens, and it opens the hit as it loads (?id= ?file= ?app=).
+  const here = ws?.id ?? `u-${user?.id}`;
+  const openHit = (kind: Kind, key: string, at?: string) => {
+    if (wsNav && at && at !== here) {
+      wsNav.onSwitch(at.startsWith("u-") ? null : at);
+      window.history.replaceState({}, "", `?${{ chats: "id", files: "file", apps: "app" }[kind]}=${encodeURIComponent(key)}`);
+    } else if (kind === "chats") onLoadChat?.(key);
+    else if (kind === "files") openFileInCanvas(key);
+    else { const app = apps.find((a) => a.slug === key); if (app) openApp(app); }
+  };
+  const inbox = useInbox(api, !!account, chatId);
+  // Push: the provider reaches our server as the signed-in person, and a notification clicked opens its chat here.
+  useEffect(() => { setPushApi(account ? api : null); }, [api, account?.user?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const openRef = useRef(openHit);
+  openRef.current = openHit;
+  useEffect(() => {
+    if (!navigator.serviceWorker) return;
+    const got = (e: MessageEvent) => { if (e.data?.type === "cycls:open" && e.data.chat) openRef.current("chats", e.data.chat, e.data.ws); };
+    navigator.serviceWorker.addEventListener("message", got);
+    return () => navigator.serviceWorker.removeEventListener("message", got);
+  }, []);
+  useUrlParam("ws", (at) => {   // a push's link: the chat, in its own workspace
+    const id = new URLSearchParams(window.location.search).get("id");
+    if (wsNav && at !== here) {
+      wsNav.onSwitch(at.startsWith("u-") ? null : at);
+      if (id) window.history.replaceState({}, "", `?id=${encodeURIComponent(id)}`);
+    }
+  });
+  useUrlParam("file", openFileInCanvas);
+  useUrlParam("app", (slug) => { const app = apps.find((a) => a.slug === slug); if (app) openApp(app); }, !appsLoading);
   const [shares, setShares] = useState<{ token: string; path: string; audience: string; title: string; shared_at: string; url: string }[]>([]);
-  const [sharesLoading, setSharesLoading] = useState(false);
-  const [chats, setChats] = useState<{ id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[]>([]);
+  // What this person has shared, for the marks in Chats and Files: a chat's id or a file's path → who can open it.
+  const loadShares = () => { if (onListShares && account) onListShares().then(setShares).catch(() => {}); };
+  const sharedOf = (kind: "chat" | "file") =>
+    Object.fromEntries(shares.filter((s) => s.path.startsWith(`${kind}/`)).map((s) => [s.path.slice(kind.length + 1), s.audience || "public"]));
+  const [sharingChat, setSharingChat] = useState<{ id: string; title: string } | null>(null);
+  const [chats, setChats] = useState<ChatRow[]>(was?.chats ?? []);
+  useEffect(() => { kept.set(view, { chat: chatId, tabs: canvasTabs, active: canvasActive, hidden: canvasHidden, chats, members }); },
+    [view, chatId, canvasTabs, canvasActive, canvasHidden, chats, members]);
   const [chatsLoading, setChatsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const examples = useExampleComposer(input, setInput, textareaRef);   // the empty screen's gallery and the composer
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
   // A chat opens on its newest: reaching the top reads the page before, and the view stays where it was.
@@ -477,6 +528,53 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, [messages]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmitRef = useRef<(overrideText?: string, origin?: string, extra?: SendExtra) => void>(() => {});
+  // The connect card in the agent's message: Connect signs in; once a connector its last message waits on is linked,
+  // the agent carries on by itself; Not now tells it to go on without.
+  const labelOf = (name: string) => connectorLabel(connectors?.find((c) => c.name === name) ?? { name });
+  const goOn = useRef<(name?: string) => void>(() => {});
+  goOn.current = (name) => {
+    const last = messages[messages.length - 1];
+    const waits = last?.role === "assistant" && last.parts?.some((p) => p.type === "card" && p.card?.action === "connect"
+      && ((p.card.connectors as string[] | undefined) ?? [p.card.connector]).includes(name));
+    if (name && waits && !isStreaming) handleSubmitRef.current(t("connectedGoOn").replace("{name}", labelOf(name)), "connect");
+  };
+  // A routine's card in the agent's message: Set up, Save and Delete are the person's; Run now opens the run to watch.
+  const [routineList, setRoutineList] = useState<Routine[] | null>(null);
+  const loadRoutines = useCallback(() => {
+    if (config?.routines && account) api("/routines", { silent: true }).then((r) => r.json()).then(setRoutineList).catch(() => {});
+  }, [api, config?.routines, account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadRoutines(); }, [loadRoutines]);
+  const routinesCtx = {
+    routines: routineList,
+    connectors: connectors ?? undefined,
+    make: async (r: Routine) => { await api("/routines", { method: "POST", json: r }); track("routine_set_up", { every: r.when.every }); loadRoutines(); },
+    save: async (id: string, patch: Partial<Routine>) => { await api(`/routines/${id}`, { method: "PATCH", json: patch }); loadRoutines(); },
+    remove: async (id: string) => { await api(`/routines/${id}`, { method: "DELETE" }); track("routine_deleted", {}); loadRoutines(); },
+    now: async (id: string) => {
+      const { chat: run } = await (await api(`/routines/${id}/now`, { method: "POST" })).json();
+      track("routine_run_now", {});
+      loadRoutines();
+      onLoadChat?.(run);
+    },
+    edit: (routine: Routine, onSave: (r: Routine) => Promise<void> | void) => setEditing({ routine, onSave }),
+    open: (path: string) => { openFileInCanvas(path); if (!isDesktop) setFilesOpen(false); },
+    connect: (name: string) => void connectCard.connect(name),
+  };
+  const [editing, setEditing] = useState<{ routine: Routine; onSave: (r: Routine) => Promise<void> | void } | null>(null);
+  const newRoutine = () => { onClear?.(); setRoutineStart(true); if (!isDesktop) setFilesOpen(false); };
+  const connectCard = {
+    connectors: connectors ?? undefined,
+    connect: async (name: string) => {
+      track("connector_connect_clicked", { connector: name, source: "card", chat_id: chatId });
+      if (connectors?.find((c) => c.name === name)?.kind === "key") return openConnectors("card", name);
+      const { url } = await (await api(`/connectors/${name}/authorize`, { method: "POST" })).json();
+      openAuth(url, loadConnectors);
+    },
+    skip: (names: string[]) => {
+      track("connector_dismissed", { connector: names.join(",") });
+      handleSubmitRef.current(t("goOnWithout").replace("{name}", names.map(labelOf).join(", ")), "connect");
+    },
+  };
   // Send pressed while a file uploads: held, shown, and sent by itself when the uploads finish.
   const { held: heldSend, request: holdSend, cancel: cancelHeld } = useHeldSend({
     input, attachments, send: (origin, extra) => handleSubmitRef.current(undefined, origin, extra),
@@ -591,8 +689,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           track("ui_action", { action: "ask", questions: questions.length });
         }
       } else if (ev.action === "connect" && typeof ev.connector === "string") {
-        setConnect({ name: ev.connector });
-        track("ui_action", { action: "connect", connector: ev.connector });
+        track("ui_action", { action: "connect", connector: ev.connector });   // the card is part of the agent's message
       } else if (ev.action === "confirm" && typeof ev.tool === "string") {
         track("ui_action", { action: "confirm", tool: ev.tool });   // the card itself is a part of the agent's message
       } else if (ev.action === "title" && typeof ev.title === "string" && typeof ev.chat_id === "string") {
@@ -618,13 +715,6 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   }, []);
   const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders, warm: !!config?.voice_warm });
   useWarmService(config?.design_editor_url);   // the design editor's service, awake before a design opens (lib/warm.ts)
-
-  // Reset sidebar data when org changes
-  useEffect(() => {
-    setChats([]);
-    setShares([]);
-    setFilesOpen(false);
-  }, [activeOrg?.id]);
 
   const handleFilesAdded = useCallback(async (incoming: File[]) => {
     // Reject oversized files up front (server enforces the same cap).
@@ -726,7 +816,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     // In a team chat the agent answers when it is named; anything else is to the team alone.
     if (inTeam) {
       const asks = !["keyboard", "voice"].includes(origin) || agentNames.some((n) => text.toLowerCase().includes(n));
-      extra = { ...extra, team: true, ...(asks ? {} : { post: true }) };
+      extra = { ...extra, team: true, ...(asks ? {} : { post: true }), ...(replyTo ? { reply: replyTo } : {}) };
+      setReplyTo(null);
     }
     // The app open beside the chat, so "this" in the message points at it and the agent reads its data first.
     const app = activeDesign ? appScope(activeDesign)?.split("/")[1] : undefined;
@@ -752,7 +843,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     const saving = [selection && flushDesignEditor(selection.path, 1500), sheetsEditorsOpen() && flushAllSheetsEditors(1500)].filter(Boolean);
     if (saving.length) void Promise.all(saving).then(go);
     else go();
-  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam, activeDesign]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, isStreaming, connection.held, onSend, attachments, scrollToBottom, chatId, attachedSel, holdSend, files?.path, inTeam, activeDesign, replyTo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // The card the last reply left waiting is asked over the message box, where the agent's other questions are.
   const approval = useMemo(() => waitingCard(messages), [messages]);
@@ -802,7 +893,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         .then((url) => saveBlob(url, design ? `${shownName(name)}.pdf` : name)).catch(() => {});
     },
     share: shareFileFn ? (path: string) => setSharingFile(path) : undefined,
-  } : null, [openFileLoud, shareFileFn]);
+    save: files?.writeNew ? (path: string, text: string) => {
+      files.writeNew!(path, text)
+        .then((saved) => toastAction(t("savedTo").replace("{name}", saved), t("open"), () => openFileInCanvas(saved, saved.split("/").pop() || saved)))
+        .catch(() => toastError(t("saveFailed")));
+    } : undefined,
+  } : null, [openFileLoud, shareFileFn, files?.writeNew, toastAction, toastError, openFileInCanvas]);
   const resolveMedia = useMemo(() => (openFileQuiet ? (p: string) => openFileQuiet(p, true) : undefined), [openFileQuiet]);
 
   // Newest step on the transcript — a run this tab never streamed still has one.
@@ -851,6 +947,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       setInput((cur) => (cur ? `${cur} ${sent.text}` : sent.text));
       if (sent.attachments?.length) setAttachments((cur) => [...cur, ...sent.attachments!]);
       if (sent.extra?.selection) setAttachedSel(sent.extra.selection);
+      if (sent.extra?.reply) setReplyTo(sent.extra.reply);
       const named = sent.extra?.connectors ?? [];
       if (named.length) setPills((ps) => [...ps, ...(connectors ?? []).filter((c) => named.includes(c.name) && !ps.some((p) => p.name === c.name))]);
       requestAnimationFrame(() => textareaRef.current?.focus());
@@ -888,6 +985,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   };
 
   const isEmpty = messages.length === 0;
+  useEffect(() => { if (!isEmpty) setRoutineStart(false); }, [isEmpty]);
 
   // Static config, then the 1h localStorage cache, then the network.
   const loadExplore = useCallback(async (): Promise<PassAgent[]> => {
@@ -916,12 +1014,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const selectTab = (tab: PanelTab) => {
     setFilesTab(tab);
     sessionStorage.setItem("cycls_panel_tab", tab);
+    if (tab === "chats" || tab === "files") loadShares();
     if (tab === "chats" && onListChats) {
       setChatsLoading(true);
       onListChats().then((items) => { setChats(items); setChatsLoading(false); }).catch(() => setChatsLoading(false));
-    } else if (tab === "shares" && onListShares) {
-      setSharesLoading(true);
-      onListShares().then((items) => { setShares(items); setSharesLoading(false); }).catch(() => setSharesLoading(false));
     } else if (tab === "files" && files) {
       files.onNavigate(files.path);
       loadTrash();   // footer count; listing is also the 30-day sweep
@@ -940,7 +1036,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   // active tab's data, same as the click path would have, and the chat that was open here.
   useEffect(() => {
     if (filesOpen) selectTab(filesTab);
-    if (was?.chat) onLoadChat(was.chat).catch(() => {});
+    if (was?.chat && !new URLSearchParams(window.location.search).has("id")) onLoadChat(was.chat).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1152,7 +1248,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     find: async (path) => ((await onListShares()) as (ShareLink & { path?: string })[])
       .filter((s) => s.path === path && s.token && s.url),
     revoke: (token) => onDeleteShare(token),
-  }), [onListShares, onDeleteShare]);
+    change: async (token, audience) => { await api(`/share/${token}`, { method: "PATCH", json: { audience } }); },
+  }), [onListShares, onDeleteShare, api]);
   // Escape closes the side pane only when nothing inside it handled the key (useEscape).
   useEscapeFallback(closeRight, rightOpen);
 
@@ -1183,13 +1280,15 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       api(`/connectors/${c.name}`, { method: "PATCH", json: { on } }).catch(loadConnectors);
     },
     onAddConnector: (c: Connector) => addPill(c, "picker"),
-    placeholder: inputPlaceholder,
+    placeholder: (isEmpty && examples.hint) || inputPlaceholder,
     selection: attachedSel,
     onAddSelection: designSel && !attachedSel ? () => {
       setAttachedSel(designSel);
       track("design_selection_attached", { nodes: designSel.nodes.length });
     } : undefined,
     onRemoveSelection: () => setAttachedSel(null),
+    reply: replyTo && { name: quoteName(replyTo, team), text: replyTo.text },
+    onCancelReply: () => setReplyTo(null),
   };
 
   return (
@@ -1207,43 +1306,47 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
         />
       )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header className="relative z-30 h-12 shrink-0" dir="ltr">
-        <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2">
+      <header className="relative z-30 h-13.5 shrink-0" dir="ltr">
+        <div className="mx-auto flex h-full max-w-full items-center justify-between gap-2 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2">
           {meta?.brand ? (
-            <span className="flex h-6 items-center">
+            <span className="flex h-6.5 items-center">
               {meta.brand.startsWith("<") ? (
-                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+                <span className="flex h-6.5 items-center [&>svg]:h-6.5 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
               ) : (
-                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+                <img src={meta.brand} alt="" className="h-6.5 w-auto object-contain" />
               )}
             </span>
           ) : (
-            <a href="https://cycls.ai" className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity">
-              <CyclsLogo className="h-5 fill-muted-foreground" />
+            // On a phone the agent's name alone: the room is the people's and the actions'.
+            <a href="https://cycls.ai" className={cn("flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity", name && "max-sm:hidden")}>
+              <CyclsLogo className="h-5.5 fill-muted-foreground" />
             </a>
           )}
           {name && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="text-muted-foreground/40">|</span>
+            <div className="flex min-w-0 items-center gap-2 text-base text-muted-foreground">
+              <span className={cn("text-muted-foreground/40", !meta?.brand && "max-sm:hidden")}>|</span>
               {config?.explore_enabled ? (
                 <button
                   onClick={openExplore}
                   className="font-display flex items-center gap-1 text-foreground font-medium capitalize hover:opacity-70 transition-opacity cursor-pointer"
                 >
                   {meta?.name || name}
-                  <Icon name="chevron-down" className="w-3 h-3 text-muted-foreground" />
+                  <Icon name="chevron-down" className="size-3.5 text-muted-foreground" />
                 </button>
               ) : (
                 <span className="font-display text-foreground font-medium capitalize">{meta?.name || name}</span>
               )}
+              {/* Super / Research | its people: the workspace read as part of the agent */}
+              {user && wsNav && <><span className="text-muted-foreground/40">/</span>
+                <span className="flex items-center gap-3.5">
+                  <WorkspaceMenu workspaces={wsNav} />
+                  {people && <><span className="h-4 w-px bg-foreground/15 max-sm:hidden" /><TeamPeople {...people} /></>}
+                </span></>}
             </div>
           )}
           </div>
           <div className="flex items-center gap-1">
-            {people && isDesktop && <TeamPeople {...people} />}
-            {/* Desktop only; on a phone it stays a row inside the user menu */}
-            {user && wsNav && isDesktop && <WorkspaceMenu workspaces={wsNav} />}
             {user && freePlan && <SubscribeButton onClick={() => openPricing(activeOrg ? "organization" : "user", "header")} />}
             {messages.length > 0 && (
               <>
@@ -1252,29 +1355,29 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="New chat"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="size-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                   </svg>
                 </button>
-                {onShare && !isStreaming && (
+                {onShare && !isStreaming && !isTeamChat(chatId) && (
                   <>
                     <button
                       onClick={() => setShareOpen((o) => !o)}
                       className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                       aria-label="Share"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="size-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                       </svg>
                     </button>
                     {shareOpen && (
                       <ShareDialog
-                        onClose={() => setShareOpen(false)}
+                        onClose={() => { setShareOpen(false); loadShares(); }}
+                        subtitle={chats.find((c) => c.id === chatId)?.title || ""}
                         org={org}
                         onShare={onShare}
                         path={chatId ? `chat/${chatId}` : undefined}
                         links={shareLinks}
-                        onManageShares={account ? () => { setShareOpen(false); openPanel("shares"); } : undefined}
                       />
                     )}
                   </>
@@ -1283,7 +1386,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
             )}
             {!user && (
               <>
-                <IconButton name="moon" onClick={() => toggleDark("header")} label="Toggle theme" />
+                <IconButton name="moon" onClick={() => toggleDark("header")} label="Toggle theme" className="[&>svg]:size-4.5" />
                 <button
                   onClick={() => {
                     const next = isAr ? "en" : "ar";
@@ -1293,11 +1396,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
                   aria-label="Toggle language"
                 >
-                  <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "ع"}</span>
+                  <span className="text-[13px] font-medium size-4.5 flex items-center justify-center">{isAr ? "En" : "ع"}</span>
                 </button>
               </>
             )}
-            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} />}
+            {account && <InboxBell inbox={inbox} workspaces={wsNav?.items} here={here} onOpen={(i) => i.chat && openHit("chats", i.chat, i.ws)} />}
+            {(files || account) && <IconButton name="search" onClick={() => setSearchOpen(true)} label={t("search")} className="[&>svg]:size-4.5" />}
             {(files || account) && (
               <button
                 onClick={() => rightOpen ? closeRight() : openRight()}
@@ -1305,12 +1409,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 aria-label={rightOpen ? t("collapse") : t("expand")}
                 title={rightOpen ? t("collapse") : t("expand")}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <svg className="size-4.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 3.75v16.5M20.25 3.75H3.75v16.5h16.5M14.25 3.75v16.5" />
                 </svg>
               </button>
             )}
-            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} workspaces={isDesktop ? undefined : wsNav} people={isDesktop ? undefined : people} /></div>}
+            {user && <div className="ml-1"><UserMenu user={user} onSignOut={onSignOut} onManageAccount={onManageAccount} onOpenSettings={account ? () => setSettingsOpen(true) : undefined} onCreateOrg={onCreateOrg} onManageOrg={onManageOrg} onSwitchOrg={onSwitchOrg} activeOrg={activeOrg} orgs={orgs} plan={plan} onOpenPlans={() => openPricing(activeOrg ? "organization" : "user", "user_menu")} /></div>}
           </div>
         </div>
       </header>
@@ -1318,7 +1422,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       <Surfaces config={config ?? null} ready={turnsDone > 0} active={!isStreaming && !ask && !hushed} />
 
       {/* Explore agents dropdown */}
-      <Popover open={exploreOpen} onClose={() => setExploreOpen(false)} className="left-4 sm:left-6 top-12 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+      <Popover open={exploreOpen} onClose={() => setExploreOpen(false)} className="left-4 sm:left-6 top-13.5 mt-1 w-72 rounded-lg border border-border bg-background shadow-lg overflow-hidden">
         <div dir={isAr ? "rtl" : "ltr"}>
           <div className="px-3 py-2 border-b border-border">
             <p className="text-xs font-medium text-muted-foreground">{t("explore")}</p>
@@ -1386,9 +1490,13 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       <div className={cn("relative flex h-full min-w-0 flex-1 flex-col", isDesktop && rightExpanded && rightOpen && "hidden")}>
       <UpgradeContext.Provider value={upgradeWith}>
       <LayoutGroup>
-        <LoadingBar active={chatLoading} />
-        {!chatLoading && (isEmpty ? (
-          examplesEnabled ? (
+        <LoadingBar active={chatLoading || opening} />
+        {!chatLoading && !opening && (isEmpty ? (
+          routineStart && config?.routines ? (
+            <RoutinesStart name={meta?.name} examples={config.routines} connectors={connectors ?? undefined} onUse={examples.makeLike}>
+              <InputBox {...inputProps} placeholder={t("describeRoutine")} />
+            </RoutinesStart>
+          ) : examplesEnabled ? (
             // With a gallery the empty screen is a page that scrolls: hero and
             // composer centered in the viewport, category chips and the top of
             // the cards peeking below the fold.
@@ -1404,8 +1512,10 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   </div>
                 </div>
                 <ExamplesGallery
-                  className="mt-5"
-                  onUsePrompt={(text) => { setInput(text); textareaRef.current?.focus(); }}
+                  className="mt-3"
+                  name={meta?.name}
+                  onUsePrompt={examples.makeLike}
+                  onFormat={examples.setFormat}
                 />
               </div>
             </div>
@@ -1436,6 +1546,8 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 <ConnectorsContext.Provider value={connectors ?? []}>
                 <FileActions.Provider value={fileActions}>
                 {older && <div ref={topRef} className="h-px w-full" />}
+                <ConnectContext.Provider value={connectCard}>
+                <RoutinesContext.Provider value={routinesCtx}>
                 <ApprovalContext.Provider value={{ agent: meta?.name || "" }}>{shown.map((msg, i) => {
                   const isLast = i === messages.length - 1;
                   const hasError = msg.role === "assistant" && msg.parts?.some((p) => p.type === "callout" && p.style === "error");
@@ -1448,10 +1560,18 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     <MessageBubble
                       message={msg}
                       team={team}
+                      anchor={key && `m-${key}`}
                       first={marks?.[i].first}
                       last={marks?.[i].last}
                       reactions={key ? live.reactions[key] : undefined}
                       onReact={team && key ? (emoji) => void onReact(key, emoji).catch(() => {}) : undefined}
+                      onReply={team && key && !msg.deleted ? () => {
+                        const said = msg.role === "user" ? msg.content || msg.attachments?.[0]?.name || ""
+                          : msg.parts?.find((p) => p.type === "text" && p.text?.trim())?.text || "";
+                        setReplyTo({ id: key, ...(msg.role === "user" ? { by: msg.by?.id ?? user?.id, name: msg.by?.name } : {}),
+                                     text: said.split(/\s+/).join(" ").slice(0, 100) });
+                        textareaRef.current?.focus();
+                      } : undefined}
                       onRewrite={team && msg.id ? (text) => onRewrite(msg.id!, text) : undefined}
                       isStreaming={
                         isStreaming &&
@@ -1469,37 +1589,32 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     </Fragment>
                   );
                 })}
-                {team && live.typing.length > 0 && (
-                  <div className="flex w-full max-w-3xl items-end gap-2.5 px-6 pb-2" role="status"
-                       title={live.typing.length === 1 ? t("isTyping").replace("{name}", live.typing[0].name || t("someone"))
-                         : t("areTyping").replace("{names}", live.typing.map((p) => p.name || t("someone")).join(", "))}>
-                    <span className="flex shrink-0">
-                      {live.typing.slice(0, 3).map((p, i) => (
-                        <span key={p.id} className="rounded-full ring-2 ring-background" style={{ marginInlineStart: i ? -10 : 0 }}><Face c={{ by: p, at: "" }} size={28} /></span>
-                      ))}
-                    </span>
-                    <span className="flex h-9 items-center gap-1 rounded-3xl bg-secondary px-4">
-                      {[0, 1, 2].map((i) => <span key={i} className="size-1.5 rounded-full bg-muted-foreground animate-[typing_1.2s_infinite]" style={{ animationDelay: `${i * 0.15}s` }} />)}
-                    </span>
+                {team && (   // its place is kept while no one types: someone starting or stopping never moves the chat
+                  <div className="flex h-11 w-full max-w-3xl items-end px-6 pb-2">
+                    {live.typing.length > 0 && (
+                      <div className="flex items-end gap-2.5" role="status"
+                           title={live.typing.length === 1 ? t("isTyping").replace("{name}", live.typing[0].name || t("someone"))
+                             : t("areTyping").replace("{names}", live.typing.map((p) => p.name || t("someone")).join(", "))}>
+                        <span className="flex shrink-0">
+                          {live.typing.slice(0, 3).map((p, i) => (
+                            <span key={p.id} className="rounded-full ring-2 ring-background" style={{ marginInlineStart: i ? -10 : 0 }}><Face c={{ by: p, at: "" }} size={28} /></span>
+                          ))}
+                        </span>
+                        <span className="flex h-9 items-center gap-1 rounded-3xl bg-secondary px-4">
+                          {[0, 1, 2].map((i) => <span key={i} className="size-1.5 rounded-full bg-muted-foreground animate-[typing_1.2s_infinite]" style={{ animationDelay: `${i * 0.15}s` }} />)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
                 {(runStatus === "interrupted" || messages[messages.length - 1]?.parts?.some((p) => p.type === "callout" && p.code === "cut_off"))
                   && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
                 )}</ApprovalContext.Provider>
+                </RoutinesContext.Provider>
+                </ConnectContext.Provider>
                 </FileActions.Provider>
                 </ConnectorsContext.Provider>
-                {sharingFile && shareFileFn && (
-                  <ShareDialog
-                    onClose={() => setSharingFile(null)}
-                    mode="file"
-                    subtitle={sharingFile.split("/").pop()}
-                    org={files?.org}
-                    onShare={(audience) => shareFileFn(sharingFile, audience)}
-                    path={`file/${sharingFile}`}
-                    links={shareLinks}
-                  />
-                )}
               </div>
               <div className="pointer-events-none sticky bottom-0 z-10 h-6 -mt-6 bg-[linear-gradient(to_top,var(--color-background)_0%,var(--color-background)_20%,transparent_100%)]" />
             </div>
@@ -1527,20 +1642,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                     }}
                   />
                 )}
-                {connect && !ask && (
-                  <ConnectCard
-                    key={connect.name}
-                    name={connect.name}
-                    onConnect={async () => {
-                      track("connector_connect_clicked", { connector: connect.name, source: "card", chat_id: chatId });
-                      if (connectors?.find((x) => x.name === connect.name)?.kind === "key") { setConnect(null); openConnectors("card", connect.name); return; }
-                      const { url } = await (await api(`/connectors/${connect.name}/authorize`, { method: "POST" })).json();
-                      openAuth(url, loadConnectors);
-                    }}
-                    onDismiss={() => { track("connector_dismissed", { connector: connect.name }); setConnect(null); }}
-                  />
-                )}
-                {!ask && !connect && !approval && survey && !hushed && !isStreaming && (
+                {!ask && !approval && survey && !hushed && !isStreaming && (
                   <SurveyStrip survey={survey} onDone={() => setSurvey(null)} />
                 )}
                 <AnimatePresence initial={false}>
@@ -1605,15 +1707,37 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           </div>
         </Popover>
       )}
+      {editing && <RoutineDialog routine={editing.routine} connectors={connectors ?? undefined} onSave={editing.onSave} onClose={() => setEditing(null)} />}
       {searchOpen && (files || account) && (
         <SearchDialog
           chats={account ? chats : undefined}
           apps={files ? apps : undefined}
           searchFiles={files?.searchFiles}
-          onOpenChat={(id) => onLoadChat?.(id)}
-          onOpenFile={(path, name) => openFileInCanvas(path, name)}
-          onOpenApp={openApp}
+          everywhere={wsNav?.search}
+          here={here}
+          onOpen={openHit}
           onClose={() => setSearchOpen(false)}
+        />
+      )}
+      {sharingFile && shareFileFn && (
+        <ShareDialog
+          onClose={() => { setSharingFile(null); loadShares(); }}
+          mode="file"
+          subtitle={apps.find((a) => a.entry === sharingFile)?.name || sharingFile.split("/").pop()}
+          org={files?.org}
+          onShare={(audience) => shareFileFn(sharingFile, audience)}
+          path={`file/${sharingFile}`}
+          links={shareLinks}
+        />
+      )}
+      {sharingChat && onShare && (
+        <ShareDialog
+          onClose={() => { setSharingChat(null); loadShares(); }}
+          subtitle={sharingChat.title}
+          org={org}
+          onShare={(audience) => onShare(audience, sharingChat.id)}
+          path={`chat/${sharingChat.id}`}
+          links={shareLinks}
         />
       )}
       {settingsOpen && account && (
@@ -1710,7 +1834,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
               {railIconsOnly ? (
                 <div className="flex flex-col items-center gap-1 border-b border-border py-2">
                   {([["chats", "list", !!account], ["files", "folder", !!files],
-                     ["apps", "grid", !!files], ["shares", "link", !!account]] as const)
+                     ["apps", "grid", !!files], ["routines", "clock", !!(config?.routines && account)]] as const)
                     .filter(([, , on]) => on)
                     .map(([tab, icon]) => (
                       <button
@@ -1751,12 +1875,12 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                         {t("apps")}
                       </button>
                     )}
-                    {account && (
+                    {config?.routines && account && (
                       <button
-                        onClick={() => selectTab("shares")}
-                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "shares" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                        onClick={() => { selectTab("routines"); loadRoutines(); }}
+                        className={`h-full px-3 text-sm font-medium border-b-2 transition-colors cursor-pointer ${filesTab === "routines" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                       >
-                        {t("shares")}
+                        {t("routines")}
                       </button>
                     )}
                   </div>
@@ -1772,7 +1896,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                 </div>
               )}
               {!railIconsOnly && (<div className="relative flex min-h-0 flex-1 flex-col">{filesTab === "files" && files ? (
-                <Files {...files} chatFiles={chatFiles} shareLinks={shareLinks} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
+                <Files {...files} chatFiles={chatFiles} shareLinks={shareLinks} shared={sharedOf("file")} onSharesChanged={loadShares} onDelete={deleteFromFiles} onRename={renameFromFiles} onOpenChat={(id) => onLoadChat?.(id)}
                        onNewDesign={config?.design_editor_url && files.newDesign ? () => void createDesign("square", "files") : undefined}
                        onOpenInCanvas={(path, name) => { openFileInCanvas(path, name); if (!isDesktop) setFilesOpen(false); }} maxUpload={config?.max_upload} />
               ) : filesTab === "apps" ? (
@@ -1780,78 +1904,28 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   apps={apps}
                   loading={appsLoading}
                   onOpen={(a) => { openApp(a); if (!isDesktop) setFilesOpen(false); }}
+                  onShare={shareFileFn ? (a) => setSharingFile(a.entry) : undefined}
                   onRename={files ? (a, name) => { void updateApp(a, { name }); } : undefined}
                   onSetIcon={files ? (a, icon) => { void updateApp(a, { icon }); } : undefined}
                   onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
                   onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
                 />
-              ) : filesTab === "shares" ? (
-                <div className="flex flex-1 min-h-0 flex-col">
-                  <div className="flex-1 overflow-y-auto pb-20">
-                    {sharesLoading ? (
-                      <LoadingBar />
-                    ) : shares.length === 0 ? (
-                      <EmptyState
-                        icon={<Icon name="link" className="size-full" strokeWidth={1.5} />}
-                        title={t("noShares")}
-                        subtitle={t("noSharesSub")}
-                      />
-                    ) : (
-                      <div className="divide-y divide-border">
-                        {shares.map((s) => {
-                          const isChat = s.path.startsWith("chat/");
-                          const audienceLabel = s.audience === "public"
-                            ? t("anyoneWithLink")
-                            : (org && s.audience === `org:${org.id}`) ? org.name : "Org";
-                          return (
-                          <div key={s.token} className="group relative flex items-center gap-3 px-4 py-2.5 sm:px-6 hover:bg-secondary/50 transition-colors cursor-pointer"
-                            onClick={() => window.open(s.url, "_blank")}
-                          >
-                            <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg">
-                              <span className="text-muted-foreground"><Icon name={isChat ? "chat" : "doc"} strokeWidth={1.5} /></span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <span dir="auto" className="text-sm text-foreground truncate block text-left">{s.title || t("untitled")}</span>
-                              <span className="text-[10px] text-muted-foreground/70 truncate block">{audienceLabel}</span>
-                            </div>
-                            <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
-                              {formatShortDate(s.shared_at)}
-                            </span>
-                            {onDeleteShare && (
-                              <div className="relative shrink-0">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSharesLoading(true);
-                                    onDeleteShare(s.token).then(() => {
-                                      setShares((prev) => prev.filter((x) => x.token !== s.token));
-                                    }).finally(() => setSharesLoading(false));
-                                  }}
-                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all cursor-pointer"
-                                  aria-label="Delete share"
-                                >
-                                  <svg className="size-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.181 8.68a4 4 0 00-5.34.638l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.34-.638l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
-                                  </svg>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
+              ) : filesTab === "routines" ? (
+                <RoutinesContext.Provider value={routinesCtx}>
+                  <RoutinesPanel routines={routineList} examples={config?.routines ?? undefined} onOpenChat={(id) => { onLoadChat?.(id); if (!isDesktop) setFilesOpen(false); }}
+                                 onNew={newRoutine} onUse={(prompt) => { newRoutine(); examples.makeLike(prompt); }} />
+                </RoutinesContext.Provider>
               ) : filesTab === "chats" ? (
                 <ChatsPanel
                   chats={chats}
+                  shared={sharedOf("chat")}
+                  onShare={onShare ? (id, title) => setSharingChat({ id, title }) : undefined}
                   loading={chatsLoading}
                   activeId={chatId}
                   kind={teamWs ? chatKind : undefined}
                   agent={meta?.name || name || ""}
                   onKind={setChatKind}
+                  onNewTeam={() => { setChatKind("team"); setRoutineStart(false); onClear(); if (!isDesktop) setFilesOpen(false); setTimeout(() => textareaRef.current?.focus(), 0); }}
                   onMoveToTeam={teamWs && onMoveToTeam ? (id) => {
                     onMoveToTeam(id).then((moved) => {
                       setChats((prev) => prev.map((x) => (x.id === id ? { ...x, id: moved, team: true } : x)));
@@ -1936,24 +2010,27 @@ function formatShortDate(iso: string) {
   return new Date(iso).toLocaleDateString(getLang(), { month: "short", day: "numeric" });
 }
 
-function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTeam, onLoad, onDelete, onRename, onToggleFavorite }: {
-  chats: { id: string; title: string; updatedAt: string; favoritedAt?: string; run?: string | null; team?: boolean; unread?: boolean; mention?: boolean }[];
+function ChatsPanel({ chats, shared, onShare, loading, activeId, kind, agent, onKind, onNewTeam, onMoveToTeam, onLoad, onDelete, onRename, onToggleFavorite }: {
+  chats: ChatRow[];
+  shared?: Record<string, string>;   // a shared chat's id → who can open it
+  onShare?: (id: string, title: string) => void;
   loading: boolean;
   activeId?: string | null;
   kind?: "agent" | "team";   // a team workspace's: which chats the list shows
   agent: string;
   onKind: (k: "agent" | "team") => void;
+  onNewTeam?: () => void;
   onMoveToTeam?: (id: string) => void;
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => Promise<void>;
   onToggleFavorite: (id: string, on: boolean) => Promise<void>;
 }) {
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [view, setView] = useState<"all" | "favorites" | "shared">("all");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
-  if (loading) return <div className="flex-1"><LoadingBar /></div>;
+  if (loading && !chats.length) return <div className="flex-1"><LoadingBar /></div>;
 
   const team = kind === "team";
   const listed = kind ? chats.filter((c) => !!c.team === team) : chats;
@@ -1969,11 +2046,11 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
     );
   }
 
-  const visible = favoritesOnly ? listed.filter((c) => c.favoritedAt) : listed;
+  const visible = view === "favorites" ? listed.filter((c) => c.favoritedAt) : view === "shared" && !team ? listed.filter((c) => shared?.[c.id]) : listed;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center gap-2 px-4 sm:px-6 py-2 border-b border-border">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 sm:px-6">
         {kind && (
           <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
             {(["agent", "team"] as const).map((k) => (
@@ -1985,20 +2062,31 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
             ))}
           </div>
         )}
-        <button
-          onClick={() => setFavoritesOnly((v) => !v)}
-          className={`ms-auto flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors cursor-pointer ${favoritesOnly ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50"}`}
-          aria-label="Favorites only"
-        >
-          <Star filled={favoritesOnly} className="size-3.5" />
-          {t("favorites")}
-        </button>
+        {team && onNewTeam && (
+          <button onClick={onNewTeam} title={t("newTeamChat")} aria-label={t("newTeamChat")}
+                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors cursor-pointer hover:bg-secondary/80 hover:text-foreground">
+            <Icon name="plus" className="size-4" />
+          </button>
+        )}
+        <div className="ms-auto flex items-center gap-1">
+          <button onClick={() => setView((v) => (v === "favorites" ? "all" : "favorites"))} aria-pressed={view === "favorites"} title={t("favorites")} aria-label={t("favorites")}
+                  className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${view === "favorites" ? "bg-secondary text-yellow-500" : "text-muted-foreground hover:bg-secondary/80 hover:text-foreground"}`}>
+            <Star filled={view === "favorites"} className="size-4" />
+          </button>
+          {!team && (
+            <button onClick={() => setView((v) => (v === "shared" ? "all" : "shared"))} aria-pressed={view === "shared"} title={t("sharedFilter")} aria-label={t("sharedFilter")}
+                    className={`flex size-8 items-center justify-center rounded-lg transition-colors cursor-pointer ${view === "shared" ? "bg-secondary text-[#3171F6]" : "text-muted-foreground hover:bg-secondary/80 hover:text-foreground"}`}>
+              <Icon name="link" className="size-4" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto divide-y divide-border pb-20">
         {listed.length === 0 && (
           <EmptyState icon={<Icon name="list" className="size-full" strokeWidth={1.5} />}
                       title={t(team ? "noTeamChats" : "noChats")} subtitle={t(team ? "noTeamChatsSub" : "noChatsSub")} />
         )}
+        {view === "shared" && !team && !visible.length && !!listed.length && <p className="px-6 py-4 text-sm text-muted-foreground">{t("noShares")}</p>}
         {visible.map((s) => {
           const isFav = !!s.favoritedAt;
           return (
@@ -2038,6 +2126,13 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
                   </span>
                 )}
               </div>
+              {shared?.[s.id] && (
+                <button onClick={(e) => { e.stopPropagation(); onShare?.(s.id, s.title || ""); }}
+                        title={t(shared[s.id] === "public" ? "anyoneWithLink" : "anyoneInOrg")} aria-label={t("share")}
+                        className="flex size-6 shrink-0 items-center justify-center rounded-md text-[#3171F6] hover:bg-secondary cursor-pointer">
+                  <Icon name={shared[s.id] === "public" ? "globe" : "org"} className="size-3.5" />
+                </button>
+              )}
               {s.mention ? <span className="shrink-0 rounded-full bg-foreground px-1.5 text-[11px] font-semibold leading-5 text-background">@</span>
                 : s.unread && <span className="size-2 shrink-0 rounded-full bg-foreground" />}
               <span className="hidden sm:block text-xs text-muted-foreground shrink-0 w-16 text-right">
@@ -2059,6 +2154,7 @@ function ChatsPanel({ chats, loading, activeId, kind, agent, onKind, onMoveToTea
                   <DropdownMenu
                     onClose={() => setMenuOpen(null)}
                     items={[
+                      ...(onShare && !s.team ? [{ label: t("share"), onClick: () => onShare(s.id, s.title || "") }] : []),
                       { label: t("rename"), onClick: () => setRenaming(s.id) },
                       ...(onMoveToTeam && !s.team ? [{ label: t("moveToTeam"), onClick: () => onMoveToTeam(s.id) }] : []),
                       { label: t("delete"), danger: true, onClick: () => onDelete(s.id) },
@@ -2132,9 +2228,9 @@ function RunIndicator({ step, startedAt, onStop, label }: {
 function SubscribeButton({ onClick }: { onClick: () => void }) {
   const id = useId().replace(/\W/g, "");   // a url(#…) reference doesn't take useId's colons
   return (
-    <button type="button" onClick={onClick} dir="auto"
-            className="me-1 inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border ps-2.5 pe-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary">
-      <svg viewBox="0 0 24 24" className="size-3 shrink-0" aria-hidden>
+    <button type="button" onClick={onClick} dir="auto" aria-label={t("subscribeShort")}
+            className="me-1 inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border ps-3 pe-3.5 text-[13px] font-medium text-foreground transition-colors hover:bg-secondary max-sm:px-2.5">
+      <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" aria-hidden>
         <defs>
           <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0.2" stopColor="#3171F6" /><stop offset="0.8" stopColor="#EF8733" />
@@ -2142,7 +2238,7 @@ function SubscribeButton({ onClick }: { onClick: () => void }) {
         </defs>
         <path fill={`url(#${id})`} d="M12 0l1.11 3.78c.98 3.43 3.68 6.12 7.11 7.12L24 11.98l-3.78 1.09c-3.43 1-6.13 3.69-7.11 7.12L12 24l-1.11-3.78c-.98-3.43-3.68-6.12-7.11-7.11L0 12.02l3.78-1.09c3.43-1 6.13-3.69 7.11-7.12L12 0z" />
       </svg>
-      {t("subscribeShort")}
+      <span className="max-sm:hidden">{t("subscribeShort")}</span>   {/* a phone's top has room for its star alone */}
     </button>
   );
 }

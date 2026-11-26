@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { Attachment, Part, Message, Source } from "../hooks/use-chat";
+import type { Attachment, Part, Message, Quote, Source } from "../hooks/use-chat";
 import { TextPart } from "./parts/text-part";
 import { AgentMark, Face } from "./file-details";
 import { ThinkingPart } from "./parts/thinking-part";
@@ -8,6 +8,8 @@ import { TablePart } from "./parts/table-part";
 import { CalloutPart } from "./parts/callout-part";
 import { StepPart } from "./parts/step-part";
 import { ApprovalReceipt } from "./approval-card";
+import { QuickConnect } from "./connect-card";
+import { RoutineCard, type Routine } from "./routine-card";
 import { GlowStar, Star } from "./cycls-star";
 import { StepGroup } from "./parts/step-group";
 import { AgentsCard } from "./parts/agents-card";
@@ -17,6 +19,7 @@ import { UsageNote, usedUp } from "./usage";
 import { SelectionChip } from "./selection-chip";
 import { SourcesPart } from "./parts/sources-part";
 import { ChartPart } from "./parts/chart-part";
+import { DataChart, chartOf } from "./parts/data-chart";
 import { AttachmentBody } from "./attachment-body";
 import { EmojiPicker } from "./emoji-picker";
 import { Icon } from "./icon";
@@ -56,10 +59,14 @@ function renderPart(part: Part, index: number, isStreaming?: boolean, onRetry?: 
       );
     case "sources":
       return <SourcesPart key={index} sources={part.sources || []} />;
-    case "chart":
-      return <ChartPart key={index} part={part} />;
-    case "card":   // a confirm card's line, where the agent asked; the card itself waits over the message box
-      return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} /> : null;
+    case "chart": {   // labels and values are drawn here; a time series, by Lightweight Charts
+      const drawn = chartOf(part);
+      return drawn ? <DataChart key={index} chart={drawn} /> : <ChartPart key={index} part={part} />;
+    }
+    case "card":   // a confirm card's line, where the agent asked (the card itself waits over the message box); a connect card whole
+      return part.card?.action === "confirm" ? <ApprovalReceipt key={index} part={part} />
+        : part.card?.action === "connect" ? <QuickConnect key={index} card={part.card as { connector?: string; connectors?: string[] }} />
+        : part.card?.action === "routine" ? <RoutineCard key={index} card={part.card as { routine?: Routine; change?: boolean; delete?: boolean }} /> : null;
     case "step": {
       const { step, tool_name } = localStep(part);
       return (
@@ -122,18 +129,47 @@ function Mentioned({ text, names }: { text: string; names: string[] }) {
   const known = names.filter(Boolean).sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   if (!known.length) return <>{text}</>;
   return <>{text.split(new RegExp(`(@(?:${known.join("|")}))`, "gi")).map((p, i) =>
-    i % 2 ? <span key={i} className="rounded-md bg-foreground/10 px-1 py-px font-medium text-foreground">{p}</span> : p)}</>;
+    i % 2 ? <span key={i} className="rounded-md bg-[#3171F6]/15 px-1 py-px font-medium text-[#3171F6]">{p}</span> : p)}</>;
 }
 
 export type Team = { agent: string; logo?: string; names: string[]; people: Record<string, string>; me?: string };
 
+export const quoteName = (q: Quote, team?: Team) =>
+  !q.by ? team?.agent || "" : q.by === team?.me ? t("you") : team?.people[q.by] || q.name || t("someone");
+
+// The message a quote names, brought into view and lit a moment; one on a page not read yet stays where it is.
+function findQuoted(id: string) {
+  const el = document.getElementById(`m-${id}`);
+  el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  el?.animate?.([{ backgroundColor: "rgb(49 113 246 / 0.12)" }, { backgroundColor: "transparent" }], { duration: 1600 });
+}
+
+// What a reply answers: whose message and how it began. Above a reply a click finds it; in the message box, × lets it go.
+export function Quoted({ name, text, onClick, onClose }: { name: string; text: string; onClick?: () => void; onClose?: () => void }) {
+  return (
+    <div className="flex max-w-full items-start gap-2 rounded-xl border-s-2 border-[#3171F6] bg-secondary/60 px-3 py-1.5 text-xs">
+      <button type="button" disabled={!onClick} onClick={(e) => { e.stopPropagation(); onClick?.(); }}
+              className="flex min-w-0 flex-1 flex-col items-start text-start enabled:cursor-pointer">
+        <span className="font-medium text-[#3171F6]">{name}</span>
+        <span dir="auto" className="line-clamp-2 break-words text-muted-foreground">{text}</span>
+      </button>
+      {onClose && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onClose(); }} aria-label={t("cancel")} title={t("cancel")}
+                className="shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"><Icon name="x" className="size-3.5" /></button>
+      )}
+    </div>
+  );
+}
+
 type BubbleProps = {
   message: Message;
   team?: Team;   // a team chat's: who its messages can name, and who reacted
+  anchor?: string;   // a team chat's: what a reply's quote finds it by
   first?: boolean;   // a team chat's run of one person's messages: the name and time top it, the face ends it
   last?: boolean;
   reactions?: Record<string, string[]>;
   onReact?: (emoji: string) => void;
+  onReply?: () => void;
   onRewrite?: (text?: string) => Promise<void>;   // your own team message, said again or (no text) taken back
   isStreaming?: boolean;
   onRetry?: () => void;
@@ -151,6 +187,13 @@ const tool = "hover:bg-secondary text-muted-foreground hover:text-foreground fle
 // Two components, not one with an early return: a slot that turns from a person's message into a reply (a team
 // chat's reload, a page put above) must not run a different set of hooks.
 export function MessageBubble(props: BubbleProps) {
+  const routine = props.message.routine;
+  if (routine)   // a routine's run began here: a small line in place of the instruction
+    return (
+      <p className="my-3 text-center text-xs text-muted-foreground">
+        {t("routineLine")} · {routine.name} · {new Date(routine.at).toLocaleString(getLang(), { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+      </p>
+    );
   return props.message.role === "user" ? <UserBubble {...props} /> : <Reply {...props} />;
 }
 
@@ -174,10 +217,16 @@ function ReactButton({ onReact }: { onReact: (emoji: string) => void }) {
   );
 }
 
+const ReplyButton = ({ onReply }: { onReply: () => void }) => (
+  <button type="button" onClick={onReply} className={tool} aria-label={t("reply")} title={t("reply")}>
+    <Icon name="reply" className="w-3.5 h-3.5 rtl:-scale-x-100" />
+  </button>
+);
+
 // A team chat message's tools, beside it on hover (a tap on a phone): a reaction in one click, every other behind
-// the smile, and on your own an edit and a delete that asks once more.
-function Tools({ className = "", shown, onReact, onEdit, onDelete }: {
-  className?: string; shown?: boolean; onReact?: (emoji: string) => void; onEdit?: () => void; onDelete?: () => void;
+// the smile, a reply, and on your own an edit and a delete that asks once more.
+function Tools({ className = "", shown, onReact, onReply, onEdit, onDelete }: {
+  className?: string; shown?: boolean; onReact?: (emoji: string) => void; onReply?: () => void; onEdit?: () => void; onDelete?: () => void;
 }) {
   const [sure, setSure] = useState(false);
   return (
@@ -188,6 +237,7 @@ function Tools({ className = "", shown, onReact, onEdit, onDelete }: {
                 className="flex size-7 items-center justify-center rounded-full text-[15px] transition-transform hover:scale-110 hover:bg-secondary cursor-pointer">{e}</button>
       ))}
       {onReact && <ReactButton onReact={onReact} />}
+      {onReply && <ReplyButton onReply={onReply} />}
       {(onEdit || onDelete) && onReact && <span className="mx-0.5 h-4 w-px bg-border" />}
       {onEdit && <button type="button" onClick={onEdit} className={tool} aria-label={t("edit")} title={t("edit")}><Icon name="pencil" className="w-3.5 h-3.5" /></button>}
       {onDelete && (sure
@@ -255,7 +305,7 @@ function VideoTile({ att, resolve }: { att: Attachment; resolve?: (path: string)
   );
 }
 
-function UserBubble({ message, team, first = true, last = true, reactions, onReact, onRewrite, onOpenFile, resolveMedia }: BubbleProps) {
+function UserBubble({ message, team, anchor, first = true, last = true, reactions, onReact, onReply, onRewrite, onOpenFile, resolveMedia }: BubbleProps) {
   const [editing, setEditing] = useState<string | null>(null);
   const [shown, setShown] = useState(false);   // a phone's tap on the message shows its tools
   const attachments = message.deleted ? [] : message.attachments || [];
@@ -269,18 +319,21 @@ function UserBubble({ message, team, first = true, last = true, reactions, onRea
     setEditing(null);
   };
   const tools = team && !message.deleted && editing === null && (
-    <Tools className={`absolute top-1/2 -translate-y-1/2 ${other ? "start-full ms-2" : "end-full me-2"}`} shown={shown} onReact={onReact}
+    <Tools className={`absolute top-1/2 -translate-y-1/2 ${other ? "start-full ms-2" : "end-full me-2"}`} shown={shown} onReact={onReact} onReply={onReply}
            onEdit={!other && onRewrite ? () => setEditing(message.content) : undefined}
            onDelete={!other && onRewrite ? () => void onRewrite().catch(() => {}) : undefined} />
   );
   return (
-    <div onClick={() => { if (team && window.matchMedia?.("(hover: none)").matches) setShown((v) => !v); }}
+    <div id={anchor} onClick={() => { if (team && window.matchMedia?.("(hover: none)").matches) setShown((v) => !v); }}
          className={`group flex w-full max-w-3xl gap-2.5 px-6 ${!team ? "pb-2" : last ? "pb-4" : "pb-1"} ${other ? "items-start justify-start" : "items-end justify-end"}`}>
       {other && <span className="w-7 shrink-0">{first && <Face c={{ by: other, at: "" }} size={28} />}</span>}
       <div className={`flex min-w-0 max-w-[80%] flex-col gap-1 ${other ? "items-start" : "items-end"}`}>
         {team && first && (other ? <Byline name={other.name || t("someone")} at={message.at} />
           : message.at && <span className="px-1 text-xs text-muted-foreground">{clock(message.at)}</span>)}
         {message.selection && <SelectionChip selection={message.selection} />}
+        {message.reply && !message.deleted && (
+          <Quoted name={quoteName(message.reply, team)} text={message.reply.text} onClick={() => findQuoted(message.reply!.id)} />
+        )}
         <div className={`relative flex flex-col gap-2 ${other ? "items-start" : "items-end"}`}>
         {tools}
         {pictures.length > 0 && <Pictures items={pictures} onOpenFile={onOpenFile} />}
@@ -333,7 +386,7 @@ function Byline({ name, at }: { name: string; at?: string | number }) {
   );
 }
 
-function Reply({ message, team, reactions, onReact, isStreaming, onRetry, onRegenerate, onOpenFile, resolveMedia }: BubbleProps) {
+function Reply({ message, team, anchor, reactions, onReact, onReply, isStreaming, onRetry, onRegenerate, onOpenFile, resolveMedia }: BubbleProps) {
   const [copied, setCopied] = useState(false);
   const parts = (message.parts || [])
     .filter((p) => p.type !== "chat_id")
@@ -410,13 +463,13 @@ function Reply({ message, team, reactions, onReact, isStreaming, onRetry, onRege
   };
 
   return (
-    <div className={`group flex w-full max-w-3xl items-start px-6 ${team ? "gap-2.5 pb-4" : "gap-4 pb-2"}`}>
+    <div id={anchor} className={`group flex w-full max-w-3xl items-start px-6 ${team ? "gap-2.5 pb-4" : "gap-4 pb-2"}`}>
       {team && <AgentMark logo={team.logo} name={team.agent} size={28} />}
       <div className="relative flex min-w-0 flex-1 flex-col gap-1">
         {team && (
           <div className="flex items-center gap-2">
             <Byline name={team.agent} at={message.at || at} />
-            {onReact && !isStreaming && <Tools onReact={onReact} />}
+            {onReact && !isStreaming && <Tools onReact={onReact} onReply={onReply} />}
           </div>
         )}
         {isEmpty && isStreaming && <Loader />}
@@ -466,6 +519,7 @@ function Reply({ message, team, reactions, onReact, isStreaming, onRetry, onRege
               </button>
             )}
             {team && onReact && <span className="[@media(hover:hover)]:hidden"><ReactButton onReact={onReact} /></span>}
+            {team && onReply && <span className="[@media(hover:hover)]:hidden"><ReplyButton onReply={onReply} /></span>}
           </div>
         )}
       </div>

@@ -1320,7 +1320,16 @@ _TOOLS = {
     "agent":      Tool(lambda inp, ws, ctx=None, **_: ctx.team.start(inp, ctx) if getattr(ctx, "team", None)
                        else asyncio.sleep(0, result="Error: agents aren't available here."),
                        lambda inp: {"tool_name": "Agent", "step": inp.get("description", "")}),
+    "routine":    Tool(lambda inp, ws, ctx=None, **_: _routines().tool(inp, ws, ctx),
+                       lambda inp: {"tool_name": "Routine", "step": inp.get("name") or inp.get("action", "")}),
+    "tell":       Tool(lambda inp, ws, ctx=None, **_: _routines().tell(inp, ws, ctx),
+                       lambda inp: {"tool_name": "Telling", "step": str(inp.get("text") or "")[:80]}),
 }
+
+
+def _routines():
+    from cycls._agent import routines   # it reaches the inbox and the store: loaded on first use
+    return routines
 
 
 def tool_prompts(tools_list):
@@ -1519,6 +1528,8 @@ class ToolContext:
     me: str | None = None                # the agent this run is, by the call that started it; None for the parent
     call: str | None = None              # the tool_use id being run
     agent: str = ""                      # the agent's name as people see it (its brand): what it signs comments with
+    routine: dict = None                 # a routine's run: {id, name, at} — what `tell` tells about
+    tz: str = ""                         # the person's time zone: a routine's when, unless they say otherwise
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)

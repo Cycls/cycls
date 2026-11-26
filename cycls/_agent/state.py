@@ -452,21 +452,79 @@ def _signed(content, by):
     return f"{content}\n\n{line}" if content else line
 
 
+_FROM = re.compile(r"(?:\A|\n\n)\[From: ([^\n]*)\]\Z")
+
+
+def _unsigned(content):
+    """A team turn and the name `_signed` put after it, apart: (content, name), the name None when it has none."""
+    if isinstance(content, list) and content and isinstance(content[-1], dict) and (f := _FROM.search(content[-1].get("text", ""))):
+        return content[:-1], f[1]
+    if isinstance(content, str) and (f := _FROM.search(content)):
+        return content[:f.start()], f[1]
+    return content, None
+
+
+def _led(msg):
+    """A person's turn as the model reads it: who wrote it, and what it answers, before what they wrote. A name
+    after each turn reads as the next one's when several are joined."""
+    content, name = _unsigned(msg.get("content"))
+    if name is None:
+        return msg
+    head = f"[From: {name}]"
+    if q := msg.get("reply"):
+        head += f'\n[Replying to {q.get("name") or "your message"}: "{q.get("text", "")}"]'
+    return {**msg, "content": f"{head}\n{content}" if isinstance(content, str) else [{"type": "text", "text": head}, *content]}
+
+
 def _joined(messages):
-    """People in a team chat write several turns in a row: a provider is given them as one."""
+    """People in a team chat write several turns in a row: a provider is given them as one, each led by who wrote it."""
     blocks = lambda c: c if isinstance(c, list) else [{"type": "text", "text": c}]
     out = []
     for m in messages:
-        if out and _is_plain_user(m) and _is_plain_user(out[-1]):
-            out[-1] = {**out[-1], "content": [*blocks(out[-1]["content"]), *blocks(m["content"])]}
-        else:
+        if not _is_plain_user(m):
             out.append(m)
+        elif out and _is_plain_user(out[-1]):
+            out[-1] = {**out[-1], "content": [*blocks(out[-1]["content"]), *blocks(_led(m)["content"])]}
+        else:
+            out.append(_led(m))
     return out
 
 
-def _stamp(msg, by, turn=None):
-    """A team chat's turn: who wrote it, its own id (what a reaction or an edit names) and when."""
-    return {**msg, "by": by["id"], "id": turn or secrets.token_hex(6), "at": datetime.now(timezone.utc).isoformat()}
+def _stamp(msg, by, typed=True):
+    """A team chat's turn: who wrote it, its own id (what a reaction, an edit or a reply names), when, and the message
+    it answers. An approval is no one's typing: it takes a fresh id and no reply."""
+    return {**msg, "by": by["id"], "id": (typed and by.get("turn")) or secrets.token_hex(6),
+            "at": datetime.now(timezone.utc).isoformat(), **({"reply": by["reply"]} if typed and by.get("reply") else {})}
+
+
+QUOTE_REACH = 400   # turns looked back for the message a reply names: a run's tool turns count too
+
+
+async def quote(workspace, chat_id, key):
+    """What a reply quotes, read from the chat as saved, never from the sender's tab: whose message and how it
+    begins. `<id>.re` is the agent's answer to message `<id>`, as the chat names it. None when it is not there."""
+    _validate(chat_id)
+    db, mid = DB(workspace), key.removesuffix(".re")
+    idx = sorted((int(k.rsplit("/", 1)[1]) for k in await db.keys(glob=f"chat/{chat_id}/[0-9]*")), reverse=True)[:QUOTE_REACH]
+    answer = None   # walking back: the agent's first words after `mid`
+    for n in range(0, len(idx), 40):
+        for m in await asyncio.gather(*[db.get(f"chat/{chat_id}/{i:06d}") for i in idx[n:n + 40]]):
+            if not m:
+                continue
+            if m.get("id") == mid:
+                if m.get("deleted"):
+                    return None
+                if key.endswith(".re"):
+                    return {"id": key, "text": answer} if answer else None
+                text = user_text(m) or next((a.get("name", "") for a in m.get("attachments") or ()), "")
+                return {"id": key, "by": m.get("by"), "name": _unsigned(m.get("content"))[1], "text": _first_line(text, 100)}
+            c = m.get("content")
+            if m.get("role") == "assistant" and (said := c if isinstance(c, str) else next(
+                    (b["text"] for b in c or () if isinstance(b, dict) and b.get("type") == "text" and b.get("text", "").strip()), "")):
+                answer = _first_line(said, 100)
+            elif _is_plain_user(m):
+                answer = None
+    return None
 
 
 def _to_team(incoming, by):
@@ -476,7 +534,7 @@ def _to_team(incoming, by):
         content = [b if b.get("type") == "text" else {"type": "text", "text": f"[Attached: {b.get('image') or b.get('file')}]"}
                    for b in content if isinstance(b, dict)]
     return _stamp({"role": "user", "content": _signed(content, by),
-                   **({"attachments": incoming["attachments"]} if incoming.get("attachments") else {})}, by, by.get("turn"))
+                   **({"attachments": incoming["attachments"]} if incoming.get("attachments") else {})}, by)
 
 
 async def _change(db, key, fn, default):
@@ -562,7 +620,7 @@ async def rewrite(workspace, chat_id, mid, by, text=None):
             return None
         was, c = msg, msg.get("content")
         if text is None:
-            msg, change = {**{k: v for k, v in msg.items() if k != "attachments"}, "content": _signed("(deleted)", by), "deleted": now}, {"deleted": now}
+            msg, change = {**{k: v for k, v in msg.items() if k not in ("attachments", "reply")}, "content": _signed("(deleted)", by), "deleted": now}, {"deleted": now}
         else:   # its files stay
             kept = [b for b in c if not (b.get("type") == "text" and not b.get("text", "").startswith(_ATTACHED))] if isinstance(c, list) else []
             msg, change = {**msg, "content": _signed([{"type": "text", "text": text}, *kept] if kept else text, by), "edited": now}, {"content": text, "edited": now}
@@ -683,12 +741,14 @@ class Session:
                    summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
                    cleared=int(marker.get("cleared", 0)),
                    next_idx=await turn_end(context.workspace, context.chat_id),
-                   replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None))
+                   replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None),
+                   routine=getattr(context, "routine", None))
 
     def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0,
-                 replay=False, by=None):
+                 replay=False, by=None, routine=None):
         self.workspace, self.chat_id, self.messages = workspace, chat_id, messages
         self.by = by   # a team chat's: who writes the turns added here
+        self.routine = routine   # a routine's run: its first turn says so
         self.replay = replay   # `regenerate` / `retry`: the person's turn is the last one saved, and runs again
         self.summary, self.first_kept = summary, min(first_kept, len(messages))
         self.cleared = min(cleared, len(messages))
@@ -752,7 +812,7 @@ class Session:
         internal = internal or bool(approvals or declined)
         msg = {"role": "user", "content": _signed(content, self.by) if self.by and not internal else content}
         if self.by:
-            msg = _stamp(msg, self.by, None if internal else self.by.get("turn"))
+            msg = _stamp(msg, self.by, not internal)
         if internal:
             msg["internal"] = True
         if approvals:
@@ -765,6 +825,8 @@ class Session:
             msg["selection"] = selection
         if connectors:   # @-mentioned: a replay loads them up front, as this turn did
             msg["connectors"] = list(connectors)
+        if self.routine and not internal:
+            msg["routine"] = self.routine
         self.messages.append(msg)
         # Before the meta touch: a turn with no index is recoverable (the next
         # touch_meta fills the title, add_cost and the chat-list self-heal both

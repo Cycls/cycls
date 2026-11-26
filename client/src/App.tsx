@@ -19,7 +19,7 @@ import { dark } from "@clerk/ui/themes";
 import { arCheckout } from "./lib/clerk-ar";
 import { useLang, setLang, t } from "./lib/i18n";
 import { toggleDark } from "./lib/utils";
-import { markSignup, detectSignup, startSignup } from "./lib/signup";
+import { markSignup, detectSignup, startSignup, needsPhone, PHONE_COUNTRIES, toE164, latinDigits } from "./lib/signup";
 import { onFreePlan } from "./lib/commerce";
 import { accountError } from "./lib/errors";
 import { IconButton } from "./components/icon";
@@ -122,10 +122,10 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
   const { user } = useUser();
   const files = useFiles();
   useRefreshOnTurnEnd(files, chat.isStreaming);
-  const ws = useWorkspaces();
   const { getToken, signOut, isLoaded: authLoaded, sessionClaims } = useAuth();
   const clerk = useClerk();
   const { organization, membership, memberships } = useOrganization(workspace ? { memberships: ALL } : {});
+  const ws = useWorkspaces("", `${user?.id}:${organization?.id}`);
   const { userMemberships, setActive } = useOrganizationList({ userMemberships: ALL });
   useAllPages(memberships, userMemberships);
   const { data: subscription } = useSubscription({ for: organization ? "organization" : "user" });
@@ -202,7 +202,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       author_org_image_url: organization.imageUrl,
     }),
   } : {};
-  const handleShare = async (audience: string = "public") => await chat.share(audience, authorFields);
+  const handleShare = async (audience: string = "public", id?: string) => await chat.share(audience, authorFields, id);
 
   // The organisation's members by account id: the workspace menu's member list, and the names a
   // design's history gives a teammate's change (the sign-in token carries none).
@@ -268,6 +268,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       fetchMembers: ws.members,
       onSetMember: ws.setMember,
       onRemoveMember: ws.removeMember,
+      search: ws.search,
     } : undefined,
   };
 
@@ -278,7 +279,7 @@ function ChatApp({ config, workspace, view }: { config: AppConfig | null; worksp
       files={filesPanelProps(files, true, organization ? { id: organization.id, name: organization.name } : null, authorFields)}
       account={account}
       config={config}
-      view={view}
+      view={`${user?.id}:${view}`}
     />
   );
 }
@@ -302,6 +303,22 @@ const ssKey = (k: string) => `cycls_${k}`;
 // OAuth leaves the page entirely, so where to come back to has to survive the
 // round trip. Signing in from a share link must land back on that link, not "/".
 const RETURN_KEY = "cycls_return_to";
+
+// Clerk sends a sign-up it holds open (the phone still to add) back to `…#/continue`: from Google or Apple through
+// /sso-callback, from One Tap through the provider's signUpUrl. That page opens the sign-in card on the phone step.
+const continuing = () => window.location.hash.startsWith("#/continue");
+const here = () => window.location.pathname + window.location.search;
+
+// One Tap reaches it on the page it was tapped on: only the hash changes, nothing loads again.
+function useContinuing() {
+  const [on, setOn] = useState(continuing);
+  useEffect(() => {
+    const look = () => { if (continuing()) setOn(true); };
+    window.addEventListener("hashchange", look);
+    return () => window.removeEventListener("hashchange", look);
+  }, []);
+  return on;
+}
 
 function stashParams(returnTo?: string) {
   const params = new URLSearchParams(window.location.search);
@@ -342,9 +359,10 @@ function SharedViewAuthed({ agent, oneTap }: { agent?: string; oneTap?: boolean 
   // sign-in surface as the app — email/password lands the session in place and
   // the share loads without a navigation; OAuth returns to this exact link.
   const [signingIn, setSigningIn] = useState(false);
+  const cont = useContinuing();
   useSessionElsewhere();
   if (!isLoaded) return null;
-  if (signingIn && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
+  if ((signingIn || cont) && !isSignedIn) return <CustomSignIn returnTo={window.location.href} />;
   // One Tap, as on the home page, brings a visitor back to this share signed in.
   return (
     <>
@@ -389,6 +407,7 @@ function SSOCallback() {
     <AuthenticateWithRedirectCallback
       signInForceRedirectUrl={dest}
       signUpForceRedirectUrl={dest}
+      continueSignUpUrl={`${dest.split("#")[0]}#/continue`}
     />
   );
 }
@@ -406,11 +425,34 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
   const [error, setError] = useState("");
   const [noticeProvider, setNoticeProvider] = useState("");
   const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot-password">("sign-in");
-  const [step, setStep] = useState<"form" | "verify">("form");
+  const [step, setStep] = useState<"form" | "verify" | "phone" | "phone_code">("form");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [region, setRegion] = useState("SA");    // a country, not a code: +1 is the US and Canada both
+  const [phone, setPhone] = useState("");        // the local number, as typed
+  const [sentTo, setSentTo] = useState("");
+  const [resent, setResent] = useState(false);
+
+  const toPhone = (su: { phoneNumber: string | null }) => {
+    setError("");
+    setCode("");
+    const given = su.phoneNumber;
+    const known = given && [...PHONE_COUNTRIES].sort((a, b) => b[1].length - a[1].length).find(([, c]) => given.startsWith(`+${c}`));
+    if (known) { setRegion(known[0]); setPhone(given.slice(known[1].length + 1)); }
+    else if (given) setPhone(given);
+    setMode("sign-up");
+    setStep("phone");
+  };
+
+  // Back from Google, Apple or One Tap with the phone still to add: straight to that step.
+  const cont = useContinuing();
+  useEffect(() => {
+    if (!isLoaded || !cont) return;
+    history.replaceState(null, "", here());
+    if (signUp && needsPhone(signUp)) toPhone(signUp);
+  }, [isLoaded, cont]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!isLoaded) return null;
 
@@ -513,6 +555,8 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     if (result.status === "complete") {
       markSignup("password", result.createdUserId);
       await setSignUpActive!({ session: result.createdSessionId });
+    } else if (needsPhone(result)) {
+      toPhone(result);
     } else {
       await signUp!.prepareEmailAddressVerification({ strategy: "email_code" });
       setStep("verify");
@@ -525,8 +569,43 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     if (result.status === "complete") {
       markSignup("email_code", result.createdUserId);
       await setSignUpActive!({ session: result.createdSessionId });
-    } else throw new Error(`sign-up ${result.status}`);
+    } else if (needsPhone(result)) toPhone(result);
+    else throw new Error(`sign-up ${result.status}`);
   });
+
+  // Clerk asks for the phone only while its phone requirement is on; the code goes out from our SMS relay.
+  const handlePhone = (e: React.FormEvent) => runAuth(e, "phone", async () => {
+    track("sign_up_attempted", { method: "phone", step: "phone" });
+    const number = toE164(dialCode, phone);
+    const su = await signUp!.update({ phoneNumber: number, locale: lang });
+    await su.preparePhoneNumberVerification({ strategy: "phone_code" });
+    setSentTo(number);
+    setCode("");
+    setResent(false);
+    setStep("phone_code");
+  });
+
+  const handlePhoneCode = (e: React.FormEvent) => runAuth(e, "phone_code", async () => {
+    track("sign_up_attempted", { method: "phone", step: "phone_code" });
+    const result = await signUp!.attemptPhoneNumberVerification({ code });
+    if (result.status !== "complete") throw new Error(`sign-up ${result.status}`);
+    // Google and Apple count on their first load (detectSignup); a form sign-up counts here
+    if (result.verifications.externalAccount?.status !== "verified") {
+      markSignup(result.verifications.emailAddress?.status === "verified" ? "email_code" : "password", result.createdUserId);
+    }
+    await setSignUpActive!({ session: result.createdSessionId });
+  });
+
+  const resendCode = async () => {
+    setError("");
+    try {
+      await signUp!.preparePhoneNumberVerification({ strategy: "phone_code" });
+      setResent(true);
+      setTimeout(() => setResent(false), 30_000);   // each send is a paid SMS
+    } catch (err) {
+      setError(accountError(err, "phone_resend"));
+    }
+  };
 
   const handleForgotPassword = (e: React.FormEvent) => runAuth(e, "reset", async () => {
     await signIn!.create({ strategy: "reset_password_email_code", identifier: email });
@@ -548,7 +627,16 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
     passwordIn:   { type: "password", placeholder: t("password"),         value: password,    set: setPassword,    autoComplete: "current-password" },
     passwordUp:   { type: "password", placeholder: t("password"),         value: password,    set: setPassword,    autoComplete: "new-password" },
     newPassword:  { type: "password", placeholder: t("newPassword"),      value: newPassword, set: setNewPassword, autoComplete: "new-password" },
-    code:         { type: "text",     placeholder: t("verificationCode"), value: code,        set: setCode,        autoComplete: "one-time-code" },
+    code:         { type: "text",     placeholder: t("verificationCode"), value: code,        set: (v) => setCode(latinDigits(v)), autoComplete: "one-time-code" },
+  };
+  const onPhone = step === "phone" || step === "phone_code";
+  const flag = (r: string) => String.fromCodePoint(...[...r].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+  const dialCode = PHONE_COUNTRIES.find(([r]) => r === region)?.[1] ?? "966";
+  // The picker's list: every country by its name in the reader's language, Saudi first
+  const countries = () => {
+    const names = new Intl.DisplayNames([lang], { type: "region" }), order = new Intl.Collator(lang);
+    return PHONE_COUNTRIES.map(([r, c]) => ({ r, c, name: names.of(r) ?? r }))
+      .sort((a, b) => Number(b.r === "SA") - Number(a.r === "SA") || order.compare(a.name, b.name));
   };
 
   const renderForm = (fs: Field[], submit: string, handler: (e: React.FormEvent) => Promise<void>, opts?: { captcha?: boolean; below?: React.ReactNode }) => (
@@ -603,7 +691,9 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
                 {t("welcomeTo")}
               </h1>
               <p className="text-muted-foreground text-sm mt-1.5">
-                {t("signInToContinue")}
+                {step === "phone" ? t("addPhone")
+                  : step === "phone_code" ? t("phoneCodeSent").replace("{phone}", `⁦${sentTo}⁩`)
+                  : t("signInToContinue")}
               </p>
             </div>
 
@@ -619,7 +709,8 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
               </div>
             )}
 
-            {/* OAuth buttons */}
+            {/* OAuth buttons: not while a sign-up waits on its phone */}
+            {!onPhone && (<>
             <div className="space-y-3">
               <div className={`relative${isLoading ? " opacity-50" : ""} transition-opacity`}>
                 {lastStrategy === "oauth_google" && (
@@ -666,15 +757,41 @@ function CustomSignIn({ returnTo }: { returnTo?: string } = {}) {
               <span className="text-xs text-muted-foreground">{t("or")}</span>
               <div className="h-px flex-1 bg-border" />
             </div>
+            </>)}
 
             {/* Email/password forms */}
-            <div className="mt-6">
+            <div className={onPhone ? "" : "mt-6"}>
               {mode === "sign-in"        && step === "form"   && renderForm([fields.email, fields.passwordIn], t("signIn"),        handleSignIn,       { below: <button type="button" onClick={() => switchMode("forgot-password")} className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer">{t("forgotPassword")}</button> })}
               {mode === "sign-in"        && step === "verify" && renderForm([fields.code],                     t("signIn"),        handleSignInVerify)}
               {mode === "sign-up"        && step === "form"   && renderForm([fields.email, fields.passwordUp], t("signUp"),        handleSignUp,       { captcha: true })}
               {mode === "sign-up"        && step === "verify" && renderForm([fields.code],                     t("signUp"),        handleSignUpVerify)}
               {mode === "forgot-password" && step === "form"  && renderForm([fields.email],                    t("sendCode"),      handleForgotPassword)}
               {mode === "forgot-password" && step === "verify"&& renderForm([fields.code, fields.newPassword], t("resetPassword"), handleResetVerify)}
+              {step === "phone" && (
+                <form onSubmit={handlePhone} className="space-y-3">
+                  {/* The picker shows the flag and code; its list, the countries' names */}
+                  <div className="flex gap-2" dir="ltr">
+                    <label className={`${inputClass.replace("w-full ", "")} relative flex shrink-0 items-center gap-1.5`}>
+                      <span>{flag(region)} +{dialCode}</span>
+                      <select value={region} onChange={(e) => setRegion(e.target.value)} aria-label={t("countryCode")}
+                              className="absolute inset-0 cursor-pointer opacity-0">
+                        {countries().map(({ r, c, name }) => <option key={r} value={r}>{flag(r)} {name} +{c}</option>)}
+                      </select>
+                    </label>
+                    <input type="tel" inputMode="tel" autoComplete="tel-national" placeholder={t("phoneNumber")} value={phone}
+                           onChange={(e) => setPhone(latinDigits(e.target.value))} className={inputClass} required autoFocus />
+                  </div>
+                  <button type="submit" disabled={!!isLoading} className={submitClass}>{t("sendCode")}</button>
+                </form>
+              )}
+              {step === "phone_code" && renderForm([fields.code],  t("verify"),   handlePhoneCode, { below: (
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <button type="button" onClick={resendCode} disabled={resent} className="hover:text-foreground transition-colors cursor-pointer disabled:cursor-default disabled:opacity-60">
+                    {resent ? t("codeResent") : t("resendCode")}
+                  </button>
+                  <button type="button" onClick={() => setStep("phone")} className="hover:text-foreground transition-colors cursor-pointer">{t("changeNumber")}</button>
+                </div>
+              ) })}
             </div>
 
             {/* Mode toggle links */}
@@ -793,7 +910,7 @@ export default function App() {
     // visitors still see public shares without auth.
     if (!clerkKey) return <SharedView agent={agent} />;
     return (
-      <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }}>
+      <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} signUpUrl={here()}>
         <SharedViewAuthed agent={agent} oneTap={config?.one_tap} />
       </ClerkProvider>
     );
@@ -814,7 +931,8 @@ export default function App() {
   }
 
   return (
-    <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} localization={lang === "ar" ? arCheckout : undefined}>
+    <ClerkProvider publishableKey={clerkKey} appearance={{ theme: isDark ? dark : undefined }} localization={lang === "ar" ? arCheckout : undefined}
+                   signUpUrl={here()}>
       <Show when="signed-in">
         <ChatAppKeyed config={config} />
       </Show>
@@ -835,8 +953,9 @@ function PublicGate({ config }: { config: AppConfig | null }) {
     const params = new URLSearchParams(window.location.search);
     return params.has("fork") || params.has("q") || params.has("plans");
   });
+  const cont = useContinuing();
   useSessionElsewhere();
-  if (signingIn) return <CustomSignIn />;
+  if (signingIn || cont) return <CustomSignIn />;
   return (
     <>
       {config?.one_tap && <GoogleOneTap />}

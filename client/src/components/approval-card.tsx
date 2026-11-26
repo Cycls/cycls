@@ -163,8 +163,7 @@ export function ApprovalCard({ part, agent, answer }: { part: Part; agent: strin
   const danger = card.risk === "destructive";
   return (
     <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}
-                className={cn("mb-2 flex max-h-[60dvh] flex-col gap-3 overflow-y-auto rounded-2xl border bg-background p-4 shadow-sm",
-                              danger ? "border-destructive/30" : "border-border")}>
+                className="mb-2 flex max-h-[60dvh] flex-col gap-3 overflow-y-auto rounded-2xl border border-border bg-background p-4 shadow-sm">
       <div className="flex items-start gap-3">
         <Face card={card} c={c} />
         <div className="min-w-0">

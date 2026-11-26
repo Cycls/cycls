@@ -79,23 +79,24 @@ function markSeen(id: string) {
 
 type Flags = {
   loaded: boolean;
-  push: { on: boolean; immediate?: boolean; snoozeDays?: number };
+  push: { immediate?: boolean; snoozeDays?: number };
   announcements: unknown;
 };
 
 function useFlags(): Flags {
-  const [flags, setFlags] = useState<Flags>({ loaded: false, push: { on: false }, announcements: null });
+  const [flags, setFlags] = useState<Flags>({ loaded: false, push: {}, announcements: null });
   useEffect(() => {
     const remote = flagsProvider();
-    // No flags provider: the prompt still shows after the first finished turn; there are no announcements to show.
-    if (!remote) { setFlags({ loaded: true, push: { on: true }, announcements: null }); return; }
+    // The prompt shows after the first finished turn either way; a flag only tunes when. No flags provider: no
+    // announcements either.
+    if (!remote) { setFlags({ loaded: true, push: {}, announcements: null }); return; }
     return remote.on(() => {
       const prompt = remote.get("notification_prompt");
       const o = (prompt.payload && typeof prompt.payload === "object" ? prompt.payload : {}) as Raw;
       const ann = remote.get("announcements");
       setFlags({
         loaded: true,
-        push: { on: prompt.enabled, immediate: o.immediate === true,
+        push: { immediate: o.immediate === true,
                 snoozeDays: typeof o.snooze_days === "number" ? o.snooze_days : undefined },
         announcements: ann.enabled ? ann.payload : null,
       });
@@ -118,8 +119,15 @@ export function Surfaces({ config, ready, active }: { config: AppConfig | null; 
 
   const [pushDone, setPushDone] = useState(false);
   const [busy, setBusy] = useState(false);
-  const push = !modal && !tip && !pushDone && !!provider && flags.push.on && (ready || !!flags.push.immediate)
-    && pushStatus() === "default" && !promptSnoozed(flags.push.snoozeDays ?? SNOOZE_DAYS);
+  // A moment that earns the question asks now, in its own words (askPush): a routine set up, a first mention.
+  const [why, setWhy] = useState<"routine" | "mention" | null>(null);
+  useEffect(() => {
+    const ask = (e: Event) => { setWhy((e as CustomEvent).detail); setPushDone(false); };
+    window.addEventListener("cycls:ask-push", ask);
+    return () => window.removeEventListener("cycls:ask-push", ask);
+  }, []);
+  const push = !modal && !tip && !pushDone && !!provider && pushStatus() === "default"
+    && (!!why || ((ready || !!flags.push.immediate) && !promptSnoozed(flags.push.snoozeDays ?? SNOOZE_DAYS)));
 
   // One `shown` per card per page, fired when it is actually on screen.
   const visible = active ? [modal && `a:${modal.id}`, tip && `a:${tip.id}`, push && "push"].filter(Boolean).join("|") : "";
@@ -127,7 +135,7 @@ export function Surfaces({ config, ready, active }: { config: AppConfig | null; 
     for (const key of visible.split("|").filter(Boolean)) {
       if (shownOnce.has(key)) continue;
       shownOnce.add(key);
-      if (key === "push") track("notification_prompt_shown", { placement: "corner" });
+      if (key === "push") track("notification_prompt_shown", { placement: "corner", reason: why ?? "task" });
       else {
         const c = cards.find((x) => `a:${x.id}` === key);
         if (c) track("announcement_shown", { id: c.id, type: c.type });
@@ -148,7 +156,7 @@ export function Surfaces({ config, ready, active }: { config: AppConfig | null; 
     if (result === "clicked" && c.url) window.open(c.url, /^https?:/.test(c.url) ? "_blank" : "_self");
   };
   const answerPush = (result: string) => {
-    track("notification_prompt_answered", { placement: "corner", result });
+    track("notification_prompt_answered", { placement: "corner", result, reason: why ?? "task" });
     if (result !== "allowed") snoozePrompt();
     setPushDone(true);
   };
@@ -255,8 +263,8 @@ export function Surfaces({ config, ready, active }: { config: AppConfig | null; 
               <Bell className="size-4.5" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium">{t("notifyTitle")}</p>
-              <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{t("notifyBody")}</p>
+              <p className="text-sm font-medium">{t(why === "routine" ? "notifyRoutineTitle" : why === "mention" ? "notifyMentionTitle" : "notifyTitle")}</p>
+              <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{t(why === "routine" ? "notifyRoutineBody" : why === "mention" ? "notifyMentionBody" : "notifyBody")}</p>
             </div>
           </div>
           <div className="mt-3 flex items-center justify-end gap-1.5">

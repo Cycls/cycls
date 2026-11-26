@@ -1,6 +1,14 @@
 import { useCallback, useState } from "react";
 import { useApi } from "./use-api";
 
+// What a search finds in every workspace you may enter, each hit naming its own (GET /search).
+export interface Everywhere {
+  workspaces: { id: string; name: string; icon?: string }[];
+  chats: { id: string; title: string; updatedAt: string; ws: string }[];
+  files: { name: string; path: string; ws: string }[];
+  apps: { slug: string; name: string; description: string; ws: string }[];
+}
+
 export interface WorkspaceInfo {
   id: string;
   name: string;
@@ -15,15 +23,19 @@ export interface MemberInfo {
   role: string;
 }
 
-export function useWorkspaces(baseUrl: string = "") {
+// The list each account and org had last: a workspace switch remounts the app, which shows it at once, then the fresh one.
+const known = new Map<string, WorkspaceInfo[]>();
+
+export function useWorkspaces(baseUrl: string = "", account: string = "") {
   const { api, setGetToken } = useApi(baseUrl);
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>(() => known.get(account) ?? []);
 
   const list = useCallback(async (): Promise<WorkspaceInfo[]> => {
     const rows = await (await api("/workspaces", { silent: true })).json();
+    known.set(account, rows);
     setWorkspaces(rows);
     return rows;
-  }, [api]);
+  }, [api, account]);
 
   const create = useCallback(async (name: string): Promise<WorkspaceInfo> => {
     const row = await (await api("/workspaces", { method: "POST", json: { name } })).json();
@@ -53,5 +65,8 @@ export function useWorkspaces(baseUrl: string = "") {
     await api(`/workspaces/${id}/members/${userId}`, { method: "DELETE" });
   }, [api]);
 
-  return { workspaces, list, create, update, remove, members, setMember, removeMember, setGetToken };
+  const search = useCallback(async (q: string): Promise<Everywhere> =>
+    (await api(`/search?q=${encodeURIComponent(q)}`, { silent: true })).json(), [api]);
+
+  return { workspaces, list, create, update, remove, members, setMember, removeMember, search, setGetToken };
 }

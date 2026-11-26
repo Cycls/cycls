@@ -49,8 +49,8 @@ export const mediaResolver = (docPath: string, openFile: (path: string, silent?:
   const folder = docPath.slice(0, docPath.lastIndexOf("/") + 1);
   return (p: string) => (folder ? openFile(folder + p, true).catch(() => openFile(p, true)) : openFile(p, true));
 };
-// Markdown the rich editor can't carry through a save — math, HTML, footnotes — edits as plain text.
-export const PLAIN_MD = /\$\$|\\\(|\\\[|\$[^$\n]+\$|<\/?[a-z][a-z0-9-]*(\s[^>]*)?>|\[\^[^\]]+\]/im;
+// Markdown the rich editor can't carry through a save, math written \( \) or \[ \], edits as plain text.
+export const PLAIN_MD = /\\\(|\\\[/;
 
 export interface CanvasFile {
   path: string;

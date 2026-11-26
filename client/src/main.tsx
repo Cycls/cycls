@@ -6,6 +6,7 @@ import { initAnalytics, setAgentDomain, type ProviderSpec } from "./lib/analytic
 import { ToastProvider } from "./lib/toast";
 import { ErrorBoundary } from "./components/error-boundary";
 import { applyTheme, getThemeMode } from "./lib/utils";
+import { keepDraftFromUrl } from "./lib/draft";
 
 applyTheme();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -19,6 +20,7 @@ window.addEventListener("vite:preloadError", (e) => {
   e.preventDefault();
   location.reload();
 });
+keepDraftFromUrl();
 // The language last picked here, else the browser's
 if ((localStorage.getItem("cycls_lang") || navigator.language).startsWith("ar")) {
   document.documentElement.lang = "ar";

@@ -14,12 +14,18 @@ def _llm():
     return LLM().model("anthropic/claude-test").allowed_tools(["Agent", "Editor", "Ask"]).price(input=1, output=1)
 
 
+def _briefed(kw):
+    """An agent's request: its system carries the brief's preamble."""
+    system = kw.get("system")
+    return BRIEFED in (system if isinstance(system, str) else "".join(b.get("text", "") for b in system or ()))
+
+
 def _client(parent, child, seen=None):
     """One fake model for the parent and its agents: an agent's requests carry the brief's preamble."""
     parent, child = iter(parent), iter(child)
     client = MagicMock()
     def stream(**kw):
-        agent = BRIEFED in str(kw.get("system"))
+        agent = _briefed(kw)
         if seen is not None: seen.append(("agent" if agent else "parent", kw))
         return FakeStream(next(child if agent else parent))
     client.messages.stream = stream
@@ -141,7 +147,7 @@ def test_a_report_reaches_the_parent_at_its_next_step(tmp_path):
     seen = []
     client = MagicMock()
     def stream(**kw):
-        if BRIEFED in str(kw.get("system")):
+        if _briefed(kw):
             return _Slow(_make_response([_text_block("done")]), 0.3 if "slow brief" in str(kw["messages"]) else 0)
         seen.append(kw)
         return _Slow(*next(parent))

@@ -60,6 +60,9 @@ cycls/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── activity.py         # who made and changed each file (.files), people's faces, an org's audit log (docs/rfc-file-metadata.md)
+    ├── inbox.py            # a person's notifications across their workspaces (.inbox): `notify`, a team message's mentions and replies, the bell's read, each person's browsers (docs/rfc-notifications.md)
+    ├── webpush.py          # Web Push from our own server: RFC 8291 encryption, a VAPID signature, sent straight to each browser's push service
+    ├── routines.py         # routines: the record (each person's, per workspace), the clock (.clock, a key per routine by its next run), a run as its owner's chat message, `routine` and `tell` (docs/rfc-routines.md)
     ├── mcp.py              # cycls.MCP — remote MCP servers via the Anthropic connector
     ├── browser/            # cycls Browser tool — thin CDP client to a shared real-Chrome service (Steel); docs/notes/browser.md
     ├── video/              # cycls Video tool, over a thin client to the cycls-video service on Modal GPUs (HyperFrames compositions → MP4); docs/notes/video.md
@@ -131,6 +134,7 @@ Yield these from app functions:
 - `{"type": "status", "status": "..."}` - Status indicator
 - `{"type": "callout", "callout": "...", "style": "info|warning|error|success"}`
 - `{"type": "image", "src": "...", "alt": "...", "caption": "..."}` - pictures side by side make a grid; a workspace picture opens in the canvas
+- `{"type": "chart", "kind": "column|bar|stacked|line|area|pie|donut|treemap", "title": ..., "data": {"labels": [...], "series": [{"name": ..., "values": [...]}]}}` - drawn in SVG in the chat, no library (parts/data-chart.tsx), saved to files, as a PNG or a CSV; a reply draws the same from a ```chart block, and a time series (`series` of `[time, value]` rows, candles) is drawn with Lightweight Charts. A reply's ```flowchart block (`nodes`, `edges`, `direction`) is laid out and drawn the same way (parts/flow-chart.tsx)
 - `{"type": "sources", "sources": [{"title": ..., "url": ..., "snippet": ...}]}` - citation chips; emitted by the `WebSearch` builtin, and by any tool as `_ui` with optional `label`, `quote`, `status`, `note`; they survive a reload
 - `{"type": "usage", "used": 11, "limit": 14, "per": "month", "resets": "2026-11-01"}` - a limit, sent with a reply: a line over the composer in its last fifth; the reply that uses the last of it opens the plans as it ends (once a period on each device), and a reply refused for it is a thank-you note
 - `{"type": "ui", "action": "open_plan_modal"}` — fire-and-forget UI trigger; not rendered, not persisted in session history (also `open_canvas`, `suggest`, `ask` — see docs/tutorial.md)
@@ -172,6 +176,8 @@ tests/
 │   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once, file holds, cost
 │   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes, a chat's files
 │   ├── team_chats_test.py       # a team workspace's chats: who sees them, a message to the team alone, moving a chat there, reactions, edits, typing, unread, paging, writes at the same moment, a look that finds nothing new
+│   ├── inbox_test.py            # the inbox: a mention, a reply and @all reach who they name, never the sender, whoever had the chat open, nor twice; push words and picks; a task ended while away; read, seen, a chat opened, the newest 30; Web Push (RFC 8291's example, a browser's push read back, one gone dropped, OneSignal to phones only)
+│   ├── routines_test.py         # routines: local time across clock changes, set up only from the card, the clock starting each once, a run as its owner off the chat list, tell, three failures pausing it
 │   ├── events_test.py           # to_ui wire shapes for the typed events
 │   ├── pdf_test.py              # PDF page parsing
 │   ├── web_test.py              # FastAPI routes, encoders, Messages, SEO/branding

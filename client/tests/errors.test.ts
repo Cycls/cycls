@@ -25,6 +25,13 @@ describe("account errors", () => {
     expect(accountError(clerk("form_identifier_exists"), "sign_up")).toBe("هذا البريد مسجّل بالفعل، سجّل الدخول بدلًا من ذلك");
   });
 
+  test("on the phone step, the same codes speak of the number", () => {
+    expect(accountError(clerk("form_identifier_exists"), "phone")).toBe("That number is already used by another account.");
+    expect(accountError(clerk("form_param_format_invalid"), "phone")).toBe("Enter the number with its country code, like +966 5X XXX XXXX.");
+    expect(accountError(clerk("form_code_incorrect"), "phone_code")).toBe("That code isn't right.");
+    expect(accountError(clerk("form_identifier_exists"), "sign_up")).toBe("An account with that email already exists. Sign in instead.");
+  });
+
   test("any other is a reference, its code and wording kept for us", () => {
     const shown = accountError(clerk("session_reverification_required", "Clerk: verify again"), "settings");
     expect(shown).toMatch(/^Something went wrong\. Reference: [0-9a-f]{8}$/);

@@ -101,8 +101,9 @@ def test_a_post_runs_nothing_and_the_next_ask_reads_who_wrote_each(tmp_path, mon
     client.post(f"/chat?id={chat_id}", json={"messages": [{"role": "user", "content": "@Super fix the rent line"}]}, headers=h)
     [context] = seen
     assert len(context) == 1 and context[0]["role"] == "user"   # the two turns, as one
-    said = " ".join(b["text"] for b in context[0]["content"])
-    assert "[From: Omar Khalid]" in said and "@Super fix the rent line" in said and "[From: Sara Alharbi]" in said
+    # each name before what it says: after it, the next turn's words read as that person's
+    assert [b["text"] for b in context[0]["content"]] == ["[From: Omar Khalid]\nNice, I'll check slide 4",
+                                                          "[From: Sara Alharbi]\n@Super fix the rent line"]
     team = state.chats_of(workspace(SARA, tmp_path, base=f"file://{tmp_path}", ws=ws_id), chat_id)
     turns = asyncio.run(state.load_messages(team, chat_id))
     assert [t.get("by") for t in turns if t["role"] == "user"] == ["omar", "sara"]
@@ -110,6 +111,56 @@ def test_a_post_runs_nothing_and_the_next_ask_reads_who_wrote_each(tmp_path, mon
     assert asyncio.run(state.get_meta(team, chat_id))["title"] == "Nice, I'll check slide 4"
     # a personal workspace cannot hold one
     assert client.post("/chat?id=team-x", json={"messages": [{"role": "user", "content": "hi"}]}).status_code == 404
+
+
+def test_a_reply_names_the_message_it_answers_to_the_model_the_chat_and_whoever_wrote_it(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import cycls._agent.web.server as server
+    from cycls._agent.web.server import Config
+    from tests.agent.web_test import THEME_PATH
+    ws_id = _team(tmp_path)
+    me, seen = {"user": OMAR}, []
+    monkeypatch.setattr(server, "validator", lambda *a, **k: (lambda: me["user"]))
+
+    async def agent(context):
+        s = await state.Session.open(context)
+        await s.add_user(context.messages.raw[-1]["content"])
+        seen.append(s.context())
+        yield "On it"
+
+    web, routes = TestClient(server.web(agent, Config(public_path=THEME_PATH, auth=True, workspaces="member", volume=str(tmp_path)))), _routers(tmp_path)
+    h = {"X-Workspace": ws_id}
+    say = lambda text, mid, **kw: web.post(f"/chat?id={chat}" if chat else "/chat", headers=h,
+                                           json={"messages": [{"role": "user", "content": text, "id": mid}], **kw})
+    chat = None
+    chat = say("Nice, I'll check slide 4", "m-omar-1", post=True, team=True).json()["chat_id"]
+    me["user"] = SARA
+    say("@Super fix the rent line", "m-sara-1", reply="m-omar-1")
+    [context] = seen
+    assert context[0]["content"][-1]["text"] == ('[From: Sara Alharbi]\n[Replying to Omar Khalid: "Nice, I\'ll check slide 4"]\n'
+                                                 "@Super fix the rent line")
+    shown = {m.get("id"): m for m in routes.get(f"/chats/{chat}", headers=h).json()["messages"]}
+    assert shown["m-sara-1"]["reply"] == {"id": "m-omar-1", "by": "omar", "name": "Omar Khalid", "text": "Nice, I'll check slide 4"}
+    assert next(c for c in routes.get("/chats", headers={**h, "X-Test-User": "omar"}).json() if c["id"] == chat)["mention"]   # told, as an @ tells
+    say("and the totals", "m-sara-2", post=True, reply="m-nowhere")   # a reply to nothing is a message
+    assert "reply" not in {m.get("id"): m for m in routes.get(f"/chats/{chat}", headers=h).json()["messages"]}["m-sara-2"]
+
+
+def test_a_reply_quotes_the_chat_as_saved_and_the_agents_answer_by_the_message_it_answers(tmp_path):
+    ws_id = _team(tmp_path)
+    team = state.chats_of(workspace(SARA, tmp_path, base=f"file://{tmp_path}", ws=ws_id), "team-1")
+    by = {"id": "sara", "name": "Sara Alharbi", "turn": "m-sara-1"}
+    asyncio.run(state.post(team, "team-1", {"content": "Fix the rent line"}, by))
+    asyncio.run(state.append_messages(team, "team-1", [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Fixed: the rent line now reads 4,200"}]}], 1))
+    quote = lambda key: asyncio.run(state.quote(team, "team-1", key))
+    assert quote("m-sara-1") == {"id": "m-sara-1", "by": "sara", "name": "Sara Alharbi", "text": "Fix the rent line"}
+    assert quote("m-sara-1.re") == {"id": "m-sara-1.re", "text": "Fixed: the rent line now reads 4,200"}
+    assert quote("m-gone-1") is None
+    asyncio.run(state.rewrite(team, "team-1", "m-sara-1", by))   # taken back: nothing left to quote
+    assert quote("m-sara-1") is None
 
 
 def test_only_a_team_chats_turns_are_joined():
