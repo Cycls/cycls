@@ -375,6 +375,8 @@ const SHIM = `<script>(function(){
     // connector's page in the host, where the person connects it; nothing about the grant comes back.
     connectors: function(){ return data({ op: 'connectors' }); },
     connect: function(name){ send({ type: 'cycls:connect', name: String(name) }); },
+    // Puts text in the host's message box for the person to review and send (the app never sends it).
+    ask: function(text){ send({ type: 'cycls:ask', text: String(text) }); return Promise.resolve(true); },
     // A connector's own API, live. The app never holds a token: the host resolves the
     // workspace's grant per call, so a refreshed one is inherited with no change here.
     connector: function(name){

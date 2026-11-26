@@ -152,6 +152,19 @@ describe("attachBridge", () => {
     expect(opened).toEqual(["posthog"]);
   });
 
+  it("puts an app's cycls.ask text in the message box", async () => {
+    const put: string[] = [];
+    const on = (e: Event) => put.push((e as CustomEvent).detail.text);
+    window.addEventListener("cycls:compose", on);
+    const { frame, contentWindow } = fakeFrame();
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "" });
+    send(contentWindow, { type: MSG.ask, text: "Refresh my tender radar" });
+    send(contentWindow, { type: MSG.ask, text: 42 });
+    await settle();
+    window.removeEventListener("cycls:compose", on);
+    expect(put).toEqual(["Refresh my tender radar"]);
+  });
+
   it("answers on the port the frame kept, when it announced itself twice", async () => {
     const ports: MessagePort[] = [];
     const contentWindow = { postMessage: (_m: unknown, _o: string, t?: MessagePort[]) => { if (t?.[0]) ports.push(t[0]); } };

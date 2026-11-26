@@ -19,6 +19,7 @@ export const MSG = {
   dataResult: "cycls:data:result",
   command: "cycls:command",   // host -> app: the workspace's app theme, the host's language (catalog)
   connect: "cycls:connect",   // app -> host: open a connector's page, to connect it
+  ask: "cycls:ask",           // app -> host: text put in the message box, for the person to review and send
   listen: "cycls:listen",     // app -> host: it has a change listener, so tell it instead of reloading it
   changed: "cycls:changed",   // host -> app: its data changed (the agent, a teammate, another tab)
   theme: "cycls:theme",       // host -> app: the chat switched between light and dark
@@ -442,6 +443,11 @@ export function attachBridge({
     if (msg.type === MSG.connect && typeof (msg as { name?: unknown }).name === "string" && fetchConnector
         && /^[a-z0-9_-]{1,64}$/i.test((msg as { name: string }).name)) {
       window.dispatchEvent(new CustomEvent(OPEN_CONNECTOR_EVENT, { detail: { name: (msg as { name: string }).name } }));
+      return;
+    }
+    // cycls.ask(text): the text goes in the message box (chat.tsx's cycls:compose); never sent by the app itself.
+    if (msg.type === MSG.ask && typeof (msg as { text?: unknown }).text === "string") {
+      window.dispatchEvent(new CustomEvent("cycls:compose", { detail: { text: (msg as { text: string }).text.slice(0, 4000) } }));
       return;
     }
 
