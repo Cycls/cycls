@@ -87,7 +87,8 @@ test("search reaches every workspace you're in: a hit from another says where it
   const { rerender } = render(<Harness at={null} />);
   fireEvent.click(screen.getByRole("button", { name: "Search" }));
   fireEvent.change(screen.getByPlaceholderText("Search chats, files and apps…"), { target: { value: "plan" } });
-  fireEvent.click(await screen.findByText("🔬 Research"));
+  expect(await screen.findByText("docs")).toBeTruthy();   // Research / docs, under its name
+  fireEvent.click(screen.getByText("Research"));
   expect(switched).toEqual(["t-research"]);
   expect(window.location.search).toBe("?file=docs%2Fplan.md");
   rerender(<Harness at={research} />);   // App remounts Chat on the workspace switched to

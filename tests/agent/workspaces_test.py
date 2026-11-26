@@ -1144,6 +1144,13 @@ def test_search_reaches_every_workspace_you_may_enter_and_no_other(tmp_path):
     assert {(c["title"], c["ws"]) for c in got["chats"]} == {("Budget review", "u-user_1"), ("Budget launch", research)}
     assert [(a["name"], a["ws"]) for a in got["apps"]] == [("Budget Tool", research)]
 
+    # one workspace picked: its hits alone, the list of workspaces still whole; one you may not enter finds nothing
+    got = client.get(f"/search?q=budget&ws={research}").json()
+    assert len(got["workspaces"]) == 3
+    assert {h["ws"] for k in ("chats", "files", "apps") for h in got[k]} == {research}
+    got = client.get(f"/search?q=budget&ws={secret}").json()
+    assert got["files"] == [] and got["chats"] == [] and got["apps"] == []
+
     # excluded from General: it leaves the search as it leaves the list
     client.delete("/workspaces/t-shared/members/user_1", headers={"X-Test-User": "admin_1"})
     got = client.get("/search?q=budget").json()

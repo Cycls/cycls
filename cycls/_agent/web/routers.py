@@ -2201,8 +2201,9 @@ def workspaces_router(cycls_app, user_dep, volume, base):
 
     @r.get("/search")
     async def search_everywhere(request: Request, user: Any = user_dep):
-        """Chats by title, files by path, apps by name, in every workspace you may enter, each hit naming its
-        workspace so opening it can go there; the one you're in (X-Workspace) first. Only what you can open: your
+        """Chats by title, files by path, apps by name, in every workspace you may enter (or the one `ws` names, the
+        list of workspaces still whole), each hit naming its workspace so opening it can go there; the one you're in
+        (X-Workspace) first. Only what you can open: your
         own chats in each workspace and its team chats, never a teammate's own; each team workspace passes the
         same check every other request makes (resolve_ws_id). A blank query: the latest chats, and files and apps
         as they come. A workspace whose files aren't indexed yet is searched for them next time."""
@@ -2211,6 +2212,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         tokens = _norm(q).split()
         hit = lambda text: all(t in _norm(text or "") for t in tokens)
         here = request.headers.get("x-workspace") or f"u-{user.id}"
+        only = request.query_params.get("ws")
         mine = []
         for w in await _mine(user):
             try:
@@ -2239,7 +2241,7 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             return chats, files, apps
 
         chats, files, apps = [], [], []
-        for got in await asyncio.gather(*(one(w) for w in mine), return_exceptions=True):
+        for got in await asyncio.gather(*(one(w) for w in mine if not only or w["id"] == only), return_exceptions=True):
             if isinstance(got, BaseException):
                 log("warn", message=f"search: a workspace was not searched: {type(got).__name__}: {got}")
                 continue

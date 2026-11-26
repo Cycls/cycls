@@ -65,8 +65,8 @@ export function useWorkspaces(baseUrl: string = "", account: string = "") {
     await api(`/workspaces/${id}/members/${userId}`, { method: "DELETE" });
   }, [api]);
 
-  const search = useCallback(async (q: string): Promise<Everywhere> =>
-    (await api(`/search?q=${encodeURIComponent(q)}`, { silent: true })).json(), [api]);
+  const search = useCallback(async (q: string, ws?: string): Promise<Everywhere> =>
+    (await api(`/search?q=${encodeURIComponent(q)}${ws ? `&ws=${encodeURIComponent(ws)}` : ""}`, { silent: true })).json(), [api]);
 
   return { workspaces, list, create, update, remove, members, setMember, removeMember, search, setGetToken };
 }
