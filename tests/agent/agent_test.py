@@ -2069,7 +2069,7 @@ def test_unconnected_connector_yields_the_card_and_stops_the_model(agent_env):
         events = asyncio.run(_drain(_run(context=ctx, mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(google)])))
 
     cards = [e for e in events if isinstance(e, dict) and e.get("action") == "connect"]
-    assert cards == [{"type": "ui", "action": "connect", "connector": "google", "id": "t1"}]   # a card names the call it holds
+    assert cards == [{"type": "ui", "action": "connect", "connector": "google", "connectors": ["google"], "id": "t1"}]   # a card names the call it holds
     result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
                   for b in msg["content"] if b.get("type") == "tool_result")
     assert "not connected" in result["content"] and "end your turn" in result["content"]
@@ -2088,6 +2088,44 @@ def _google():
 def _grant(ctx):
     from cycls._agent import credentials
     asyncio.run(credentials.put(ctx.workspace, "google", {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12}))
+
+
+def test_one_not_connected_is_seen_and_find_tools_offers_its_card(agent_env):
+    """A REST connector gives the model nothing until it is connected: it is named in the system prompt instead, and
+    `find_tools` asked for what it does answers with the card, the ones that fit, and the turn ends there."""
+    from cycls._agent import connectors as c
+    ws, ctx = agent_env
+    outlook = c.OAuth2("outlook", authorize="a", token="t", client_id="i", secret="s", title="Outlook",
+                       description="Read and send your email", api="https://graph.microsoft.com/v1.0")
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "read my email"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, _make_response([_text_block("ok")])])
+    with _mock_anthropic(client), patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        events = asyncio.run(_drain(_run(context=ctx, api_connectors=[outlook])))
+    system = calls[0]["system"][-1]["text"] if isinstance(calls[0]["system"], list) else calls[0]["system"]
+    assert "find_tools" in [t["name"] for t in calls[0]["tools"]] and "outlook (Outlook)" in system
+    assert [e.get("connectors") for e in events if isinstance(e, dict) and e.get("action") == "connect"] == [["outlook"]]
+    assert len(calls) == 1   # the card ends the turn: the person connects, or carries on without
+
+
+def test_one_connected_is_named_and_find_tools_points_at_its_tool(agent_env):
+    """A connected REST connector's one tool is there from the start: the prompt names it as connected, and
+    `find_tools` asked for what it does points at it, rather than saying nothing is left to load."""
+    from cycls._agent import connectors as c, credentials
+    ws, ctx = agent_env
+    outlook = c.OAuth2("outlook", authorize="a", token="t", client_id="i", secret="s", title="Outlook",
+                       description="Read and send your email", api="https://graph.microsoft.com/v1.0")
+    slack = c.OAuth2("slack", authorize="a", token="t", client_id="i", secret="s", title="Slack",
+                     description="Messages in your channels", api="https://slack.com/api")
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "send an email"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, _make_response([_text_block("ok")])])
+    with _mock_anthropic(client), patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        asyncio.run(credentials.put(ctx.workspace, "outlook", {"access_token": "tok", "refresh_token": "r", "expires_at": 9e12}))
+        asyncio.run(_drain(_run(context=ctx, api_connectors=[outlook, slack])))
+    system = calls[0]["system"][-1]["text"] if isinstance(calls[0]["system"], list) else calls[0]["system"]
+    assert "Connected, their tools already here: outlook (Outlook)" in system and "slack (Slack)" in system
+    result = next(b for msg in _read_history(ctx) if msg["role"] == "user" and isinstance(msg["content"], list)
+                  for b in msg["content"] if b.get("type") == "tool_result")
+    assert result["content"].startswith("Already connected: outlook (outlook_request)")
 
 
 def test_connector_schemas_are_absent_until_find_tools_matches(agent_env):
@@ -2198,6 +2236,7 @@ def test_find_tools_matches_on_what_the_tools_do(agent_env):
     assert c.matches("how many orders today", catalog) == ["salla"]
     assert c.matches("salla", catalog)[0] == "salla"
     assert c.matches("nothing relevant here", catalog) == []
+    assert c.matches("list the orders and files in salla", catalog) == ["salla"]   # one named comes alone
 
 
 _TENDERS = {"tenders": ("Saudi government tenders on Etimad",
@@ -2421,6 +2460,15 @@ def test_a_tool_can_send_several_ui_events():
     assert [e["action"] for e in evs] == ["a", "b"] and all(e["id"] == "t1" for e in evs)
     assert _shape({"name": "design", "id": "t2"}, {"_model": "ok", "_ui": {"type": "ui", "action": "c"}}, True, {}, set())[1] == \
         [{"type": "ui", "action": "c", "id": "t2"}]
+
+
+def test_a_chart_of_labels_a_tool_sends_is_kept_for_the_reload():
+    from cycls._agent.harness.main import _kept
+    chart = {"type": "chart", "id": "t1", "kind": "column", "title": "Sales", "prefix": "SAR ", "short": True,
+             "data": {"labels": ["Jan", "Feb"], "series": [{"name": "Sales", "values": [120, 150], "color": "#3171F6"}, "junk"]}}
+    assert _kept(chart) == {**chart, "data": {"labels": ["Jan", "Feb"], "series": [{"name": "Sales", "values": [120, 150], "color": "#3171F6"}]}}
+    assert _kept({"type": "chart", "id": "t2", "data": {"labels": ["Jan"], "series": [{"name": "no values"}]}}) is None
+    assert _kept({"type": "chart", "id": "t3", "series": [{"kind": "line", "data": [["2026-01-01", 1]]}]})["series"]   # a time series, as before
 
 
 def test_a_file_a_tool_opens_stands_in_the_chat_and_is_kept():

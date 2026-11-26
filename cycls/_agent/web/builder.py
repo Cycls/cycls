@@ -51,6 +51,23 @@ class OneSignal:
         self.spec = {"provider": "onesignal", "app_id": app_id}
 
 
+class WebPush:
+    """Push provider: Web Push from the agent's own server, to the browsers people turn it on in. No provider: the key
+    pair is VAPID_PRIVATE_KEY's (docs/rfc-notifications.md, Devices). Listed first, it reaches the browsers; a phone
+    app's provider after it (cycls.OneSignal) reaches phones only."""
+    def __init__(self):
+        self.spec = {"provider": "webpush"}
+
+
+def _font(path) -> bytes:
+    """A font file's bytes, read at build time; a missing file or one that isn't a font fails the build."""
+    from cycls._agent.video.fonts import read
+    p = Path(path).expanduser()
+    if not p.is_file() or not read(p.read_bytes()):
+        raise ValueError(f"not a TrueType or OpenType font: {path}")
+    return p.read_bytes()
+
+
 def _asset(value: str) -> str:
     """Inline an image at build time: SVG paths as markup, PNG/JPG/WebP paths
     as data URIs (keep raster logos small — they ride the page config). Raw
@@ -75,6 +92,7 @@ class Web:
         self._cms: Optional[dict] = None
         self._analytics: Optional[list] = None
         self._notifications: Optional[list] = None
+        self._routines: Optional[list] = None
         self._on_run = None
         self._suggestions: bool = False
         self._affiliate: Optional[str] = None
@@ -93,6 +111,8 @@ class Web:
         self._og_bytes: Optional[bytes] = None
         self._og_url: Optional[str] = None
         self._favicon: Optional[str] = None
+        self._accent: Optional[str] = None
+        self._fonts: list = []
         self._colors: Optional[dict] = None
         self._connectors: list = []
 
@@ -126,21 +146,27 @@ class Web:
         any CMS: plain GET URLs returning the contract JSON (title/title_ar/description/description_ar/
         icon_svg; {"agents": [...]} for explore; {"connectors": [...]} for connectors; {"pills": [{"label":
         {"en", "ar"}, "cards": [{"share"} | {"video", "title"}]}]} for examples, what
-        cms.cycls.ai/site/examples/{agent} serves), optional bearer `token`. What the code declares wins,
+        cms.cycls.ai/site/examples/{agent} serves; a card may describe itself instead — {share, title, prompt, kind,
+        template, thumbnail}, what cms.cycls.ai/site/gallery/{agent} serves from its library), optional bearer `token`. What the code declares wins,
         piece by piece — `.brand()`, `.explore()`, `.examples()`, and each field a cycls.OAuth2/cycls.Key
         sets for itself."""
         cms = {k: v for k, v in (("brand", brand), ("explore", explore), ("connectors", connectors),
                                  ("examples", examples), ("token", token)) if v}
         return self._copy(_cms=cms or None)
 
-    def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None):
+    def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None,
+              accent=None, fonts=None):
         """Static branding, from code instead of a CMS. `name`, `description`,
         `logo` (the agent icon shown in the chat hero) and `brand` (the wordmark
         shown in the nav bar; falls back to the Cycls logo when unset) are per
         locale — repeat with `locale="ar"` for Arabic. `og` (social card, path
         or URL) and `favicon` apply globally. Image paths are read at build time
         (SVG inlined, PNG/JPG as data URIs), so assets don't need to ship with
-        the container."""
+        the container. The cards the agent draws for its public links (and its
+        own, without `og`) carry its icon, names and wordmark, in `accent` (the
+        colour rising from below) and `fonts`: font files, read at build time
+        too, one face for Latin and one for Arabic headlines (else Inter and
+        IBM Plex Sans Arabic) — so a licensed font ships with the agent alone."""
         cur = {**self._brand.get(locale, {})}
         if name is not None: cur["name"] = name
         if description is not None: cur["description"] = description
@@ -155,6 +181,8 @@ class Web:
                 if not p.is_file(): raise ValueError(f"og image not found: {og}")
                 updates["_og_bytes"] = p.read_bytes()
         if favicon is not None: updates["_favicon"] = _asset(favicon)
+        if accent is not None: updates["_accent"] = accent
+        if fonts is not None: updates["_fonts"] = [_font(f) for f in fonts]
         return self._copy(**updates)
 
     def colors(self, *, primary=None, secondary=None, primary_dark=None, secondary_dark=None):
@@ -263,13 +291,27 @@ class Web:
         return self._copy(_on_run=fn)
 
     def notifications(self, *providers):
-        """Push notifications as plugins (cycls.OneSignal). The SDK owns the
+        """Push notifications as plugins (cycls.WebPush, cycls.OneSignal). The SDK owns the
         prompt UI and the subscription handshake; who gets pushed, and when,
         is the platform's job. Empty or False disables."""
         if providers in ((), (False,)):
             return self._copy(_notifications=None)
         specs = [p.spec if hasattr(p, "spec") else dict(p) for p in providers]
         return self._copy(_notifications=specs or None)
+
+    def routines(self, *examples: dict):
+        """Routines (docs/rfc-routines.md): the agent does a job on its own, on a schedule, in a new chat each run. Each
+        example: {"name", "name_ar", "prompt", "prompt_ar", "icon"}, its prompt put in the message box ([a blank]
+        selected first), its icon a connector's name for its logo or one of the client's icons; with none, a few
+        general ones. Off by default."""
+        keys = ("name", "name_ar", "prompt", "prompt_ar", "icon")
+        return self._copy(_routines=[{k: str(e[k]) for k in keys if e.get(k)} for e in examples] or [
+            {"name": "News on a topic", "name_ar": "أخبار موضوع", "icon": "globe",
+             "prompt": "Every morning at 8, send me what is new about [topic].",
+             "prompt_ar": "كل صباح الساعة 8 أرسل لي الجديد عن [الموضوع]"},
+            {"name": "Weekly files summary", "name_ar": "ملخص الملفات الأسبوعي", "icon": "folder",
+             "prompt": "Every Sunday, sum up what changed in my files last week.",
+             "prompt_ar": "كل أحد لخّص لي ما تغيّر في ملفاتي خلال الأسبوع الماضي"}])
 
     def suggestions(self, on: bool = True):
         """Show the prompt-starter suggestions on the empty-chat screen. Off by default."""

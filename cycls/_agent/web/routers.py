@@ -16,13 +16,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from cycls._app.db import DB, Conflict, Workspace, workspace
 from cycls._agent import connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
-from cycls._agent import activity
+from cycls._agent import activity, inbox, routines
 from cycls._agent.design import refresh as design_refresh
 from cycls._agent.logs import log
-from cycls._agent.tools import tool_step, detailed, excerpt, skills
+from cycls._agent.tools import tool_step, detailed, excerpt, pdf, skills
 from cycls._agent.connectors import approval_key
 from cycls._agent.web.shared import _NO_CACHE, _free_rel, _safe_path, person, resolve_path
-from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_response, design_router
+from cycls._agent.web.design_routes import _DESIGN_AS, _design_doc, _design_export, _design_response, design_router
 from cycls._agent.web.video_routes import _VIDEO_HTML_LIMIT, _composition, _versioned, _video_response, video_router
 from cycls._agent.web.office_routes import office_router, office_views
 
@@ -133,8 +133,10 @@ def to_ui_messages(raw):
             elif not isinstance(c, str):
                 continue
             ui = {"role": "user", "content": state.user_text(msg)}
+            if msg.get("routine"):   # a routine's run began here: the chat shows its line, not the instruction
+                ui["routine"] = msg["routine"]
             if msg.get("by"):   # a team chat's: the face beside it, and what a reaction or an edit names
-                ui.update({k: msg[k] for k in ("by", "id", "at", "edited", "deleted") if msg.get(k)})
+                ui.update({k: msg[k] for k in ("by", "id", "at", "edited", "deleted", "reply") if msg.get(k)})
                 if msg.get("deleted"): ui["content"] = ""
             if msg.get("attachments"):
                 # with no address: the one it was sent with is the sender's tab's own, gone for anyone else
@@ -286,7 +288,7 @@ def chats_router(ws_dep):
         for w in filter(None, (ws, state.team_chats(ws))):
             runs = await state.list_runs(w)   # one listing for the whole workspace
             async for cid, data in state.list_chats(w):
-                if data.get("deletedAt"):   # in the trash
+                if data.get("deletedAt") or data.get("routine"):   # in the trash; a routine's run, on its page
                     continue
                 items.append({
                     "id": data.get("id", cid),
@@ -319,6 +321,8 @@ def chats_router(ws_dep):
         # cold load, and a stale id is normal — 404s clutter the dev console.
         if meta is None:
             return Response(status_code=204)
+        if since is None and before is None:   # opened: what the bell has about it is read
+            await inbox.opened(mine, chat_id)
         # `run` tells the client whether to keep polling: a run outlives the
         # request that started it, so a finished stream is not a finished run.
         run = state.run_status(row)
@@ -789,6 +793,26 @@ def _search(entries, query, cap=_SEARCH_CAP):
         ))
     ranked.sort(key=lambda row: row[:4])
     return [row[4] for row in ranked[:cap]]
+
+
+_FOUND_CAP = 30   # hits of a kind a search across the workspaces returns
+
+
+def _apps_in(root):
+    """A workspace's apps: each folder under apps/ with an index.html, named by its app.json, else by its folder."""
+    out, apps = [], Path(root) / "apps"
+    if not apps.is_dir():
+        return out
+    for d in sorted(apps.iterdir()):
+        if not (d / "index.html").is_file():
+            continue
+        try:
+            m = json.loads((d / "app.json").read_text()) if (d / "app.json").is_file() else {}
+        except Exception:
+            m = {}
+        name = m.get("name") or re.sub(r"\b\w", lambda c: c.group().upper(), re.sub(r"[-_]+", " ", d.name))
+        out.append({"slug": d.name, "name": str(name), "description": str(m.get("description") or "")})
+    return out
 
 
 def _sorted(entries, key, desc):
@@ -1536,25 +1560,76 @@ async def _cms_pills(url, token=None):
     return r.json().get("pills") or []
 
 
+async def find_share(user, token, ws_q, mode, volume, base):
+    """Find the share row in whichever of the owner's workspaces minted it.
+    Minted URLs carry `?ws=`; bare legacy links fall back to the owner's
+    personal workspace, then General. Audience is NOT checked here."""
+    candidates = [ws_q] if ws_q else ([personal_ws(user), "t-shared"] if mode else [None])
+    for ws_id in candidates:
+        try:
+            ws_owner = workspace(user, volume, base=base, ws=ws_id)
+        except ValueError:
+            break
+        row = await state.find_share(ws_owner, token)
+        if row is not None:
+            return ws_owner, row
+    return None
+
+
+async def public_share(user, token, ws_q, mode, volume, base):
+    """A link anyone may open — its owner's workspace, its row and its title (the chat's, or the file's name) — else
+    None: what the link's page and its social card may say to someone who isn't signed in."""
+    found = await find_share(user, token, ws_q, mode, volume, base)
+    if found is None or not state.share_allows(found[1], None):
+        return None
+    ws_owner, row = found
+    if row["path"].startswith("file/"):
+        return ws_owner, row, row["path"].rsplit("/", 1)[-1]
+    meta = await state.get_meta(ws_owner, row["path"][5:])
+    return None if meta is None else (ws_owner, row, meta.get("title", ""))
+
+
+async def _picture(ws, path):
+    """A file as one picture (PNG or JPEG bytes) for a social card, else None: a picture as it is; a PDF's, an Office
+    file's or a design's first page, through their previews' caches."""
+    try:
+        src, ext = resolve_path(ws.root, path), path.rpartition(".")[2].lower()
+        if ext in ("png", "jpg", "jpeg"):
+            data = await asyncio.to_thread(src.read_bytes)
+            return data if len(data) <= 5 << 20 else None
+        if _design_doc(path):
+            return (await _design_export(ws.root, src, "png", ws.subject))[0].read_bytes()
+        if office.convertible(path):
+            src = await _office_pdf(ws.root, src, ws.subject)
+        elif ext != "pdf":
+            return None
+        page = await pdf.extract(src, 1, 1)
+        return base64.b64decode(page[0]["source"]["data"]) if isinstance(page, list) else None
+    except Exception:   # gone, or its preview's service down: the card shows the title instead
+        return None
+
+
+async def share_words(ws_owner, row):
+    """What a public link's card shows besides its title: the question, and the shared file, else the last file the
+    chat made that makes a picture, as one picture."""
+    ask, files = "", [row["path"][5:]]
+    if row["path"].startswith("chat/"):
+        ui = to_ui_messages(await state.load_messages(ws_owner, row["path"][5:]))
+        ask = next((m.get("content", "") for m in ui if m.get("role") == "user"), "")
+        files = canvas_files(ui)[::-1]
+    for f in files:
+        if picture := await _picture(ws_owner, f):
+            return ask, picture
+    return ask, None
+
+
 def share_router(cycls_app, ws_dep, user_dep, volume, base):
     r = APIRouter()
     bearer_scheme = HTTPBearer(auto_error=False)
     mode = getattr(getattr(cycls_app, "config", None), "workspaces", None)
 
-    async def _locate(user: str, token: str, ws_q=None):
-        """Find the share row in whichever of the owner's workspaces minted it.
-        Minted URLs carry `?ws=`; bare legacy links fall back to the owner's
-        personal workspace, then General. Audience is NOT checked here."""
-        candidates = [ws_q] if ws_q else ([personal_ws(user), "t-shared"] if mode else [None])
-        for ws_id in candidates:
-            try:
-                ws_owner = workspace(user, volume, base=base, ws=ws_id)
-            except ValueError:
-                break
-            row = await state.find_share(ws_owner, token)
-            if row is not None:
-                return ws_owner, row
-        return None
+    def _locate(user: str, token: str, ws_q=None):
+        return find_share(user, token, ws_q, mode, volume, base)
 
     async def _resolve_or_403(user: str, token: str, bearer, ws_q=None):
         """404 no such share · 401 audience needs a viewer we couldn't identify
@@ -1620,6 +1695,20 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
             out.append({"token": token, "url": _share_url(ws, token), "title": title, **meta})
         out.sort(key=lambda s: s.get("shared_at", ""), reverse=True)
         return out
+
+    @r.patch("/share/{token}")
+    async def change_share(token: str, request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """Who can open it, changed: the link stays the same."""
+        audience = (await request.json()).get("audience")
+        if audience != "public" and audience != f"org:{getattr(user, 'org_id', None)}":
+            raise HTTPException(400, "audience is 'public' or your organization's")
+        row = await DB(ws).get(f"share/{token}")
+        if not row:
+            raise HTTPException(404, "No such link")
+        row = {**row, "audience": audience}
+        await DB(ws).put(f"share/{token}", row, meta={k: v for k, v in row.items() if isinstance(v, str)})
+        await _kept(activity.audit(ws, {**activity.change(ws, "shared"), "audience": audience}, row.get("path")))
+        return {"token": token, "url": _share_url(ws, token), **row}
 
     @r.delete("/share/{token}")
     async def revoke_share(token: str, ws: Workspace = ws_dep):
@@ -1771,13 +1860,24 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
         """One configured entry → a gallery card, or None (bad URL, dead
         token, non-public, not a chat). A {video, title} entry is a tutorial
         card and needs no resolution — the FE previews the clip and plays it
-        in-page. Author fields are deliberately absent: examples read as
-        product showcase, not user content."""
+        in-page. A card that describes itself (a CMS library's: its title,
+        request, format and «Make one like this» template, each {en, ar}) is
+        taken as it is, its chat never read. Author fields are deliberately
+        absent: examples read as product showcase, not user content."""
         if isinstance(entry, str):
             entry = {"share": entry}
         pic = {"thumbnail": entry["thumbnail"]} if entry.get("thumbnail") else {}
         if entry.get("video"):
             return {"video": entry["video"], "title": entry.get("title", ""), **pic}
+        if entry.get("title") and entry.get("share"):
+            def en_ar(v):
+                v = v if isinstance(v, dict) else {"en": v or ""}
+                return (v.get("en") or v.get("ar") or ""), (v.get("ar") or None)
+            (title, title_ar), (template, template_ar) = en_ar(entry["title"]), en_ar(entry.get("template"))
+            share = entry["share"]
+            return {"share": share + ("&" if "?" in share else "?") + "example=1", "title": title, "title_ar": title_ar,
+                    "prompt": entry.get("prompt", ""), "kind": entry.get("kind"),
+                    "template": template or None, "template_ar": template_ar, **pic}
         url = entry.get("share", "")
         parts = urlsplit(url)
         seg = parts.path.strip("/").split("/")
@@ -2061,6 +2161,26 @@ def workspaces_router(cycls_app, user_dep, volume, base):
         if await _role_or_404(user, ws_id) not in ("owner", "admin"):
             raise HTTPException(403, "Managing this workspace requires owner or admin")
 
+    async def _mine(user):
+        """The workspaces `user` may enter: Personal, the teams they are a member of, General unless excluded.
+        Two LISTs total — my member rows and the registry — joined in memory; per-team gets would be 2K
+        roundtrips on object storage."""
+        orgdb = _orgdb(user)
+        out = [{"id": f"u-{user.id}", "name": "Personal", "type": "personal", "role": "owner"}]
+        members = {k.split("/")[1]: m async for k, m in orgdb.scan(glob=f"members/*/{user.id}")}
+        regs = {k.split("/")[-1]: row async for k, row in orgdb.scan(prefix="workspaces/")}
+        for ws_id, member in members.items():
+            reg = regs.get(ws_id)
+            if reg and not reg.get("builtin") and member.get("role") != "excluded":
+                out.append({**reg, "role": member.get("role")})
+        # General: every org member by default; admins immune to exclusion.
+        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")) and reg.get("builtin"):
+            if _is_org_admin(user):
+                out.append({**reg, "role": "admin"})
+            elif members.get("t-shared", {}).get("role") != "excluded":
+                out.append({**reg, "role": "editor"})
+        return out
+
     @r.get("/workspaces")
     async def list_workspaces(request: Request, user: Any = user_dep):
         await state.ensure_general(user, volume, base)
@@ -2077,21 +2197,57 @@ def workspaces_router(cycls_app, user_dep, volume, base):
             out += [{"id": d, "name": d[2:], "type": "personal", "role": None}
                     for d in sorted(dirs) if d.startswith("u-") and d != f"u-{user.id}"]
             return out
-        # Two LISTs total — my member rows and the registry — joined in
-        # memory; per-team gets would be 2K roundtrips on object storage.
-        members = {k.split("/")[1]: m async for k, m in orgdb.scan(glob=f"members/*/{user.id}")}
-        regs = {k.split("/")[-1]: row async for k, row in orgdb.scan(prefix="workspaces/")}
-        for ws_id, member in members.items():
-            reg = regs.get(ws_id)
-            if reg and not reg.get("builtin") and member.get("role") != "excluded":
-                out.append({**reg, "role": member.get("role")})
-        # General: every org member by default; admins immune to exclusion.
-        if getattr(user, "org_id", None) and (reg := regs.get("t-shared")) and reg.get("builtin"):
-            if _is_org_admin(user):
-                out.append({**reg, "role": "admin"})
-            elif members.get("t-shared", {}).get("role") != "excluded":
-                out.append({**reg, "role": "editor"})
-        return out
+        return await _mine(user)
+
+    @r.get("/search")
+    async def search_everywhere(request: Request, user: Any = user_dep):
+        """Chats by title, files by path, apps by name, in every workspace you may enter, each hit naming its
+        workspace so opening it can go there; the one you're in (X-Workspace) first. Only what you can open: your
+        own chats in each workspace and its team chats, never a teammate's own; each team workspace passes the
+        same check every other request makes (resolve_ws_id). A blank query: the latest chats, and files and apps
+        as they come. A workspace whose files aren't indexed yet is searched for them next time."""
+        await state.ensure_general(user, volume, base)
+        q = request.query_params.get("q", "")
+        tokens = _norm(q).split()
+        hit = lambda text: all(t in _norm(text or "") for t in tokens)
+        here = request.headers.get("x-workspace") or f"u-{user.id}"
+        mine = []
+        for w in await _mine(user):
+            try:
+                if await resolve_ws_id(user, w["id"], mode, volume, base) == w["id"]:
+                    mine.append(w)
+            except HTTPException:
+                pass
+
+        async def one(w):
+            ws = workspace(user, volume, base=base, ws=w["id"])
+            chats = [{"id": data.get("id", cid), "title": data.get("title", ""), "updatedAt": data.get("updatedAt", ""), "ws": w["id"]}
+                     for store in filter(None, (ws, state.team_chats(ws)))
+                     async for cid, data in state.list_chats(store)
+                     if not data.get("deletedAt") and hit(data.get("title", ""))]
+            root = Path(ws.root).resolve()
+            if not root.is_dir():
+                return chats, [], []
+            try:   # a first walk can take a while: the others answer meanwhile
+                entries, _ = await asyncio.wait_for(_catalog_get(root), timeout=3)
+            except asyncio.TimeoutError:
+                entries = []
+            files = [{"name": e["name"], "path": e["path"], "ws": w["id"]}
+                     for e in _search(entries, q) if not e["path"].startswith("apps/")]
+            apps = [{**a, "ws": w["id"]} for a in await asyncio.to_thread(_apps_in, root)
+                    if hit(f"{a['name']} {a['description']} {a['slug']}")]
+            return chats, files, apps
+
+        chats, files, apps = [], [], []
+        for got in await asyncio.gather(*(one(w) for w in mine), return_exceptions=True):
+            if isinstance(got, BaseException):
+                log("warn", message=f"search: a workspace was not searched: {type(got).__name__}: {got}")
+                continue
+            chats += got[0]; files += got[1]; apps += got[2]
+        elsewhere = lambda h: h["ws"] != here
+        chats.sort(key=lambda c: c["updatedAt"], reverse=True)
+        return {"workspaces": [{k: w.get(k) for k in ("id", "name", "type", "icon")} for w in mine],
+                **{k: sorted(v, key=elsewhere)[:_FOUND_CAP] for k, v in (("chats", chats), ("files", files), ("apps", apps))}}
 
     @r.post("/workspaces")
     async def create_workspace(request: Request, user: Any = user_dep):
@@ -2649,6 +2805,84 @@ def skills_router(ws_dep, user_dep):
     return r
 
 
+# ---- Routines (docs/rfc-routines.md) ----
+
+def routines_router(ws_dep):
+    """A person's routines in a workspace: made from the agent's card, changed from the dialog or the routine's page.
+    Each person sees only their own."""
+    r = APIRouter()
+
+    async def _or_400(do):
+        try: return await do
+        except ValueError as e: raise HTTPException(status_code=400, detail=str(e))
+
+    @r.get("/routines")
+    async def list_routines(ws: Workspace = ws_dep):
+        return sorted(await routines.listing(ws), key=lambda x: x.get("made", ""))
+
+    @r.post("/routines")
+    async def make_routine(request: Request, ws: Workspace = ws_dep):
+        """Set up, from the card the agent showed: the card's routine, as the person saw it."""
+        return await _or_400(routines.make(ws, await request.json(), state.actor_of(ws.subject)))
+
+    @r.patch("/routines/{rid}")
+    async def change_routine(rid: str, request: Request, ws: Workspace = ws_dep):
+        if (done := await _or_400(routines.change(ws, rid, await request.json()))) is None:
+            raise HTTPException(status_code=404, detail="No such routine")
+        return done
+
+    @r.delete("/routines/{rid}")
+    async def remove_routine(rid: str, ws: Workspace = ws_dep):
+        if await routines.remove(ws, rid) is None:
+            raise HTTPException(status_code=404, detail="No such routine")
+        return {"ok": True}
+
+    return r
+
+
+# ---- Inbox ----
+
+def inbox_router(user_dep, volume, base):
+    r = APIRouter()
+
+    @r.get("/inbox")
+    async def get_inbox(limit: Optional[int] = None, user: Any = user_dep):
+        """What concerns you, from every workspace you are in, newest first, and how many since you last looked. The
+        app asks for `limit=1` every 15 seconds: the count, and the newest, to know whether to sound."""
+        return await inbox.read(user, volume, base, limit)
+
+    @r.post("/inbox/seen")
+    async def inbox_seen(request: Request, user: Any = user_dep):
+        """The bell was opened; with {"chat"}, that chat is the one in front of them. How many are left unread."""
+        chat = (await request.json() if await request.body() else {}).get("chat")
+        return {"ok": True, "unread": await inbox.seen(user, volume, base, chat if isinstance(chat, str) else None)}
+
+    @r.post("/devices")
+    async def add_device(request: Request, user: Any = user_dep):
+        """This browser, to push to (Web Push): its subscription, its language, and where the app is, as it says."""
+        try:
+            await inbox.add_device(user, volume, base, await request.json(), request.headers.get("origin"))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise HTTPException(400, "Not a push subscription")
+        return {"ok": True}
+
+    @r.delete("/devices")
+    async def drop_device(request: Request, user: Any = user_dep):
+        await inbox.drop_device(user, volume, base, str((await request.json()).get("endpoint") or ""))
+        return {"ok": True}
+
+    @r.get("/notifications")
+    async def get_picks(user: Any = user_dep):
+        """How each kind reaches you away from the app: `push` or `off`."""
+        return await inbox.picks(user, volume, base)
+
+    @r.patch("/notifications")
+    async def set_picks(request: Request, user: Any = user_dep):
+        return await inbox.picks(user, volume, base, await request.json())
+
+    return r
+
+
 # ---- Mount ----
 
 def install_routers(cycls_app, app, required_auth, volume, base):
@@ -2667,6 +2901,9 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(office_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
+    app.include_router(inbox_router(required_auth, volume, base))
+    if getattr(getattr(cycls_app, "config", None), "routines", None) is not None:
+        app.include_router(routines_router(ws_dep))
     if mode:
         app.include_router(workspaces_router(cycls_app, required_auth, volume, base))
     if getattr(cycls_app, "connectors", None):

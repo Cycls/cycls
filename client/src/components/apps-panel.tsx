@@ -7,10 +7,11 @@ import { Icon } from "./icon";
 import { t } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
 
-export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUploadIcon, onDelete }: {
+export function AppsPanel({ apps, loading, onOpen, onShare, onRename, onSetIcon, onUploadIcon, onDelete }: {
   apps: AppInfo[];
   loading: boolean;
   onOpen: (app: AppInfo) => void;
+  onShare?: (app: AppInfo) => void;
   onRename?: (app: AppInfo, name: string) => void;
   onSetIcon?: (app: AppInfo, icon: string) => void;
   onUploadIcon?: (app: AppInfo, file: File) => void;
@@ -23,6 +24,7 @@ export function AppsPanel({ apps, loading, onOpen, onRename, onSetIcon, onUpload
   const uploadFor = useRef<AppInfo | null>(null);
   if (loading) return <LoadingBar />;
   const itemsFor = (app: AppInfo) => [
+    ...(onShare ? [{ label: t("share"), onClick: () => onShare(app) }] : []),
     ...(onRename ? [{ label: t("rename"), onClick: () => setRenaming(app.slug) }] : []),
     ...(onSetIcon ? [{ label: t("changeIcon"), onClick: () => setIconFor(app.slug) }] : []),
     ...(onUploadIcon ? [{ label: t("uploadIcon"), onClick: () => { uploadFor.current = app; fileInput.current?.click(); } }] : []),

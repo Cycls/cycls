@@ -3,51 +3,60 @@ import { render, cleanup, screen, act, fireEvent } from "@testing-library/react"
 import { ShareDialog, type ShareLinks } from "../src/components/share-dialog";
 import { CanvasDoc } from "../src/components/canvas";
 
-// Sharing a design. The Share popover offered "Create link" again for a file that was
-// already shared, and the shared page of a design showed "Preview isn't available".
+// Sharing: who can open it is one choice, "Only you" first. Choosing makes the link at once, changing who can
+// open it keeps the same link, and "Only you" takes it back.
 
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 afterEach(cleanup);
 
 describe("the Share popover", () => {
-  const linksWith = (rows: { token: string; url: string; audience?: string }[]): ShareLinks & { revoke: ReturnType<typeof vi.fn> } => ({
+  const linksWith = (rows: { token: string; url: string; audience?: string }[]) => ({
     find: vi.fn(async () => rows),
     revoke: vi.fn(async () => {}),
-  });
+    change: vi.fn(async () => {}),
+  }) satisfies ShareLinks;
+  const chosen = () => screen.getAllByRole("radio").find((r) => r.getAttribute("aria-checked") === "true")?.textContent;
 
-  it("shows the link a file already has, and removes it", async () => {
+  it("shows the card a file's link has, and Only you takes it back", async () => {
     const links = linksWith([{ token: "tok1", url: "/shared/u/tok1", audience: "public" }]);
     const onShare = vi.fn(async () => "https://x/new");
     render(<ShareDialog mode="file" onClose={() => {}} onShare={onShare} path="file/designs/a.fig" links={links} />);
     await settle();
     expect(links.find).toHaveBeenCalledWith("file/designs/a.fig");
-    expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe(`${window.location.origin}/shared/u/tok1`);
-    expect(screen.queryByText("Create link")).toBeNull();
+    expect(chosen()).toBe("Anyone");
+    expect(document.querySelector("img")?.getAttribute("src")).toBe(`${window.location.origin}/share/u/tok1/card.png`);
+    expect(screen.getByText("Copy link")).toBeTruthy();
 
-    fireEvent.click(screen.getByText("Remove link"));
+    fireEvent.click(screen.getByRole("radio", { name: /Only you/ }));
     await settle();
     expect(links.revoke).toHaveBeenCalledWith("tok1");
-    expect(screen.getByText("Create link")).toBeTruthy();
+    expect(chosen()).toBe("Only you");
+    expect(screen.queryByText("Copy link")).toBeNull();
     expect(onShare).not.toHaveBeenCalled();
   });
 
-  it("offers to create one when there is none, then shows it", async () => {
-    const links = linksWith([]);
-    render(<ShareDialog mode="file" onClose={() => {}} onShare={async () => "https://x/made"} path="file/a.md" links={links} />);
+  it("choosing who can open it makes the link at once", async () => {
+    const onShare = vi.fn(async () => "https://x/made");
+    render(<ShareDialog onClose={() => {}} onShare={onShare} />);
+    expect(chosen()).toBe("Only you");
+    fireEvent.click(screen.getByRole("radio", { name: /Anyone/ }));
     await settle();
-    fireEvent.click(screen.getByText("Create link"));
-    await settle();
-    expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("https://x/made");
+    expect(onShare).toHaveBeenCalledWith("public");
+    expect(screen.getByText("Copy link")).toBeTruthy();
+    expect(screen.getByText(/Anyone with link can open the chat/)).toBeTruthy();
   });
 
-  it("a link for one audience doesn't stand in for another", async () => {
+  it("changing who can open it keeps the same link", async () => {
     const links = linksWith([{ token: "tok1", url: "/shared/u/tok1", audience: "org:o1" }]);
-    render(<ShareDialog mode="file" onClose={() => {}} onShare={async () => "x"} org={{ id: "o1", name: "Acme" }}
-                        path="file/a.md" links={links} />);
+    const onShare = vi.fn(async () => "x");
+    render(<ShareDialog mode="file" onClose={() => {}} onShare={onShare} org={{ id: "o1", name: "Acme" }} path="file/a.md" links={links} />);
     await settle();
-    expect(screen.getByText("Create link")).toBeTruthy();            // nothing public yet
-    fireEvent.click(screen.getByText(/Acme/));
-    expect((screen.getByRole("textbox") as HTMLInputElement).value).toContain("/shared/u/tok1");
+    expect(chosen()).toBe("Acme");
+    fireEvent.click(screen.getByRole("radio", { name: /Anyone/ }));
+    await settle();
+    expect(links.change).toHaveBeenCalledWith("tok1", "public");
+    expect(chosen()).toBe("Anyone");
+    expect(onShare).not.toHaveBeenCalled();
   });
 });
 

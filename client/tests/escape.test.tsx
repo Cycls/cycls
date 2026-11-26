@@ -40,9 +40,9 @@ describe("Escape closes one thing", () => {
 
   it("the Share popover, not the canvas under it", async () => {
     render(<Pane>{(close) => <ShareDialog mode="file" onClose={close} onShare={async () => "https://x/s"} />}</Pane>);
-    expect(screen.getByText("Create link")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
     await escape();
-    expect(screen.queryByText("Create link")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByTestId("pane")).toBeTruthy();
   });
 

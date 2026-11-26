@@ -510,6 +510,17 @@ def test_share_url_carries_ws_and_resolves(tmp_path):
     assert client.get(f"/share/org_1:user_1/{body['token']}/data").status_code == 404
 
 
+def test_who_can_open_a_link_changes_and_the_link_stays(tmp_path):
+    client = _client(tmp_path)
+    client.put("/chats/c1", json={"title": "Mine"})
+    made = client.post("/share", json={"path": "chat/c1", "audience": "public"}).json()
+    changed = client.patch(f"/share/{made['token']}", json={"audience": "org:org_1"}).json()
+    assert changed["url"] == made["url"] and changed["audience"] == "org:org_1"
+    assert [(s["token"], s["audience"]) for s in client.get("/share").json()] == [(made["token"], "org:org_1")]
+    assert client.patch(f"/share/{made['token']}", json={"audience": "org:someone_else"}).status_code == 400
+    assert client.patch("/share/nope", json={"audience": "public"}).status_code == 404
+
+
 def test_share_bare_link_falls_back_to_personal(tmp_path):
     client = _client(tmp_path)
     client.put("/chats/c1", json={"title": "Mine"})          # personal workspace
@@ -1088,3 +1099,57 @@ def test_a_teams_shared_app_data_reaches_the_audit_log_and_a_persons_own_rows_do
     events = client.get("/audit", headers={**h, "X-Test-User": "admin_1"}).json()["events"]
     rows = [e for e in events if e["action"] == "app_data"]
     assert len(rows) == 1 and rows[0]["target"] == "apps/standup" and rows[0]["by"]["id"] == "user_1"
+
+
+# ---------------------------------------------------------------------------
+# Search across the workspaces
+# ---------------------------------------------------------------------------
+
+def _chat(tmp_path, user, ws_id, chat_id, title):
+    from cycls._app.db import workspace
+    ws = workspace(USERS[user], tmp_path, base=f"file://{tmp_path}", ws=ws_id)
+    meta = {"id": chat_id, "title": title, "updatedAt": "2026-11-23T10:00:00"}
+    _run(state.put_meta(state.chats_of(ws, chat_id), chat_id, meta))
+
+
+def test_search_reaches_every_workspace_you_may_enter_and_no_other(tmp_path):
+    """One search across Personal, your teams and General, each hit naming its workspace, the one you're in first.
+    A teammate's own chats and files, a team you're not in, General once you're excluded and another org never
+    show."""
+    client = _client(tmp_path)
+    client.get("/workspaces")   # provisions General
+    research = _mk_team(client, "Research")
+    secret = _mk_team(client, "Secret", as_user="user_2")   # user_1 is not in it
+
+    def put(path, who="user_1", ws=None):
+        h = {"X-Test-User": who, **({"X-Workspace": ws} if ws else {})}
+        assert client.put(f"/files/{path}", files={"file": (path, b"x")}, headers=h).status_code == 200
+    put("budget-mine.xlsx"); put("budget-plan.md", ws=research); put("budget-general.md", ws="t-shared")
+    put("budget-theirs.xlsx", who="user_2"); put("budget-secret.md", who="user_2", ws=secret)
+    app = tmp_path / "org_1" / "ws" / research / "apps" / "budget-tool"
+    app.mkdir(parents=True)
+    (app / "index.html").write_text("<p>app</p>")
+    (app / "app.json").write_text(json.dumps({"name": "Budget Tool"}))
+    _chat(tmp_path, "user_1", "u-user_1", "c1", "Budget review")
+    _chat(tmp_path, "user_1", research, "team-1", "Budget launch")
+    _chat(tmp_path, "user_2", research, "c3", "Budget notes of user 2")   # a teammate's own chat in the team
+    _chat(tmp_path, "user_2", "u-user_2", "c2", "Budget of user 2")
+    _chat(tmp_path, "user_2", secret, "team-2", "Budget secret")
+
+    got = client.get("/search?q=budget", headers={"X-Workspace": research}).json()
+    assert {w["id"] for w in got["workspaces"]} == {"u-user_1", research, "t-shared"}
+    assert {(f["name"], f["ws"]) for f in got["files"]} == {
+        ("budget-mine.xlsx", "u-user_1"), ("budget-plan.md", research), ("budget-general.md", "t-shared")}
+    assert got["files"][0]["ws"] == research   # the workspace you're in, first
+    assert {(c["title"], c["ws"]) for c in got["chats"]} == {("Budget review", "u-user_1"), ("Budget launch", research)}
+    assert [(a["name"], a["ws"]) for a in got["apps"]] == [("Budget Tool", research)]
+
+    # excluded from General: it leaves the search as it leaves the list
+    client.delete("/workspaces/t-shared/members/user_1", headers={"X-Test-User": "admin_1"})
+    got = client.get("/search?q=budget").json()
+    assert "t-shared" not in {w["id"] for w in got["workspaces"]} | {f["ws"] for f in got["files"]}
+
+    # another org's member finds nothing of this one
+    got = client.get("/search?q=budget", headers={"X-Test-User": "outsider"}).json()
+    assert got["files"] == [] and got["chats"] == [] and got["apps"] == []
+    assert not {w["id"] for w in got["workspaces"]} & {"u-user_1", research, secret}

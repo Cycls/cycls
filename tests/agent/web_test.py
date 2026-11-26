@@ -711,6 +711,148 @@ def _seed_canvas_chat(ws, chat_id="c1", title="Site build"):
     (ws.root / "secret.txt").write_text("not shared")
 
 
+def test_a_public_links_card_shows_its_question_and_work(tmp_path):
+    """What a public link's card shows besides its title: the question, and the shared file, else the last file the
+    chat made that makes a picture."""
+    from cycls._agent import state as chat
+    from cycls._agent.web.routers import public_share, share_words
+    from cycls._app.db import workspace
+
+    svc, user, client = _share_test_app(tmp_path)
+    ws = workspace(user, tmp_path, base=f"file://{tmp_path}")
+    _seed_canvas_chat(ws)   # made site.html: no picture
+    png = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR\0\0\0\x08\0\0\0\x04"
+    (ws.root / "chart.png").write_bytes(png)
+
+    async def seed():
+        await chat.put_meta(ws, "c2", {"id": "c2", "title": "Sales chart"})
+        await chat.append_messages(ws, "c2", [
+            {"role": "user", "content": "chart my sales"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "canvas", "input": {"path": "chart.png"}},
+                {"type": "tool_use", "id": "t2", "name": "canvas", "input": {"path": "site.html"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "opened"},
+                                         {"type": "tool_result", "tool_use_id": "t2", "content": "opened"}]},
+            {"role": "assistant", "content": "done"}], 0)
+    asyncio.run(seed())
+
+    async def shown(path, audience="public"):
+        token = client.post("/share", json={"path": path, "audience": audience}).json()["token"]
+        found = await public_share("user_test", token, None, None, tmp_path, f"file://{tmp_path}")
+        return found and (found[2], *await share_words(*found[:2]))
+    assert asyncio.run(shown("chat/c2")) == ("Sales chart", "chart my sales", png)   # past site.html, made last
+    assert asyncio.run(shown("chat/c1")) == ("Site build", "make a site", None)      # only a page: its title
+    assert asyncio.run(shown("file/chart.png")) == ("chart.png", "", png)
+    assert asyncio.run(shown("chat/c2", "org:org_1")) is None                         # a team's link says nothing
+
+
+def test_a_card_is_the_sites_look_filled_in():
+    """A card is drawn from one template, in the site's sizes: an Arabic line keeps its order (resvg lays runs out left
+    to right), each script in its face, Latin headlines tighter; the icon comes before the names in either language, as
+    on the site; a picture lies beside the title on its tile, the wordmark moving to the start. An agent's own fonts and
+    wordmark take their places."""
+    from pathlib import Path
+    from cycls._agent.web import og
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR\0\0\x06\x40\0\0\x03\x84"   # 1600 x 900: lies wide
+    assert og._size(png) == (1600, 900) and og._size(b"GIF89a") is None
+    agent = {"icon": "<svg/>", "en": "Super", "ar": "سوبر", "accent": "#ff8800"}
+    plain = og._svg("A pitch deck for a new café in Riyadh", "“make me a deck”", agent)
+    assert 'stop-color="#ff8800"' in plain and "tile" not in plain and 'translate(970' in plain   # the trailing corner
+    assert '<tspan font-family="Inter" letter-spacing="-1.86">A pitch deck' in plain
+    arabic = og._svg("عرض PowerPoint عن الإبل", "سوّاه سوبر", agent, png)
+    assert og.RLI + '<tspan font-family="IBM Plex Sans Arabic">عرض </tspan><tspan font-family="Inter">PowerPoint</tspan>' + og.PDI in arabic
+    assert 'rotate(-4' in arabic and "url(#tile)" not in arabic and 'translate(970' in arabic   # start, in Arabic
+    assert '<rect x="946" y="72"' in arabic and '<text x="1042" y="102"' in arabic   # icon, then names, at the right
+    own = og._svg("عرض PowerPoint عن الإبل", "سوّاه سوبر", {**agent, "latin": "BR Omny", "arabic": "Fatimah", "logo": "<svg/>"}, png)
+    assert '<tspan font-family="Fatimah">عرض </tspan><tspan font-family="BR Omny">PowerPoint</tspan>' in own
+    assert '<tspan font-family="IBM Plex Sans Arabic">سوّاه سوبر</tspan>' in own   # its text stays in Plex, as the site's
+    assert "translate(970" not in own and 'preserveAspectRatio="xMaxYMax meet"' in own   # its own wordmark, in the corner
+    assert og._href("https://example.com/logo.png") == ""   # resvg fetches nothing
+    page = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR\0\0\x04\x4c\0\0\x06\x14"   # 1100 x 1556: stands, cut off at its foot
+    assert 'rotate(-5' in og._svg("A guide", "", agent, page) and 'clip-path="url(#tile)"' in og._svg("A guide", "", agent, page)
+    assert og._lines("A very long title " * 9, 56, 1040, 2)[-1] == "very long title A very long title A…"   # cut at a word
+    assert og._lines("riyadh-pocket-guide.pdf", 52, 470, 3) == ["riyadh-pocket-", "guide.pdf"]   # a name at its dashes
+    plex = (Path(og.__file__).parent / "fonts" / "IBMPlexSansArabic-Bold.ttf").read_bytes()
+    faces = og.faces([plex, b"not a font"])
+    assert faces["arabic"] == "IBM Plex Sans Arabic" and "latin" not in faces and len(os.listdir(faces["fonts"])) == 1
+    assert og.faces([]) == {} == og.faces([b"not a font"])
+
+
+def test_a_public_links_page_is_named_after_it_with_its_own_card(tmp_path, monkeypatch):
+    """The CMS gives the agent its card (its page's on the website) and its colour. A public link's page is named after
+    what it shares and shows its own card, drawn by the agent; a team's link, or one that isn't there, is the agent's
+    page and card and says nothing of the chat. Every card's address is whole. .brand() sets every piece itself."""
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from cycls._agent import state as chat
+    from cycls._agent.web import og
+    from cycls._agent.web.server import PassMetadata
+    from cycls._app.auth import User
+    from cycls._app.db import DB, workspace
+
+    class _Resp:
+        status_code = 200
+        def json(self): return {"title": "Super", "title_ar": "سوبر", "description": "Gets things done",
+                                "icon_svg": "<svg/>", "card": "https://cms.example/files/super.png", "accent": "#ff8800"}
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp())
+    drawn = []
+
+    async def link(title, ask, picture, agent):
+        drawn.append((title, ask, picture, agent))
+        return b"\x89PNG card"
+    monkeypatch.setattr(og, "link", link)
+
+    async def dummy_agent(context):
+        yield "test"
+
+    vol = tmp_path / "vol"
+    ws = workspace(User(id="user_test"), vol, base=f"file://{vol}")
+
+    async def seed():
+        await chat.put_meta(ws, "c1", {"id": "c1", "title": "A pitch deck for a café"})
+        await chat.append_messages(ws, "c1", [{"role": "user", "content": "make me a deck"}], 0)
+        for token, audience in (("pub", "public"), ("team", "org:org_1")):
+            row = {"path": "chat/c1", "audience": audience}
+            await DB(ws).put(f"share/{token}", row, meta=row)
+    asyncio.run(seed())
+
+    client = TestClient(web(dummy_agent, Config(public_path=_seo_theme(tmp_path), name="super", volume=str(vol),
+                                                cms={"brand": "https://cms.example/agents/super"})))
+    assert '<meta property="og:image" content="https://cms.example/files/super.png" />' in client.get("/").text
+    page = client.get("/shared/user_test/pub").text
+    assert "<title>A pitch deck for a café</title>" in page
+    assert 'content="http://testserver/share/user_test/pub/card.png"' in page
+    r = client.get("/share/user_test/pub/card.png")
+    assert r.content == b"\x89PNG card" and r.headers["content-type"] == "image/png"
+    assert drawn == [("A pitch deck for a café", "make me a deck", None,
+                      {"icon": "<svg/>", "en": "Super", "ar": "سوبر", "accent": "#ff8800", "logo": ""})]
+    for other in ("team", "nope"):
+        page = client.get(f"/shared/user_test/{other}").text
+        assert "<title>Super</title>" in page and "café" not in page
+        assert 'content="https://cms.example/files/super.png"' in page
+        r = client.get(f"/share/user_test/{other}/card.png", follow_redirects=False)   # the agent's own card
+        assert r.status_code == 307 and r.headers["location"] == "https://cms.example/files/super.png"
+
+    own = Config(public_path=_seo_theme(tmp_path), name="super", volume=str(vol), og="https://mine.example/og.png",
+                 accent="#00ff00", pass_metadata={"en": PassMetadata(name="Mine", logo="<svg id='i'/>", brand="<svg id='w'/>")},
+                 cms={"brand": "https://cms.example/agents/super"})
+    own._fonts = [(Path(og.__file__).parent / "fonts" / "IBMPlexSansArabic-Bold.ttf").read_bytes()]
+    mine = TestClient(web(dummy_agent, own))
+    assert 'content="https://mine.example/og.png"' in mine.get("/").text   # .brand(og=) wins over the CMS's
+    mine.get("/share/user_test/pub/card.png")
+    look = drawn[-1][3]   # and every other piece of the cards
+    assert (look["icon"], look["en"], look["accent"], look["logo"], look["arabic"]) == \
+        ("<svg id='i'/>", "Mine", "#00ff00", "<svg id='w'/>", "IBM Plex Sans Arabic")
+    alone = TestClient(web(dummy_agent, Config(public_path=_seo_theme(tmp_path), name="super", volume=str(vol))))
+    assert 'content="http://testserver/og.png"' in alone.get("/").text
+
+    async def broken(*a): raise RuntimeError("no fonts")
+    monkeypatch.setattr(og, "link", broken)
+    r = alone.get("/share/user_test/pub/card.png", follow_redirects=False)   # one that can't be drawn: the agent's own
+    assert r.status_code == 307 and r.headers["location"] == "http://testserver/og.png"
+
+
 def test_chat_share_serves_canvas_files(tmp_path):
     """A chat share's file route covers the canvas artifacts the conversation
     produced — the shared page shows the chat WITH its output on one token.
@@ -828,6 +970,30 @@ def test_examples_come_from_the_cms(tmp_path, monkeypatch):
                                  cms=svc.config.cms)
     assert client.get("/examples").json()["categories"][0]["label"] == "Code"
     assert len(reads) == 2   # the code's pills win, and the CMS isn't asked
+
+
+def test_examples_from_a_cms_library_describe_themselves(tmp_path, monkeypatch):
+    """A CMS library's cards (/site/gallery/{agent}) bring their title, request, format and «Make one like this»
+    template, each {en, ar}: taken as they are, the share's chat never read."""
+    from types import SimpleNamespace
+    from cycls._agent.web import routers
+
+    svc, user, client = _share_test_app(tmp_path)
+    card = {"share": "https://super.test/shared/u/t?ws=t-a", "thumbnail": "/files/deck.png", "prompt": "أبي عرض",
+            "title": {"en": "A pitch deck", "ar": "عرض للمستثمرين"}, "kind": "pptx",
+            "template": {"en": "A deck for [business]", "ar": "عرض لـ [المشروع]"}}
+
+    async def cms(url, token=None):
+        return [{"label": {"en": "", "ar": ""}, "cards": [card, {**card, "share": "https://super.test/shared/u/t2", "template": {}}]}]
+    monkeypatch.setattr(routers, "_cms_pills", cms)
+    monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)
+    svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/gallery/super"})
+
+    first, second = client.get("/examples").json()["categories"][0]["items"]
+    assert first == {"share": "https://super.test/shared/u/t?ws=t-a&example=1", "title": "A pitch deck", "title_ar": "عرض للمستثمرين",
+                     "prompt": "أبي عرض", "kind": "pptx", "template": "A deck for [business]", "template_ar": "عرض لـ [المشروع]",
+                     "thumbnail": "https://cms.test/files/deck.png"}
+    assert second["share"].endswith("/t2?example=1") and second["template"] is None and second["template_ar"] is None
 
 
 def test_examples_builder_normalizes_labels():
@@ -1740,6 +1906,12 @@ def test_web_builder_brand_and_explore():
 
     with pytest.raises(ValueError):
         Web().brand(logo="missing/logo.svg")
+
+    plex = importlib.resources.files("cycls").joinpath("_agent/web/fonts/IBMPlexSansArabic-Regular.ttf")
+    cards = Web().brand(accent="#123456", fonts=[str(plex)])   # the colour and fonts of the cards it draws
+    assert cards._accent == "#123456" and cards._fonts == [plex.read_bytes()]
+    with pytest.raises(ValueError):
+        Web().brand(fonts=[THEME_PATH + "/index.html"])   # not a font: the build fails, not the cards
 
 
 def test_mobile_app_links_reach_the_page(tmp_path):

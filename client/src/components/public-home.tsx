@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { InputBox } from "./input-box";
-import { ExamplesGallery } from "./examples";
+import { ExamplesGallery, useExampleComposer } from "./examples";
 import { EmptyHero, Suggestions } from "./chat";
 import { CyclsLogo } from "./cycls-logo";
 import { AppBanner } from "./app-banner";
@@ -27,11 +27,18 @@ export function PublicHome({ config, onSignIn }: {
   const meta = _active
     ? { ..._active, logo: _active.logo || _en?.logo || "", brand: _active.brand || _en?.brand || "" }
     : _en;
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(() => sessionStorage.getItem("cycls_draft") || "");   // a draft link's text, kept
   // One Tap signs in without passing the gate — keep the draft either way.
   useEffect(() => { if (input.trim()) sessionStorage.setItem("cycls_draft", input.trim()); }, [input]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const noop = () => {};
+  // The composer grows with what's in it, as the signed-in chat's does (chat.tsx).
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+  }, [input]);
+  const examples = useExampleComposer(input, setInput, textareaRef);
 
   // The Sign in button alone is not a sign-up start — returning users press it.
   const gate = (text?: string, source: "compose" | "suggestion" | "sign_in" = "compose") => {
@@ -43,18 +50,18 @@ export function PublicHome({ config, onSignIn }: {
 
   return (
     <div className="h-dvh flex flex-col bg-background">
-      <header className="relative z-30 h-12 shrink-0" dir="ltr">
+      <header className="relative z-30 h-13.5 shrink-0" dir="ltr">
         <div className="mx-auto flex h-full max-w-full items-center justify-between px-4 sm:px-6">
           {meta?.brand ? (
-            <span className="flex h-6 items-center">
+            <span className="flex h-6.5 items-center">
               {meta.brand.startsWith("<") ? (
-                <span className="flex h-6 items-center [&>svg]:h-6 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
+                <span className="flex h-6.5 items-center [&>svg]:h-6.5 [&>svg]:w-auto" dangerouslySetInnerHTML={{ __html: meta.brand }} />
               ) : (
-                <img src={meta.brand} alt="" className="h-6 w-auto object-contain" />
+                <img src={meta.brand} alt="" className="h-6.5 w-auto object-contain" />
               )}
             </span>
           ) : (
-            <CyclsLogo className="h-5 fill-muted-foreground" />
+            <CyclsLogo className="h-5.5 fill-muted-foreground" />
           )}
           <div className="flex items-center gap-1">
             <button
@@ -66,12 +73,12 @@ export function PublicHome({ config, onSignIn }: {
               className="text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg p-2 transition-colors cursor-pointer"
               aria-label="Toggle language"
             >
-              <span className="text-xs font-medium w-4 h-4 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
+              <span className="text-[13px] font-medium h-4.5 flex items-center justify-center">{isAr ? "En" : "عربي"}</span>
             </button>
-            <IconButton name="moon" onClick={() => toggleDark("public_home")} label="Toggle theme" />
+            <IconButton name="moon" onClick={() => toggleDark("public_home")} label="Toggle theme" className="[&>svg]:size-4.5" />
             <button
               onClick={() => gate("", "sign_in")}
-              className="ms-1 rounded-full bg-foreground px-3.5 py-1.5 text-sm font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"
+              className="ms-1 rounded-full bg-foreground px-4 py-1.5 text-[15px] font-medium text-background hover:opacity-90 transition-opacity cursor-pointer"
             >
               {t("signIn")}
             </button>
@@ -101,7 +108,7 @@ export function PublicHome({ config, onSignIn }: {
               stopMic={noop}
               cancelMic={noop}
               voice={false}
-              placeholder={meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined}
+              placeholder={examples.hint || (meta ? (isAr ? `اسأل ${meta.name}` : `Ask ${meta.name}`) : undefined)}
             />
             {!config?.examples_enabled && config?.suggestions && (
               <div className="relative">
@@ -114,8 +121,10 @@ export function PublicHome({ config, onSignIn }: {
           </div>
           {config?.examples_enabled && (
             <ExamplesGallery
-              className="mt-5"
-              onUsePrompt={(text) => { setInput(text); textareaRef.current?.focus(); }}
+              className="mt-3"
+              name={meta?.name}
+              onUsePrompt={examples.makeLike}
+              onFormat={examples.setFormat}
             />
           )}
         </div>

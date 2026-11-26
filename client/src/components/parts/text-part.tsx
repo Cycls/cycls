@@ -8,6 +8,8 @@ import { memo, useMemo } from "react";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { CodePart } from "./code-part";
+import { ChartBlock } from "./data-chart";
+import { FlowBlock } from "./flow-chart";
 import { SourceChip, domainOf, urlKey } from "./sources-part";
 import { track } from "../../lib/analytics";
 import type { Source } from "../../hooks/use-chat";
@@ -118,8 +120,15 @@ const MemoizedMarkdownBlock = memo(
     sources?: Map<string, Source>;
     resolveMedia?: (path: string) => Promise<string>;
   }) {
+    const closed = /\n\s*(```|~~~)\s*$/.test(content);   // a fence still streaming has no end yet
     const components = {
       ...markdownComponents,
+      code: (props: { className?: string; children?: React.ReactNode }) => {
+        const lang = /\blanguage-(chart|flowchart)\b/.exec(props.className || "")?.[1], code = String(props.children).replace(/\n$/, "");
+        return lang === "chart" ? <ChartBlock code={code} done={closed} />
+          : lang === "flowchart" ? <FlowBlock code={code} done={closed} />
+          : markdownComponents.code(props);
+      },
       img: ({ src, alt }: { src?: string; alt?: string }) => <Media src={src ?? ""} alt={alt} resolve={resolveMedia} />,
       a({ href, children }: { href?: string; children?: React.ReactNode }) {
         const path = href && onOpenFile ? workspacePath(href, folder) : null;
