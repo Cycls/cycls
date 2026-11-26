@@ -8,8 +8,8 @@ PDF:
 |------|------------|-----|
 | **Spreadsheets** `csv tsv xls xlsx xlsm ods` | interactive grid (sheet tabs) | SheetJS, in a Web Worker, client-side |
 | **Word** `docx` | formatted document (pages, fonts, tables, images, RTL) | docx-preview, client-side from raw bytes |
-| **Presentations** `ppt pptx odp fodp` | slide viewer (main slide + thumbnail rail) | office-render `/v1/render` → per-slide PNGs |
-| **Everything else** `doc odt rtf fodt fods epub` | read-only PDF | office-render `/v1/convert` → PDF viewer |
+| **Presentations** `ppt pptx odp fodp` | slide viewer (main slide + thumbnail rail) | cycls-office `/v1/render` → per-slide PNGs |
+| **Everything else** `doc odt rtf fodt fods epub` | read-only PDF | cycls-office `/v1/convert` → PDF viewer |
 
 The routing is decided **client-side by extension** (`canvas-utils.ts`:
 `isSpreadsheet` / `isDocx` / `isPresentation` / `isOffice`), so web and mobile
@@ -21,8 +21,8 @@ dead error.
 ## The four paths
 
 ```
-canvas click                     agent web server              office-render
-────────────                     ────────────────              ─────────────
+canvas click                     agent web server              cycls-office
+────────────                     ────────────────              ────────────
 GET /files/book.xlsx        ──▶  raw bytes ──────────────────▶ (client parses w/ SheetJS)
 GET /files/report.docx      ──▶  raw bytes ──────────────────▶ (client renders w/ docx-preview)
 GET /files/deck.pptx?as=slides ─▶ cache? ─▶ POST /v1/render ─▶ soffice → PNGs
@@ -50,23 +50,29 @@ GET /files/memo.rtf?as=pdf  ──▶  cache? ─▶ POST /v1/convert ─▶ sof
 LibreOffice is ~1 GB and used by a minority of turns. Baking it into every agent
 image taxes 100% of invocations for a <5% capability and puts soffice cold-start
 on the user's path. So the presentation-render and PDF-convert steps live in
-**one** deployed service (`office-render`, `https://office-render.cycls.ai`) that
-every agent calls over HTTP — the same service that backs the agent's
-`render_file` / `convert_file` tools. This SDK ships only the *client*
-(`_agent/web/office.py`); the service is its own repo. Spreadsheets and .docx
-skip the service entirely — they render from the raw bytes in the browser.
+**one** deployed service that every agent calls over HTTP: `cycls-office`
+(`https://cycls-office.cycls.ai`, repo `Cycls/cycls-office`), the service behind
+Cycls Sheets and Cycls Docs. It also makes what the Sheets and Docs editors print
+and what the agent's `sheets` / `docs` **export** writes, so one converter, with
+the fonts Office files ask for (Carlito for Calibri, Caladea for Cambria,
+Liberation, Noto), serves the preview, the print and the export. It took over
+from the separate `office-render` service on the same `/v1/convert` and
+`/v1/render` contract. This SDK ships only the *client* (`_agent/office/client.py`,
+used by `_agent/web/office.py`). Spreadsheets and .docx skip the service entirely
+— they render from the raw bytes in the browser.
 
 ## Configuration
 
 The service-backed paths (presentations, PDF fallback) are on when the agent's
 environment carries both:
 
-| Env var                | Meaning                                         |
-|------------------------|-------------------------------------------------|
-| `OFFICE_RENDER_URL`    | service base URL, e.g. `https://office-render.cycls.ai` |
-| `OFFICE_RENDER_SECRET` | shared service secret (Bearer token)            |
+| Env var         | Meaning                                                  |
+|-----------------|----------------------------------------------------------|
+| `OFFICE_URL`    | the office service, e.g. `https://cycls-office.cycls.ai` |
+| `OFFICE_SECRET` | the key every request carries (Bearer token)             |
 
-Unset either and `office.configured()` is false: `to_pdf` / `to_slides` raise
+These are the settings Cycls Sheets and Cycls Docs already use. Unset `OFFICE_URL`
+and `office.configured()` is false: `to_pdf` / `to_slides` raise
 `Unavailable`, the route answers 415, and those files show the download card —
 **no regression.** Spreadsheets and .docx still render (client-side), since they
 never call the service. The workspace's `subject` rides along as `X-User-Id` for
@@ -111,7 +117,7 @@ for spreadsheets and .docx — all read-only.
 
 ## Follow-ups
 
-- **Cold start** — the first `?as=slides` / `?as=pdf` on an idle `office-render`
+- **Cold start** — the first `?as=slides` / `?as=pdf` on an idle `cycls-office`
   pays LibreOffice spawn (~1-2s); caching hides it after the first open. A warm LO
   (unoserver) is the service-side upgrade if that ever bites.
 - **Big decks** — the slide manifest inlines every slide as a base64 data-URI in

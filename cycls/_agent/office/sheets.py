@@ -13,8 +13,9 @@ from ..design.deck import lock
 from ..design.store import Stale, load_fig, write_fig
 from ..paths import _resolve_path
 from . import client, fill
+from .export import export_pdf
 
-ACTIONS = ("read", "edit", "create", "comments")
+ACTIONS = ("read", "edit", "create", "comments", "export")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
        "insert_cols", "delete_cols", "add_sheet", "rename_sheet", "delete_sheet", "freeze", "column_width",
        "sort", "set_direction", "note", "define_name")
@@ -34,11 +35,14 @@ SHEETS_TOOL = {
         "- note puts a note on a cell (`text`; empty removes it); define_name names a range (`name`, `target`).\n"
         "- comments: what people wrote on the workbook's cells, every thread; with `number` (the # in the list) "
         "answer it (`reply`) and close or reopen it (`resolve`). read lists the open ones too.\n"
+        "- export: the workbook as a PDF beside it (budget.xlsx → budget.pdf), as it prints, for when the person "
+        "asks for a PDF to print or send. Once, when the work is done: it is not a way to look at an edit.\n"
         "Targets are A1 ranges (B3, B3:D9, 'Sheet 2'!A1:C4), rows (5 or 5:7), columns (C or C:D) or a "
         "sheet name. Values are rows of cells: [[\"Item\", \"Qty\"], [\"Tea\", 5]]; a value starting with = "
         "is a formula. Rows a query, a tool or a script produced are not typed: set_values `from` fills them from "
         "its .csv or .json file. One formula over a range fills it like Excel's fill handle (target F2:F93, "
-        "formulas [[\"=C2/D2\"]]). Read before editing a file you have not seen. `ops` is always sent: [] for read."
+        "formulas [[\"=C2/D2\"]]). Read before editing a file you have not seen. `ops` is always sent: [] for "
+        "read and export."
     ),
     "input_schema": {
         "type": "object",
@@ -109,7 +113,8 @@ SHEETS_PROMPT = (
     "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
     "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
     "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
-    "person's open editor. Rows a query, a tool or a script produced go in with set_values `from` (their "
+    "person's open editor. A PDF of the workbook, when the person asks for one, is `sheets` export. "
+    "Rows a query, a tool or a script produced go in with set_values `from` (their "
     ".csv or .json file), never retyped into `values`: typing is for what exists nowhere else (the person's "
     "own figures, assumptions, labels) or a few cells, and a typed figure from a document or a page says "
     "where it came from beside it. A column of formulas is one formula over its range, not one per row."
@@ -284,6 +289,9 @@ async def exec_sheets(inp, workspace, ctx=None):
             if not path.is_file():
                 return _err(f"{rel} does not exist.")
             return await _exec_comments(inp, workspace, rel, getattr(ctx, "agent", None))
+
+        if action == "export":
+            return await export_pdf(workspace, path, rel, "workbook")
 
         if bad := _check_ops(ops):
             return _err(bad)

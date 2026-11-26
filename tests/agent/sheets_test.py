@@ -61,7 +61,7 @@ def _run(inp, ws):
 def test_the_choices_that_matter_are_required():
     schema = sheets.SHEETS_TOOL["input_schema"]
     assert schema["required"] == ["action", "path", "ops"]     # ops too: models drop optional fields
-    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments"]
+    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments", "export"]
     op = schema["properties"]["ops"]["items"]
     assert op["required"] == ["op", "target"]
     assert set(op["properties"]["op"]["enum"]) == set(sheets.OPS)
@@ -372,3 +372,50 @@ def test_a_selection_in_a_workbook_reaches_the_model_with_its_sheet():
         '[Selected in reports/ميزانية.xlsx sheet "الميزانية": B8:E8 (cells), B4 (cell) "47,000.00"]'
     assert _clean_selection({**raw, "path": "reports/x.csv"}) is None
     assert _clean_selection({**raw, "path": "../x.xlsx"}) is None
+
+
+# ---- export: the workbook as a PDF ----------------------------------------------------------
+
+def test_export_writes_the_pdf_beside_the_workbook_and_opens_it(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        form = _form(request)
+        seen.append((request.url.path, form, request.headers.get("x-user-id")))
+        return httpx.Response(200, content=b"%PDF-1.7 the workbook", headers={"content-type": "application/pdf"})
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "export", "path": "reports/b.xlsx", "ops": []}, _ws(tmp_path))
+    path, form, user = seen[0]
+    assert path == "/v1/convert" and form["file"] == XLSX and form["to"] == b"pdf" and user == "org1:user1"
+    assert (tmp_path / "reports" / "b.pdf").read_bytes() == b"%PDF-1.7 the workbook"
+    assert out["_model"].startswith("Saved reports/b.pdf (") and "as it prints" in out["_model"]
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "reports/b.pdf"}
+    assert (tmp_path / "reports" / "b.xlsx").read_bytes() == XLSX        # the workbook itself is untouched
+
+
+def test_export_says_why_it_cannot(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    assert _run({"action": "export", "path": "none.xlsx", "ops": []}, _ws(tmp_path)).startswith(
+        "Error: none.xlsx does not exist")
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    _mock(monkeypatch, lambda request: httpx.Response(422, json={"error": "LibreOffice could not convert this file to pdf"}))
+    out = _run({"action": "export", "path": "b.xlsx", "ops": []}, _ws(tmp_path))
+    assert "could not convert" in out and not (tmp_path / "b.pdf").exists()
+    _mock(monkeypatch, lambda request: httpx.Response(503, json={"error": "down"}))
+    assert "Sheets is unavailable" in _run({"action": "export", "path": "b.xlsx", "ops": []}, _ws(tmp_path))
+
+
+def test_export_keeps_a_pdf_that_was_already_there_as_a_version(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    (tmp_path / "b.pdf").write_bytes(b"%PDF the person's own")
+    _mock(monkeypatch, lambda request: httpx.Response(200, content=b"%PDF-1.7 exported"))
+    out = _run({"action": "export", "path": "b.xlsx", "ops": []}, _ws(tmp_path))
+    assert "kept in its versions" in out["_model"]
+    assert (tmp_path / "b.pdf").read_bytes() == b"%PDF-1.7 exported"
+    kept = versions.listing(tmp_path, "b.pdf")
+    assert kept and versions.read(tmp_path, "b.pdf", kept[0]["id"]) == b"%PDF the person's own"

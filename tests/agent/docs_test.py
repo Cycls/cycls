@@ -66,7 +66,7 @@ def _applied(report="¶3 replaced.", unchanged=False, touched=()):
 def test_the_choices_that_matter_are_required():
     schema = docs.DOCS_TOOL["input_schema"]
     assert schema["required"] == ["action", "path", "ops", "content"]     # models drop optional fields
-    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create"]
+    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "export"]
     op = schema["properties"]["ops"]["items"]
     assert op["required"] == ["op"]
     assert set(op["properties"]["op"]["enum"]) == set(docs.OPS)
@@ -312,3 +312,21 @@ def test_page_layout_ops_are_offered_and_cleaned_of_what_a_host_filled_with_noth
              "margins": {"top": ""}, "orientation": "", "line": False, "gap": ""}
     assert _check_ops([setup]) is None
     assert setup == {"op": "page_setup", "paper": "A4", "margins": "2cm", "line": False}
+
+
+# ---- export: the document as a PDF ----------------------------------------------------------
+
+def test_export_writes_the_pdf_beside_the_document(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "q3.docx").write_bytes(DOCX)
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, _form(request)))
+        return httpx.Response(200, content=b"%PDF-1.7 the document", headers={"content-type": "application/pdf"})
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "export", "path": "q3.docx", "ops": [], "content": ""}, _ws(tmp_path))
+    assert seen[0][0] == "/v1/convert" and seen[0][1]["file"] == DOCX and seen[0][1]["to"] == b"pdf"
+    assert (tmp_path / "q3.pdf").read_bytes() == b"%PDF-1.7 the document"
+    assert out["_model"].startswith("Saved q3.pdf (") and out["_ui"]["path"] == "q3.pdf"
