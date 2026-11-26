@@ -15,10 +15,10 @@ from ..paths import _resolve_path
 from . import client, fill
 from .export import export_pdf
 
-ACTIONS = ("read", "edit", "create", "comments", "export")
+ACTIONS = ("read", "edit", "create", "comments", "export", "print")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
        "insert_cols", "delete_cols", "add_sheet", "rename_sheet", "delete_sheet", "freeze", "column_width",
-       "row_height", "page_setup", "sort", "set_direction", "note", "define_name")
+       "row_height", "page_setup", "print_ready", "sort", "set_direction", "note", "define_name")
 _MAX_OPS = 200
 
 SHEETS_TOOL = {
@@ -41,6 +41,12 @@ SHEETS_TOOL = {
         "reply, not a PDF.\n"
         "- comments: what people wrote on the workbook's cells, every thread; with `number` (the # in the list) "
         "answer it (`reply`) and close or reopen it (`resolve`). read lists the open ones too.\n"
+        "- print: the workbook made to print well, in one call, and its PDF written beside it: the title and header "
+        "rows found, the table in one font with a coloured header, borders and banded rows (style clean; keep leaves "
+        "fonts and colours as they are), columns shared over the page and rows sized to their text, the paper turned "
+        "and fitted to one page, pictures kept their size, values untouched. Options: target (the sheet), style, color "
+        "(the header, #RRGGBB), font, size, paper, orientation, header (rows such as 2:3, found when left out). The "
+        "reply says how it prints; that is the check.\n"
         "- export: the workbook as a PDF beside it (budget.xlsx → budget.pdf), as it prints, for when the person "
         "asks for a PDF to print or send. Once, when the work is done: it is not a way to look at an edit.\n"
         "Targets are A1 ranges (B3, B3:D9, 'Sheet 2'!A1:C4), rows (5 or 5:7), columns (C or C:D) or a "
@@ -121,6 +127,13 @@ SHEETS_TOOL = {
             "resolve": {"type": "boolean", "description": "comments: true closes comment `number`, false reopens it"},
             "raw": {"type": "boolean", "description": "read: stored values instead of formatted ones"},
             "intent": {"type": "string", "description": "edit: a few words on what the change does, shown to the person"},
+            "style": {"type": "string", "enum": ["clean", "keep"], "description": "print: clean (one font, a coloured header, borders) or keep"},
+            "color": {"type": "string", "description": "print: the header's colour, #RRGGBB"},
+            "font": {"type": "string", "description": "print: the table's font (the workbook's when left out)"},
+            "size": {"type": "number", "description": "print: the text's size in points (10 when left out)"},
+            "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"], "description": "print"},
+            "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "print: left out, whichever prints larger"},
+            "header": {"type": "string", "description": "print: the header rows, e.g. 2:3 (found when left out)"},
         },
         # `ops` is required although read takes none: models that drop optional fields sent edits without it.
         "required": ["action", "path", "ops"],
@@ -134,7 +147,10 @@ SHEETS_PROMPT = (
     "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
     "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
     "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
-    "person's open editor. How a workbook prints is in every `sheets` read and layout edit's reply (pages, scale, the "
+    "person's open editor. To make a workbook print well (on one page, looking professional), call `sheets` print "
+    "once: it lays the table out, writes the PDF and says how it prints; that reply is the check, so do not open the "
+    "PDF or inspect the file to look again, and send the person the PDF. Only what they ask after that is an edit. "
+    "How a workbook prints is in every `sheets` read and layout edit's reply (pages, scale, the "
     "text that does not fit): set it with page_setup, row_height and column_width (auto fits them to the text) "
     "and trust that reply; never export or convert a copy to look at it. Change a layout only when the person asks "
     "about printing or how the sheet looks. A PDF of the workbook, when the person "
@@ -274,7 +290,7 @@ def _check_ops(ops):
             return f"op {i} needs an `op` ({', '.join(OPS)})"
         if op["op"] not in OPS:
             return f"op {i}: unknown op {str(op['op'])[:30]!r} (one of {', '.join(OPS)})"
-        if op["op"] != "add_sheet" and not op.get("target"):
+        if op["op"] not in ("add_sheet", "print_ready") and not op.get("target"):
             return f"op {i} ({op['op']}) needs a `target`"
     return None
 
@@ -314,6 +330,21 @@ async def exec_sheets(inp, workspace, ctx=None):
             if not path.is_file():
                 return _err(f"{rel} does not exist.")
             return await _exec_comments(inp, workspace, rel, getattr(ctx, "agent", None))
+
+        if action == "print":
+            # The layout in one edit (print_ready), then the PDF: one call where a dozen edits checked against PDFs were.
+            op = {"op": "print_ready"}
+            for k in ("target", "style", "color", "font", "size", "paper", "orientation", "header"):
+                if inp.get(k) not in (None, ""):
+                    op[k] = inp[k]
+            edited = await exec_sheets({"action": "edit", "path": raw_path, "ops": [op],
+                                        "intent": inp.get("intent") or "Made ready to print"}, workspace, ctx)
+            if not isinstance(edited, dict):
+                return edited
+            printed = await export_pdf(workspace, path, rel, "workbook")
+            if not isinstance(printed, dict):
+                return f"{edited['_model']}\n{printed}"
+            return {"_model": f"{edited['_model']}\n{printed['_model']}", "_ui": printed["_ui"]}
 
         if action == "export":
             return await export_pdf(workspace, path, rel, "workbook")

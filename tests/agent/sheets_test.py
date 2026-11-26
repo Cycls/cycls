@@ -61,7 +61,7 @@ def _run(inp, ws):
 def test_the_choices_that_matter_are_required():
     schema = sheets.SHEETS_TOOL["input_schema"]
     assert schema["required"] == ["action", "path", "ops"]     # ops too: models drop optional fields
-    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments", "export"]
+    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments", "export", "print"]
     op = schema["properties"]["ops"]["items"]
     assert op["required"] == ["op", "target"]
     assert set(op["properties"]["op"]["enum"]) == set(sheets.OPS)
@@ -440,3 +440,25 @@ def test_read_and_edit_ask_for_the_print_report(monkeypatch):
     props = sheets.SHEETS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
     assert {"height", "auto", "paper", "orientation", "fit_width", "fit_height", "margins", "print_area", "repeat_rows"} <= set(props)
     assert "never export or convert a copy to look at it" in sheets.SHEETS_PROMPT
+
+
+def test_print_lays_the_workbook_out_and_writes_its_pdf_in_one_call(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            seen.append(json.loads(_form(request)["request"]))
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Sheet1 made ready to print\nPrint Sheet1: 1 page"})
+        assert request.url.path == "/v1/convert" and _form(request)["file"] == PATCHED   # the laid-out file
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "print", "path": "b.xlsx", "ops": [], "style": "clean", "color": "#1F4E79", "paper": "A4"}, _ws(tmp_path))
+    assert seen[0]["edits"] == [{"op": "print_ready", "style": "clean", "color": "#1F4E79", "paper": "A4"}]
+    assert (tmp_path / "b.xlsx").read_bytes() == PATCHED and (tmp_path / "b.pdf").read_bytes() == b"%PDF-1.7 printed"
+    assert "made ready to print" in out["_model"] and "Saved b.pdf" in out["_model"]
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "b.pdf"}
+    assert "call `sheets` print" in sheets.SHEETS_PROMPT
