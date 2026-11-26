@@ -3,8 +3,11 @@ DESIGN_URL turns it on (unset: no Design tool); DESIGN_SECRET is the optional Be
 import asyncio
 import base64
 import hashlib
+import hmac
+import json
 import os
 import pathlib
+import time
 from typing import NamedTuple
 
 import httpx
@@ -118,6 +121,36 @@ async def add_fonts(root, user_id=None):
     ready = "; ".join(f"{f} ({', '.join(s)})" for f, s in faces.items())
     return " ".join(filter(None, [f"The workspace's own fonts are ready for designs: {ready}. Name them by that family." if ready else "",
                                   f"Not usable as fonts: {'; '.join(bad)}." if bad else ""]))
+
+
+_FONT_KEY_FILES = 100   # the most files a key may name (the service's src/font-key.ts): a key rides in a header
+
+
+def font_key(root, ttl=24 * 3600, now=None):
+    """The workspace's font key → str, or None (no DESIGN_SECRET, or no font files). The design service gives a
+    font a workspace added (brand/fonts, often a bought one) only to an editor sending a key that names its file
+    (sha256), signed with DESIGN_SECRET; the editor gets this one with the brand kit. A file unchanged since it was
+    hashed isn't read again. Format (the service's src/font-key.ts):
+    b64url(JSON {e: expiry, unix seconds; s: [sha256 hex]}) + "." + b64url(HMAC-SHA256(secret, the first part))."""
+    secret = os.environ.get("DESIGN_SECRET")
+    if not secret:
+        return None
+    shas = []
+    for p in sorted(pathlib.Path(root, "brand", "fonts").glob("*")):
+        if p.suffix.lower() not in (".ttf", ".otf") or not p.is_file():
+            continue
+        st = p.stat()
+        sha = _hashed.get((str(p), st.st_size, st.st_mtime_ns))
+        if sha is None:
+            sha = _hashed[(str(p), st.st_size, st.st_mtime_ns)] = hashlib.sha256(p.read_bytes()).hexdigest()
+        if sha not in shas:
+            shas.append(sha)
+    if not shas:
+        return None
+    b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+    claim = {"e": int(time.time() if now is None else now) + ttl, "s": shas[:_FONT_KEY_FILES]}
+    body = b64(json.dumps(claim, separators=(",", ":")).encode())
+    return f"{body}.{b64(hmac.new(secret.encode(), body.encode(), hashlib.sha256).digest())}"
 
 
 class Rendered(NamedTuple):
