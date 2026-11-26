@@ -419,3 +419,24 @@ def test_export_keeps_a_pdf_that_was_already_there_as_a_version(monkeypatch, tmp
     assert (tmp_path / "b.pdf").read_bytes() == b"%PDF-1.7 exported"
     kept = versions.listing(tmp_path, "b.pdf")
     assert kept and versions.read(tmp_path, "b.pdf", kept[0]["id"]) == b"%PDF the person's own"
+
+
+def test_read_and_edit_ask_for_the_print_report(monkeypatch):
+    """This SDK can change page setup and row heights, so it asks the service to say how a sheet prints."""
+    _on(monkeypatch)
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"]))
+        if request.url.path == "/v1/sheets/read":
+            return httpx.Response(200, json={"text": "ok"})
+        return httpx.Response(200, json={"unchanged": True, "file": None, "mutations": [], "ops": [], "report": ""})
+
+    _mock(monkeypatch, handler)
+    asyncio.run(office.sheets_read(XLSX, "b.xlsx"))
+    asyncio.run(office.sheets_apply(XLSX, "b.xlsx", [{"op": "page_setup", "target": "Sheet1", "orientation": "landscape"}]))
+    assert seen[0]["print"] is True and seen[1]["print"] is True
+    assert {"row_height", "page_setup"} <= set(sheets.OPS)
+    props = sheets.SHEETS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
+    assert {"height", "auto", "paper", "orientation", "fit_width", "fit_height", "margins", "print_area", "repeat_rows"} <= set(props)
+    assert "never export or convert a copy to look at it" in sheets.SHEETS_PROMPT

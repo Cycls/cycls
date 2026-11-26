@@ -205,7 +205,8 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 async def sheets_read(data, name, target=None, raw=False, max_chars=None):
     """The agent's read: the workbook outlined and a sheet or range as a grid (formulas → values)."""
     import json
-    request = {"name": name, "target": target, "raw": bool(raw)}
+    # print: say how the sheet prints (pages, scale, the text that does not fit); this SDK can act on it.
+    request = {"name": name, "target": target, "raw": bool(raw), "print": True}
     if max_chars:
         request["maxChars"] = int(max_chars)
     r = await _call("POST", "/v1/sheets/read", files={
@@ -223,7 +224,7 @@ async def sheets_apply(data, name, edits, create=None):
     and needs no `data`."""
     import base64
     import json
-    request = {"name": name, "edits": list(edits or [])}
+    request = {"name": name, "edits": list(edits or []), "print": True}
     if create is not None:
         request["create"] = create
     files = {"request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json")}
