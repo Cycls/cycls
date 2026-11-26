@@ -1151,6 +1151,29 @@ def test_inspect_says_how_many_parts_a_long_slide_has_beyond_those_it_lists(tmp_
     assert "… and 57 more parts of this slide are not listed" in out
 
 
+def test_inspect_says_a_text_is_set_in_its_box(tmp_path, monkeypatch):
+    # a label in the middle of its band: its h is the band's, not its words' — said, so an edit keeps to it
+    _design(tmp_path)
+
+    async def _outline(fig, user_id=None, page=None, sheets=False):
+        return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
+                {"slide": 1, "name": "slide-1", "size": [1080, 1350], "nodes": [
+            {"name": "spine-1-text", "type": "text", "x": 80, "y": 660, "w": 920, "h": 180, "text": "BRING A BOOK.",
+             "font": "Gloock Regular", "size": 80, "color": "#f3f0e4", "valign": "center"}]}]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
+    assert '"BRING A BOOK."  Gloock Regular 80px #f3f0e4  valign center in its box' in out
+
+
+def test_an_edit_says_what_the_service_set_instead(tmp_path, monkeypatch):
+    # a restyle to a style the font hasn't got: set in its nearest, and said — an edit used to keep it to itself
+    _design(tmp_path)
+    _fake_apply(monkeypatch, notes=["Sora has no italics; Bold Italic is set in Bold, upright"])
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [
+        {"op": "style", "node": "headline", "font": "Sora Bold Italic"}]}, _ws(tmp_path)))
+    assert "Note — Sora has no italics; Bold Italic is set in Bold, upright." in _text(out)
+
+
 def test_edit_ops_errors_come_back_verbatim(tmp_path, monkeypatch):
     _design(tmp_path)
     _fake_apply(monkeypatch, error='op 1 (set_text nope): no node named "nope" — this design has: headline, cta')

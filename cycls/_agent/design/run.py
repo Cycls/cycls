@@ -381,6 +381,8 @@ async def _design_call(inp, workspace):
         ack = (f"Edit applied and saved to {rel}{on}. If the design is open in the editor, the Super "
                f"cursor replays the change live there." + _edit_names(r) + _fixed_line(r.get("fixed"), "png")
                + _layout_check(r.get("lint"), "png"))
+        for line in r.get("notes") or []:   # what the service set instead (a style a font hasn't got), as a render says it
+            ack += f" Note — {line}."
         for credit in credits:
             ack += f" {credit}."
         # a deck or carousel: show the slides the edit changed, not slide 1 — more than two, small on one sheet

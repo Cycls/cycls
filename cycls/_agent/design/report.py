@@ -37,6 +37,8 @@ def _outline_text(rel, frames, pages=None, page=None):
                 bits.append(f"{n.get('font')} {n.get('size')}px {n.get('color', '')}".strip())
                 if n.get("align"):
                     bits.append(f"align {n['align']}")
+                if n.get("valign"):
+                    bits.append(f"valign {n['valign']} in its box")
             elif n.get("type") in ("icon", "svg", "qr", "line") and (n.get("icon") or n.get("color")):
                 if n.get("icon"):
                     bits.append(n["icon"])
@@ -134,7 +136,7 @@ def _comments_listing(rel, threads):
     return "\n".join(out)
 
 
-_OUTLINE_STYLE = ("font", "size", "color", "fill", "radius", "stroke", "rotation", "opacity", "align")
+_OUTLINE_STYLE = ("font", "size", "color", "fill", "radius", "stroke", "rotation", "opacity", "align", "valign")
 
 
 def _page_changes(before, after):
