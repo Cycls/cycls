@@ -574,6 +574,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         log("warn", user=user, chat_id=billed,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
     tools_list = build_tools(allowed_tools, tools or [], vendor=vendor, web_search=web_search)
+    if lead: tools_list = [lead.tool if t.get("name") == "agent" else t for t in tools_list]   # its limit, its kinds
     # Routines (docs/rfc-routines.md): a run tells what it found; elsewhere, with Web.routines on, the agent offers one
     if routine := getattr(context, "routine", None):
         tools_list.append(routines.TELL_TOOL)

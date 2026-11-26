@@ -603,7 +603,8 @@ async for ev in llm.run(context=context):
 | `.system(str)` | System prompt |
 | `.tools(list)` | Custom tool JSON schemas |
 | `.on(name, fn, label=)` | Register async handler for a custom tool; `label` (input → str) renders the step line in the UI, like `Bash(command)`; the default is the input's first string value |
-| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `Video`, `Transcribe`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design`, `Video` and `Transcribe` are offered only when their service is configured (see below) |
+| `.allowed_tools(names)` | Enable Cycls-provided builtins (`Bash`, `Editor`, `WebSearch`, `Browser`, `Design`, `Video`, `Transcribe`, `DataBase`, `Canvas`, `Apps`, `Suggest`, `Ask`, `Agent`). A tool brings its own prompt guidance, so enabling it is the only switch; `Ask` (up to 3 questions on one card) ends the turn once the card reaches the user. `Browser`, `Design`, `Video` and `Transcribe` are offered only when their service is configured (see below) |
+| `.subagents(*kinds, at_once=)` | The agents `Agent` hands work to in the background: how many work at once (default 4), and `cycls.Subagent`s with fixed instructions the main agent picks by name, next to the general one (see *Subagents* below) |
 | `.instructions(path)` | Workspace instructions file auto-loaded into the system prompt (default `AGENT.md`; `None` disables) |
 | `.skills(*dirs)` | Ship skills with the agent (dirs of `<name>/SKILL.md` folders; `None` disables skills) |
 | `.context(n)` | Model context window in tokens; sets when compaction kicks in (default 1M; set it for smaller models) |
@@ -621,6 +622,28 @@ async for ev in llm.run(context=context):
 | `.connectors(*objs)` | Offer a connector's tools (see [Connectors](#connectors) below) |
 | `.headers(mapping)` | Extra HTTP headers on every model request, for proxy-authenticated endpoints |
 | `.loop(fn)` | Replace the built-in loop (see *Hooking the loop* below) |
+
+### Subagents
+
+With `"Agent"` allowed, the agent can hand parts of the work to agents of its own. Each works in the background from
+a brief the main agent writes, and its report comes back as a message. The general one follows that brief alone, with
+the main agent's system prompt and tools. Define your own with fixed instructions, and the main agent picks one by
+name when the work fits its description:
+
+```python
+reviewer = cycls.Subagent("reviewer", "Checks a draft for mistakes and tone",
+                          instructions="You are a strict editor. List each mistake, then the fixed text.",
+                          loop=False)   # no tools: it answers once from its instructions and the brief
+researcher = cycls.Subagent("researcher", "Researches a question across sources",
+                            instructions="Check every figure in two sources and cite both.")
+
+llm = (cycls.LLM().model(...).allowed_tools(["Bash", "Editor", "WebSearch", "Agent"])
+       .subagents(reviewer, researcher, at_once=3))
+```
+
+A subagent's instructions take the place of the main agent's system prompt; the workspace's `AGENT.md` and skills
+still apply. With `loop=True` (the default) it works step by step with the main agent's tools, except starting agents
+or asking the person. `at_once` caps how many work at the same time; a call over it is refused until a report arrives.
 
 The Bash tool runs inside a `bubblewrap` sandbox with the workspace bound at `/workspace` and a sanitized environ. Network is on by default so `curl`/`pip`/`git` just work, but a prompt-injected bash could exfiltrate anything it can read, so pass `.sandbox(network=False)` when the agent doesn't need it. See [sandbox-security.md](notes/sandbox-security.md) for the full threat model.
 

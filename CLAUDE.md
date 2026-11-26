@@ -84,7 +84,7 @@ cycls/
     ├── office/             # Cycls Sheets / Cycls Docs: thin client to the cycls-office service (its own repo; Univer engine), org gating (SHEETS_ORGS/DOCS_ORGS), the agent's `sheets` tool (sheets.py: read / edit / create, live replay via sheets_command) and `docs` tool (docs.py); guard.py keeps bash off their files; docs/notes/office.md
     ├── paths.py            # a path a tool was given, kept inside the workspace
     ├── tools/              # tool schemas + execution + `Tool` rows: run/step/once/terminal/prompt (docs/notes/tool-rows.md); Design and Video are imported from their packages; ondemand.py swaps a tool's whole form in on first use
-    │   └── agent.py        # the `agent` tool: agents a run hands work to, in the background; their reports wake the parent (docs/rfc-subagents.md)
+    │   └── agent.py        # the `agent` tool: agents a run hands work to, in the background; their reports wake the parent; the developer's own (cycls.Subagent, LLM.subagents) (docs/rfc-subagents.md)
     ├── harness/            # the managed LLM loop and the kit a custom loop needs
     │   ├── llm.py          # cycls.LLM fluent builder (.loop(fn) swaps the loop; .price()/.context() set cost rates + window)
     │   ├── main.py         # the default loop (_run) + retry/recover + attachment ingest
@@ -173,7 +173,7 @@ tests/
 │   ├── sheets_test.py           # Sheets tool: schema, gating, the service wire, edit/create, the stale-file retry
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
-│   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once, file holds, cost
+│   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once or the developer's number, their own agents with fixed instructions, file holds, cost
 │   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes, a chat's files
 │   ├── team_chats_test.py       # a team workspace's chats: who sees them, a message to the team alone, moving a chat there, reactions, edits, typing, unread, paging, writes at the same moment, a look that finds nothing new
 │   ├── inbox_test.py            # the inbox: a mention, a reply and @all reach who they name, never the sender, whoever had the chat open, nor twice; push words and picks; a task ended while away; read, seen, a chat opened, the newest 30; Web Push (RFC 8291's example, a browser's push read back, one gone dropped, OneSignal to phones only)

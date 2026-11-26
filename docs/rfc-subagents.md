@@ -2,7 +2,9 @@
 
 **Status**: proposed (2026-11-07), branch `rfc/subagents`. Built (2026-11-08): the tool, background agents, reports
 waking the parent, the limits, file holds, cost, the stored record and the web card; tried live on super-new
-(2026-11-09). Still to build: messages to a
+(2026-11-09). Built (2026-11-26): the developer's settings, `LLM.subagents(*kinds, at_once=)`: how many work at
+once, and `cycls.Subagent`s with fixed instructions the main agent picks by name, with or without tools (`loop`).
+Still to build: messages to a
 running run (the inbox below), Stop per agent, paid plans in Super and Haseef, mobile.
 
 An agent gets one more builtin tool, `Agent`. It starts a child agent with a short label and a written brief.
@@ -23,7 +25,8 @@ at the end).
 | What a child gets | Only its brief: a fresh context, the same workspace, user and tools |
 | What comes back | Its final report, to the parent only. The person sees it by opening the child |
 | Who gets agents | **Paid plans only.** Agents cost several times a turn |
-| How many at once | **4** per chat |
+| How many at once | **4** per chat, or the developer's `at_once` |
+| The developer's own agents | `cycls.Subagent(name, description, instructions, loop=True)`, next to the general one |
 
 ## The tool
 
@@ -94,8 +97,8 @@ arrives. The run ends when the parent has ended its turn, no child is working, a
 
 ### Limits
 
-- **4 at once** per chat. A fifth call is refused: `4 agents are already working. Start this one after a report
-  arrives.`
+- **4 at once** per chat, or the developer's `at_once`. A call over it is refused: `4 already working, the most at
+  once. Start this one after a report arrives.`
 - **No nesting**: a child has no `Agent` tool.
 - **One budget**: the run's 45 minutes covers the parent and every child. At the limit everything stops, as today.
 - **One message**: the person's request counts once toward a plan's limit; children and report turns don't.
@@ -160,9 +163,16 @@ Mobile follows in its own change: the same card from the same `agent` field.
    cost lock; storage, reload and regenerate; Stop per child. Mocked-loop tests for each, one live test.
 2. **Web**: the team card, the side panel, the composer sending to the inbox, Arabic strings.
 3. **Mobile**: the card and the inbox.
-4. **Later**: message a child or continue a finished one with its context; agent types a developer defines (name,
-   description, prompt, tools, model); approvals forwarded from a child to the chat; a fork that inherits the
-   parent's conversation.
+4. **Later**: message a child or continue a finished one with its context; a tool list or model of its own for a
+   developer's agent; approvals forwarded from a child to the chat; a fork that inherits the parent's conversation.
+
+## The developer's agents
+
+`LLM.subagents(*kinds, at_once=)` sets how many work at once and adds `cycls.Subagent`s. Each has a name, a
+description the main agent picks it by, and fixed instructions that take the place of the main agent's system prompt
+(the preamble above, `AGENT.md` and skills still apply). The tool lists them and gains an `agent` field, an enum of
+their names; left out, the general agent starts as before. `loop=False` gives one no tools at all, so it answers once
+from its instructions and the brief, and the tool tells the main agent to put everything it needs in the brief.
 
 ## The survey (2026-11-07)
 

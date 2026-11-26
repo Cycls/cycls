@@ -6,7 +6,7 @@ compose these: `default_loop` (the built-in), `make_provider` (the wire),
 `compact` (context budget), and the `events` module (dict event factories +
 identity `to_ui` for back-compat).
 """
-from .llm import LLM
+from .llm import LLM, Subagent
 from .main import _run as default_loop
 from .providers import make_provider, AnthropicProvider
 from .compact import compact

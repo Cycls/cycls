@@ -1,9 +1,12 @@
 """Agents a run hands work to (cycls/_agent/tools/agent.py, docs/rfc-subagents.md): they work in the background,
-the parent waits for their reports instead of ending, at most four work at once, and two never write one file."""
+the parent waits for their reports instead of ending, at most four work at once (or the developer's number), the
+developer's own agents follow their fixed instructions, and two never write one file."""
 import asyncio
 from unittest.mock import MagicMock
 
-from cycls._agent.harness.llm import LLM
+from types import SimpleNamespace
+
+from cycls._agent.harness.llm import LLM, Subagent
 from cycls._agent.harness.events import to_ui
 from cycls._agent.state import get_agents, get_meta, load_messages
 from cycls._agent.tools.agent import BRIEFED, Team
@@ -80,8 +83,36 @@ def test_at_most_four_work_at_once(tmp_path):
     asyncio.run(_drain(_llm().run(context=ctx, client=client)))
     results = {b["tool_use_id"]: b["content"] for m in asyncio.run(load_messages(ctx.workspace, ctx.chat_id))
                if isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_result"}
-    assert results["a4"].startswith("Error: 4 agents are already working")
+    assert results["a4"].startswith("Error: 4 already working")
     assert sum(who == "agent" for who, _ in seen) == 4
+
+
+def test_the_developer_sets_how_many_at_once_and_agents_with_fixed_instructions(tmp_path):
+    """`.subagents`: its own limit, and a Subagent the main agent picks by name, following the developer's
+    instructions instead of the main agent's system prompt; with loop=False it has no tools and answers once."""
+    ctx = _make_context(tmp_path / "ws")
+    seen = []
+    reviewer = Subagent("reviewer", "Checks a draft for mistakes", "You are a strict editor.", loop=False)
+    review = _tool_use_block("a1", "agent", {"description": "Check the draft", "prompt": "Draft: hello", "agent": "reviewer"})
+    client = _client(parent=[_make_response([review, _agent("a2")], stop_reason="tool_use"),
+                             *[_make_response([_text_block("ok")]) for _ in range(3)]],
+                     child=[_make_response([_text_block("Looks right.")])], seen=seen)
+    asyncio.run(_drain(_llm().system("You are Super.").subagents(reviewer, at_once=1).run(context=ctx, client=client)))
+
+    tool = next(t for who, kw in seen if who == "parent" for t in kw["tools"] if t["name"] == "agent")
+    assert "At most 1 work at once" in tool["description"] and "- reviewer: Checks a draft for mistakes" in tool["description"]
+    assert tool["input_schema"]["properties"]["agent"]["enum"] == ["reviewer"]
+    child = next(kw for who, kw in seen if who == "agent")
+    system = "".join(b["text"] for b in child["system"])
+    assert "You are a strict editor." in system and "You are Super." not in system
+    assert child["tools"] == []
+    results = {b["tool_use_id"]: b["content"] for m in asyncio.run(load_messages(ctx.workspace, ctx.chat_id))
+               if isinstance(m["content"], list) for b in m["content"] if b.get("type") == "tool_result"}
+    assert results["a2"].startswith("Error: 1 already working")
+    assert asyncio.run(get_agents(ctx.workspace, ctx.chat_id))["a1"]["report"] == "Looks right."
+    team = Team(None, None, None, kinds=[reviewer])
+    got = asyncio.run(team.start({"description": "x", "prompt": "y", "agent": "writer"}, SimpleNamespace(call="a3")))
+    assert got.startswith("Error: there is no agent named writer. Name one of reviewer")
 
 
 def test_two_agents_never_write_one_file():

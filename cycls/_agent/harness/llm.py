@@ -15,6 +15,17 @@ you invoked it.
 """
 
 
+class Subagent:
+    """An agent the main one can hand work to by name (the `Agent` builtin, `LLM.subagents`), following the
+    developer's fixed `instructions` instead of the main agent's system prompt. `description` tells the main agent
+    when to pick it. `loop=False` gives it no tools, so it answers once from its instructions and the brief:
+    translating, reviewing, summarising."""
+    def __init__(self, name, description, instructions, *, loop=True):
+        if not (name and description and instructions):
+            raise ValueError("cycls.Subagent needs a name, a description and instructions")
+        self.name, self.description, self.instructions, self.loop = name, description, instructions, loop
+
+
 class LLM:
     def __init__(self):
         self._model = None
@@ -44,6 +55,8 @@ class LLM:
         self._instructions = "AGENT.md"
         self._skills = []
         self._extra_body = None
+        self._subagents = ()
+        self._at_once = None
 
     def _copy(self, **updates):
         new = LLM.__new__(LLM)
@@ -133,6 +146,13 @@ class LLM:
         for unmapped vendors/params, e.g. `.extra_body({"reasoning_effort":
         "low"})`. None clears."""
         return self._copy(_extra_body=dict(params) if params else None)
+
+    def subagents(self, *kinds, at_once=None):
+        """The agents the `Agent` builtin starts (on with `"Agent"` in `.allowed_tools`): `cycls.Subagent`s with
+        fixed instructions, which the main agent picks by name next to the general one that follows its brief
+        alone, and how many work at once (default 4)."""
+        return self._copy(_subagents=(*getattr(self, "_subagents", ()), *kinds),
+                          _at_once=at_once or getattr(self, "_at_once", None))
 
     def connectors(self, *os):
         """Connectors whose tools the loop should offer. A cycls.Key with `api=` and no MCP
@@ -229,16 +249,20 @@ class LLM:
         if loop is _run and "Agent" in kw["allowed_tools"]:
             from types import SimpleNamespace
             from ..tools.agent import BRIEFED, Team
-            # An agent starts from its brief, without the tools that need the person or start more agents
+            # An agent starts from its brief, without the tools that need the person or start more agents. One of
+            # the developer's follows its own instructions, and with `loop=False` has no tools: it answers once.
             agent_kw = {**kw, "system": f"{kw['system']}\n\n{BRIEFED}" if kw["system"] else BRIEFED,
                         "allowed_tools": [t for t in kw["allowed_tools"] if t not in ("Agent", "Ask", "Suggest")],
                         "mcp_servers": None, "api_connectors": (), "approvals": (), "declined": (), "mentions": ()}
+            setup = lambda k: {**agent_kw, "system": f"{k.instructions}\n\n{BRIEFED}",
+                               **({} if k.loop else {"allowed_tools": [], "tools": [], "skills": None})}
             chat_id = getattr(context, "chat_id", None)
-            spawn = lambda brief, call: _run(context=SimpleNamespace(
+            spawn = lambda brief, call, kind=None: _run(context=SimpleNamespace(
                 workspace=context.workspace, user=getattr(context, "user", None), chat_id=None, bill=chat_id,
                 agent_name=getattr(context, "agent_name", ""),   # its Word comments are signed as the parent's are
-                messages=SimpleNamespace(raw=[{"role": "user", "content": brief}])), team=team, me=call, **agent_kw)
-            team = Team(context.workspace, chat_id, spawn)
+                messages=SimpleNamespace(raw=[{"role": "user", "content": brief}])), team=team, me=call,
+                **(setup(team.kinds[kind]) if kind else agent_kw))
+            team = Team(context.workspace, chat_id, spawn, getattr(self, "_at_once", None), getattr(self, "_subagents", ()))
         try:
             async for ev in loop(context=context, **kw, **({"team": team} if team else {})):
                 yield ev

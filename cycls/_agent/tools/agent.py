@@ -10,29 +10,40 @@ from ..logs import log
 AT_ONCE = 4
 SAVE_EVERY = 2   # seconds: a burst of steps is one write
 
-TOOL = {
-    "name": "agent",
-    "description": (
-        "Hand part of the work to an agent of your own. It starts from your brief alone, works in the background "
-        "with the same workspace and tools, and its report comes back to you as a message when it finishes.\n\n"
-        "Use it for parts that stand alone and can run at once: research across several sources, separate "
-        "deliverables (a deck, a sheet, a document, an app), the same work over many items. Don't use it for a "
-        "lookup or anything a few tool calls finish: an agent costs several times a normal turn.\n\n"
-        "Write the brief so a colleague could act on it without asking: the goal, the files to use, what to make "
-        "and where, what to report. Give each agent its own files; two agents never edit the same file. When the "
-        "parts belong in one file, have each agent make its own part and combine them yourself once the reports "
-        "are in. Commands an agent runs in bash are not checked for this, so keep them to its own files too.\n\n"
-        "Once you've handed something off, don't also do it yourself. Carry on with other work or end your turn: "
-        "you are woken with each report as a message. Until its report arrives you don't know what an agent made "
-        "or found, so never describe, quote or predict it; if the person asks, say it is still working. Tell the "
-        f"person what matters in each report. At most {AT_ONCE} work at once."),
-    "input_schema": {"type": "object", "properties": {
-        "description": {"type": "string",
-                        "description": "What the agent will do, in 3 to 5 words, in the language of the person's latest message. They see it."},
-        "prompt": {"type": "string",
-                   "description": "The brief. The agent knows nothing else, so give it everything it needs."},
-    }, "required": ["description", "prompt"]},
-}
+def tool(at_once=AT_ONCE, kinds=()):
+    """The tool as the model sees it: how many work at once, and the developer's own agents it may pick by name."""
+    picks = "".join(f"\n- {k.name}: {k.description}" + ("" if k.loop else " It has no tools: put everything it needs in the brief.")
+                    for k in kinds)
+    return {
+        "name": "agent",
+        "description": (
+            "Hand part of the work to an agent of your own. It starts from your brief alone, works in the background "
+            "with the same workspace and tools, and its report comes back to you as a message when it finishes.\n\n"
+            "Use it for parts that stand alone and can run at once: research across several sources, separate "
+            "deliverables (a deck, a sheet, a document, an app), the same work over many items. Don't use it for a "
+            "lookup or anything a few tool calls finish: an agent costs several times a normal turn.\n\n"
+            "Write the brief so a colleague could act on it without asking: the goal, the files to use, what to make "
+            "and where, what to report. Give each agent its own files; two agents never edit the same file. When the "
+            "parts belong in one file, have each agent make its own part and combine them yourself once the reports "
+            "are in. Commands an agent runs in bash are not checked for this, so keep them to its own files too.\n\n"
+            "Once you've handed something off, don't also do it yourself. Carry on with other work or end your turn: "
+            "you are woken with each report as a message. Until its report arrives you don't know what an agent made "
+            "or found, so never describe, quote or predict it; if the person asks, say it is still working. Tell the "
+            f"person what matters in each report. At most {at_once} work at once."
+            + (f"\n\nBesides the general agent that follows your brief alone, these have instructions of their own. "
+               f"Name one in `agent` when the work fits it:{picks}" if picks else "")),
+        "input_schema": {"type": "object", "properties": {
+            "description": {"type": "string",
+                            "description": "What the agent will do, in 3 to 5 words, in the language of the person's latest message. They see it."},
+            "prompt": {"type": "string",
+                       "description": "The brief. The agent knows nothing else, so give it everything it needs."},
+            **({"agent": {"type": "string", "enum": [k.name for k in kinds],
+                          "description": "One of the agents above; leave it out for the general one."}} if kinds else {}),
+        }, "required": ["description", "prompt"]},
+    }
+
+
+TOOL = tool()
 
 BRIEFED = (
     "You are doing one part of a larger task, handed to you by the agent the person is talking to. Do the part in "
@@ -57,8 +68,10 @@ def _now():
 
 
 class Team:
-    def __init__(self, workspace, chat_id, spawn):
-        self.workspace, self.chat_id, self.spawn = workspace, chat_id, spawn
+    def __init__(self, workspace, chat_id, spawn, at_once=None, kinds=()):
+        self.workspace, self.chat_id, self.spawn, self.at_once = workspace, chat_id, spawn, at_once or AT_ONCE
+        self.kinds = {k.name: k for k in kinds}
+        self.tool = tool(self.at_once, list(self.kinds.values()))
         self.agents, self.tasks, self.holds = {}, {}, {}
         self.fresh, self.reports = set(), []
         self.wake, self.dirty, self.saving = asyncio.Event(), False, None
@@ -71,11 +84,15 @@ class Team:
 
     async def start(self, inp, ctx):
         label, brief = str(inp.get("description") or "").strip(), str(inp.get("prompt") or "").strip()
+        kind = str(inp.get("agent") or "")
         if not brief:
             return "Error: write the agent's brief in `prompt`."
-        if self.working() >= AT_ONCE:
-            return f"Error: {AT_ONCE} agents are already working. Start this one after a report arrives."
-        self.agents[ctx.call] = {"label": label, "brief": brief, "status": "working", "started": _now(), "steps": []}
+        if kind and kind not in self.kinds:
+            return f"Error: there is no agent named {kind}. Name one of {', '.join(self.kinds) or 'none'}, or leave `agent` out."
+        if self.working() >= self.at_once:
+            return f"Error: {self.at_once} already working, the most at once. Start this one after a report arrives."
+        self.agents[ctx.call] = {"label": label, "brief": brief, "status": "working", "started": _now(), "steps": [],
+                                 **({"kind": kind} if kind else {})}
         self.tasks[ctx.call] = asyncio.create_task(self._work(ctx.call))
         self._changed(ctx.call)
         return (f"Started «{label}». You'll be woken with its report as a message. Until then you don't know what "
@@ -85,7 +102,7 @@ class Team:
     async def _work(self, call):
         a, why = self.agents[call], ""
         try:
-            async for ev in self.spawn(a["brief"], call):
+            async for ev in self.spawn(a["brief"], call, a.get("kind")):
                 if not isinstance(ev, dict):
                     continue
                 if ev.get("type") == "report":
