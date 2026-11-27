@@ -272,6 +272,7 @@ def gated(fn, tool, label, connector, classify=None, hard=False, allowed=False, 
 REFUSED_TTL = 600   # a refusal is asked again after this, behind a turn
 _refused = {}       # url -> deadline: an OAuth server that would not list for someone not connected
 _behind = set()     # work started beside a turn, held until it ends
+_renewing = {}      # (connector, the grant's refresh token) -> its refresh in flight, which the rest wait for
 
 
 def behind(job):
@@ -631,11 +632,21 @@ class OAuth2(Connector):
         return {**grant, **new, "refresh_token": new["refresh_token"] or grant["refresh_token"]}
 
     async def bearer(self, ws):
-        """A live access token for this workspace's caller, refreshed if stale; None when not connected."""
-        grant, shared = await credentials.find(ws, self.name)
-        if not grant:
-            return None
-        if grant["expires_at"] < time.time() + 60:
+        """A live access token for this workspace's caller, refreshed if stale; None when not connected. One refresh
+        at a time per grant — a refresh token may work once (GitHub's does) — and it saves even if the turn that
+        started it stops, so the new token is never lost."""
+        grant, _ = await credentials.find(ws, self.name)
+        if grant and grant["expires_at"] < time.time() + 60:
+            key = (self.name, grant.get("refresh_token") or grant["access_token"])
+            if not (job := _renewing.get(key)):
+                job = _renewing[key] = asyncio.ensure_future(self._renew(ws))
+                job.add_done_callback(lambda t: (_renewing.pop(key, None), t.cancelled() or t.exception()))
+            grant = await asyncio.shield(job)
+        return grant and grant["access_token"]
+
+    async def _renew(self, ws):
+        grant, shared = await credentials.find(ws, self.name)   # another container may have refreshed it already
+        if grant and grant["expires_at"] < time.time() + 60:
             grant = await self.refresh(grant)
             await credentials.put(ws, self.name, grant, shared=shared)
-        return grant["access_token"]
+        return grant

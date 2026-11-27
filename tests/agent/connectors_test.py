@@ -53,6 +53,31 @@ def test_bearer_refreshes_a_stale_grant_and_writes_it_back(tmp_path):
     assert asyncio.run(g.bearer(workspace("org:u2", tmp_path, base=f"file://{tmp_path}"))) is None
 
 
+def test_one_refresh_at_a_time_and_it_saves_even_if_the_turn_stops(tmp_path):
+    """A refresh token may work once (GitHub's does): turns that find the grant stale together share one refresh, a
+    turn stopped while it runs does not lose the token it brings, and a grant another container refreshed is used."""
+    ws = workspace("org:u1", tmp_path, base=f"file://{tmp_path}")
+    g = _google()
+    asyncio.run(credentials.put(ws, "google", {"access_token": "old", "refresh_token": "r1", "expires_at": time.time() - 1}))
+    sent = []
+    async def token(self, client, **form):
+        sent.append(form["refresh_token"])
+        await asyncio.sleep(0.05)
+        return {"access_token": "new", "refresh_token": "r2", "expires_at": time.time() + 3600}
+    async def turns():
+        stopped = asyncio.ensure_future(g.bearer(ws))
+        await asyncio.sleep(0.01)
+        stopped.cancel()                                    # Stop, while the refresh is out
+        return await asyncio.gather(*(g.bearer(ws) for _ in range(4)))
+    with patch.object(c.OAuth2, "_token", token):
+        assert asyncio.run(turns()) == ["new"] * 4
+    assert sent == ["r1"] and asyncio.run(credentials.get(ws, "google"))["refresh_token"] == "r2" and not c._renewing
+
+    asyncio.run(credentials.put(ws, "google", {"access_token": "theirs", "refresh_token": "r3", "expires_at": time.time() + 3600}))
+    with patch.object(c.OAuth2, "_token", AsyncMock()) as tok:
+        assert asyncio.run(g._renew(ws))["access_token"] == "theirs" and not tok.await_count
+
+
 def test_mcp_handler_uses_the_grant_or_asks_to_connect(tmp_path):
     from cycls._agent import mcp as m
     from cycls._agent.tools import ToolContext
