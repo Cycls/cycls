@@ -262,7 +262,11 @@ everything else, not consequences of it.
   where the two counters first diverge for real. It also stopped being optional
   the moment the rule below landed: a run killed mid-batch now leaves an unpaired
   turn routinely, so the delete-and-renumber would have fired constantly rather
-  than never. **§3's lease is unblocked.**
+  than never. **§3's lease is unblocked.** Since 2026-11-27 the open path does
+  answer such a turn, still append-only: its calls get the note a stop writes
+  ("may or may not have completed — check before repeating it"), in a turn past
+  the end, written with the run's first. Stripped, the model ran the step again,
+  often the command that had killed the container.
 - **The assistant turn is checkpointed before its tools run** — safe only once the
   first rule is in, because until then it is precisely the state that makes every
   reader destructive. It also makes `Session`'s two counters genuinely diverge for

@@ -208,10 +208,10 @@ def test_a_reader_normalizes_in_memory_and_leaves_disk_alone(tmp_path):
     assert _turn_keys(ws, cid) == before, "a reader rewrote the turn files"
 
 
-def test_the_writer_appends_past_disk_instead_of_repairing_it(tmp_path):
-    """The writer does not repair either. Its two counters diverge: `_saved`
-    indexes the normalized list, `_next_idx` the real end of the turn files, so
-    the next append lands after the dangling turn rather than over it."""
+def test_the_writer_answers_a_cut_call_past_disk_instead_of_repairing_it(tmp_path):
+    """The writer does not repair either: calls a killed run left open are answered
+    in a turn of its own, written with the run's first turn, after the dangling one
+    rather than over it. `_saved` indexes the list, `_next_idx` the real end of disk."""
     ws, cid = _ws(tmp_path), "test"
     _dangling(ws, cid)
 
@@ -219,12 +219,15 @@ def test_the_writer_appends_past_disk_instead_of_repairing_it(tmp_path):
     session = _run(chat.Session.open(ctx))
 
     assert len(_turn_keys(ws, cid)) == 2, "opening a chat rewrote disk"
-    assert session._saved == 1, "the dangling turn should be out of the list"
-    assert session._next_idx == 2, "writes must land past every slot on disk"
+    answer = session.messages[-1]["content"][0]
+    assert answer["tool_use_id"] == "A" and answer["is_error"] and "server stopped" in answer["content"]
+    assert session._saved == 2 and session._next_idx == 2, "the answer is written past every slot on disk"
 
-    session.messages.append({"role": "user", "content": "next"})
-    _run(session.checkpoint())
-    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001", "000002"]
+    _run(session.add_user("next"))
+    assert [k.split("/")[-1] for k in _turn_keys(ws, cid)] == ["000000", "000001", "000002", "000003"]
+    loaded = _run(chat.load_messages(ws, cid))
+    assert [b.get("type") for b in loaded[1]["content"]] == ["tool_use"] and loaded[-1]["content"] == "next", \
+        "the model sees the call it made, answered, then the person"
 
 
 def test_a_reader_cannot_move_a_live_sessions_slots(tmp_path):

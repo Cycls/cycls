@@ -221,6 +221,27 @@ def test_a_replay_runs_the_saved_turn_not_the_request(agent_env):
     assert history[0] == saved
 
 
+def test_a_run_after_a_container_died_mid_tool_tells_the_model(agent_env):
+    """A container killed while a tool ran: the next message's run gives the model that call, answered as a stop
+    answers it, before the person's words — so it checks rather than runs the step again."""
+    from cycls._agent.state import append_messages
+    ws, ctx = agent_env
+    asyncio.run(append_messages(ctx.workspace, ctx.chat_id, [
+        {"role": "user", "content": "read the scan"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Running OCR."},
+                                          {"type": "tool_use", "id": "t9", "name": "bash", "input": {"command": "python ocr.py"}}]}], 0))
+    ctx.messages.raw = [{"role": "user", "content": "كمل"}]
+    calls, client = [], MagicMock()
+    client.messages.stream = _stream(iter([_make_response([_text_block("Checking first.")])]), calls=calls)
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx)))
+
+    sent = json.dumps(calls[0]["messages"], ensure_ascii=False)
+    assert '"t9"' in sent and "server stopped" in sent and sent.index("server stopped") < sent.index("كمل")
+    assert [m["role"] for m in _read_history(ctx)] == ["user", "assistant", "user", "user", "assistant"]
+
+
 def test_history_survives_crash_after_first_tool_round(agent_env):
     """Crash during round 2 streaming — round 1 history should already be on disk."""
     ws, ctx = agent_env
@@ -530,26 +551,6 @@ def test_exec_read_pages_read_each_page_as_text(tmp_path, monkeypatch):
     out = read("6-8", chat_id="c1", look=look)
     assert "read 6a" in out and "[page 7: not read." in out and "[page 8: not read." in out
     assert "read 4a" in read("4", chat_id="c1", look=look)   # one already read is never refused
-
-
-def test_calls_a_dead_container_left_open_are_answered_as_a_stop_answers_them():
-    """Unanswered, the next read strips the turn and the model runs the step again; answered, it is told the call
-    may not have finished. Once: a chat already answered is left as it is."""
-    from cycls._agent.harness.main import _close_cut
-    from cycls._agent.state import normalize
-    saved = []
-    s = types.SimpleNamespace(messages=[
-        {"role": "user", "content": "read the scan"},
-        {"role": "assistant", "content": [{"type": "text", "text": "Running OCR."},
-                                          {"type": "tool_use", "id": "t1", "name": "bash", "input": {"command": "python ocr.py"}}]}])
-    async def checkpoint(): saved.append(len(s.messages))
-    s.checkpoint = checkpoint
-    asyncio.run(_close_cut(s))
-    answer = s.messages[-1]["content"][0]
-    assert answer["tool_use_id"] == "t1" and answer["is_error"] and "server stopped" in answer["content"] and saved == [3]
-    assert any(b.get("type") == "tool_use" for m in normalize(s.messages) if isinstance(m["content"], list) for b in m["content"])
-    asyncio.run(_close_cut(s))
-    assert len(s.messages) == 3 and saved == [3]
 
 
 def test_reader_reads_a_picture_and_bills_it():

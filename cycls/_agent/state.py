@@ -324,11 +324,28 @@ async def load_messages(workspace, chat_id):
     mid-tool-batch now leaves an unpaired turn routinely, so that path would fire
     constantly instead of never. The writer appends past the end of disk instead
     — see `Session.open`."""
+    return normalize(await _turns(workspace, chat_id))
+
+
+async def _turns(workspace, chat_id):
+    """The turn files as written, in turn order. Glob `[0-9]*` selects them (000000, 000001, ...) — index excluded."""
     _validate(chat_id)
-    db = DB(workspace)
-    # Glob `[0-9]*` selects turn files (000000, 000001, ...) — index excluded.
-    messages = [msg async for _, msg in db.items(glob=f"chat/{chat_id}/[0-9]*")]
-    return normalize(messages)
+    return [msg async for _, msg in DB(workspace).items(glob=f"chat/{chat_id}/[0-9]*")]
+
+
+def _answered(turns):
+    """A run killed while its tools ran leaves its last turn calling them with no result. Its next run answers them
+    as a stop does, in a turn after it: unanswered, normalizing strips the turn, and the model runs the step again —
+    often the command that took the container down."""
+    last = turns[-1] if turns else {}
+    calls = [b for b in last.get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use"] \
+        if last.get("role") == "assistant" else []
+    if not calls: return []
+    from .tools import interrupted_note
+    return [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": b["id"], "is_error": True,
+         "content": interrupted_note(b["name"], "cut off when its server stopped, as a command using too much memory can do")}
+        for b in calls]}]
 
 
 async def turn_end(workspace, chat_id):
@@ -734,15 +751,20 @@ class Session:
         if not persist:
             return cls(context.workspace, None, [])
         # Append-only: the normalized list can be shorter than disk, so writes
-        # go past every existing slot rather than over one.
-        messages = _ephemeralize(await load_messages(context.workspace, context.chat_id))
+        # go past every existing slot rather than over one — the answer to calls
+        # a killed run left open among them, written with the run's first turn.
+        turns = await _turns(context.workspace, context.chat_id)
+        answer = _answered(turns)
+        messages = _ephemeralize(normalize(turns + answer))
         marker = await get_compaction(context.workspace, context.chat_id) or {}
-        return cls(context.workspace, context.chat_id, messages,
-                   summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
-                   cleared=int(marker.get("cleared", 0)),
-                   next_idx=await turn_end(context.workspace, context.chat_id),
-                   replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None),
-                   routine=getattr(context, "routine", None))
+        session = cls(context.workspace, context.chat_id, messages,
+                      summary=marker.get("summary"), first_kept=int(marker.get("first_kept", 0)),
+                      cleared=int(marker.get("cleared", 0)),
+                      next_idx=await turn_end(context.workspace, context.chat_id),
+                      replay=bool(getattr(context, "replay", False)), by=getattr(context, "by", None),
+                      routine=getattr(context, "routine", None))
+        session._saved -= len(answer)
+        return session
 
     def __init__(self, workspace, chat_id, messages, summary=None, first_kept=0, next_idx=None, cleared=0,
                  replay=False, by=None, routine=None):
