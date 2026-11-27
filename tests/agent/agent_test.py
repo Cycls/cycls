@@ -451,7 +451,7 @@ def test_exec_read_parses_documents_to_markdown(tmp_path, monkeypatch):
 
     assert asyncio.run(_exec_read({"path": "report.docx"}, str(tmp_path))) == "[page 2: verify]\n# التقرير\n\n| a | b |"
     pdf = asyncio.run(_exec_read({"path": "report.pdf"}, str(tmp_path)))
-    assert "3 pages" in pdf and "pages='N'" in pdf and pdf.endswith("| a | b |")
+    assert "3 pages" in pdf and "pages='3-5'" in pdf and "picture: true" in pdf and pdf.endswith("| a | b |")
     assert calls == [("report.docx", "markdown"), ("report.pdf", "markdown")]
 
 
@@ -471,33 +471,91 @@ def test_exec_read_keeps_a_long_document_in_tmp(tmp_path, monkeypatch):
 
 
 def test_exec_read_falls_back_when_the_parser_cannot_help(tmp_path, monkeypatch):
-    """Unavailable, failing, or finding no text (a scan): `read` does what it did before the parser."""
+    """Unavailable or failing: `read` does what it did before the parser. A PDF it finds no text in is a scan,
+    read by pages."""
     (tmp_path / "scan.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
     (tmp_path / "notes.docx").write_bytes(b"\x80\x81" * 50)
     for reply in (OSError("unreachable"), {"content": "", "error": "malformed document"}, {"content": "  "}):
         _parser(monkeypatch, reply)
-        assert asyncio.run(_exec_read({"path": "scan.pdf"}, str(tmp_path)))[0]["type"] == "document"
         assert "binary" in asyncio.run(_exec_read({"path": "notes.docx"}, str(tmp_path)))
+        out = asyncio.run(_exec_read({"path": "scan.pdf"}, str(tmp_path)))
+        if isinstance(reply, dict) and not reply.get("error"):
+            assert "a scan" in out and "pages='1-20'" in out
+        else:
+            assert out[0]["type"] == "document"
 
 
-def test_exec_read_pages_render_a_small_pdf_too(tmp_path, monkeypatch):
-    """`pages` is how a model without PDF support sees one: a small PDF sent whole again would be stubbed again."""
+def test_exec_read_pages_as_pictures(tmp_path, monkeypatch):
+    """`picture: true` shows the pages as images, at any size."""
     from cycls._agent.tools import pdf
     seen = []
     async def extract(path, first, last):
         seen.append((path.name, first, last)); return [{"type": "image", "source": {}}]
     monkeypatch.setattr(pdf, "extract", extract)
     (tmp_path / "small.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 20)
-    assert asyncio.run(_exec_read({"path": "small.pdf", "pages": "1-2"}, str(tmp_path)))[0]["type"] == "image"
-    assert seen == [("small.pdf", 1, 2)]
+    out = asyncio.run(_exec_read({"path": "small.pdf", "pages": "1-2", "picture": True}, str(tmp_path)))
+    assert out[0]["type"] == "image" and seen == [("small.pdf", 1, 2)]
 
 
-def test_exec_read_pages_skip_the_parser(tmp_path, monkeypatch):
-    """`pages` asks to see the PDF, so it is rendered, never parsed."""
-    calls = _parser(monkeypatch, {"content": "text"})
-    (tmp_path / "doc.pdf").write_bytes(b"%PDF-1.4")
-    asyncio.run(_exec_read({"path": "doc.pdf", "pages": "1"}, str(tmp_path)))
-    assert calls == []
+def test_exec_read_pages_read_each_page_as_text(tmp_path, monkeypatch):
+    """`pages` reads each page as the parser does, its page number put right; a scan, or a page whose text
+    layer is garbled, is read off its picture — once a chat, then from .tmp/, and of one document so many."""
+    import cycls
+    from cycls._agent import tools
+    from cycls._agent.tools import pdf
+    replies = {"3": {"content": "Revenue [Image: page 1, 600×300]", "warnings": ["page 1: verify the numbers on this page"]},
+               "4": {"content": "", "warnings": ["1 of 1 page(s) need OCR (page 1)"]},
+               "5": {"content": "ا\ufffdمادة ا\ufffdخامسة", "warnings": []}}
+    monkeypatch.setattr(tools, "PARSER", "cycls-parser")
+    monkeypatch.setattr(cycls, "remote", lambda name, **_: lambda data, filename, mode: {"error": None, "warnings": [], **replies.get(data.decode(), {"content": ""})})
+    async def count(path): return 9
+    async def split(path, first, last): return [str(n).encode() for n in range(first, last + 1)]
+    async def strips(path, n): return [f"{n}a".encode(), f"{n}b".encode()]
+    for name, fn in (("page_count", count), ("split", split), ("strips", strips)): monkeypatch.setattr(pdf, name, fn)
+    looked = []
+    async def look(jpeg):
+        looked.append(jpeg); return f"read {jpeg.decode()}"
+    (tmp_path / "mixed.pdf").write_bytes(b"%PDF-1.4")
+    read = lambda pages, **kw: asyncio.run(_exec_read({"path": "mixed.pdf", "pages": pages}, str(tmp_path), **kw))
+
+    out = read("3-5", chat_id="c1", look=look)
+    assert out == ("[page 3]\n[page 3: verify the numbers on this page]\nRevenue [Image: page 3, 600×300]\n\n"
+                   "[page 4, read off its picture]\nread 4a\nread 4b\n\n"
+                   "[page 5, read off its picture]\nread 5a\nread 5b")
+    assert read("3-5", chat_id="c1", look=look) == out and len(looked) == 4
+    assert "can't read pictures" in read("4", chat_id="c2")
+    assert read("10-12") == "Error: the PDF has 9 pages"
+
+    monkeypatch.setattr(pdf, "SCANS_PER_DOCUMENT", 3)   # c1 has read two of its pages off their pictures
+    out = read("6-8", chat_id="c1", look=look)
+    assert "read 6a" in out and "[page 7: not read." in out and "[page 8: not read." in out
+    assert "read 4a" in read("4", chat_id="c1", look=look)   # one already read is never refused
+
+
+def test_reader_reads_a_picture_and_bills_it():
+    """`look` is one call to the run's own model, the picture and the ask alone, its cost put on the chat."""
+    import base64
+    from cycls._agent.harness.main import _reader
+    from cycls._agent.harness.events import Turn
+    sent, billed = [], []
+    class Provider:
+        async def stream(self, **kw):
+            sent.append(kw)
+            yield Turn(content=[{"type": "text", "text": " words \n"}], stop_reason="end_turn", input=1030, output=500)
+    async def bill(u, **tag): billed.append((u, tag))
+    look = _reader(Provider(), bill, max_tokens=8192, thinking="adaptive")
+    assert asyncio.run(look(b"jpeg")) == "words"
+    assert billed == [((1030, 500, 0, 0), {"picture": True})]
+    picture = sent[0]["messages"][0]["content"][0]
+    assert picture["type"] == "image" and picture["source"]["data"] == base64.b64encode(b"jpeg").decode()
+    assert sent[0]["tools"] == [] and sent[0]["thinking"] == "adaptive"
+
+    class OutOfTokens:   # thinking that used the whole budget leaves no words: a failure, never a blank part
+        async def stream(self, **kw):
+            yield Turn(content=[], stop_reason="max_tokens", input=1030, output=8192)
+    with pytest.raises(RuntimeError):
+        asyncio.run(_reader(OutOfTokens(), bill)(b"jpeg"))
+    assert billed[-1] == ((1030, 8192, 0, 0), {"picture": True})
 
 
 # ---------------------------------------------------------------------------
@@ -834,8 +892,7 @@ def test_ingest_no_vision_image_becomes_note(tmp_path):
     result = asyncio.run(_ingest(parts, str(ws), vision=False))
     assert result[0] == {"type": "text", "text": "what is this?"}
     assert len(result) == 2
-    assert '"photo.png"' in result[1]["text"]
-    assert "propose a way to extract" in result[1]["text"]
+    assert '"photo.png"' in result[1]["text"] and "can't see pictures" in result[1]["text"]
     assert all(b["type"] == "text" for b in result)
 
 
@@ -860,8 +917,7 @@ def test_ingest_unreadable_attachment_names_the_file(tmp_path):
     for fname in ("report.docx", "nope.txt"):
         result = asyncio.run(_ingest([{"type": "file", "file": fname}], str(ws)))
         assert len(result) == 1
-        assert f'"{fname}"' in result[0]["text"]
-        assert "propose a way to extract" in result[0]["text"]
+        assert f'"{fname}"' in result[0]["text"] and "propose a way" not in result[0]["text"]
 
 
 def test_ingest_video_clip_points_at_footage_only_when_video_is_offered(tmp_path):
@@ -878,7 +934,7 @@ def test_ingest_video_clip_points_at_footage_only_when_video_is_offered(tmp_path
     assert "propose a way" not in offered[0]["text"]
 
     plain = asyncio.run(_ingest([{"type": "file", "file": "uploads/Talk.MOV"}], str(ws)))
-    assert "propose a way to extract" in plain[0]["text"] and "footage" not in plain[0]["text"]
+    assert '"uploads/Talk.MOV"' in plain[0]["text"] and "footage" not in plain[0]["text"]
 
     missing = asyncio.run(_ingest([{"type": "file", "file": "uploads/gone.mp4"}], str(ws), video=True))
     assert "footage" not in missing[0]["text"]

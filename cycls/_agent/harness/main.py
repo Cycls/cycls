@@ -5,7 +5,7 @@ stops. Yields dict events (and bare strings for text deltas) that the agent
 body forwards as-is. `Turn` is loop-internal (the last event a provider
 stream emits) — never reaches the body.
 """
-import asyncio, hashlib, json, os, random, re, time, uuid
+import asyncio, base64, hashlib, json, os, random, re, time, uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +82,9 @@ _OVERFLOW_RE = re.compile(
     r"|is longer than the model", re.I)
 DEFAULT_WINDOW = 1_000_000    # context window when .context() is unset — set it for smaller models
 DEFAULT_MAX_TOKENS = 8_192    # output cap when .max_tokens() is unset — safe on every model
+LOOKS = 16                    # pictures read at once (a 20-page scan is 60 strips)
+READ_PICTURE = ("Transcribe this part of a scanned page exactly, line by line, in its own language, each number in "
+                "the digits it is written in (٠-٩ stay ٠-٩). Output only the text; output nothing if it's blank.")
 
 
 def _cause(e):
@@ -434,15 +437,13 @@ async def _ingest(content, workspace, vision=True, video=False, transcribe=False
                     out.append({"type": "text", "text": _deck_note(fname, False)})
                     continue
                 if isinstance(result, str) and result.startswith("Error:"):
-                    out.append({"type": "text", "text":
-                        f'[The user attached "{fname}" but it can\'t be read directly ({result[7:]}). '
-                        "It's saved in the workspace — propose a way to extract its content.]"})
+                    out.append({"type": "text", "text": f'[The user attached "{fname}": {result[7:]}]'})
                     continue
                 if (not vision and isinstance(result, list)
                         and any(b.get("type") in ("image", "document") for b in result)):
                     out.append({"type": "text", "text":
-                        f'[The user attached "{fname}" but this model can\'t view it directly (no vision). '
-                        "It's saved in the workspace — propose a way to extract its content.]"})
+                        f'[The user attached "{fname}", saved in the workspace, but this model can\'t see pictures'
+                        + ("; take its text out with bash.]" if low.endswith(".pdf") else ".]")})
                     continue
                 out.append({"type": "text", "text": _deck_note(fname, True) if deck else f"[Attached: {fname}]"})
                 if isinstance(result, list): out.extend(result); continue
@@ -549,6 +550,23 @@ async def _chat_title(provider, said, **kw):
     return " ".join(line.split()).strip("\"'«»“”`").rstrip(".").strip()[:80]
 
 
+def _reader(provider, bill, **kw):
+    """`look` for the tools: a picture's words, read by the run's own model in a side call billed to the chat."""
+    looking = asyncio.Semaphore(LOOKS)
+    async def look(jpeg):
+        turn = None
+        async with looking:
+            async for ev in provider.stream(messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                 "data": base64.b64encode(jpeg).decode()}},
+                    {"type": "text", "text": READ_PICTURE}]}], system="You transcribe scanned pages.", tools=[], **kw):
+                if isinstance(ev, Turn): turn = ev
+        await bill((turn.input, turn.output, turn.cached, turn.cache_create), picture=True)
+        if turn.stop_reason == "max_tokens": raise RuntimeError("the reading ran out of tokens")   # never a silent gap
+        return "".join(b.get("text", "") for b in turn.content if b.get("type") == "text").strip()
+    return look
+
+
 async def _settled(task, wait):
     """The task's result if it ends within `wait` seconds, else "" and it is called off."""
     done, _ = await asyncio.wait({task}, timeout=wait)
@@ -593,10 +611,22 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # And Docs, for the organisations on DOCS_ORGS.
     if "Docs" in allowed_tools and not office_offered(workspace, "docs"):
         allowed_tools = [t for t in allowed_tools if t != "Docs"]
-    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes, team=team, me=me,
-                      agent=str(getattr(context, "agent_name", "") or ""))
-    lead = team if me is None else None   # the parent follows its agents; an agent has none of its own
     billed = session.chat_id or getattr(context, "bill", None)   # an agent's turns are its parent chat's cost
+
+    async def bill(u, **tag):
+        """A side call's tokens, logged, and its cost put on the chat."""
+        c = _cost(price, *u)
+        log("usage", user=user, chat_id=billed, model=bare_model, input=u[0], output=u[1], cached=u[2],
+            cache_create=u[3], cost=round(c, 6), ms=0, **tag, **({"agent": me} if me else {}))
+        if billed and c:
+            try: await state.add_cost(workspace, billed, c)
+            except Exception as e: log("warn", user=user, chat_id=billed, message=f"add_cost failed: {e}")
+
+    look = _reader(provider, bill, max_tokens=min(max_tokens, DEFAULT_MAX_TOKENS), thinking=thinking,
+                   extra_body=extra_body, session=session.chat_id) if vision else None
+    ctx = ToolContext(user, workspace, session.chat_id, frozenset(approvals), auto, modes, team=team, me=me,
+                      agent=str(getattr(context, "agent_name", "") or ""), look=look)
+    lead = team if me is None else None   # the parent follows its agents; an agent has none of its own
     if not session.replay:   # a replay runs the saved turn again, as it was
         incoming = context.messages.raw[-1]
         content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
@@ -892,14 +922,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             task.result()
             yield compacted(2, reason, tokens_since_compact, DROPPED not in session.summary)
             # The summarizer call is a real billed turn — track it too.
-            if u := getattr(provider, "last_usage", None):
-                c = _cost(price, *u)
-                log("usage", user=user, chat_id=billed, model=bare_model,
-                    input=u[0], output=u[1], cached=u[2], cache_create=u[3],
-                    cost=round(c, 6), ms=0, compact=True, **({"agent": me} if me else {}))
-                if billed and c:
-                    try: await state.add_cost(workspace, billed, c)
-                    except Exception as e: log("warn", user=user, chat_id=billed, message=f"add_cost failed: {e}")
+            if u := getattr(provider, "last_usage", None): await bill(u, compact=True)
         except Exception as ce:
             # degrades the loop until the context hard-overflows — never silent
             yield compacted(2, reason, tokens_since_compact, False)

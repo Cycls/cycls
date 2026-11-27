@@ -26,9 +26,12 @@ so nothing here ever clears or summarizes it.
   inlined through `read`, so the same cap bounds them. Documents (PDF, Office, ODF, RTF,
   EPUB) go to the deployed parser (`CYCLS_PARSER`, default `cycls-parser`) and come back
   as Markdown; past 20,000 characters the model gets the beginning and the full text waits
-  in `.tmp/{chat_id}/`. When the parser is unavailable or finds no text, `read` works as
-  before: files over 3 MB are refused (use bash), large PDFs need `pages`, 20 per read.
-  Images, and PDFs asked for with `pages`, go as base64 blocks.
+  in `.tmp/{chat_id}/`. `pages` reads a PDF by number, 20 at most, each page sent to the
+  parser alone; a scan, or a page whose text layer is garbled, is read off its picture by
+  the run's own model (three strips cut between lines, side calls billed to the chat) and
+  kept in `.tmp/{chat_id}/`, so a chat reads each page once. `picture: true` sends the
+  pages as images instead. When the parser is unavailable, `read` works as before: files
+  over 3 MB are refused (use bash), large PDFs need `pages`. Images go as base64 blocks.
 - **Every other string result** of 20,000 characters or more spills to
   `.tmp/{chat_id}/` and the model gets a preview (`spill.py`, 48h TTL). `read` and
   `skill` never spill; list-shaped results (MCP multi-part, images) don't either.

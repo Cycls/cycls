@@ -94,8 +94,7 @@ class OpenAIProvider:
             elif t == "document":
                 dropped.add(t)
                 parts.append("[PDF can't be sent inline on this provider — call `read` "
-                             "again with the pages parameter (e.g. pages='1-5') to view "
-                             "it as page images]" if vision else
+                             "again with pages (e.g. pages='1-20') to read it by pages]" if vision else
                              "[document content not viewable on this provider — extract "
                              "its text with bash instead]")
             elif t == "image":
@@ -130,8 +129,8 @@ class OpenAIProvider:
                         dropped.add(t)
                         parts.append({"type": "text", "text":
                             "[this document can't be sent inline on this provider — it's "
-                            "saved in the workspace; use `read` with pages='1-5' to view "
-                            "it as page images, or extract its text with bash]" if self.vision else
+                            "saved in the workspace; `read` it with pages (e.g. pages='1-20') "
+                            "to read it by pages]" if self.vision else
                             "[this document can't be viewed by this model — it's saved in "
                             "the workspace; extract its text with bash]"})
                     elif t == "image":

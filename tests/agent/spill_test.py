@@ -43,15 +43,18 @@ def test_hidden_from_the_file_list(tmp_path):
     assert [e["name"] for e in _walk_catalog(tmp_path)[0]] == ["report.md"]
 
 
-def test_sweep_drops_idle_chats_and_throttles(tmp_path):
+def test_sweep_drops_what_sat_idle_and_throttles(tmp_path):
+    """A chat's directory, or a file the agent left loose in .tmp/."""
     tmp = tmp_path / ".tmp"
     old, fresh = tmp / "old", tmp / "fresh"
     for d in (old, fresh):
         d.mkdir(parents=True); (d / "f").write_text("x")
+    (tmp / "loose.png").write_text("x"); (tmp / "new.json").write_text("x")
     stale = time.time() - spill.TTL - 1
-    os.utime(old / "f", (stale, stale))
+    os.utime(old / "f", (stale, stale)); os.utime(tmp / "loose.png", (stale, stale))
     spill._sweep(tmp)
     assert not old.exists() and fresh.exists()
+    assert not (tmp / "loose.png").exists() and (tmp / "new.json").exists()
     os.utime(fresh / "f", (stale, stale))
     spill._sweep(tmp)                      # within SWEEP_EVERY: no-op
     assert fresh.exists()

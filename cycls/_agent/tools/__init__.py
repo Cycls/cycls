@@ -66,6 +66,8 @@ _PARSED_EXTS = {"pdf", "doc", "docx", "docm", "ppt", "pptx", "pptm", "pps", "pps
                 "xls", "xlsx", "xlsm", "xlsb", "odt", "ods", "odp", "rtf", "epub"}
 _PARSE_MAX = 50 * 1024 * 1024
 _PARSE_TIMEOUT = 120   # seconds — a 200-page PDF takes about 10
+_PAGE_TIMEOUT = 30     # one page takes 1-3; past this its picture is read instead
+_PAGE_ONE = re.compile(r"\bpage 1\b")   # how the parser names a page read on its own
 
 _BASH_TOOL = {
     "type": "custom",
@@ -108,8 +110,9 @@ _READ_TOOL = {
         "- Reads images (PNG, JPG, GIF, WebP) visually — you will see their contents.\n"
         "- Reads documents (PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB) as Markdown text. "
         "A long one shows its beginning and keeps the full text in .tmp/, to continue with offset or search with rg.\n"
-        "- `pages` (e.g. pages='1-5') shows PDF pages as images instead: for scans, charts, or checking a page. "
-        "Maximum 20 pages per read. A PDF with no text layer is shown as images, or asks for `pages` when over 3MB.\n"
+        "- `pages` (e.g. pages='1-5') reads PDF pages by number, each marked [page N]; a scanned page, or one whose "
+        "text is garbled, is read off its picture. Maximum 20 pages per read. Add `picture: true` to see the pages "
+        "as images instead: a chart, a stamp, the layout.\n"
         "- Returns up to 50,000 characters per call; a longer file ends with the offset to continue from.\n"
         "- When you already know which part of the file you need, use offset and limit to read only that part.\n"
         "- Only reads files, not directories. Use `ls` via bash for directories.\n"
@@ -120,7 +123,8 @@ _READ_TOOL = {
         "path": {"type": "string", "description": "Relative path to read (e.g. src/main.py)"},
         "offset": {"type": "integer", "description": "Start line, 1-indexed (default: 1)"},
         "limit": {"type": "integer", "description": "Max lines to read. Omit to read as much as fits."},
-        "pages": {"type": "string", "description": "PDF pages to see as images, e.g. '1-5' or '3'. Max 20 pages."},
+        "pages": {"type": "string", "description": "PDF pages to read, e.g. '1-5' or '3'. Max 20 pages."},
+        "picture": {"type": "boolean", "description": "With pages: see them as images instead of reading their text."},
     }, "required": ["path"]}
 }
 
@@ -644,33 +648,97 @@ async def _exec_web_fetch(inp):
     return (text[:limit] + "\n... (truncated)") if len(text) > limit else (text or "(no readable text)")
 
 
-async def _parsed(path, workspace, chat_id):
-    """A document as the parser reads it: Markdown, its warnings first, a long one kept whole in .tmp/. None
-    when the parser is unavailable or finds no text (a scan), and `read` goes on as it did before."""
+async def _parse(data, name, chat_id, timeout=_PARSE_TIMEOUT):
+    """The parser's reading of a document — its result, with `content` — or None when there is none to be had."""
     import cycls
     try:
-        parse = cycls.remote(PARSER, timeout=_PARSE_TIMEOUT)
-        doc = await asyncio.to_thread(lambda: parse(path.read_bytes(), path.name, mode="markdown"))
-        body = doc["content"].strip()
+        parse = cycls.remote(PARSER, timeout=timeout)
+        doc = await asyncio.to_thread(lambda: parse(data, name, mode="markdown"))
+        doc["content"] = doc["content"].strip()
     except Exception as e:
         log("parser", chat_id=chat_id, error=f"{type(e).__name__}: {e}"[:300])
         return None
-    if not body: return None   # an error, or nothing to read
-    text = "".join(f"[{w}]\n" for w in doc["warnings"]) + (
-        f"[{doc['page_count']} pages. To see one as an image (a scan, a chart, a number to check), read with pages='N'.]\n\n"
-        if path.suffix.lower() == ".pdf" else "") + body
+    return None if doc.get("error") else doc
+
+
+async def _parsed(path, workspace, chat_id):
+    """A document as the parser reads it: Markdown, its warnings first, a long one kept whole in .tmp/; a scan
+    is read by pages. None when the parser is unavailable or finds nothing, and `read` goes on as before."""
+    if not (doc := await _parse(path.read_bytes(), path.name, chat_id)): return None
+    pdf_ = path.suffix.lower() == ".pdf"
+    if not doc["content"]:
+        return (f"[{doc['page_count']} pages and no text layer: a scan. Read it by pages, e.g. pages='1-20', "
+                "20 at most a read; each page is read off its picture.]" if pdf_ and doc["page_count"] else None)
+    return _shown("".join(f"[{w}]\n" for w in doc["warnings"]) + (
+        f"[{doc['page_count']} pages. Read any by number with pages='3-5' (a scanned page too: it comes back as text); "
+        "add picture: true to see them.]\n\n" if pdf_ else "") + doc["content"], path.stem, workspace, chat_id)
+
+
+def _shown(text, stem, workspace, chat_id):
+    """*text* whole, or past the spill size its beginning, with the whole kept in .tmp/ to continue from."""
     if len(text) <= spill.SPILL_AT: return text
     shown = text[:max(text.rfind("\n", 0, spill.SPILL_AT), 0) or spill.SPILL_AT]
     lines = shown.count("\n") + 1
-    if not (kept := spill.save(text, workspace, chat_id, f"{path.stem}-{uuid.uuid4().hex[:6]}.md")):
+    if not (kept := spill.save(text, workspace, chat_id, f"{stem}-{uuid.uuid4().hex[:6]}.md")):
         return f"{shown}\n\n[Showing {len(shown):,} of {len(text):,} characters.]"
     return (f"{shown}\n\n[Showing {len(shown):,} of {len(text):,} characters, the first {lines:,} lines. The full text is "
             f"in {kept.relative_to(workspace)}: continue with read at offset={lines + 1}, or search it with rg.]")
 
 
+async def _pages(path, first, last, workspace, chat_id, look):
+    """PDF pages by number, as text: each as the parser reads it, or, when it is a scan or its text layer is
+    garbled, as the model reads it off the page's picture."""
+    if err := pdf.check(first, last): return err
+    if (count := await pdf.page_count(path)) and first > count: return f"Error: the PDF has {count} pages"
+    split = await pdf.split(path, first, min(last, count or last))
+    if isinstance(split, str): return split
+    async def text(n, data):
+        doc = await _parse(data, f"{path.stem}-{n}.pdf", chat_id, _PAGE_TIMEOUT) if PARSER else None
+        if doc and (t := doc["content"]) and t.count("\ufffd") * 100 < len(t):   # under 1% unreadable
+            notes = "".join(f"[{_PAGE_ONE.sub(f'page {n}', w)}]\n" for w in doc["warnings"])   # it saw page 1 of 1
+            return f"[page {n}]\n{notes}" + t.replace("[Image: page 1,", f"[Image: page {n},")
+    numbers = range(first, first + len(split))
+    texts = await asyncio.gather(*map(text, numbers, split))
+    tmp, prefix = pathlib.Path(workspace) / spill.DIR / str(chat_id), _kept(path)
+    room = [pdf.SCANS_PER_DOCUMENT - (sum(f.name.startswith(prefix) for f in tmp.iterdir()) if tmp.is_dir() else 0)]
+    # the rest read off their pictures, started in page order: past the document's limit, the last are the ones left
+    seen = iter(await asyncio.gather(*(_seen(path, n, workspace, chat_id, look, room)
+                                       for n, t in zip(numbers, texts) if not t)))
+    return _shown("\n\n".join(t or next(seen) for t in texts), path.stem, workspace, chat_id)
+
+
+def _kept(path):
+    """How a chat's .tmp/ names this document's pages read off their pictures, before each page's "{n}.md"."""
+    st = path.stat()
+    return f"{path.stem}-{st.st_size:x}{int(st.st_mtime):x}-p"
+
+
+async def _seen(path, n, workspace, chat_id, look, room):
+    """Page n as the model reads it off its picture, kept in .tmp/ so a chat reads each page once; `room` holds
+    how many more of the document's pages may be read so."""
+    name = f"{_kept(path)}{n}.md"
+    if chat_id and (kept := pathlib.Path(workspace) / spill.DIR / chat_id / name).is_file():
+        return f"[page {n}, read off its picture]\n{kept.read_text()}"
+    if not look: return f"[page {n}: a picture, and this model can't read pictures]"
+    if room[0] <= 0:
+        return (f"[page {n}: not read. At most {pdf.SCANS_PER_DOCUMENT} pages of a document are read off their "
+                "pictures; tell the person]")
+    room[0] -= 1
+    strips = await pdf.strips(path, n)
+    if isinstance(strips, str): return f"[page {n}: {strips}]"
+    read = await asyncio.gather(*(look(s) for s in strips), return_exceptions=True)
+    if failed := next((r for r in read if isinstance(r, Exception)), None):
+        log("warn", chat_id=chat_id, message=f"page {n} not read off its picture: {type(failed).__name__}: {failed}"[:300])
+        return f"[page {n}: it couldn't be read off its picture this time; read it again]"
+    text = "\n".join(r for r in read if r) or "(Nothing is written on it.)"
+    spill.save(text, workspace, chat_id, name)
+    return f"[page {n}, read off its picture]\n{text}"
+
+
 async def _read_noted(inp, ws, ctx):
     """A file read in a team workspace starts with who last edited it (activity.note)."""
-    out = await _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None))
+    out = await _exec_read(inp, ws.root, getattr(ctx, "skills", None), getattr(ctx, "chat_id", None),
+                           getattr(ctx, "look", None))
     if isinstance(out, str) and not out.startswith("Error") and getattr(ws, "subject", None):
         from .. import activity
         try: rel = _resolve_path(str(inp.get("path") or ""), ws.root).relative_to(pathlib.Path(ws.root).resolve()).as_posix()
@@ -679,7 +747,7 @@ async def _read_noted(inp, ws, ctx):
     return out
 
 
-async def _exec_read(inp, workspace, catalog=None, chat_id=None):
+async def _exec_read(inp, workspace, catalog=None, chat_id=None, look=None):
     try: path = skills.resolve_path(inp["path"], catalog) or _resolve_path(inp["path"], workspace)
     except ValueError as e: return f"Error: {e}"
     if not path.exists(): return f"Error: {inp['path']} does not exist"
@@ -689,7 +757,7 @@ async def _exec_read(inp, workspace, catalog=None, chat_id=None):
     if PARSER and ext in _PARSED_EXTS and not inp.get("pages") and size <= _PARSE_MAX:
         if text := await _parsed(path, workspace, chat_id): return text
 
-    if ext == "pdf" and (inp.get("pages") or size > pdf.EXTRACT_SIZE_THRESHOLD):   # `pages` asks to see them, at any size
+    if ext == "pdf" and (inp.get("pages") or size > pdf.EXTRACT_SIZE_THRESHOLD):   # pages by number, at any size
         if not (pages_spec := inp.get("pages")):
             count = await pdf.page_count(path)
             hint = f"{count} pages" if count else "unknown page count"
@@ -697,7 +765,8 @@ async def _exec_read(inp, workspace, catalog=None, chat_id=None):
                     f"Max {pdf.MAX_PAGES_PER_READ} pages per read.")
         parsed = pdf.parse_pages(pages_spec)
         if not parsed: return f"Error: invalid pages '{pages_spec}'. Use '1-5' or '3'."
-        return await pdf.extract(path, *parsed)
+        if inp.get("picture"): return await pdf.extract(path, *parsed)
+        return await _pages(path, *parsed, workspace, chat_id, look)
 
     from ..design import photos                         # a phone's HEIC or a large photo is seen as a smaller copy
     if (ext in photos.OTHER_EXTS or (ext in _IMAGE_EXTS and size > 3 * 1024 * 1024)) and size <= photos.MAX_FILE and photos.available():
@@ -1551,6 +1620,7 @@ class ToolContext:
     agent: str = ""                      # the agent's name as people see it (its brand): what it signs comments with
     routine: dict = None                 # a routine's run: {id, name, at} — what `tell` tells about
     tz: str = ""                         # the person's time zone: a routine's when, unless they say otherwise
+    look: object = None                  # a picture's words, read by the run's model (a scanned page); None: no vision
 
     async def secret(self, name):
         return await credentials.get(self.workspace, name)

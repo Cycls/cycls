@@ -3,7 +3,8 @@ text lands in .tmp/{chat_id}/ and the model gets a preview and a path — then
 analyses it with bash instead of reading it back. `.tmp` is hidden from
 listings but deliberately readable by bash and `read`, and the rm shim passes
 it through. Cleanup is lazy, like the trash: chat purge removes its directory,
-and each spill sweeps chat directories idle past TTL.
+and each spill sweeps what sat idle past TTL — a chat's directory, or a file
+left loose in .tmp.
 """
 import json, shutil, time
 from pathlib import Path
@@ -62,9 +63,15 @@ def _sweep(tmp):
     if marker.exists() and now - marker.stat().st_mtime < SWEEP_EVERY:
         return
     marker.touch()
-    for chat in tmp.iterdir():
-        if chat.is_dir() and now - max((f.stat().st_mtime for f in chat.iterdir()), default=0) > TTL:
-            shutil.rmtree(chat, ignore_errors=True)
+    for p in tmp.iterdir():
+        try:
+            if p.is_dir() and not p.is_symlink():
+                if now - max((f.stat().st_mtime for f in p.iterdir()), default=0) > TTL:
+                    shutil.rmtree(p, ignore_errors=True)
+            elif now - p.lstat().st_mtime > TTL:
+                p.unlink()
+        except OSError:
+            continue
 
 
 def purge(root, chat_id):
