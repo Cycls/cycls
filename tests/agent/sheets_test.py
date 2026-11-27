@@ -71,7 +71,7 @@ def test_offered_only_with_the_service_and_the_organisation(monkeypatch, tmp_pat
     from cycls._agent.tools import _TOOLS, build_tools
     assert not [t for t in build_tools(["Sheets"], None) if t["name"] == "sheets"]
     monkeypatch.setenv("OFFICE_URL", "https://office.test")
-    assert [t["name"] for t in build_tools(["Sheets"], None)] == ["sheets"]
+    assert [t["name"] for t in build_tools(["Sheets"], None)] == ["sheets", "print_sheet"]
     assert "sheets" in _TOOLS and "openpyxl" in _TOOLS["sheets"].prompt
     # The tool is in the list but the organisation is not on SHEETS_ORGS: the call says so.
     out = _run({"action": "read", "path": "a.xlsx"}, _ws(tmp_path))
@@ -461,4 +461,26 @@ def test_print_lays_the_workbook_out_and_writes_its_pdf_in_one_call(monkeypatch,
     assert (tmp_path / "b.xlsx").read_bytes() == PATCHED and (tmp_path / "b.pdf").read_bytes() == b"%PDF-1.7 printed"
     assert "made ready to print" in out["_model"] and "Saved b.pdf" in out["_model"]
     assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "b.pdf"}
-    assert "call `sheets` print" in sheets.SHEETS_PROMPT
+    assert "This is final" in out["_model"]
+
+
+def test_print_sheet_is_the_one_call_and_its_reply_is_final(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            seen.append(json.loads(_form(request)["request"])["edits"])
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Sheet1 made ready to print"})
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    out = asyncio.run(sheets.exec_print_sheet({"path": "b.xlsx", "sheet": "Sheet1", "color": "#0B5394"}, _ws(tmp_path),
+                                              types.SimpleNamespace(chat_id="c1")))
+    assert seen == [[{"op": "print_ready", "target": "Sheet1", "color": "#0B5394"}]]
+    assert "This is final" in out["_model"] and "one font" in out["_model"]
+    assert out["_ui"]["path"] == "b.pdf" and (tmp_path / "b.pdf").exists()
+    assert sheets.PRINT_SHEET_TOOL["input_schema"]["required"] == ["path"]
+    assert "`print_sheet` call" in sheets.SHEETS_PROMPT

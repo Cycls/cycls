@@ -147,9 +147,10 @@ SHEETS_PROMPT = (
     "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
     "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
     "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
-    "person's open editor. To make a workbook print well (on one page, looking professional), call `sheets` print "
-    "once: it lays the table out, writes the PDF and says how it prints; that reply is the check, so do not open the "
-    "PDF or inspect the file to look again, and send the person the PDF. Only what they ask after that is an edit. "
+    "person's open editor. A workbook to make print-ready (to print on one page, look professional, be ready to "
+    "print) is one `print_sheet` call, made straight away with no read first: it lays the table out, writes the PDF "
+    "and its reply is final. Do not inspect the file, open or render the PDF, or make other versions; tell the person "
+    "what the reply says, how to change the font and colours included. Only what they ask after that is an edit. "
     "How a workbook prints is in every `sheets` read and layout edit's reply (pages, scale, the "
     "text that does not fit): set it with page_setup, row_height and column_width (auto fits them to the text) "
     "and trust that reply; never export or convert a copy to look at it. Change a layout only when the person asks "
@@ -171,6 +172,46 @@ def _arabic(text):
 
 def sheets_step(inp):
     return {"tool_name": "Sheets", "step": inp.get("intent") or inp.get("path") or ""}
+
+
+# print_sheet: the one call for "make this print well". A tool of its own, not only an action of `sheets`: a model
+# reaches for a tool named for the job, and one asked for a print-ready sheet otherwise formatted it by hand, a
+# hundred ops over seven edits checked against PDFs (2.5 minutes, where this is a few seconds).
+PRINT_SHEET_TOOL = {
+    "name": "print_sheet",
+    "description": (
+        "Make an Excel workbook (.xlsx) print well, in one call: for a sheet that should print on one page, look "
+        "professional or be ready to print. It finds the title and header rows, puts the table in one font with a "
+        "coloured header, borders and banded rows (style clean; keep leaves fonts and colours as they are), shares the "
+        "page's width over the columns and sizes the rows to their text, turns the paper and fits the sheet to one "
+        "page, keeps every picture its size and every value as it is, then writes the PDF beside the workbook and opens "
+        "it. Call it straight away, with no read first, and once: its reply is final."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "The .xlsx file in the workspace, e.g. attachments/register.xlsx"},
+            "sheet": {"type": "string", "description": "The sheet (the first when left out)"},
+            "style": {"type": "string", "enum": ["clean", "keep"], "description": "clean (default) or keep"},
+            "color": {"type": "string", "description": "The header's colour, #RRGGBB (a deep blue when left out)"},
+            "font": {"type": "string", "description": "The table's font (the workbook's when left out)"},
+            "size": {"type": "number", "description": "The text's size in points (10 when left out)"},
+            "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"]},
+            "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "Left out: whichever prints larger"},
+            "header": {"type": "string", "description": "The header rows, e.g. 2:3 (found when left out)"},
+        },
+        "required": ["path"],
+    },
+}
+
+
+def print_step(inp):
+    return {"tool_name": "Sheets", "step": "Making it ready to print"}
+
+
+async def exec_print_sheet(inp, workspace, ctx=None):
+    return await exec_sheets({**inp, "action": "print", "target": inp.get("sheet") or inp.get("target"), "ops": []},
+                             workspace, ctx)
 
 
 def _err(message):
@@ -344,7 +385,11 @@ async def exec_sheets(inp, workspace, ctx=None):
             printed = await export_pdf(workspace, path, rel, "workbook")
             if not isinstance(printed, dict):
                 return f"{edited['_model']}\n{printed}"
-            return {"_model": f"{edited['_model']}\n{printed['_model']}", "_ui": printed["_ui"]}
+            final = ("This is final; there is nothing to check or redo. The person prints the PDF, or the workbook "
+                     "itself (its page is set). To change the font or the colours they select the table in Cycls Sheets "
+                     "and pick a font, or the header rows and a fill colour: the table is in one font and the header in "
+                     "one colour, so one change is enough.")
+            return {"_model": f"{edited['_model']}\n{printed['_model']}\n{final}", "_ui": printed["_ui"]}
 
         if action == "export":
             return await export_pdf(workspace, path, rel, "workbook")
