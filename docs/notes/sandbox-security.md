@@ -41,7 +41,13 @@ bwrap --ro-bind / /
       -- bash -c <command>
 ```
 
-Launched via `asyncio.create_subprocess_exec(..., env={"PATH": ..., "LANG": ...})`.
+Launched via `asyncio.create_subprocess_exec(..., env={"PATH": ..., "LANG": ...})`, stdin from `/dev/null`, in its own
+process group (`start_new_session`). A timeout, a cancel (Stop, a run ending) or the command's own end sends
+SIGKILL to the whole group, so nothing it started outlives it or holds its pipe (2026-11-26; before, only bwrap
+was killed and a child kept the call waiting). A process that calls `setsid` still escapes: there is no PID
+namespace. `pip` inside is a stand-in (`tools/shims/pip`) that stops an install once it has put more than
+`CYCLS_PIP_LIMIT_MB` (50) in `/tmp`, memory the container shares: a guard against crashes, not a boundary
+(`python -m pip` goes around it).
 
 Key properties:
 
@@ -175,8 +181,11 @@ When auditing new sandbox changes, test `/proc/1/environ` specifically, not just
 
 Tests split across `tests/app/sandbox_test.py` (sandbox-level) and `tests/agent/harness_test.py` (tool-level):
 
-- **Argv-level (always run, in `sandbox_test.py`):** assert the flags we depend on are present — `--unshare-user`, `--unshare-net` when `network=False`, `--clearenv`, `--die-with-parent`, only safe env via `--setenv` (PATH/HOME/TERM/LANG/LD_PRELOAD), explicit `env=` on `subprocess_exec`, `_blockmeta.so` ro-bind + LD_PRELOAD set.
+- **Argv-level (always run, in `sandbox_test.py`):** assert the flags we depend on are present — `--unshare-user`, `--unshare-net` when `network=False`, `--clearenv`, `--die-with-parent`, only safe env via `--setenv` (PATH/HOME/TERM/LANG/LD_PRELOAD, the trash paths, the pip limit and fixed no-prompt switches), explicit `env=` on `subprocess_exec`, `_blockmeta.so` ro-bind + LD_PRELOAD set.
 - **Live — bwrap environ leak (skipped off-container):** plant a sentinel env var, verify *bwrap's own* `/proc/<pid>/environ` is clean. Skipped on hosts where `--ro-bind / /` blocks creating `/workspace`.
 - **Live — metadata block:** with `network=True`, assert `curl http://169.254.169.254/...` fails fast with "Couldn't connect" (libc connect → ECONNREFUSED via shim). Prevents future regressions where someone edits `_blockmeta.c` and forgets to rebuild — stale `.so` would still bind-mount fine but stop blocking.
 
-When touching the sandbox layer, run all three and — if the live tests skip on your dev host — bring up a deployed container (`docker exec` into the running cycls agent) and verify there.
+- **Processes (always run):** behind a `bwrap` that runs the command as is, a timed-out command stops all it started
+  and keeps what it printed; a child left running does not hold the call; output comes in order with its exit code.
+
+When touching the sandbox layer, run all of these and — if the live tests skip on your dev host — bring up a deployed container (`docker exec` into the running cycls agent) and verify there.

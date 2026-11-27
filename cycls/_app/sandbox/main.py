@@ -2,6 +2,8 @@
 chain methods deviate via last-flag-wins."""
 import asyncio
 import importlib.resources
+import os
+import signal
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple, Optional
 
@@ -70,24 +72,41 @@ class Sandbox:
             s = s._add("--setenv", k, str(v))
         return s
 
-    async def run(self, argv: list[str], env: Optional[dict] = None) -> SandboxResult:
+    async def run(self, argv: list[str], env: Optional[dict] = None, *, merge: bool = False,
+                  cap: Optional[int] = None) -> SandboxResult:
+        """`merge`: stderr joins stdout as written, in order (`stderr` comes back empty). `cap`: past it, a stream
+        keeps its start and its latest bytes, so a flood can't fill the server's memory. A timeout, a cancel or the
+        command's end stops everything it started, in its own process group; what it printed is kept."""
         bwrap_argv = ["bwrap", *self._args]
         if not self._network:
             bwrap_argv.append("--unshare-net")
         bwrap_argv += ["--", *argv]
         proc = await asyncio.create_subprocess_exec(
-            *bwrap_argv, env=env,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            *bwrap_argv, env=env, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT if merge else asyncio.subprocess.PIPE, start_new_session=True,
         )
+        out, err = bytearray(), bytearray()
+        pumps = [asyncio.ensure_future(_drain(s, b, cap)) for s, b in ((proc.stdout, out), (proc.stderr, err)) if s]
+
+        async def exited():   # the command, not its pipes: a child it left running holds those open
+            while proc.returncode is None:
+                await asyncio.sleep(0.02)
         timed_out = False
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            await asyncio.wait_for(exited(), timeout=self._timeout)
         except asyncio.TimeoutError:
-            timed_out = True; proc.kill()
-            try: stdout, stderr = await proc.communicate()
-            except Exception: stdout, stderr = b"", b""
-        except asyncio.CancelledError:
-            proc.kill()   # a stopped run must not leave its command running
-            raise
+            timed_out = True
+        finally:
+            try: os.killpg(proc.pid, signal.SIGKILL)
+            except OSError: pass   # the group is already gone
+        await asyncio.wait(pumps, timeout=2)   # what it printed, without waiting on a pipe something escaped holds
+        for p in pumps: p.cancel()
         code = proc.returncode if proc.returncode is not None else -1
-        return SandboxResult(stdout, stderr, code, timed_out)
+        return SandboxResult(bytes(out), bytes(err), code, timed_out)
+
+
+async def _drain(stream, buf, cap=None):
+    while chunk := await stream.read(1 << 16):
+        buf += chunk
+        if cap and len(buf) > 2 * cap:   # keep the first half-cap and the latest half-cap, and say so
+            buf[cap // 2: len(buf) - cap // 2] = b"\n... (truncated) ...\n"

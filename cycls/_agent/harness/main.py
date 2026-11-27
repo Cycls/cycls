@@ -488,7 +488,7 @@ async def _settled(task, wait):
 
 async def _run(*, context, system="", tools=None, allowed_tools=[],
                model="anthropic/claude-sonnet-4-20250514", max_tokens=None,
-               bash_timeout=600, bash_network=True, client=None,
+               bash_timeout=120, bash_network=True, client=None,
                base_url=None, api_key=None, headers=None, handlers=None, mcp_servers=None,
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,

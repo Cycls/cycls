@@ -1,22 +1,32 @@
 """Sandbox argv + bwrap behavior tests."""
 import asyncio
+import os
 import shutil
-from unittest.mock import AsyncMock, MagicMock, patch
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
+from cycls._agent import tools
 from cycls._agent.tools import _exec_bash
 
 
+def _proc(out=b"ok", code=0):
+    """What `Sandbox.run` reads of a process: its output and return code (None: still running). No such group."""
+    stdout = asyncio.StreamReader()
+    stdout.feed_data(out)
+    stdout.feed_eof()
+    return SimpleNamespace(pid=2**22 + 7, returncode=code, stdout=stdout, stderr=None)
+
+
 def _capture_bash_exec(tmp_path, **kwargs):
-    mock_proc = MagicMock()
-    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
     captured = {}
 
     async def fake_exec(*args, **kw):
         captured["argv"] = args
         captured["kwargs"] = kw
-        return mock_proc
+        return _proc()
 
     with patch("asyncio.create_subprocess_exec", fake_exec):
         asyncio.run(_exec_bash("echo", str(tmp_path), **kwargs))
@@ -31,19 +41,7 @@ def test_bash_sandbox_hides_db(tmp_path):
     """_exec_bash argv must tmpfs-overlay /workspace/.db so the sandboxed shell
     can't read DB internals (defense in depth; editor tools also reject
     .db/ via _resolve_path)."""
-    mock_proc = MagicMock()
-    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
-
-    captured = {}
-
-    async def fake_exec(*args, **kwargs):
-        captured["argv"] = args
-        return mock_proc
-
-    with patch("asyncio.create_subprocess_exec", fake_exec):
-        asyncio.run(_exec_bash("echo", str(tmp_path)))
-
-    argv = captured["argv"]
+    argv = _capture_bash_argv(tmp_path)
     assert "--tmpfs" in argv
     indices = [i for i, a in enumerate(argv) if a == "--tmpfs"]
     assert any(argv[i + 1] == "/workspace/.db" for i in indices), \
@@ -100,12 +98,15 @@ def test_bash_sandbox_clearenv(tmp_path):
 
 
 def test_bash_sandbox_forwards_only_safe_env(tmp_path):
-    """Only PATH / HOME / TERM / LANG / LD_PRELOAD and the two fixed trash
-    paths (CYCLS_WORKSPACE / CYCLS_TRASH, constants the rm shim reads) may be
-    forwarded via --setenv. LD_PRELOAD is the metadata-block shim path;
-    everything else risks leaking a secret the caller forgot to strip."""
+    """Only PATH / HOME / TERM / LANG / LD_PRELOAD, the two fixed trash
+    paths (CYCLS_WORKSPACE / CYCLS_TRASH, constants the rm shim reads), the pip
+    stand-in's size limit and the fixed switches that keep a command off prompts
+    may be forwarded via --setenv.
+    LD_PRELOAD is the metadata-block shim path; everything else risks leaking a
+    secret the caller forgot to strip."""
     argv = _capture_bash_argv(tmp_path)
-    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD", "CYCLS_WORKSPACE", "CYCLS_TRASH"}
+    safe = {"PATH", "HOME", "TERM", "LANG", "LD_PRELOAD", "CYCLS_WORKSPACE", "CYCLS_TRASH", "CYCLS_PIP_LIMIT_MB", "PYTHONUNBUFFERED",
+            "PIP_NO_INPUT", "PIP_NO_CACHE_DIR", "PIP_DISABLE_PIP_VERSION_CHECK", "DEBIAN_FRONTEND", "GIT_TERMINAL_PROMPT"}
     forwarded = {argv[i + 1] for i, a in enumerate(argv) if a == "--setenv"}
     assert forwarded <= safe, f"unexpected env forwarded: {forwarded - safe}"
 
@@ -208,3 +209,117 @@ def test_bash_sandbox_bind_targets_ship_in_the_image(tmp_path):
     baked = " ".join(Agent._base_run).split()
     for t in targets - {"/", "/workspace"}:
         assert t.startswith(("/workspace/", "/tmp/", "/skills/")) or t in baked, t
+
+
+# ---- a command's life: real processes, behind a `bwrap` that runs the command as is ----
+
+@pytest.fixture
+def plain_bwrap(tmp_path_factory, monkeypatch):
+    """Isolation is tested above and live; here, what Sandbox.run does with the processes, on any host."""
+    d = tmp_path_factory.mktemp("bin")
+    (d / "bwrap").write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n')
+    (d / "bwrap").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{d}:{os.environ['PATH']}")
+
+
+def _gone(pid, within=3.0):
+    end = time.monotonic() + within
+    while time.monotonic() < end:
+        try: os.kill(pid, 0)
+        except ProcessLookupError: return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_timed_out_command_stops_all_it_started_and_keeps_what_it_printed(tmp_path, plain_bwrap):
+    """It killed bwrap alone: a child it started held the pipe and the call returned when the child did (34 min
+    once, on a 120 s limit). What the command printed was dropped."""
+    started = time.monotonic()
+    out = asyncio.run(_exec_bash(f"echo started; sleep 60 & echo $! > {tmp_path}/child; sleep 60", str(tmp_path), timeout=1))
+    assert time.monotonic() - started < 5
+    assert out.startswith("Error: timed out after 1s") and out.endswith("started")
+    assert _gone(int((tmp_path / "child").read_text()))
+
+
+def test_a_child_left_running_does_not_hold_the_call(tmp_path, plain_bwrap):
+    started = time.monotonic()
+    out = asyncio.run(_exec_bash(f"sleep 60 & echo $! > {tmp_path}/child; echo done", str(tmp_path), timeout=30))
+    assert time.monotonic() - started < 5 and out.startswith("done\n[exit 0 · ")
+    assert _gone(int((tmp_path / "child").read_text()))
+
+
+def test_output_comes_in_order_with_its_exit_code_and_nothing_waits_on_input(tmp_path, plain_bwrap):
+    out = asyncio.run(_exec_bash("echo a; echo b >&2; read x; echo c$x; exit 3", str(tmp_path), timeout=10))
+    assert out.splitlines()[:3] == ["a", "b", "c"] and out.splitlines()[-1].startswith("[exit 3 · ")
+
+
+def test_a_command_asks_for_at_most_five_minutes_unless_the_agent_allows_more(monkeypatch):
+    seen = []
+    async def run(command, cwd, timeout, **_): seen.append(timeout)
+    monkeypatch.setattr(tools, "_exec_bash", run)
+    ws = SimpleNamespace(root="/tmp")
+    for asked, default in ((3_600_000, 120), (30_000, 120), (None, 120), (3_600_000, 900)):
+        asyncio.run(tools._run_bash({"command": "x", "timeout": asked}, ws, timeout=default, network=False))
+    assert seen == [300, 30, 120, 900]
+
+
+def _shim(name):
+    """A stand-in from the sandbox's shim folder, loaded as a module."""
+    import importlib.machinery, importlib.util, pathlib
+    path = pathlib.Path(tools.__file__).parent / "shims" / name
+    loader = importlib.machinery.SourceFileLoader(f"shim_{name}", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def test_pip_is_stopped_once_its_download_passes_the_limit(monkeypatch, capsys):
+    """/tmp is memory every chat on the container shares: torch's 3 GB crashed containers. Stopped at 50 MB."""
+    pip = _shim("pip")
+    filled = iter([0, 20e6, 60e6])
+    monkeypatch.setattr(pip, "used", lambda: next(filled))
+    monkeypatch.setattr(pip.time, "sleep", lambda s: None)
+
+    class Download:   # runs until stopped
+        returncode = None
+        def poll(self): return self.returncode
+        def kill(self): self.returncode = -9
+        def wait(self): return self.returncode
+    monkeypatch.setattr(pip.subprocess, "Popen", lambda argv: Download())
+    assert pip.main(["install", "torch"]) == 1
+    err = capsys.readouterr().err
+    assert "pip: stopped" in err and '"packages": ["torch"], "mb": 60.0, "installed": false' in err
+
+
+def test_a_note_anything_could_print_sets_only_the_pip_fields(tmp_path, monkeypatch):
+    rows = []
+    monkeypatch.setattr(tools, "log", lambda level, **f: rows.append((level, f)))
+    out = '[cycls-pip] {"packages": ["a"], "mb": 1, "installed": true, "user": "someone"}\n[cycls-pip] {"level": 1}\nhi'
+
+    async def fake_exec(*args, **kw): return _proc(out.encode())
+    with patch("asyncio.create_subprocess_exec", fake_exec):
+        shown = asyncio.run(_exec_bash("x", str(tmp_path)))
+    assert rows == [("pip", {"packages": ["a"], "mb": 1.0, "installed": True})]
+    assert shown.startswith("hi\n[exit 0")
+
+
+def test_a_flood_of_output_keeps_its_start_and_end_not_all_of_it(tmp_path, plain_bwrap):
+    """Held whole, a print loop could fill the server's memory in seconds and take every chat on it down."""
+    from cycls._agent.tools import MAX_OUTPUT
+    out = asyncio.run(_exec_bash("echo START; head -c 30000000 /dev/zero | tr '\\0' x; echo; echo END", str(tmp_path), timeout=30))
+    assert out.startswith("START") and "(truncated)" in out and out.splitlines()[-2] == "END"
+    assert len(out) < MAX_OUTPUT + 100
+
+
+def test_a_cut_flood_always_says_so():
+    """Cut on its last chunk, a flood came back exactly at the limit and the tool added no marker: start and end read
+    as if joined."""
+    from cycls._app.sandbox.main import _drain
+    async def go():
+        stream, buf = asyncio.StreamReader(), bytearray()
+        stream.feed_data(b"a" * 15 + b"b" * 10)
+        stream.feed_eof()
+        await _drain(stream, buf, cap=10)
+        return bytes(buf)
+    assert asyncio.run(go()) == b"aaaaa\n... (truncated) ...\nbbbbb"

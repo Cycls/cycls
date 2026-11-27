@@ -716,24 +716,26 @@ def test_multiple_tool_calls_all_get_results(agent_env):
 # Bash timeout tests (_exec_bash directly)
 # ---------------------------------------------------------------------------
 
+def _proc(out=b"", code=0):
+    """What `Sandbox.run` reads of a process: its output and return code (None: still running). No such group."""
+    stdout = asyncio.StreamReader()
+    stdout.feed_data(out)
+    stdout.feed_eof()
+    return types.SimpleNamespace(pid=2**22 + 7, returncode=code, stdout=stdout, stderr=None)
+
+
 def test_exec_bash_returns_error_on_timeout(tmp_path):
     """_exec_bash must return a timeout error string when the process hangs."""
     ws = str(tmp_path / "workspace")
     Path(ws).mkdir()
 
-    mock_proc = MagicMock()
-    mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-    mock_proc.kill = MagicMock()
-
     async def run():
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
-            return await _exec_bash("sleep 60", ws, timeout=5)
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_proc(b"halfway", None))):   # never exits
+            return await _exec_bash("sleep 60", ws, timeout=0.2)
 
     result = asyncio.run(run())
 
-    assert "timed out" in result
-    assert "5s" in result
-    mock_proc.kill.assert_called_once()
+    assert result.startswith("Error: timed out after 0.2s") and result.endswith("halfway")
 
 
 # ---------------------------------------------------------------------------
@@ -746,13 +748,9 @@ def test_exec_bash_truncates_large_output(tmp_path):
     Path(ws).mkdir()
 
     big_output = ("x" * (MAX_OUTPUT + 10000)).encode()
-    mock_proc = MagicMock()
-    mock_proc.communicate = AsyncMock(return_value=(big_output, b""))
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock()
 
     async def run():
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc)):
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_proc(big_output))):
             return await _exec_bash("echo big", ws)
 
     result = asyncio.run(run())

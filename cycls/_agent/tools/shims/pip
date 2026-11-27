@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""`pip` inside the agent sandbox: the real pip, stopped once what it has put in /tmp passes CYCLS_PIP_LIMIT_MB
+(default 50). /tmp is memory the container shares with every chat on it, and a few big installs were what
+crashed containers."""
+import json, os, subprocess, sys, time
+
+
+def used():
+    s = os.statvfs(os.environ.get("TMPDIR") or "/tmp")
+    return (s.f_blocks - s.f_bfree) * s.f_frsize
+
+
+def main(argv):
+    limit = float(os.environ.get("CYCLS_PIP_LIMIT_MB") or 50) * 1e6
+    start, peak = used(), 0
+    pip = subprocess.Popen([sys.executable, "-m", "pip", *argv])
+    while pip.poll() is None:
+        peak = max(peak, used() - start)
+        if peak > limit:
+            pip.kill()
+            pip.wait()
+            print(f"pip: stopped. The download passed {limit / 1e6:.0f} MB, this sandbox's limit: it lands in memory "
+                  f"every chat here shares. Use what is installed, a lighter package, or one of your tools.", file=sys.stderr)
+            break
+        time.sleep(0.2)
+    if "install" in argv:   # logged by the bash tool, not shown
+        names = [a for a in argv[argv.index("install") + 1:] if not a.startswith("-") and "/" not in a]
+        print("[cycls-pip] " + json.dumps({"packages": names, "mb": round(peak / 1e6, 1), "installed": pip.returncode == 0}),
+              file=sys.stderr)
+    return 1 if peak > limit else pip.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

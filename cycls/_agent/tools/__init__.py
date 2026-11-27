@@ -50,6 +50,10 @@ from ..office.sheets import SHEETS_PROMPT, SHEETS_TOOL, exec_sheets, sheets_step
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
 MAX_OUTPUT = 2_000_000   # memory ceiling; the loop spills anything large to .tmp/
+BASH_MAX = 300           # seconds a command may ask for (the default is the LLM's `.bash_timeout`, 120)
+_UNATTENDED = {"PYTHONUNBUFFERED": "1",   # a stopped command's output is not lost in a buffer
+               "PIP_NO_INPUT": "1", "PIP_NO_CACHE_DIR": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+               "DEBIAN_FRONTEND": "noninteractive", "GIT_TERMINAL_PROMPT": "0"}   # no prompt nobody answers
 READ_MAX = 50_000        # chars per read (~25k tokens) — attachments inline through read
 
 _IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
@@ -79,13 +83,13 @@ _BASH_TOOL = {
         "- Use the `edit` tool to create OR modify files — never `cat >`, `echo >`, heredocs, or `sed`/`awk`. Bash for files bypasses safety checks and blows the output-token budget on long content.\n"
         "- Always quote paths containing spaces with double quotes.\n"
         "- Large output is saved to `.tmp/` with a preview — analyse it with jq, rg or python.\n"
-        "- Default timeout is 600s; adjust via `timeout` parameter (milliseconds).\n"
+        "- Default timeout is 120s, at most 300s (`timeout`, in milliseconds). Split a longer job into steps.\n"
         "- Avoid destructive commands (`rm -rf`) unless the user explicitly asks.\n"
         "- When issuing multiple independent commands, send multiple bash tool calls in parallel rather than chaining with &&."
     ),
     "input_schema": {"type": "object", "properties": {
         "command": {"type": "string", "description": "The shell command to execute."},
-        "timeout": {"type": "integer", "description": "Timeout in milliseconds (default: 600000, max: 600000)."},
+        "timeout": {"type": "integer", "description": "Timeout in milliseconds (default: 120000, max: 300000)."},
         "description": {"type": "string", "description": "What this command does in 5 to 10 plain words, in the language of the person's latest message. They see it, so no code. Example: 'Convert the report to PDF', 'Count the rows in the sheet'."},
     }, "required": ["command", "description"]}
 }
@@ -477,7 +481,7 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
 
 # ---- Tool execution ----
 
-async def _exec_bash(command, cwd, timeout=600, network=False, catalog=None):
+async def _exec_bash(command, cwd, timeout=120, network=False, catalog=None):
     from cycls._app.sandbox import Sandbox
     path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     lang = os.environ.get("LANG", "C.UTF-8")
@@ -487,8 +491,8 @@ async def _exec_bash(command, cwd, timeout=600, network=False, catalog=None):
     trash_dir = os.path.join(cwd, trash.DIR)
     os.makedirs(trash_dir, exist_ok=True)
     shims = str(pathlib.Path(__file__).parent / "shims")
-    env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang,
-           "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT}
+    env = {"PATH": f"{SHIMS_MOUNT}:{path}", "LANG": lang, "CYCLS_WORKSPACE": "/workspace", "CYCLS_TRASH": TRASH_MOUNT,
+           "CYCLS_PIP_LIMIT_MB": os.environ.get("CYCLS_PIP_LIMIT_MB", "50"), **_UNATTENDED}
     sb = Sandbox().bind(cwd, "/workspace")
     for name in MANAGED:   # chats, memory, app data, secrets, settings…: each reached only by its own tool
         sb = sb.tmpfs(f"/workspace/{name}")
@@ -504,14 +508,23 @@ async def _exec_bash(command, cwd, timeout=600, network=False, catalog=None):
         for src, dst in binds:
             sb = sb.ro_bind(src, dst)
     # bwrap's own environ stays PATH/LANG; the trash vars reach only the inner shell (--setenv).
-    result = await sb.run(["bash", "-c", command], env={"PATH": env["PATH"], "LANG": lang})
-    if result.timed_out:
-        return f"Error: Command timed out after {timeout}s"
+    started = time.monotonic()
+    result = await sb.run(["bash", "-c", command], env={"PATH": env["PATH"], "LANG": lang}, merge=True, cap=MAX_OUTPUT)
     out = result.output
+    for note in re.findall(r"^\[cycls-pip\] (.+)$", out, re.M)[:5]:   # the pip stand-in's word: logged, not shown
+        try:   # anything can print this line, so it sets three fields and no others
+            d = json.loads(note)
+            log("pip", packages=[str(p)[:80] for p in d["packages"][:20]], mb=float(d["mb"]), installed=bool(d["installed"]))
+        except (ValueError, KeyError, TypeError): pass
+    out = re.sub(r"^\[cycls-pip\] .*\n?", "", out, flags=re.M)
     if len(out) > MAX_OUTPUT:
         h = MAX_OUTPUT // 2
         out = out[:h] + "\n... (truncated) ...\n" + out[-h:]
-    return out.strip() or "(no output)"
+    out = out.strip() or "(no output)"
+    if result.timed_out:
+        return (f"Error: timed out after {timeout:g}s; the command and everything it started were stopped. "
+                f"Split the work or make it faster. What it printed:\n{out}")
+    return f"{out}\n[exit {result.code} · {time.monotonic() - started:.1f}s]"
 
 async def _exec_web_search(inp):
     """Brave web search — one call, native-parity. Each result carries its
@@ -1090,8 +1103,9 @@ class Tool(NamedTuple):
 
 
 def _run_bash(inp, workspace, *, timeout, network, ctx=None, **_):
-    t = inp.get("timeout")
-    run = _exec_bash(inp.get("command", ""), workspace.root, timeout=t / 1000 if t else timeout, network=network,
+    if isinstance(t := inp.get("timeout"), (int, float)) and t > 0:   # milliseconds, at most BASH_MAX (or a longer default)
+        timeout = min(t / 1000, max(BASH_MAX, timeout))
+    run = _exec_bash(inp.get("command", ""), workspace.root, timeout=timeout, network=network,
                      catalog=getattr(ctx, "skills", None))
     if not getattr(ctx, "office", None):
         return run

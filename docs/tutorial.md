@@ -615,7 +615,7 @@ async for ev in llm.run(context=context):
 | `.vision(bool)` | Whether the model accepts base64 media (images, PDFs). Default on; pass `False` for text-only models (GLM, most local); attachments then stay in the workspace and the model gets a note naming the file, instead of the provider rejecting the request |
 | `.web_search(mode)` | `"brave"` (default, any model, needs `BRAVE_API_KEY`) or `"native"` (Anthropic server-side) |
 | `.mcp(*servers)` | Remote MCP servers via `cycls.MCP` (Anthropic models only) |
-| `.bash_timeout(secs)` | Bash sandbox timeout |
+| `.bash_timeout(secs)` | Bash sandbox timeout (default 120 s; a command may ask for up to 300) |
 | `.sandbox(network=False)` | Cut bash off from the network (`curl`, `pip`, `git`). Default on |
 | `.base_url(url)` | Custom endpoint (Groq, vLLM, HUMAIN, self-hosted) |
 | `.api_key(key)` | Override API key |

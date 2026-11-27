@@ -35,7 +35,7 @@ class LLM:
         self._max_tokens = None   # None = 8k default
         self._context = None      # None = 1M default
         self._price = None
-        self._bash_timeout = 600
+        self._bash_timeout = 120
         self._bash_network = True
         self._base_url = None
         self._api_key = None
