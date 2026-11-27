@@ -56,6 +56,18 @@ def _states(client, h=None):
     return {a["slug"]: a["state"] for a in client.get("/apps/catalog", headers=h or {}).json()["apps"]}
 
 
+def test_bundles_are_looked_for_by_name_and_held_a_minute(shelf, monkeypatch):
+    """Each look is a call over the volume: only the apps the CMS names are looked for, a name that is no slug never,
+    and what was found holds for a minute."""
+    from cycls._agent import catalog
+    assert list(catalog.bundles(shelf, ["tasks", "nope", "..", "broken", 7])) == ["tasks"]
+    assert list(catalog.bundles(shelf)) == ["crm", "tasks"]
+    _bundle(shelf, "notes")
+    assert list(catalog.bundles(shelf)) == ["crm", "tasks"]
+    monkeypatch.setattr(catalog, "FOUND_FOR", -1)
+    assert list(catalog.bundles(shelf)) == ["crm", "notes", "tasks"]
+
+
 def test_a_workspace_installs_a_bundle_as_build_app_lands_an_app(tmp_path, shelf):
     client, vol = _client(tmp_path, shelf)
     listed = client.get("/apps/catalog").json()

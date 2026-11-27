@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -12,6 +13,8 @@ from urllib.parse import quote
 STAMP = "catalog"   # an installed app's app.json: the {version, at, shipped} of the bundle it came from
 LOOKS = ("classic", "ocean", "palm", "sand", "rose", "custom")
 _versions = {}      # (path, mtime, size) -> hash: a bundle on a volume is read again only once it changed
+FOUND_FOR = 60      # seconds a folder's bundles are taken as read: one put on the volume shows within a minute
+_found = {}         # (folder, slugs looked for) -> (when, slug -> its folder)
 
 
 def _manifest(path):
@@ -22,10 +25,18 @@ def _manifest(path):
         return {}
 
 
-def bundles(folder):
-    """slug -> its folder, for each one with an index.html."""
-    folder = Path(folder)
-    return {d.name: d for d in sorted(folder.iterdir()) if (d / "index.html").is_file()} if folder.is_dir() else {}
+def bundles(folder, slugs=None):
+    """slug -> its folder, for each one with an index.html: among `slugs` (the ones the CMS names), else all of them.
+    Every look is a call over the volume, so what was found holds for FOUND_FOR."""
+    key = (str(folder), None if slugs is None else tuple(slugs))
+    at, found = _found.get(key, (float("-inf"), {}))
+    if time.monotonic() - at > FOUND_FOR:
+        folder = Path(folder)
+        names = slugs if slugs is not None else sorted(d.name for d in folder.iterdir()) if folder.is_dir() else ()
+        found = {s: folder / s for s in names if isinstance(s, str) and re.fullmatch(r"[\w-]+", s)
+                 and (folder / s / "index.html").is_file()}
+        _found[key] = (time.monotonic(), found)
+    return found
 
 
 def version(bundle):
@@ -50,6 +61,13 @@ def _shipped(slug, copy):
     svg = copy.get("icon") or ""
     return {"name": copy["title"]["en"] or copy["title"]["ar"] or slug, "name_ar": copy["title"]["ar"],
             **({"icon": f"data:image/svg+xml;utf8,{quote(svg)}"} if svg.startswith("<svg") else {})}
+
+
+def states(root, rows, found):
+    """Each row's state in one workspace, its apps/ listed once rather than asked after slug by slug."""
+    apps = Path(root) / "apps"
+    have = {p.name for p in apps.iterdir()} if apps.is_dir() else set()
+    return [state(root, a["slug"], found[a["slug"]], a) if a["slug"] in have else "available" for a in rows]
 
 
 def state(root, slug, bundle, copy):

@@ -1381,8 +1381,8 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
     read = {"at": 0.0, "rows": []}
 
     async def offered():
-        found = await asyncio.to_thread(catalog.bundles, folder)
         if not cms.get("apps"):
+            found = await asyncio.to_thread(catalog.bundles, folder)
             return found, [catalog.own_copy(s, b) for s, b in found.items()]
         if time.monotonic() - read["at"] > EXAMPLES_TTL:
             read["at"] = time.monotonic()
@@ -1390,19 +1390,20 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
                 read["rows"] = (await _cms_get(cms["apps"], cms.get("token"))).get("apps") or []
             except Exception as e:
                 log("warn", chat_id=None, message=f"apps: the CMS read failed: {type(e).__name__}: {e}")
+        found = await asyncio.to_thread(catalog.bundles, folder, [a["slug"] for a in read["rows"] if a.get("slug")])
         return found, [{**a, "picture": urljoin(cms["apps"], a["picture"]) if a.get("picture") else ""}
                        for a in read["rows"] if a.get("slug") in found]
 
     @r.get("/apps/catalog")
     async def listing(ws: Workspace = ws_dep, user: Any = user_dep):
         found, rows = await offered()
-        states = await asyncio.to_thread(lambda: [catalog.state(ws.root, a["slug"], found[a["slug"]], a) for a in rows])
+        states = await asyncio.to_thread(catalog.states, ws.root, rows, found)
         return {"admin": await _admin(cycls_app, user, ws, volume, base), "apps": [{**a, "state": s} for a, s in zip(rows, states)]}
 
     @r.get("/apps/catalog/{slug}/preview")
     async def preview(slug: str, ws: Workspace = ws_dep):
         """The bundle as it ships, which the canvas runs with no bridge: it shows its own example data."""
-        found = await asyncio.to_thread(catalog.bundles, folder)
+        found, _ = await offered()
         if slug not in found:
             raise HTTPException(status_code=404, detail="No such app")
         return FileResponse(found[slug] / "index.html", media_type="text/html", headers={"Cache-Control": "no-store"})
