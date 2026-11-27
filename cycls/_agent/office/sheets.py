@@ -188,7 +188,7 @@ PRINT_SHEET_TOOL = {
         "it. In a workbook of several sheets it lays out the one holding the table (not a guide or instructions sheet) "
         "and prints that sheet; a form's rows still waiting for entries are left out. Call it straight away, with no read "
         "first, and once: its reply is final, and the PDF is open (no canvas call). Give it only the path and what the "
-        "person asked for (a sheet, a font, a colour, a paper); it finds the rest itself."
+        "person asked for (a sheet, a font, a colour, a paper); it finds the rest itself, the paper's orientation included."
     ),
     "input_schema": {
         "type": "object",
@@ -200,15 +200,16 @@ PRINT_SHEET_TOOL = {
             "font": {"type": "string", "description": "Only a font the person asked for"},
             "size": {"type": "number", "description": "Only a text size the person asked for, in points"},
             "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"], "description": "Only a paper the person named"},
-            "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "Only when the person asked for one"},
         },
         "required": ["path"],
     },
 }
 
 # What print_sheet passes on. The header rows are not among them: the model has not read the workbook, so rows it
-# names are a guess, and one guessed rows 3-4 where the header was 2-3, painting the first data row as a header.
-_PRINT_SHEET_KEYS = ("path", "style", "color", "font", "size", "paper", "orientation")
+# names are a guess, and one guessed rows 3-4 where the header was 2-3, painting the first data row as a header. Nor
+# the orientation: print_ready turns the paper whichever way prints larger, and a model that set landscape on a tall
+# form printed it on two pages where portrait fits one (one set by the person is page_setup's, after).
+_PRINT_SHEET_KEYS = ("path", "style", "color", "font", "size", "paper")
 
 
 def print_step(inp):

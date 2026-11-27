@@ -499,10 +499,11 @@ def test_print_sheet_passes_no_guessed_header(monkeypatch, tmp_path):
         return httpx.Response(200, content=b"%PDF-1.7 printed")
 
     _mock(monkeypatch, handler)
-    asyncio.run(sheets.exec_print_sheet({"path": "b.xlsx", "header": "3:4", "target": "A1", "paper": "A4", "style": "clean"},
+    asyncio.run(sheets.exec_print_sheet({"path": "b.xlsx", "header": "3:4", "target": "A1", "paper": "A4", "style": "clean",
+                                         "orientation": "landscape"},
                                         _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
     assert seen == [[{"op": "print_ready", "style": "clean", "paper": "A4"}]]
-    assert "header" not in sheets.PRINT_SHEET_TOOL["input_schema"]["properties"]
+    assert not {"header", "orientation"} & set(sheets.PRINT_SHEET_TOOL["input_schema"]["properties"])
 
 
 def test_print_sheet_prints_the_sheet_it_laid_out(monkeypatch, tmp_path):
