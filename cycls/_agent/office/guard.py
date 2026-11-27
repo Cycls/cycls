@@ -17,7 +17,9 @@ _EXT = r"\.(?:docx|xlsx|xlsm)"
 # A path in quotes (spaces and Arabic allowed), or a bare one (no spaces or shell punctuation).
 _QUOTED = re.compile(r"""(['"])([^'"\n]*?""" + _EXT + r""")\1""", re.I)
 _BARE = re.compile(r"""(?<![\w./*?-])([^\s'"`;|&<>()=,\[\]{}]+""" + _EXT + r""")(?![\w.])""", re.I)
-_SCRIPT = re.compile(r"""(?:(['"])([^'"\n]+\.py)\1|(?<![\w./-])([^\s'"`;|&<>()=,]+\.py)(?![\w.]))""")
+# A script the command runs with Python: one it only searches, copies or prints (rg, cp, sed on build.py) opens
+# nothing, yet was read as if run — a third of the refusals in 746 chats (2026-11-26).
+_SCRIPT = re.compile(r"""\bpython(?:3(?:\.\d+)?)?\s+(?:-\S+\s+)*(?:(['"])([^'"\n]+\.py)\1|([^\s'"`;|&<>()=,]+\.py)(?![\w.]))""")
 _CD = re.compile(r"""\bcd\s+(?:(['"])([^'"\n]+)\1|([^\s;&|]+))""")
 # What opens a Word or Excel file as a package, or writes one.
 _OPENS = re.compile(r"\b(?:unzip|zipinfo|zipfile|ZipFile|7za?|bsdtar|import\s+docx|from\s+docx|docx2txt|docx2python|"
@@ -107,16 +109,17 @@ def refusal(command: str, root, office, built=()) -> str | None:
         if tool in office and path.is_file() and str(path) not in built:
             rel = path.relative_to(Path(root).resolve()).as_posix()
             if tool == "docs":
-                return (f"Error: not run — {rel} is a Word document, and Word documents in the workspace are read with "
-                        "`docs` read and changed with `docs` edit, never opened with Bash (zip, python-docx, XML). "
+                return (f"Error: not run — {rel} is a Word document: read it with `docs` read, change it with `docs` "
+                        "edit, make its PDF with `docs` export; never with Bash (zip, python-docx, XML, LibreOffice). "
                         "`docs` keeps the file's lock, its versions and the person's open editor, and its reply "
                         "already shows the file as it now is. Copying, moving or listing it with Bash is fine; so is a "
                         "new Word file built under a name that is not taken.")
-            return (f"Error: not run — {rel} is an Excel workbook, and workbooks in the workspace are read with "
-                    "`sheets` read and changed with `sheets` edit, never opened with Bash (zip, openpyxl, XML). "
-                    "`sheets` keeps the file's lock, its versions and the person's open editor, and its reply already "
-                    "shows the changed cells. pandas.read_excel stays fine for analysing the data; copying, moving or "
-                    "listing it is fine; so is a new workbook built under a name that is not taken.")
+            return (f"Error: not run — {rel} is an Excel workbook: read it with `sheets` read, change it with `sheets` "
+                    "edit, make it print-ready with `print_sheet`, make its PDF with `sheets` export; never with Bash "
+                    "(zip, openpyxl, XML, LibreOffice). `sheets` keeps the file's lock, its versions and the person's "
+                    "open editor, and its reply already shows the changed cells. pandas.read_excel stays fine for "
+                    "analysing the data; copying, moving or listing it is fine; so is a new workbook built under a "
+                    "name that is not taken.")
     return None
 
 

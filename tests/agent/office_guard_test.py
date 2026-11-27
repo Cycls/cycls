@@ -118,3 +118,20 @@ def test_dispatch_remembers_what_bash_made(ws, monkeypatch):
     check = {"id": "b2", "name": "bash", "input": {"command": "python3 -c \"import zipfile; zipfile.ZipFile('out.docx').namelist()\""}}
     step, result = tools.dispatch(check, workspace, 60, ctx=ctx)
     assert step.get("ok") is not False and asyncio.run(result) == "saved"
+
+
+def test_a_script_only_searched_copied_or_read_opens_nothing(ws):
+    """rg, cp, sed or wc on a build script never run it: a third of the refusals in 746 chats were these."""
+    (ws / "build.py").write_text("from docx import Document\nDocument('docs-test/layout.docx').save('docs-test/layout.docx')\n")
+    for command in ("rg -n 'doc.save' build.py", "cp build.py .tmp/build2.py", "wc -l build.py; sed -n 1,40p build.py",
+                    "grep -n save build.py | head", "cat build.py"):
+        assert guard.refusal(command, ws, DOCS) is None, command
+    assert guard.refusal("python3 build.py", ws, DOCS)
+    assert guard.refusal("cd . && python -u build.py", ws, DOCS)
+
+
+def test_a_refusal_names_the_action_for_what_was_tried(ws):
+    word = guard.refusal("soffice --headless --convert-to pdf docs-test/layout.docx", ws, BOTH)
+    assert "`docs` export" in word and "LibreOffice" in word
+    book = guard.refusal("python3 -c \"import openpyxl; openpyxl.load_workbook('finance/budget.xlsx')\"", ws, BOTH)
+    assert "`print_sheet`" in book and "`sheets` export" in book
