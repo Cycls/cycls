@@ -1209,10 +1209,11 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         await db.delete(src)
 
     async def _drop_app_data(ws, metas):
-        """An app's rows outlive its folder until the trash entry goes for good."""
+        """An app's rows outlive its folder until the trash entry goes for good, unless an app of that name is
+        there again: the rows are its now."""
         db = state.apps_db(ws)
         for m in metas:
-            if m and m.get("kind") == "app":
+            if m and m.get("kind") == "app" and not (Path(ws.root) / m["path"]).exists():
                 await db.delete(state.app_shelf(m["path"].split("/")[1]))
 
     async def _trashed_chats(ws):

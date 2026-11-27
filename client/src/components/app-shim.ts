@@ -214,7 +214,10 @@ const SHIM = `<script>(function(){
   var themeListeners = [];
   function applyTheme(t){
     if (t !== 'dark' && t !== 'light') return;
-    try { document.documentElement.classList.toggle('dark', t === 'dark'); } catch (e) {}
+    try {
+      document.documentElement.classList.toggle('dark', t === 'dark');
+      if (document.documentElement.hasAttribute('data-theme')) document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
   }
   function changed(m){
     var keys = Array.isArray(m.keys) ? m.keys.map(String) : null;
@@ -383,6 +386,8 @@ const SHIM = `<script>(function(){
       remove: function(user, key){ return data({ op: 'delete', key: String(key), who: String(user) }); }
     },
     keys: async function(){ return Object.keys(await load()); },
+    // Puts text in the chat's message box for the person to send; the app never sends it.
+    ask: function(text){ send({ type: 'cycls:ask', text: String(text) }); return Promise.resolve(); },
     flush: flush,
     resize: function(h){ parent.postMessage({ type: 'cycls:resize', height: h }, '*'); }
   };

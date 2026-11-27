@@ -235,6 +235,9 @@ calls a function instead of hand-rolling the postMessage protocol.
 **`cycls.save(name, content)`** is the only way out of the folder, and it opens a host dialog every
 time. An app never holds standing permission to write elsewhere.
 
+**`cycls.ask(text)`** puts text in the chat's message box. The person sends it or not; an app never sends a
+message itself.
+
 **Forms are submitted by the shim.** The sandbox has no `allow-forms`, and the browser checks that
 flag *before* it fires `submit`, so until 2026-11-10 every `<form onSubmit>` in an app did nothing:
 react-hook-form, each shadcn form, any "Add" button inside a form. Adding `allow-forms` would let a
@@ -420,7 +423,7 @@ folder's lifecycle one step behind:
 |---|---|---|
 | delete app | → `.trash/<id>/` | untouched |
 | restore | ← back | untouched — the data reappears, **zero copies** |
-| purge entry / empty trash | gone | `remove_prefix(.apps/<slug>/)` |
+| purge entry / empty trash | gone | `remove_prefix(.apps/<slug>/)`, unless an app of that name is there again |
 | `build_app` on a slug with no folder | fresh | stale rows purged first |
 | rename app (`PATCH /files`) | moved | the shelf moves with it — O(N), admin-gated, rare |
 | delete workspace | gone | swept by `wipe_workspace`'s existing prefix removal |
@@ -504,7 +507,7 @@ turn end for a file the agent wrote.
 light after the person switched to dark, and apps grew their own toggles, saved under a key the route refuses
 (`u/theme`). The bridge now watches the `dark` class on the chat's `<body>` and posts `cycls:theme`; the shim
 sets the `dark` class on the app's `<html>` (what Tailwind's class-based dark mode and the kit read) at init and
-on every switch, and calls `cycls.onTheme` listeners. A reload gets the mode it is in now. Apps carry no toggle.
+on every switch, moves `data-theme` too when the app marks its mode with it, and calls `cycls.onTheme` listeners. A reload gets the mode it is in now. Apps carry no toggle.
 
 ## Who is using it
 

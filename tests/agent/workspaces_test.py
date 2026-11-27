@@ -652,6 +652,22 @@ def test_app_delete_and_purge_are_admin_only(tmp_path):
     assert client.get("/trash", headers=h).json() == []
 
 
+def test_emptying_the_trash_spares_the_rows_of_an_app_made_again_at_that_name(tmp_path):
+    client = _client(tmp_path)
+    ws_id = _mk_team(client)
+    from cycls._app.db import workspace as _workspace
+    app = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws=ws_id).root / "apps" / "crm"
+    h = {"X-Workspace": ws_id}
+    app.mkdir(parents=True)
+    (app / "index.html").write_text("<h1>old")
+    assert client.delete("/files/apps/crm", headers=h).status_code == 200
+    app.mkdir(parents=True)
+    (app / "index.html").write_text("<h1>new")
+    client.put("/apps/crm/data/deal", json={"v": 2}, headers=h)
+    assert client.delete("/trash", headers=h).status_code == 200
+    assert client.get("/apps/crm/data/deal", headers=h).json()["value"] == {"v": 2}
+
+
 def test_chat_delete_is_a_tombstone(tmp_path):
     client = _client(tmp_path)
     client.put("/chats/c1", json={"title": "Keep me"})

@@ -118,6 +118,12 @@ describe("the injected cycls api", () => {
     expect(api.ctx).toMatchObject({ theme: "dark" });
   });
 
+  it("asks by putting text in the chat's message box", async () => {
+    const { api, posted } = load("apps/burnup");
+    await api.ask("Plan the week");
+    expect(posted).toContainEqual({ type: "cycls:ask", text: "Plan the week" });
+  });
+
   it("announces itself until the host replies, naming its document", () => {
     const { posted } = load("apps/burnup");
     expect(posted[0]).toMatchObject({ type: "cycls:ready" });
@@ -497,7 +503,7 @@ describe("following the chat's light or dark mode", () => {
     const deliver = (data: unknown) => listeners.forEach((fn) => fn({ data }));
     return { api: win.cycls as { ctx: { theme?: string }; onTheme: (fn: (t: string) => void) => () => void }, deliver };
   }
-  afterEach(() => document.documentElement.classList.remove("dark"));
+  afterEach(() => { document.documentElement.classList.remove("dark"); document.documentElement.removeAttribute("data-theme"); });
 
   it("sets the dark class at init and on every switch, and tells the listeners", () => {
     const { api, deliver } = install();
@@ -512,6 +518,14 @@ describe("following the chat's light or dark mode", () => {
     deliver({ type: "cycls:theme", theme: "dark" });
     expect(heard).toEqual(["light"]);
     expect(document.documentElement.classList.contains("dark")).toBe(true);
+  });
+
+  it("moves data-theme too, for an app that marks its mode with it", () => {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const { deliver } = install();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "dark" });
+    deliver({ type: "cycls:theme", theme: "light" });
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 
   it("ignores a mode it does not know", () => {

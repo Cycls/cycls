@@ -300,6 +300,19 @@ describe("attachBridge", () => {
     expect(onResize.mock.calls.flat()).toEqual([120, 4000, 500]);
   });
 
+  it("puts an app's text in the message box, and nothing that is not text", async () => {
+    const { frame, contentWindow } = fakeFrame();
+    const composed: unknown[] = [];
+    const heard = (e: Event) => composed.push((e as CustomEvent).detail);
+    window.addEventListener("cycls:compose", heard);
+    detach = attachBridge({ frame, appPath: APP, readFile: async () => "" });
+    send(contentWindow, { type: MSG.ask, text: "Plan the week" });
+    send(contentWindow, { type: MSG.ask, text: 42 });
+    await settle();
+    window.removeEventListener("cycls:compose", heard);
+    expect(composed).toEqual([{ text: "Plan the week" }]);
+  });
+
   it("stops listening after detach", async () => {
     const { frame, sent, contentWindow } = fakeFrame();
     const off = attachBridge({ frame, appPath: APP, readFile: async () => "" });

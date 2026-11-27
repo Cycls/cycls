@@ -20,6 +20,7 @@ export const MSG = {
   listen: "cycls:listen",     // app -> host: it has a change listener, so tell it instead of reloading it
   changed: "cycls:changed",   // host -> app: its data changed (the agent, a teammate, another tab)
   theme: "cycls:theme",       // host -> app: the chat switched between light and dark
+  ask: "cycls:ask",           // app -> host: text for the message box, which the person sends or not
 } as const;
 
 // Window events the chat sends the open apps: the agent changed an app's data (the `app_data` tool
@@ -421,6 +422,11 @@ export function attachBridge({
       } catch (err) {
         fail(said(err));
       }
+      return;
+    }
+
+    if (msg.type === MSG.ask && typeof (msg as { text?: unknown }).text === "string") {
+      window.dispatchEvent(new CustomEvent("cycls:compose", { detail: { text: (msg as { text: string }).text.slice(0, 4000) } }));
       return;
     }
 
