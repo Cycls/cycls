@@ -2422,13 +2422,18 @@ def test_deck_route_adds_a_slide_and_keeps_a_slides_notes(tmp_path, monkeypatch)
     client = _ws_routers_client(tmp_path)
 
     r = client.post("/deck/designs/pitch.fig", json={"op": "add", "number": 2, "title": "شريحة جديدة", "text": "أضف نصك"})
-    assert r.status_code == 200 and r.json() == {"ok": True, "slides": 4, "added": 3}
+    assert r.status_code == 200
+    got = r.json()
+    # The new slide, and the edit an editor open on the deck makes to have it too (no room took it: none here).
+    assert {k: got[k] for k in ("ok", "slides", "added", "script")} == {"ok": True, "slides": 4, "added": 3, "script": "S"}
+    assert got["version"] and "live" not in got
     [op] = seen[-1]
     assert op["op"] == "slide_add" and op["at"] == 2
     assert op["slide"]["layout"] == "bullets" and op["slide"]["title"] == "شريحة جديدة" and op["slide"]["bullets"] == ["أضف نصك"]
     assert op["deck"]["theme"] == "editorial"                         # laid out as the deck's own slides are
     # No place said: at the end, with words of its own.
-    assert client.post("/deck/designs/pitch.fig", json={"op": "add"}).json() == {"ok": True, "slides": 4, "added": 4}
+    got = client.post("/deck/designs/pitch.fig", json={"op": "add"}).json()
+    assert (got["ok"], got["slides"], got["added"]) == (True, 4, 4)
     [op] = seen[-1]
     assert "at" not in op and op["slide"]["title"] == "New slide" and op["slide"]["bullets"] == ["Add your text"]
 
@@ -2547,6 +2552,33 @@ def test_the_editor_opening_gives_the_workspaces_own_fonts_first(tmp_path, monke
     client.get("/brand")
     client.get("/brand")
     assert sent == ["sha", "file"]   # once: its sha256, then the file the service never had
+
+
+
+def test_the_brand_kit_carries_a_font_key_for_the_workspaces_own_fonts(tmp_path, monkeypatch):
+    """The design service gives a font a workspace added (often a bought one) only to an editor holding a key that
+    names its file. The brand kit carries one, signed with DESIGN_SECRET, even when the kit is font files alone."""
+    import base64, hashlib, hmac, json, time
+
+    async def _post(path, body, user_id=None):
+        return {"ok": True, "family": "Brand Sans", "style": "Bold"}
+    monkeypatch.setattr("cycls._agent.design.client._post", _post)
+    monkeypatch.setattr("cycls._agent.design.client._given", {})
+    monkeypatch.setenv("DESIGN_SECRET", "s3cret")
+    client = _ws_routers_client(tmp_path)
+    _seed(tmp_path, {"brand/fonts/Brand-Bold.otf": b"OTTO brand", "brand/fonts/readme.txt": b"not a font"})
+    brand = client.get("/brand").json()["brand"]
+    assert not brand["colors"] and brand["fonts"] == {"heading": None, "body": None}
+    body, sig = brand["fontKey"].split(".")
+    pad = lambda s: s + "=" * (-len(s) % 4)
+    assert base64.urlsafe_b64decode(pad(sig)) == hmac.new(b"s3cret", body.encode(), hashlib.sha256).digest()
+    claim = json.loads(base64.urlsafe_b64decode(pad(body)))
+    assert claim["s"] == [hashlib.sha256(b"OTTO brand").hexdigest()]
+    assert time.time() < claim["e"] <= time.time() + 24 * 3600 + 5
+    monkeypatch.delenv("DESIGN_SECRET")
+    assert client.get("/brand").json() == {"brand": None}   # no secret, no key: nothing to hand the editor
+
+# ---- office module: the office-render /v1/convert client ----
 
 
 # ---- office module: the canvas's converter, on the office service (cycls-office) ----

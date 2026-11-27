@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useDarkMode } from "../hooks/use-dark-mode";
 import { useEscape } from "../hooks/use-escape";
 import type { BrandKit, DesignLive, DesignVersion, FetchVersioned, WriteFile } from "../hooks/use-files";
 import { track } from "../lib/analytics";
 import { useComments } from "../lib/comments";
 import { peerColor } from "../lib/people";
+import { CanvasHeaderSlot } from "./canvas-header-slot";
 import { CommentsList, OpenComment, editorComments } from "./comments";
 import { getLang, t, tn, useLang } from "../lib/i18n";
 import { useToast } from "../lib/toast";
@@ -18,6 +20,8 @@ import { cn } from "../lib/utils";
 //     load {protocol:2, doc, name, fig, brand?, page?, live?} · written {doc, id, ok}
 //     save · flush {id} · command {script, intent?, page?} · theme {theme} · locale {lang}
 //     page {name} (feature "pages") · fit (feature "fit")
+//     host {features: ["present", "slides"]} · slide {index} (feature "present": what the app does for it — the
+//     deck presented, a new slide made by the service — and, after that, the slide to show)
 //     comments {pins, adding, active, draft, me} (feature "comments")
 //     follow {client} · liveTicket {id, ticket} · liveBase {version} · liveReset (feature "live")
 //   editor → host:
@@ -28,6 +32,7 @@ import { cn } from "../lib/utils";
 //     newDesign {size?} · saveCopy {doc, name, fig} · export {doc, files} · exportAs {doc, format}
 //     presence {doc, peers, saver, connected} · liveTicket {id}
 //     liveAgent {doc, version} · liveReload {doc, version} · liveBase {doc, version}
+//     present {doc, page?, slide?, index} · slideOp {doc, page?, op: "add", number?} (feature "present")
 // `doc` tags one load: a save from an older load is refused. Saves name the version they
 // stand on as their base, so a save over a newer file is refused. An editor before
 // protocol 2 sends none of the new messages and never waits for `written`.
@@ -113,6 +118,7 @@ type EditorMessage = {
   peers?: DesignPeer[]; saver?: boolean; connected?: boolean; version?: string | null; live?: "seed" | "join";
   frames?: { name: string; w: number; h: number }[]; frame_name?: string; x?: number; y?: number;
   at?: { x: number; y: number } | null; box?: { w: number; h: number };
+  slide?: string; index?: number; op?: string; number?: number;
 };
 
 // The latest selection per design: what "Add selection" attaches to a message. A video's
@@ -187,6 +193,17 @@ const frameSets = new Map<string, DesignFrames>();
 const commenting = new Set<string>();
 // An older editor can't draw pins: comments then go on the design's preview.
 export const designEditorComments = (path: string) => commenting.has(path);
+// An editor that presents and adds slides itself (feature "present"): the design has no preview. An older
+// one (today's production editor) keeps the Edit / Preview switch. Unknown until the editor is ready.
+const presenting = new Map<string, boolean>();
+export const designEditorPresents = (path: string): boolean | null => presenting.get(path) ?? null;
+// The slide to show once the editor has the design again (a slide added by the service: it reopens with it).
+const slideAfterLoad = new Map<string, number>();
+export function showDesignSlideAfterLoad(path: string, index: number): void {
+  slideAfterLoad.set(path, index);
+}
+// In a live room, a change the service made reloads the editor by itself (`liveReload`).
+export const designInRoom = (path: string) => presences.has(path);
 export function useDesignFrames(path: string): DesignFrames | null {
   const [value, setValue] = useState(() => frameSets.get(path) ?? null);
   useEffect(() => {
@@ -213,8 +230,18 @@ function keepPage(path: string, page: string | null) {
 // An agent edit to replay: `intent` labels the cursor, `version` is the file's after it.
 type Command = { script: string; intent?: string; version?: string; page?: string };
 
-export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host }: {
+// The design (with its version) and the brand, asked for as the view opens instead of when the editor says
+// `ready`: the editor takes a second or more to start, and these came after it, one request behind the other
+// (1.45 s of a 5.4 s open, measured on super-dev). The first `ready` takes them only while nothing has changed
+// the file as far as this view knows — no agent edit arrived, no reload — and they aren't old; else it reads
+// afresh, as before.
+type Early = { got: Promise<{ url: string; version: string } | null>; brand: Promise<unknown>; at: number; stale: boolean };
+const EARLY_FOR = 20_000;   // ms an early read stays good for the first `ready`
+const dropEarly = (e: Early | null) => { if (e) void e.got.then((g) => { if (g) URL.revokeObjectURL(g.url); }); };
+
+export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload, host, refresh }: {
   url: string;        // blob URL of the .fig, used when there's no host.fetchVersioned
+  refresh?: string;   // changes when the file was rewritten: an editor that couldn't open it tries again
   path: string;       // workspace path to write edits back to
   name: string;
   editorUrl: string;  // base URL of the deployed editor (config.design_editor_url)
@@ -229,6 +256,13 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const [frameKey, setFrameKey] = useState(0);        // bump → the editor iframe remounts
   const sourceRef = useRef<string | null>(null);      // what the next `ready` loads, if not `url`
   const [status, setStatus] = useState<"loading" | "ready" | "saved" | "error" | "saveerror">("loading");
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  // "Saved ✓" goes in the file's header, beside Edit | Preview, where the text editor says "Saved": over the
+  // editor it covered the editor's own controls (Simple | Designer, its bars). Full screen, or with no
+  // header (a share), it stays over the editor, at the top.
+  const slots = useContext(CanvasHeaderSlot);
+  const savedInHeader = !!slots.end && !full;
   const [copyOf, setCopyOf] = useState<{ fig: string } | null>(null);
   // A save refused over a change made elsewhere; saves wait while the person decides.
   const [conflict, setConflict] = useState<{ version: string; fig: string } | null>(null);
@@ -259,8 +293,18 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
   const resetWait = useRef<number | null>(null);   // "Load the latest" in a room: the editor is telling the room
   const known = useRef(new Set<string>());   // file versions the room's document holds (`liveBase`)
   const retried = useRef(0);            // consecutive 412 retries on a version the room holds
+  const early = useRef<Early | null>(null);   // the design and brand, asked for as the view opened (Early)
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   const stem = (path.split("/").pop() ?? name).replace(/\.fig$/i, "");
+
+  useEffect(() => {
+    const h = latest.current.host;
+    if (!h?.fetchVersioned) return;
+    const e: Early = { got: h.fetchVersioned(latest.current.path).catch(() => null), brand: h.brand().catch(() => null),
+                       at: Date.now(), stale: false };
+    early.current = e;
+    return () => { if (early.current === e) { early.current = null; dropEarly(e); } };   // unused: let its blob go
+  }, []);
 
   const post = useCallback((msg: Record<string, unknown>) => {
     if (origin) frameRef.current?.contentWindow?.postMessage({ target: "cycls-editor", ...msg }, origin);
@@ -306,12 +350,23 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
 
   // Re-open on the saved file (a fresh fetch, with its version).
   const reopen = useCallback(() => {
+    dropEarly(early.current);
+    early.current = null;
     commands.current = [];
     replaying.current = null;
     editorLoaded.current = false;
     setStatus("loading");
     setFrameKey((k) => k + 1);
   }, []);
+
+  // The file rewritten — or only now written: a design opened while the agent was still making it — reaches an
+  // editor that couldn't read it (the canvas once fetched the file first and showed the editor when it came).
+  const lastRefresh = useRef(refresh);
+  useEffect(() => {
+    if (refresh === lastRefresh.current) return;
+    lastRefresh.current = refresh;
+    if (statusRef.current === "error") reopen();
+  }, [refresh, reopen]);
 
   // Full screen is the editor's box, not the page, so the iframe doesn't reload.
   const enterFullscreen = useCallback(() => {
@@ -470,9 +525,14 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         protocol.current = typeof m.protocol === "number" ? m.protocol : 0;
         features.current = new Set(Array.isArray(m.features) ? m.features : []);
         commenting.delete(latest.current.path);
+        presenting.set(latest.current.path, features.current.has("present"));
+        window.dispatchEvent(new CustomEvent("cycls:design-editor", { detail: { path: latest.current.path } }));
         if (!disposed) { setPinsOn(false); setPlace(null); }
         let source = sourceRef.current;
         sourceRef.current = null;
+        const pre = early.current;      // the first `ready` only (Early)
+        early.current = null;
+        if (!(protocol.current >= 2 && host?.fetchVersioned)) dropEarly(pre);   // an editor from before the protocol
         version.current = loadedVersion.current = null;
         commands.current = [];          // edits made before now are in the file this load reads
         replaying.current = null;
@@ -482,14 +542,15 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           // Read afresh with its version: the base its saves name (design/store.py).
           if (source) URL.revokeObjectURL(source);
           try {
-            const got = await host.fetchVersioned(latest.current.path);
+            let got = pre && !pre.stale && Date.now() - pre.at < EARLY_FOR ? await pre.got : null;
+            if (!got) { dropEarly(pre); got = await host.fetchVersioned(latest.current.path); }
             source = got.url;
             version.current = loadedVersion.current = got.version || null;
           } catch {
             if (!disposed) setStatus("error");
             return;
           }
-        } else if (!source && readies > 0 && latest.current.reload) {
+        } else if (!source && (readies > 0 || !latest.current.url) && latest.current.reload) {
           // A later `ready` (the editor reloaded itself) reads the saved file again.
           try { source = await latest.current.reload(); } catch { source = null; }
         }
@@ -502,8 +563,9 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         try {
           const together = protocol.current >= 2 && features.current.has("live") && !!host?.live && !!host.me;
           const [buf, brand, room] = await Promise.all([
-            fetch(source ?? latest.current.url).then((r) => r.arrayBuffer()),
-            protocol.current >= 2 && host ? host.brand().catch(() => null) : Promise.resolve(null),
+            (source ?? latest.current.url) ? fetch((source ?? latest.current.url)!).then((r) => r.arrayBuffer())
+              : Promise.reject(new Error("no design to load")),
+            protocol.current >= 2 && host ? (pre?.brand ?? host.brand().catch(() => null)) : Promise.resolve(null),
             together ? host!.live!(latest.current.path).catch(() => null) : Promise.resolve(null),
           ]);
           if (disposed) return;
@@ -518,6 +580,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
             post({ type: "theme", theme: document.body.classList.contains("dark") ? "dark" : "light" });
             post({ type: "locale", lang: getLang() });
           }
+          // The app presents the deck and adds slides for it (the canvas: "cycls:design-present", "-slide-op").
+          if (features.current.has("present")) post({ type: "host", features: ["present", "slides"] });
         } catch {
           if (!disposed) setStatus("error");
         } finally {
@@ -545,7 +609,20 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           commenting.add(latest.current.path);
           if (!disposed) setPinsOn(true);
         }
+        window.dispatchEvent(new CustomEvent("cycls:design-loaded", { detail: { path: latest.current.path } }));
+        const show = slideAfterLoad.get(latest.current.path);
+        if (show != null) {
+          slideAfterLoad.delete(latest.current.path);
+          post({ type: "slide", index: show });
+        }
         pump();
+      } else if ((m.type === "present" || m.type === "slideOp") && features.current.has("present")) {
+        // ▶ Present, or + Add slide, in the editor: the canvas does them (it has the deck's presenter and its ops).
+        if (m.doc && m.doc !== doc.current) return;
+        const detail = { path: latest.current.path, page: typeof m.page === "string" ? m.page : undefined,
+                         slide: typeof m.slide === "string" ? m.slide : undefined, index: typeof m.index === "number" ? m.index : 0,
+                         op: typeof m.op === "string" ? m.op : undefined, number: typeof m.number === "number" ? m.number : undefined };
+        window.dispatchEvent(new CustomEvent(m.type === "present" ? "cycls:design-present" : "cycls:design-slide-op", { detail }));
       } else if (m.type === "frames" && Array.isArray(m.frames)) {
         if (m.doc && m.doc !== doc.current) return;
         const now: DesignFrames = { path: latest.current.path, page: typeof m.page === "string" ? m.page : "",
@@ -672,6 +749,8 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         reopen();
       } else if (m.type === "commandError") {
         // The server already saved the edit: reopen on a fresh fetch, or an auto-save would undo it.
+        dropEarly(early.current);
+        early.current = null;
         commands.current = [];
         replaying.current = null;
         editorLoaded.current = false;
@@ -734,6 +813,7 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
         window.clearTimeout(pending.current.timer);
         pending.current = null;
       }
+      if (early.current) early.current.stale = true;   // it may not hold this edit: the first `ready` reads afresh
       commands.current.push({ script: d.script, intent: d.intent, version: typeof d.version === "string" ? d.version : undefined,
                               page: typeof d.page === "string" && d.page ? d.page : undefined });
       pump();
@@ -834,8 +914,14 @@ export function DesignEditorView({ url, path, name, editorUrl, writeFile, reload
           {hint && t("exitFullScreen")}
         </button>
       )}
-      {status !== "ready" && (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur">
+      {status === "saved" && savedInHeader && createPortal(
+        <span className="text-xs text-muted-foreground" role="status" data-testid="design-saved">{t("editorSaved")}</span>,
+        slots.end!,
+      )}
+      {status !== "ready" && !(status === "saved" && savedInHeader) && (
+        <div data-testid="design-status"
+             className={cn("pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow backdrop-blur",
+                           full ? "top-12" : "top-3")}>
           {t(status === "error" ? "editorError"
             : status === "saveerror" ? "editorSaveError"
               : status === "saved" ? "editorSaved"

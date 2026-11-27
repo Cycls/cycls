@@ -162,7 +162,11 @@ async def named(obj, root, user_id=None):
     """Every picture NAMED in a spec, deck, slide or ops list rather than saved — a stock
     photo to find, an asset of the library — made a workspace file, in place.
     → (lines for the ack, error or None)."""
-    from . import stock
+    from . import photos, stock
+    from .tool import DESIGN_HEARD
+    err = await photos.links(obj, root, DESIGN_HEARD.get())   # a picture at a link the person gave
+    if err:
+        return [], err
     credits, err = await stock.resolve(obj, root)
     if err:
         return [], err

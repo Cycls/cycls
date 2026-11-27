@@ -19,24 +19,24 @@ Two decks in the same look with different themes are the same design recoloured.
 every other deck" comes from the look, not the colours, so choose it on purpose.
 
 Built-in themes: `minimal-light`, `minimal-dark`, `bold-gradient`, `editorial`, `corporate`, `tech-dark`,
-`warm`, `mono`, and `brand` (the workspace's brand kit, the default when one exists). Each fits a kind of subject:
-- `corporate` for finance and B2B;
-- `editorial` for culture, research and premium work;
-- `tech-dark` for software and AI;
-- `warm` for people, food and education;
-- `mono` for architecture and design;
-- `bold-gradient` for a launch or an event;
-- `minimal-light` or `minimal-dark` when nothing else fits.
+`warm`, `mono`, and `brand` (the workspace's brand kit, the default when one exists). When the person names one, use it exactly as it is, and write its `decor` in when they want its glow or circles (`{"base": "tech-dark", "decor": "glow"}`): a new deck otherwise leaves them out. Otherwise they are BASES: a named theme
+used as it stands looks like every other deck made from it. Start from the one nearest your direction
+(`corporate` finance and B2B, `editorial` culture and research, `tech-dark` software, `warm` people and food, `mono`
+architecture, `bold-gradient` a launch, `minimal-light` / `minimal-dark` anything) and make it this deck's own.
 
-A theme is also an object that overrides ANY of a base's keys, so the direction you chose becomes the deck's own:
+A theme is an object that overrides ANY of a base's keys, so the palette and faces you chose (design-direction)
+become the deck's own:
 - colours: `bg`, `text`, `muted` (content slides); `hero`, `heroText`, `heroMuted`, `heroAccent` (title,
   section and closing slides — `hero` may be a gradient); `accent`, `accent2`, `onAccent`; `surface` (cards,
   table bands), `line` (rules);
 - type: `heading`, `body`, `arHeading`, `arBody`;
-- `decor`: `glow`, `rule`, `bar`, `circles` or `none` (the deck's one motif); `radius` (corners).
+- `decor`: `rule`, `bar`, `glow`, `circles` or `none` (the deck's one motif; `glow` and `circles` written here are drawn in every look, `bar` only in `classic`, `bold` and `soft`); `radius` (corners). `glow` (a soft
+  ellipse in a corner) and `circles` are the decoration every AI deck has: a new deck draws neither unless you
+  write it in, so ask for one only when the concept is about light, sound or circles.
 
 Set the colours and fonts of the direction, not only the accent: a deck that differs only in its accent still
-looks like every other deck.
+looks like every other deck. The concept goes into the slides themselves: a custom title slide built on it, and
+its signature move carried through the deck.
 
 The looks (`"look"` in the deck, beside `theme`):
 - `editorial`: a running head over a hairline at the top of each slide, large titles, points as numbered rows
@@ -69,6 +69,9 @@ again.
   long deck. End on `closing`, with its `cta`, `contact` or `qr`.
 - Change the layout every slide or two. Never put three `bullets` slides in a row. For every two slides of text,
   give one of picture, number or chart (`image-left` / `image-right`, `image`, `stats`, `chart`, `quote`).
+- A slide with little on it is not a sparse list in an empty slide: its numbers go on `stats`, one claim is a
+  big statement (a `quote` style or a `custom` slide), a scene is a picture slide; otherwise fold it into the
+  slide beside it.
 - Vary how slides of one kind are drawn with a slide's `style`, so two `bullets` slides don't look alike:
   - `bullets`: `list`, `rows`, `numbers`, `cards` or `plain`;
   - `stats`: `dividers`, `ruled`, `tiles` or `plain`;
@@ -117,12 +120,15 @@ mood on every slide.
 
 ## Custom slides
 
-`{"layout": "custom", "fill": "#…", "nodes": [ … ]}` is a frame you place by hand, and it gets no decor, footer
-or page number. Keep the deck's grid so it doesn't look pasted in. On a 1920 × 1080 slide the margins are 144 and
-1776, the content stays above y 950, and the title is in the theme's heading font, placed as the look places it:
+`{"layout": "custom", "fill": "#…", "nodes": [ … ], "footer": true}` is a frame you place by hand, and it gets no
+decor. With `"footer": true` (in a deck that has a footer, always) it gets the deck's running head and page number,
+exactly where every other slide has them — never draw your own: a hand-drawn one came out differently ("THE MODEL",
+"04" in a deck numbered "2", "3"). Keep their band free: in `editorial` the head sits at y 49 over a rule at y 87;
+in the other looks the footer runs along y ≈ 1014. Keep the deck's grid so it doesn't look pasted in. On a
+1920 × 1080 slide the margins are 144 and 1776, the content stays above y 950, and the title is in the theme's
+heading font, placed as the look places it:
 - `classic`: the title at y 92, 64 px; with `decor: "rule"`, a 2 px rule in the `line` colour at y ≈ 222;
-- `editorial`: a running head — the footer text in 20 px capitals (`letterSpacing` 4, the `muted` colour) at
-  y 49 — over a 2 px `line` rule at y 87; the title at y 132, 80 px;
+- `editorial`: the title at y 132, 80 px, under the running head;
 - `swiss`: a 5 px rule in the text colour at y 58 from 144 to 1776; the title in the column x 144, w 490 from
   y 92, 54 px; the content in x 706 to 1776, from y 92;
 - `bold`: the title at y 92, 88 px; `soft`: centred (x 144, w 1632, `"align": "center"`) at y 92, 64 px;
@@ -156,7 +162,10 @@ the one number and its meaning. The chart's colours come from the theme's accent
 
 1. **One render for the whole deck**: theme, every slide, notes and footer. Never build it slide by slide.
    Use `"format": "pptx"` when it will be presented or edited in PowerPoint; other formats come later from `export`.
-2. **Every slide comes back to you.** Fix what's off without rendering again:
+2. **Every slide comes back to you.** Look at them all together, give the deck the polish pass
+   (`design-direction`), then fix what's off on EVERY slide in ONE `edit` (each op with its `frame`) — never one
+   edit per slide or per problem. Look at what it changed and stop unless a fault is still there: two rounds at
+   most. "Could be better" is not a fault. Without rendering again:
    - wording or style on a slide: ONE `edit`, ops with `frame` (the slide index from 0) and the node's name
      (layouts name their parts: `title`, `subtitle`, `eyebrow`, `stat-1` …; `inspect` lists them);
    - a slide rebuilt: `update_slide` {number from 1, slide};
@@ -168,14 +177,14 @@ the one number and its meaning. The chart's colours come from the theme's accent
 
 ```json
 {"deck": {
-  "theme": {"base": "editorial", "bg": "#f6f1e7", "text": "#2b1d14", "muted": "#6b5b4b", "hero": "#3b2416",
-            "heroText": "#f6f1e7", "heroMuted": "#d8c7ad", "heroAccent": "#d4af37", "accent": "#9b2226",
-            "accent2": "#2d6a4f", "surface": "#ece3d3", "line": "#d9ccb6", "heading": "DM Serif Display",
+  "theme": {"base": "editorial", "bg": "#dcecf5", "text": "#2b1d14", "muted": "#6b5b4b", "hero": "#3b2416",
+            "heroText": "#ffffff", "heroMuted": "#d8c7ad", "heroAccent": "#d4af37", "accent": "#9b2226",
+            "accent2": "#2d6a4f", "surface": "#c9e0ec", "line": "#b5d2e0", "heading": "DM Serif Display",
             "body": "DM Sans", "arHeading": "Reem Kufi Bold", "arBody": "IBM Plex Sans Arabic", "decor": "rule", "radius": 6},
   "look": "editorial",
-  "footer": {"text": "Qahwa House · Investor update"},
+  "footer": {"text": "Corner Roast · Investor update"},
   "slides": [
-    {"layout": "title", "eyebrow": "INVESTOR UPDATE · Q3 2026", "title": "Specialty coffee, now in every district of Riyadh",
+    {"layout": "title", "eyebrow": "INVESTOR UPDATE · Q3 2026", "title": "Specialty coffee, now in every district of the city",
      "subtitle": "Where we are, and where the next round takes us", "notes": "Thank everyone; one line on why we are here."},
     {"layout": "stats", "title": "A quarter of firsts", "items": [{"value": "14", "label": "branches open"},
      {"value": "38%", "label": "growth on Q2"}, {"value": "4.8", "label": "average rating"}],
@@ -186,15 +195,15 @@ the one number and its meaning. The chart's colours come from the theme's accent
                   {"name": "Walk-ins", "values": [480, 470, 500, 510, 520, 530]}]}},
      "takeaway": {"value": "3.3×", "text": "subscriptions since April"},
      "notes": "The crossing point is the story: a recurring business, not a café chain."},
-    {"layout": "custom", "fill": "#f6f1e7", "nodes": [
-      {"type": "text", "id": "running-head", "text": "QAHWA HOUSE · INVESTOR UPDATE", "x": 144, "y": 49, "w": 1200,
+    {"layout": "custom", "fill": "#dcecf5", "nodes": [
+      {"type": "text", "id": "running-head", "text": "CORNER ROAST · INVESTOR UPDATE", "x": 144, "y": 49, "w": 1200,
        "size": 20, "letterSpacing": 4, "font": "DM Sans Semi Bold", "color": "#6b5b4b"},
-      {"type": "rect", "id": "head-rule", "x": 144, "y": 87, "w": 1632, "h": 2, "fill": "#d9ccb6"},
+      {"type": "rect", "id": "head-rule", "x": 144, "y": 87, "w": 1632, "h": 2, "fill": "#b5d2e0"},
       {"type": "text", "id": "title", "text": "How a bag reaches a door in 36 hours", "x": 144, "y": 132, "w": 1632,
        "size": 80, "font": "DM Serif Display", "color": "#2b1d14"},
-      {"type": "rect", "id": "card-1", "x": 144, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#ece3d3"},
-      {"type": "rect", "id": "card-2", "x": 740, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#ece3d3"},
-      {"type": "rect", "id": "card-3", "x": 1336, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#ece3d3"},
+      {"type": "rect", "id": "card-1", "x": 144, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#c9e0ec"},
+      {"type": "rect", "id": "card-2", "x": 740, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#c9e0ec"},
+      {"type": "rect", "id": "card-3", "x": 1336, "y": 380, "w": 440, "h": 300, "radius": 6, "fill": "#c9e0ec"},
       {"type": "line", "id": "arrow-1", "from": [600, 530], "to": [724, 530], "color": "#9b2226", "width": 4, "end": "arrow"},
       {"type": "line", "id": "arrow-2", "from": [1196, 530], "to": [1320, 530], "color": "#9b2226", "width": 4, "end": "arrow"},
       {"type": "stack", "id": "step-1", "x": 192, "y": 428, "w": 344, "gap": 18, "children": [
@@ -213,5 +222,5 @@ the one number and its meaning. The chart's colours come from the theme's accent
     {"layout": "quote", "style": "panel", "quote": "It is the first coffee subscription that tastes like the café.",
      "author": "Noura Al-Harbi", "role": "Subscriber since March", "notes": "Read it, pause."},
     {"layout": "closing", "title": "Fourteen districts down, forty to go", "subtitle": "Raising SAR 12M to open the next 26 branches",
-     "cta": "Read the plan", "contact": "invest@qahwa.house", "notes": "The ask, then questions."}]}}
+     "cta": "Read the plan", "contact": "invest@cornerroast.co", "notes": "The ask, then questions."}]}}
 ```

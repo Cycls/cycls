@@ -1,6 +1,7 @@
 """Phase 3 — the Design tool: the cycls-design service client, the tool executor,
 gating, and label. Pure logic — no service is contacted (httpx mocked). The live
 render is proven separately against the real cycls-design service."""
+import io
 import asyncio
 import base64
 import json
@@ -331,7 +332,8 @@ def test_render_saves_and_opens_canvas(tmp_path, monkeypatch):
         {"action": "render", "name": "launch", "spec": {"size": [1080, 1080]}, "format": "png"},
         _ws(tmp_path)))
     assert (tmp_path / "launch.fig").read_bytes() == b"FIGZ"                     # the design is one file
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["launch.fig"]          # nothing beside it
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".cache", "launch.fig"]  # nothing beside it but the hidden
+    assert [p.name for p in (tmp_path / ".cache" / "design").iterdir()] == ["recent.json"]   # what it looks like (recent.py)
     assert calls["user_id"] == "org_1:user_1" and calls["spec"] == {"size": [1080, 1080]}
     assert calls["keep"] == {"kind": "post"}                                     # what it is, kept in the file
     assert calls["fmt"] == "png" and calls["scale"] == 1                         # its picture is only looked at
@@ -572,7 +574,8 @@ def test_a_deck_is_one_file_and_every_slide_is_qad(tmp_path, monkeypatch):
     spec = {"frames": [{"size": "slide", "notes": "Open with the story", "transition": "fade"},
                        {"size": "slide"}, {"size": "slide"}]}
     out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "format": "pptx", "spec": spec}, _ws(tmp_path)))
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["pitch.fig"] and (tmp_path / "pitch.fig").read_bytes() == b"FIGZ"
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != ".cache") == ["pitch.fig"] \
+        and (tmp_path / "pitch.fig").read_bytes() == b"FIGZ"                     # (.cache: hidden, recent.py)
     assert calls["keep"] == {"kind": "deck"} and calls["every"] is False
     assert calls["spec"]["frames"][0]["notes"] == "Open with the story"     # notes reach the service
     m = out["_model"]
@@ -612,7 +615,7 @@ def test_a_carousel_is_one_file_too(tmp_path, monkeypatch):
     spec = {"frames": [{"size": "post-portrait"}] * 3}
     out = asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
     assert calls["keep"] == {"kind": "carousel"} and calls["every"] is False    # its slides' images are downloaded, not saved
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["tips.fig"]
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != ".cache") == ["tips.fig"]
     assert "Carousel saved (3 slides)" in out["_model"][-1]["text"] and out["_ui"]["path"] == "tips.fig"
     _fake_render(monkeypatch)
     asyncio.run(_exec_design({"action": "render", "name": "tips", "spec": spec}, _ws(tmp_path)))
@@ -856,11 +859,11 @@ def test_image_errors_name_the_fix(tmp_path, monkeypatch):
     assert "workspace file" in err({"w": 10})                                       # no src
     assert "does not exist" in err({"src": "nope.png", "w": 10})
     assert "escapes" in err({"src": "../../etc/passwd", "w": 10})                   # traversal
-    assert "save it into the workspace" in err({"src": "https://x.com/a.png", "w": 10})
+    assert "didn't come from the person" in err({"src": "https://x.com/a.png", "w": 10})
     assert "SVG" in err({"src": "logo.svg", "w": 10})
     assert "w` and/or `h" in err({"src": "p.png"})
     assert "cover or contain" in err({"src": "p.png", "w": 10, "fit": "stretch"})
-    monkeypatch.setattr("cycls._agent.design.images._DESIGN_IMAGE_MAX", 8)
+    monkeypatch.setattr("cycls._agent.design.photos.MAX_FILE", 8)
     assert "smaller copy" in err({"src": "p.png", "w": 10})
     assert calls == {}                                                             # none reached the service
 
@@ -1148,6 +1151,29 @@ def test_inspect_says_how_many_parts_a_long_slide_has_beyond_those_it_lists(tmp_
     assert "… and 57 more parts of this slide are not listed" in out
 
 
+def test_inspect_says_a_text_is_set_in_its_box(tmp_path, monkeypatch):
+    # a label in the middle of its band: its h is the band's, not its words' — said, so an edit keeps to it
+    _design(tmp_path)
+
+    async def _outline(fig, user_id=None, page=None, sheets=False):
+        return {"pages": [{"name": "design", "frames": 1}], "page": "design", "frames": [
+                {"slide": 1, "name": "slide-1", "size": [1080, 1350], "nodes": [
+            {"name": "spine-1-text", "type": "text", "x": 80, "y": 660, "w": 920, "h": 180, "text": "BRING A BOOK.",
+             "font": "Gloock Regular", "size": 80, "color": "#f3f0e4", "valign": "center"}]}]}
+    monkeypatch.setattr("cycls._agent.design.outline", _outline)
+    out = asyncio.run(_exec_design({"action": "inspect", "name": "launch"}, _ws(tmp_path)))
+    assert '"BRING A BOOK."  Gloock Regular 80px #f3f0e4  valign center in its box' in out
+
+
+def test_an_edit_says_what_the_service_set_instead(tmp_path, monkeypatch):
+    # a restyle to a style the font hasn't got: set in its nearest, and said — an edit used to keep it to itself
+    _design(tmp_path)
+    _fake_apply(monkeypatch, notes=["Sora has no italics; Bold Italic is set in Bold, upright"])
+    out = asyncio.run(_exec_design({"action": "edit", "name": "launch", "ops": [
+        {"op": "style", "node": "headline", "font": "Sora Bold Italic"}]}, _ws(tmp_path)))
+    assert "Note — Sora has no italics; Bold Italic is set in Bold, upright." in _text(out)
+
+
 def test_edit_ops_errors_come_back_verbatim(tmp_path, monkeypatch):
     _design(tmp_path)
     _fake_apply(monkeypatch, error='op 1 (set_text nope): no node named "nope" — this design has: headline, cta')
@@ -1384,7 +1410,8 @@ def test_a_deck_of_layouts_resolves_its_images(tmp_path, monkeypatch):
         {"layout": "team", "title": "Team", "people": [{"name": "Sara", "photo": "attachments/sara.png"}, {"name": "Omar"}]},
         {"layout": "custom", "nodes": [{"text": "hand-built", "x": 100, "y": 100}]}]}}
     spec, err, notes = _prepare_spec(deck, None, tmp_path)
-    assert err is None and notes == ["The deck's look: editorial, its theme's — `look` composes it another way (classic, swiss, bold, soft, minimal)."]
+    assert err is None and notes[1:] == ["The deck's look: editorial, its theme's — `look` composes it another way (classic, swiss, bold, soft, minimal)."]
+    assert notes[0].startswith("The deck's theme is editorial as it stands")
     d = spec["deck"]
     assert d["size"] == [1920, 1080] and d["theme"] == "editorial"                  # the size a deck defaults to
     assert d["slides"][0]["image"]["src"] == "attachments/farm.png" and d["slides"][0]["image"]["focus"] == [0.3, 0.5]
@@ -1927,7 +1954,8 @@ def test_a_document_is_one_file_its_source_kept_in_it(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["coffee-report.fig"]   # no PDF beside it: it downloads as one
     assert calls["fmt"] == "png" and calls["scale"] == 1                      # its picture is only looked at
     # The source is kept in the file as it was written — paths, not the images' bytes.
-    assert calls["keep"] == {"kind": "document", "document": {**_DOC, "look": "editorial"}}   # its look settled
+    # (Its look settled, and its text at the page's edge with no lines, as nobody said otherwise.)
+    assert calls["keep"] == {"kind": "document", "document": {**_DOC, "look": "editorial", "measure": "full", "lines": False}}
     assert calls["keep"]["document"]["sections"][0]["blocks"][2]["image"] == "attachments/beans.png"
     assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "coffee-report.fig", "name": "coffee-report.fig"}
     m = out["_model"]
@@ -1935,6 +1963,45 @@ def test_a_document_is_one_file_its_source_kept_in_it(tmp_path, monkeypatch):
     ack = m[-1]["text"]
     assert "Document saved (3 pages)" in ack and "ONE file, coffee-report.fig" in ack
     assert "All 3 pages are attached" in ack and '"replace": true' in ack
+
+
+def test_a_cream_page_nobody_asked_for_is_questioned_once():
+    from cycls._agent.design import brief
+    page = lambda fill: {"frames": [{"size": [1240, 1754], "fill": fill, "nodes": [{"type": "text", "text": "A flyer for a swim school"}]}]}
+    ask = "Make a flyer for a swim school"
+    for fill in ("#f7f3ec", "#fff7e8", "#FFFBF0", "#f8f5ee"):
+        assert "its page is cream" in brief.check(page(fill), ask)
+    for fill in ("#ffffff", "#fafafa", "#f1f3ee", "#8ad8ea", "#0f4c5c", "#fce9c0", "#fff0f5"):
+        assert brief.check(page(fill), ask) is None
+    assert "its page is cream" in brief.check({"document": {"title": "x", "theme": {"base": "editorial"}, "sections": []}}, ask)
+    assert brief.check({"document": {"title": "x", "theme": {"base": "editorial", "bg": "#ffffff"}, "sections": []}}, ask) is None
+    assert brief.check(page("#f7f3ec"), "A vintage poster on cream paper") is None           # they asked
+    assert brief.check(page("#f7f3ec"), ask, branded=True) is None                           # it is their brand's
+    assert "really is this piece's idea" in brief.check(page("#f7f3ec"), ask)
+
+
+def test_two_pdfs_with_the_same_page_recipe_are_noticed(tmp_path):
+    from cycls._agent.design import recent
+    doc = lambda **kw: {"document": {"title": "x", "sections": [], "lines": False, "theme": {"base": "mono", "heading": "Inter Bold", "accent": "#123456"}, **kw}}
+    assert recent.fingerprint(doc())["page"] == "Bold headings, no lines, the look's cover, plain openers"
+    assert recent.remember(tmp_path, "a.fig", doc(), "document") == []
+    said = recent.remember(tmp_path, "b.fig", doc(theme={"base": "warm", "heading": "Lora Bold", "accent": "#ee8811"}), "document")
+    assert "its page (Bold headings, no lines" in said[0] and "update_document" in said[0]
+    other = doc(theme={"base": "corporate", "heading": "Sora Bold", "accent": "#11aa66"}, headings={"weight": "Light", "caps": True}, lines=True, cover={"style": "type"})
+    assert recent.remember(tmp_path, "c.fig", other, "document") == []
+    assert "page: Light capitals headings, lines, type cover" in recent.listing(tmp_path)
+
+
+def test_what_a_document_says_of_its_page_is_kept(tmp_path, monkeypatch):
+    _img(tmp_path, "attachments/beans.png", _png(1600, 900))
+    calls = _doc_render(monkeypatch)
+    said = {"measure": "center", "lines": True, "align": "justify", "headings": {"weight": "Light"}}
+    asyncio.run(_exec_design({"action": "render", "name": "asked", "spec": {"document": {**_DOC, **said}}}, _ws(tmp_path)))
+    assert {k: calls["keep"]["document"][k] for k in said} == said
+    # (Written beside the document, it is still the document's.)
+    asyncio.run(_exec_design({"action": "render", "name": "beside", "spec": {"document": _DOC, "align": "justify", "lines": True}}, _ws(tmp_path)))
+    kept = calls["keep"]["document"]
+    assert (kept["align"], kept["lines"], kept["measure"]) == ("justify", True, "full")
 
 
 def test_a_long_document_is_seen_whole_its_first_pages_and_the_rest_on_contact_sheets(tmp_path, monkeypatch):
@@ -2024,7 +2091,8 @@ def test_a_document_takes_the_brand_kit_unless_it_names_a_theme(tmp_path, monkey
     assert "uses the workspace brand kit" in out["_model"][-1]["text"]
     # A theme the agent (or the user) chose stands; so does a document with no kit at all.
     asyncio.run(_exec_design({"action": "render", "name": "r2", "spec": {"document": {**plain, "theme": "tech-dark"}}}, _ws(tmp_path)))
-    assert calls["spec"]["document"]["theme"] == "tech-dark" and "logo" not in calls["spec"]["document"]
+    # (a new document leaves out its theme's glow: test_a_new_document_leaves_out_its_themes_circles…)
+    assert calls["spec"]["document"]["theme"] == {"base": "tech-dark", "decor": "none"} and "logo" not in calls["spec"]["document"]
 
 
 def test_what_is_wrong_with_a_document_is_said_in_words(tmp_path, monkeypatch):
@@ -2940,6 +3008,26 @@ def test_export_of_a_deck_is_one_file_or_an_image_a_slide_and_of_a_page_that_pag
     assert 'page "Story"' in _text(out)
 
 
+def test_one_slide_of_a_deck_exports_alone_and_page_1_of_a_deck_is_its_first_slide(tmp_path, monkeypatch):
+    # To look at a deck's cover the agent asked for `page: 1`, which failed (a deck is one page of slides), and then
+    # exported all five slides to see one (super-dev, 2026-11-25).
+    _deck(tmp_path, monkeypatch, slides=3)
+    asked = []
+
+    async def _export_slide(fig, slide, fmt="png", scale=2, user_id=None):
+        asked.append((slide, fmt))
+        return f"S{slide}".encode()
+    monkeypatch.setattr("cycls._agent.design.export_slide", _export_slide)
+    out = asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "png", "slide": 2}, _ws(tmp_path)))
+    assert asked == [(2, "png")] and (tmp_path / "pitch-slide-2.png").read_bytes() == b"S2" and "(slide 2)" in _text(out)
+    asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "png", "page": 1}, _ws(tmp_path)))
+    assert asked[-1] == (1, "png")
+    whole = asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "pdf", "slide": 2}, _ws(tmp_path)))
+    assert whole.startswith("Error") and "the whole deck" in whole
+    assert "a slide's number" in asyncio.run(_exec_design({"action": "export", "name": "pitch", "format": "png", "slide": "x"},
+                                                           _ws(tmp_path)))
+
+
 def test_a_design_is_renamed_on_its_own(tmp_path, monkeypatch):
     _deck(tmp_path, monkeypatch)
     (tmp_path / "pitch.pptx").write_bytes(b"PPTX")                          # an export made earlier: a file of its own
@@ -3069,6 +3157,9 @@ def test_skills_load_in_one_call_and_say_nothing_was_made(tmp_path):
     one = asyncio.run(_exec_design({"action": "skill", "skill": "Deck-Design, deck-design"}, _ws(tmp_path)))
     assert one.count("<design-skill ") == 1 and skill.SKILLS["deck-design"][1] in one
     assert "<design-skill name=\"document-design\">" in asyncio.run(_exec_design({"action": "skill", "name": "document-design"}, _ws(tmp_path)))
+    # a list written out as text, as some models send it, is that list
+    listed = asyncio.run(_exec_design({"action": "skill", "skill": '["design-direction", "graphic-design"]'}, _ws(tmp_path)))
+    assert listed.count("<design-skill ") == 2 and not listed.startswith("Error")
     assert not list(tmp_path.iterdir())                                       # nothing written
 
 
@@ -3159,10 +3250,12 @@ def test_a_deck_says_the_theme_it_is_laid_out_with(tmp_path):
     # none given and no brand kit: the default — said, so a theme that never arrived is seen at once
     _, _, notes = _prepare_spec({"deck": {"slides": _SLIDES}}, None, tmp_path)
     assert any("no `theme`" in n and "minimal-light" in n for n in notes), notes
-    # a named theme needs no word (only its look, which it chose)
-    assert _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2] == [
-        "The deck's look: minimal, its theme's — `look` composes it another way (classic, editorial, swiss, bold, soft)."]
-    assert _prepare_spec({"deck": {"theme": "mono", "look": "bold", "slides": _SLIDES}}, None, tmp_path)[2] == []
+    # a named theme as it stands is said to be every deck's, beside the look it chose
+    notes = _prepare_spec({"deck": {"theme": "mono", "slides": _SLIDES}}, None, tmp_path)[2]
+    assert notes[0].startswith("The deck's theme is mono as it stands") and notes[1] == (
+        "The deck's look: minimal, its theme's — `look` composes it another way (classic, editorial, swiss, bold, soft).")
+    assert [n[:35] for n in _prepare_spec({"deck": {"theme": "mono", "look": "bold", "slides": _SLIDES}}, None, tmp_path)[2]] == [
+        "The deck's theme is mono as it stan"]
 
 
 # ---- a deck's or a document's look: how its slides or pages are composed, apart from its theme ----
@@ -3284,9 +3377,352 @@ def test_a_render_in_a_chat_without_the_skills_says_which_to_load(tmp_path, monk
     assert "No design skill" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
 
 
+def test_a_new_design_is_held_once_a_turn_until_it_has_searched(tmp_path, monkeypatch):
+    from cycls._agent.design.tool import DESIGN_RESEARCHED, _RESEARCH_FIRST, design_researched
+    _fake_render(monkeypatch)
+    post = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Hi", "x": 100, "y": 100}]}
+    token = DESIGN_RESEARCHED.set(False)
+    try:
+        held = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": post}, _ws(tmp_path)))
+        skills = asyncio.run(_exec_design({"action": "skill", "skill": "deck-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    assert held.startswith(_RESEARCH_FIRST)
+    assert "research first" not in skills
+    assert "research first" not in _text(asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path))))
+    # A design made again (an edit's re-render) was researched when it was first made: never held.
+    token = DESIGN_RESEARCHED.set(False)
+    try:
+        again = asyncio.run(_exec_design({"action": "render", "name": "b", "replace": True, "spec": post}, _ws(tmp_path)))
+        variant = asyncio.run(_exec_design({"action": "render", "name": "b", "spec": post}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    assert "research first" not in _text(again) and "research first" not in _text(variant)
+    tools = [{"name": "web_search"}, {"name": "design"}]
+    ask = {"role": "user", "content": "make a post"}
+    use = lambda name: {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": name, "input": {}}]}
+    told = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": _RESEARCH_FIRST}]}
+    assert not design_researched([ask, use("design")], tools)
+    assert design_researched([ask, use("web_search"), use("design")], tools)
+    assert design_researched([ask, use("design"), told, use("design")], tools)              # told once: never a loop
+    assert design_researched([ask, use("design")], [{"name": "design"}])                    # no search here: nothing to ask
+    assert not design_researched([ask, use("web_search"), {"role": "user", "content": "now another"}, use("design")], tools)
+
+
+def test_any_photo_becomes_one_the_renderer_takes(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    from cycls._agent.design import photos
+    from cycls._agent.design.images import _image_size
+    from cycls._agent.tools import _exec_read
+    def saved(im, fmt, **kw):
+        out = io.BytesIO()
+        im.save(out, fmt, **kw)
+        return out.getvalue()
+    im = Image.new("RGB", (400, 200), (200, 30, 30))
+    small = saved(im, "JPEG")
+    assert photos.ready(small, _image_size(small)) == small                    # what fits is left as it is
+    for fmt in ("BMP", "TIFF"):
+        made = photos.ready(saved(im, fmt), None)
+        assert _image_size(made) == (400, 200)
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    turned = saved(im.rotate(90, expand=True), "JPEG", exif=exif)
+    big = photos.ready(turned, _image_size(turned), cap=10)                    # re-made: the right way up
+    assert _image_size(big) == (400, 200)
+    wide = Image.effect_noise((5000, 2500), 60).convert("RGB")
+    raw = saved(wide, "JPEG", quality=95)
+    made = photos.ready(raw, _image_size(raw), cap=600 * 1024)
+    assert len(made) <= 600 * 1024 and max(_image_size(made)) <= photos.LONG
+    clear = saved(Image.new("RGBA", (400, 200), (0, 0, 0, 0)), "TIFF")
+    assert photos.ready(clear, None)[:4] == b"\x89PNG"                          # transparency stays
+    with pytest.raises(ValueError, match="can't be read"):
+        photos.ready(b"not a picture", None)
+    assert photos.cap_for({"nodes": [{"src": "a.jpg"}]}) == photos.CAP
+    assert photos.cap_for({"frames": [{"src": f"{i}.jpg"} for i in range(30)]}) == photos.BUDGET // 30
+    assert photos.cap_for({"frames": [{"src": f"{i}.jpg"} for i in range(500)]}) == photos.FLOOR
+    (tmp_path / "scan.tiff").write_bytes(saved(im, "TIFF"))
+    shown = asyncio.run(_exec_read({"path": "scan.tiff"}, str(tmp_path)))
+    assert shown[0]["type"] == "image" and shown[0]["source"]["media_type"] == "image/jpeg"
+
+
+def test_a_picture_at_a_link_must_come_from_the_person(tmp_path, monkeypatch):
+    from cycls._agent.design import photos
+    png = _png(10, 10)
+    got = []
+    async def fake(url):
+        got.append(url)
+        return png
+    monkeypatch.setattr(photos, "_download", fake)
+    url = "https://cdn.acme.com/team.png"
+    spec = {"nodes": [{"type": "image", "src": url}, {"type": "image", "src": url}]}
+    assert "didn't come from the person" in asyncio.run(photos.links(json.loads(json.dumps(spec)), str(tmp_path), "a post about acme"))
+    assert "didn't come from the person" in asyncio.run(photos.links(json.loads(json.dumps(spec)), str(tmp_path), "see https://notacme.com/x"))
+    assert got == []
+    placed = json.loads(json.dumps(spec))
+    assert asyncio.run(photos.links(placed, str(tmp_path), "our site is https://www.acme.com/about")) is None
+    assert placed["nodes"][0]["src"] == placed["nodes"][1]["src"] and placed["nodes"][0]["src"].startswith("attachments/links/")
+    assert (tmp_path / placed["nodes"][0]["src"]).read_bytes() == png and got == [url]    # fetched once
+    async def page(url):
+        return b"<html>not a picture</html>"
+    monkeypatch.setattr(photos, "_download", page)
+    other = {"nodes": [{"type": "image", "src": "https://acme.com/page"}]}
+    assert "isn't a picture" in asyncio.run(photos.links(other, str(tmp_path), "https://acme.com/page"))
+
+
+def test_a_new_design_is_held_once_against_the_brief(tmp_path, monkeypatch):
+    from cycls._agent.design import brief
+    from cycls._agent.design.tool import DESIGN_ASK, DESIGN_CHECKED, design_checked, person_last
+    _fake_render(monkeypatch)
+    en = "Design a post for Bright Smile Dental Clinic's new branch in Jeddah"
+    arabic = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "افتتاح الفرع الجديد في جدة قريبا", "x": 0, "y": 0}]}
+    renamed = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "BRIGHT SMILE DENTAL CLINICS opens in Jeddah", "x": 0, "y": 0}]}
+    exact = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Bright Smile Dental Clinic opens in Jeddah", "x": 0, "y": 0}]}
+    assert "in English" in brief.check(arabic, en)
+    assert 'says "BRIGHT SMILE DENTAL CLINICS"' in brief.check(renamed, en)
+    assert brief.check(exact, en) is None
+    assert brief.check(arabic, en + ", in Arabic") is None                     # asked for
+    assert brief.check(exact, "صمم منشورا لعيادة الأسنان الجديدة في جدة") is not None
+    assert brief.check(arabic, "صمم منشورا لعيادة الأسنان الجديدة في جدة") is None
+    assert brief.name_drift("for Swift Cargo", "Swift Logistics and Swift Cargo") == []   # another word, not a misspelling
+    a, c = DESIGN_ASK.set(en), DESIGN_CHECKED.set(False)
+    try:
+        held = asyncio.run(_exec_design({"action": "render", "name": "a", "spec": renamed}, _ws(tmp_path)))
+        good = asyncio.run(_exec_design({"action": "render", "name": "b", "spec": exact}, _ws(tmp_path)))
+    finally:
+        DESIGN_ASK.reset(a), DESIGN_CHECKED.reset(c)
+    assert held.startswith("Not run: check it against the brief")
+    assert "Not run" not in _text(good)
+    ask = {"role": "user", "content": en}
+    use = {"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "design", "input": {}}]}
+    told = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": held}]}
+    assert not design_checked([ask, use]) and design_checked([ask, use, told, use])
+    assert design_checked([ask, use, told, {"role": "user", "content": "another"}, use])   # that chat has its design
+    assert person_last([ask, use, told]) == en
+
+
+def test_no_place_comes_in_unless_the_person_named_it():
+    from cycls._agent.design import brief
+    post = lambda text: {"nodes": [{"type": "text", "text": text}]}
+    held = brief.check(post("The fix costs SAR 1.2m and meets SAMA rules"), "Make a report on a bank audit")
+    assert "SAR" in held and "SAMA" in held and "never mentioned" in held
+    assert "Riyadh" in brief.check(post("Now open in Riyadh"), "Make a post for our new shop")
+    assert brief.check(post("The fix costs $1.2m"), "Make a report on a bank audit") is None
+    assert brief.check(post("Now open in Jeddah"), "A post for our branch in Jeddah") is None
+    assert brief.check(post("Saudi Coffee Day"), "A post for Saudi Coffee Day") is None
+    assert brief.check(post("Costs SAR 40"), "make it shorter", "A price list for our Riyadh shop\nmake it shorter") is None
+    assert brief.check(post("Sar and sama are words here too"), "Write about Sar and sama") is None
+    assert brief.check(post("Our grandmother sings"), "A post about singing") is None
+    said = brief.check(post("افتتاح الفرع الجديد في جدة قريبا"), "Design a post for our new branch")
+    assert "in English" in said and "saved chat language" in said
+
+
+def test_the_brief_check_leaves_real_saudi_and_arabic_work_alone():
+    from cycls._agent.design import brief
+    from cycls._agent.design.tool import design_checked
+    post = lambda text: {"nodes": [{"type": "text", "text": text}]}
+    assert brief.check(post("قهوة عربية ١٥ ريال، شاي ١٠ ريال، كيك ٢٠ ريال"), "اعمل قائمة أسعار لمطعمنا الجديد") is None
+    assert brief.check(post("اليوم الوطني السعودي، دام عزك يا وطن"), "صمم منشور لليوم الوطني لشركتنا") is None
+    assert brief.check(post("وصفة جدة العائلة الأصلية"), "اكتب بوست عن وصفة عائلية") is None
+    assert brief.check(post("We filed 41 SAR filings and reviewed every SAR in ten days"), "A report on our anti-money-laundering work") is None
+    assert "SAR" in brief.check(post("The fix costs SAR 1.2m"), "A report on our bank's audit")
+    assert brief.check(post("افتتاح الفرع الجديد قريبا في المدينة كل يوم"), "Make a story size version of tests/x/opening.fig") is None
+    ask = {"role": "user", "content": "make it a story"}
+    made = {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "design", "input": {"action": "render"}}]}
+    only_skill = {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "design", "input": {"action": "skill"}}]}
+    first = {"role": "user", "content": "a post"}
+    assert design_checked([first, made, ask, made])                            # an earlier turn made it: its language is settled
+    assert not design_checked([first, only_skill, ask, made])
+
+
+def test_a_theme_or_a_glow_the_person_named_is_kept(tmp_path):
+    from cycls._agent.design.prepare import _quiet_decor
+    from cycls._agent.design.tool import DESIGN_HEARD, person_words
+    cases = [("use the tech-dark theme exactly as it is, with its glow", "tech-dark", "glow"), ("use the tech dark theme", "tech-dark", "glow"),
+             ("a deck on cloud security", "tech-dark", "none"), ("tech-dark but no glow please", "tech-dark", "none"),
+             ("a glowing review of our year", "tech-dark", "none"), ("a warm friendly feeling", "warm", "none"),
+             ("the warm theme please", "warm", "circles"), ("بدون توهج", "tech-dark", "none"), ("مع توهج", "tech-dark", "glow")]
+    for said, theme, want in cases:
+        token = DESIGN_HEARD.set(said)
+        try:
+            assert _quiet_decor(theme)[0]["decor"] == want, said
+        finally:
+            DESIGN_HEARD.reset(token)
+    # Only what the person typed counts: a tool's result handed back as a user turn doesn't.
+    said = person_words([{"role": "user", "content": "a post"}, {"role": "assistant", "content": []},
+                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "glow"}, {"type": "text", "text": "glow"}]},
+                         {"role": "user", "content": [{"type": "text", "text": "make it blue"}]}])
+    assert said == "a post\nmake it blue"
+    # A file's name isn't their words: an Arabic filename on an English brief doesn't make the design Arabic.
+    from cycls._agent.design import brief
+    from cycls._agent.design.tool import person_last
+    ask = person_last([{"role": "user", "content": [{"type": "text", "text": "[Attached: attachments/1-قهوة عربية.webp]"},
+                                                     {"type": "text", "text": "Make a post for Coffee Day on 3 March"}]}])
+    assert ask == "Make a post for Coffee Day on 3 March"
+    assert "in English" in brief.check({"nodes": [{"type": "text", "text": "قهوة من أرضنا وكرم من طبعنا"}]}, ask)
+
+
 def test_the_skill_a_render_needs_follows_what_it_makes():
     from cycls._agent.design.run import _skill_for
     assert _skill_for({"document": {}}) == "document-design"
     assert _skill_for({"deck": {}}) == "deck-design" and _skill_for({"frames": [{"size": "slide"}, {"size": "slide"}]}) == "deck-design"
     assert _skill_for({"frames": [{"size": "post-portrait"}] * 3}) == "graphic-design"       # a carousel
     assert _skill_for({"size": "square", "nodes": []}) == "graphic-design" and _skill_for({"pages": []}) == "graphic-design"
+
+
+# ---- every design new: a theme's stock glow left out of a new piece, and what the workspace made before ----
+
+_DARK = {"size": [1080, 1350], "fill": "#0e0e0e", "nodes": [
+    {"type": "ellipse", "x": 600, "y": -300, "w": 900, "h": 900,
+     "fill": {"gradient": ["#c9a45c66", "#c9a45c00"], "type": "radial"}},
+    {"type": "text", "text": "Oud Noir", "x": 96, "y": 500, "w": 888, "size": 160, "font": "Cormorant Garamond Semi Bold",
+     "color": "#f5efe3"},
+    {"type": "text", "text": "Eau de parfum", "x": 96, "y": 700, "w": 888, "size": 28, "font": "Montserrat Medium",
+     "color": "#c9a45c"}]}
+
+
+def test_a_new_deck_leaves_out_its_themes_glow_unless_it_asks_and_keeps_the_look_its_name_gives(tmp_path, monkeypatch):
+    """minimal-dark, bold-gradient and tech-dark draw a soft glow on every slide, warm draws circles: the look
+    every AI deck has. A new deck draws neither unless its theme writes `decor`, and says so; the look a named
+    theme gives (tech-dark → swiss) is still its look."""
+    from cycls._agent.design.prepare import _quiet_deck
+    spec, note = _quiet_deck({"deck": {"theme": "tech-dark", "slides": _SLIDES}})
+    assert spec["deck"]["theme"] == {"base": "tech-dark", "decor": "none"} and "soft glow" in note and '"decor": "glow"' in note
+    assert _prepare_spec(spec, None, tmp_path)[0]["deck"]["look"] == "swiss"
+    spec, note = _quiet_deck({"deck": {"slides": _SLIDES}, "theme": "warm"})            # beside the deck, it is the deck's
+    assert spec["theme"] == {"base": "warm", "decor": "none"} and "circles" in note
+    assert _prepare_spec(spec, None, tmp_path)[0]["deck"]["look"] == "soft"
+    own = {"base": "minimal-dark", "accent": "#3ddc97", "decor": "glow"}                 # asked for: kept
+    assert _quiet_deck({"deck": {"theme": own, "slides": _SLIDES}}) == ({"deck": {"theme": own, "slides": _SLIDES}}, None)
+    for quiet in ("editorial", "mono", {"base": "corporate"}, None, "brand"):              # nothing to leave out
+        deck = {"deck": {"slides": _SLIDES, **({"theme": quiet} if quiet is not None else {})}}
+        assert _quiet_deck(deck) == (deck, None)
+    # through the tool: the deck is drawn, and kept, without it
+    calls = _fake_render(monkeypatch)
+    out = asyncio.run(_exec_design({"action": "render", "name": "pitch", "spec": {"deck": {"theme": "bold-gradient",
+                                                                                          "slides": _SLIDES}}}, _ws(tmp_path)))
+    assert calls["spec"]["deck"]["theme"] == {"base": "bold-gradient", "decor": "none"} and calls["spec"]["deck"]["look"] == "bold"
+    assert calls["keep"]["deck"]["theme"] == {"base": "bold-gradient", "decor": "none"}   # so its added slides match
+    assert "draws a soft glow by itself" in _text(out)
+
+
+def test_a_deck_from_before_keeps_its_glow_on_the_slides_added_to_it(tmp_path):
+    """A deck made before keeps its theme as its file has it: a slide added to it is laid out with the same
+    settings, glow and all, so the deck doesn't come out half decorated."""
+    from cycls._agent.design.prepare import _prepare_deck
+    spec, err, _ = _prepare_deck({"deck": {"theme": "tech-dark", "look": "classic", "slides": _SLIDES}}, None, tmp_path)
+    assert err is None and spec["deck"]["theme"] == "tech-dark"
+
+
+def test_a_named_theme_as_it_stands_is_said_to_be_every_decks(tmp_path):
+    _, _, notes = _prepare_spec({"deck": {"theme": "editorial", "slides": _SLIDES}}, None, tmp_path)
+    assert any("editorial as it stands" in n and '"base": "editorial"' in n for n in notes), notes
+    _, _, notes = _prepare_spec({"deck": {"theme": _OWN, "slides": _SLIDES}}, None, tmp_path)
+    assert not any("as it stands" in n for n in notes)
+
+
+def test_a_new_document_leaves_out_its_themes_circles_and_its_sections_keep_that(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    calls = _doc_render(monkeypatch)
+    doc = {"title": "Nour", "theme": "warm", "sections": [{"title": "A", "blocks": ["x"]}]}
+    out = asyncio.run(_exec_design({"action": "render", "name": "appeal", "spec": {"document": doc}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "warm", "decor": "none"}
+    assert _source(tmp_path, "appeal")["theme"] == {"base": "warm", "decor": "none"} and doc["theme"] == "warm"
+    assert calls["spec"]["document"]["look"] == "soft" and "draws circles by itself" in out["_model"][-1]["text"]
+    asyncio.run(_exec_design({"action": "update_section", "name": "appeal", "number": 1, "section": {"blocks": ["y"]}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "warm", "decor": "none"}
+    # one from before: its source keeps the theme it had, circles and all
+    _source(tmp_path, "appeal")["theme"] = "warm"
+    asyncio.run(_exec_design({"action": "update_section", "name": "appeal", "number": 1, "section": {"blocks": ["z"]}}, ws))
+    assert calls["spec"]["document"]["theme"] == "warm"
+    # a theme changed on it later is drawn whole, and without its glow unless it asks
+    asyncio.run(_exec_design({"action": "update_document", "name": "appeal", "document": {"theme": "minimal-dark"}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "minimal-dark", "decor": "none"}
+    asyncio.run(_exec_design({"action": "update_document", "name": "appeal",
+                              "document": {"theme": {"base": "warm", "decor": "circles"}}}, ws))
+    assert calls["spec"]["document"]["theme"] == {"base": "warm", "decor": "circles"}
+
+
+def test_what_a_design_looks_like_is_read_from_what_it_holds():
+    from cycls._agent.design import recent
+    fp = recent.fingerprint(_DARK)
+    assert fp["kind"] == "post" and fp["ground"] == "#0e0e0e" and fp["faces"] == ["Cormorant Garamond", "Montserrat"]
+    assert fp["moves"] == ["soft glow or big faint ellipse"]
+    deck = recent.fingerprint({"deck": {"theme": {"base": "editorial", "bg": "#f6f1e7", "accent": "#b4532a",
+                                                  "heading": "Fraunces Bold", "body": "DM Sans"}, "look": "editorial"}})
+    assert deck == {"kind": "deck", "look": "editorial", "theme": "editorial", "ground": "#f6f1e7",
+                    "accent": "#b4532a", "faces": ["Fraunces", "DM Sans"]}
+    framed = recent.fingerprint({"size": [1080, 1080], "fill": {"gradient": ["#4f46e5", "#db2777"], "angle": 135}, "nodes": [
+        {"type": "rect", "x": 40, "y": 40, "w": 1000, "h": 1000, "stroke": "#c9a45c"},
+        {"type": "rect", "x": 96, "y": 96, "w": 600, "h": 300, "fill": "#ffffff1a", "backdropBlur": 30},
+        {"type": "stack", "x": 96, "y": 96, "w": 800, "children": [{"type": "text", "text": "x", "size": 220, "color": "#ffffff26",
+                                                                   "font": {"family": "Anton"}}]}]})
+    assert framed["ground"] == "gradient #4f46e5→#db2777" and framed["faces"] == ["Anton"]
+    assert framed["moves"] == ["giant faint word", "glass card", "inset frame"]
+
+
+def test_a_workspace_remembers_its_designs_and_a_render_like_one_of_them_says_so(tmp_path, monkeypatch):
+    """Given the same brief, a model makes the same free choices. Each new design is remembered by what it
+    holds; the skills list the latest before the next is composed, and a render that shares two things or more
+    with one of them (not itself) says what, as a note: never a refusal."""
+    ws = _ws(tmp_path)
+    _fake_render(monkeypatch, preview=b"\xff\xd8jpg")
+    first = _text(asyncio.run(_exec_design({"action": "render", "name": "oud-noir", "spec": _DARK}, ws)))
+    assert "every AI design tool makes" in first and "It shares" not in first   # the stock glow, said
+    calm = {**_DARK, "nodes": _DARK["nodes"][1:]}                                     # the same ground and face, no glow
+    second = _text(asyncio.run(_exec_design({"action": "render", "name": "musk-blanc", "spec": calm}, ws)))
+    assert "shares its ground (#0e0e0e) and its heading face (Cormorant Garamond) with oud-noir.fig" in second
+    assert "every AI design tool makes" not in second
+    again = _text(asyncio.run(_exec_design({"action": "render", "name": "musk-blanc", "replace": True, "spec": calm}, ws)))
+    assert "with musk-blanc.fig" not in again                                        # never alike itself
+    listed = asyncio.run(_exec_design({"action": "skill", "skill": "design-direction"}, ws))
+    assert "most recent designs" in listed and listed.index("musk-blanc.fig") < listed.index("oud-noir.fig")
+    assert "ground #0e0e0e" in listed and "faces Cormorant Garamond / Montserrat" in listed
+    # a deck is not alike a post; a brand kit's colours and faces are meant to be shared
+    from cycls._agent.design import recent
+    fp = recent.fingerprint(calm)
+    assert recent.alike(tmp_path, "x.fig", {**fp, "kind": "deck"}) is None
+    assert recent.alike(tmp_path, "x.fig", fp, brand=True) is None
+    # nothing remembered: nothing listed
+    assert recent.listing(tmp_path / "elsewhere") == ""
+
+
+def test_every_message_brings_the_design_as_it_is_now(tmp_path, monkeypatch):
+    """The design a chat works on is read from its file with each message — the agent's old view of it may have been
+    cleared, or the person changed it by hand — so an edit names its parts as they are, with no inspect first."""
+    from cycls._agent.design.run import design_now
+
+    async def outline(fig, user_id=None, page=None, full=False, sheets=False):
+        assert fig == b"FIG"
+        return {"frames": [{"slide": 0, "name": "Post", "size": [1080, 1080],
+                            "nodes": [{"name": "headline", "type": "text", "text": "First time at the wheel?",
+                                       "x": 86, "y": 610, "w": 908, "h": 248}]}], "pages": [], "page": ""}
+    monkeypatch.setattr("cycls._agent.design.outline", outline)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "post.fig").write_bytes(b"FIG")
+    used = lambda inp: {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "design", "input": inp}]}
+    chat = [{"role": "user", "content": "make a post"}, used({"action": "render", "name": "tests/post", "spec": {}}),
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "[Old tool result cleared]"}]}]
+    line = asyncio.run(design_now(chat, str(tmp_path)))
+    assert line.startswith("[The design this chat is working on") and "tests/post.fig" in line
+    assert "headline" in line and "ONE `edit`" in line
+    assert asyncio.run(design_now([{"role": "user", "content": "hi"}], str(tmp_path))) is None      # no design in the chat
+    gone = [*chat[:1], used({"action": "render", "name": "tests/elsewhere", "spec": {}})]
+    assert asyncio.run(design_now(gone, str(tmp_path))) is None                                       # its file isn't there
+
+
+def test_loading_the_design_instructions_says_to_search_first_in_a_turn_that_has_not(tmp_path, monkeypatch):
+    """The agent planned a whole post before it searched, then planned it again: where the instructions are loaded in
+    a turn that hasn't searched, it is told to search first and plan once."""
+    from cycls._agent.design.tool import DESIGN_RESEARCHED, _SEARCH_NOW
+    token = DESIGN_RESEARCHED.set(False)
+    try:
+        before = asyncio.run(_exec_design({"action": "skill", "skill": "graphic-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    token = DESIGN_RESEARCHED.set(True)
+    try:
+        after = asyncio.run(_exec_design({"action": "skill", "skill": "graphic-design"}, _ws(tmp_path)))
+    finally:
+        DESIGN_RESEARCHED.reset(token)
+    assert _SEARCH_NOW in before and "Search FIRST" in before
+    assert "Search FIRST" not in after

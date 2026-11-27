@@ -2,8 +2,9 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import {
   DesignEditorView, designPage, designPages, designPresence, designSelection, detachDesignEditorsUnder, flushDesignEditor,
-  followDesignPeer, fullscreenDesignEditor, showDesignPage, type DesignHost,
+  followDesignPeer, fullscreenDesignEditor, reloadDesignEditors, showDesignPage, type DesignHost,
 } from "../src/components/design-editor-view";
+import { CanvasHeaderSlot } from "../src/components/canvas-header-slot";
 import { DesignPresenceRow } from "../src/components/design-presence";
 import { designEditorComments } from "../src/components/design-editor-view";
 import { CommentsContext, commentStore, forgetComments, type CommentThread, type CommentsApi, type CommentsHost } from "../src/lib/comments";
@@ -307,6 +308,98 @@ describe("DesignEditorView", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads the design (with its version) and the brand as it opens, not after the editor's `ready`", async () => {
+    const h = versioned(() => "v4");
+    const { frame } = mount({ host: h });
+    await flush();
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(1);                         // before the editor said anything
+    expect(h.brand).toHaveBeenCalledTimes(1);
+    const { load } = await ready(frame(), 2);
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(1);                         // `ready` used that read
+    expect(h.brand).toHaveBeenCalledTimes(1);
+    expect(load).toMatchObject({ fig: b64(bytes["blob:orig"]), brand: { colors: { primary: "#b45309" } } });
+  });
+
+  it("an agent edit before `ready`: the editor reads the design afresh, not the read begun as it opened", async () => {
+    let v = "v4";
+    const h = versioned(() => v);
+    const { frame } = mount({ host: h });
+    await flush();
+    v = "v5";
+    await command({ script: "A", version: "v5" });                             // saved after that read, maybe
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    fromEditor(frame(), "ready", { protocol: 2 });
+    await flush();
+    await flush();
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:orig");             // the early read let go
+    const load = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m.type === "load")!;
+    fromEditor(frame(), "loaded", { doc: load.doc });
+    await flush();
+    expect(post.mock.calls.map((c) => c[0] as Record<string, unknown>).filter((m) => m.type === "command")).toEqual([]);   // v5 holds it
+  });
+
+  it("an editor opened again reads afresh; one closed before `ready` lets its early read go", async () => {
+    const h = versioned(() => "v4");
+    const { frame, unmount } = mount({ host: h });
+    await ready(frame(), 2);
+    reloadDesignEditors("designs/launch.fig");
+    await flush();
+    await ready(frame(), 2);
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);
+    unmount();
+
+    const h2 = versioned(() => "v4");
+    const second = mount({ host: h2 });
+    await flush();
+    second.unmount();
+    await flush();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:orig");
+  });
+
+  it("a design not written yet when it opened: the editor says so, and opens it when the file comes", async () => {
+    const h = versioned(() => "v1");
+    let there = false;
+    h.fetchVersioned = vi.fn(async () => { if (!there) throw Object.assign(new Error("HTTP 404"), { status: 404 }); return { url: "blob:orig", version: "v1" }; });
+    const props = { url: "", path: "designs/launch.fig", name: "launch.fig", editorUrl: EDITOR, writeFile: vi.fn(async () => {}), host: h };
+    const utils = render(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#0" /></ToastProvider>);
+    const first = utils.container.querySelector("iframe")!;
+    fromEditor(first, "ready", { protocol: 2 });
+    await flush();
+    await flush();
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(2);                        // the early read, then afresh: both 404
+    expect(screen.getByText(/couldn.t|could not|error/i)).toBeTruthy();
+    there = true;                                                             // the agent wrote it: the canvas's reload
+    utils.rerender(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#1" /></ToastProvider>);
+    await flush();
+    const second = utils.container.querySelector("iframe")!;
+    expect(second).not.toBe(first);                                           // reopened
+    const { load } = await ready(second, 2);
+    expect(load).toMatchObject({ fig: b64(bytes["blob:orig"]) });
+  });
+
+  it("a reload of a design that opened fine changes nothing in its editor", async () => {
+    const h = versioned(() => "v1");
+    const props = { url: "", path: "designs/launch.fig", name: "launch.fig", editorUrl: EDITOR, writeFile: vi.fn(async () => {}), host: h };
+    const utils = render(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#0" /></ToastProvider>);
+    const frame = utils.container.querySelector("iframe")!;
+    await ready(frame, 2);
+    utils.rerender(<ToastProvider><DesignEditorView {...props} refresh="cycls:design-by-editor#1" /></ToastProvider>);
+    await flush();
+    expect(utils.container.querySelector("iframe")).toBe(frame);              // its edits come as commands
+    expect(h.fetchVersioned).toHaveBeenCalledTimes(1);
+  });
+
+  it("given no URL (its canvas left the reading to it), an editor without a versioned read reads the saved file", async () => {
+    const reload = vi.fn(async () => "blob:fresh");
+    const writeFile = vi.fn(async () => {});
+    const utils = render(<DesignEditorView url="" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR}
+                                           writeFile={writeFile} reload={reload} />);
+    const { post } = await ready(utils.container.querySelector("iframe")!, 2);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "load", fig: b64(bytes["blob:fresh"]) }), EDITOR);
   });
 
   it("agent edits replay one at a time, and one the editor loaded already is skipped", async () => {
@@ -1036,5 +1129,43 @@ describe("DesignEditorView, comments", () => {
     fromEditor(frame, "commentPlace", { doc: load.doc, id: "t1", at: { x: 300, y: 200 }, box: { w: 1000, h: 700 } });   // a stale place
     await flush();
     expect(screen.queryByTestId("comment-thread")).toBeNull();
+  });
+});
+
+// "Saved ✓" over the editor covered the editor's own controls (its Simple | Designer switch, the bar under
+// a narrow slide): in the canvas it is said in the file's header instead, where the text editor says it.
+describe("DesignEditorView, saved", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async (u: string) => ({ arrayBuffer: async () => new Uint8Array(bytes[u]).buffer })));
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("in the canvas: in the header, not over the editor", async () => {
+    const end = document.createElement("div");
+    document.body.appendChild(end);
+    const writeFile = vi.fn(async () => {});
+    const utils = render(
+      <CanvasHeaderSlot.Provider value={{ start: null, end }}>
+        <DesignEditorView url="blob:orig" path="designs/launch.fig" name="launch.fig" editorUrl={EDITOR} writeFile={writeFile} host={host()} />
+      </CanvasHeaderSlot.Provider>);
+    const frame = utils.container.querySelector("iframe")!;
+    const { load } = await ready(frame, 2);
+    fromEditor(frame, "saved", { doc: load.doc, id: "s1", fig: b64([5, 6]) });
+    await flush();
+    expect(end.querySelector("[data-testid=design-saved]")?.textContent).toBe("Saved ✓");
+    expect(utils.container.querySelector("[data-testid=design-status]")).toBeNull();
+    end.remove();
+  });
+
+  it("with no header (a share): over the editor, at the top", async () => {
+    const { frame } = mount({ host: host() });
+    const { load } = await ready(frame(), 2);
+    fromEditor(frame(), "saved", { doc: load.doc, id: "s1", fig: b64([5, 6]) });
+    await flush();
+    const pill = screen.getByTestId("design-status");
+    expect(pill.textContent).toBe("Saved ✓");
+    expect(pill.className).toContain("top-3");
+    expect(pill.className).not.toContain("bottom-3");
   });
 });

@@ -3,10 +3,13 @@ file and comment actions in actions.py; a PowerPoint deck brought in (`import`) 
 import asyncio, base64, json, pathlib, re
 from ..paths import _resolve_path
 from . import skill
-from .tool import DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN
+from .tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED,
+    DESIGN_GIVEN, DESIGN_SKILLED, _GUIDE_LOADED, _GUIDE_NOT_RUN, _RESEARCH_FIRST, _SEARCH_NOW)
+from . import brief
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES, _DESIGN_QA_TYPES
-from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec
+from .prepare import _mend_json_tail, _prepare_ops, _prepare_spec, _quiet_deck
+from . import recent
 from .extract import _pdf_parts
 from .powerpoint import _import_deck
 from .report import _edit_names, _fixed_line, _layout_check, _outline_text
@@ -44,14 +47,118 @@ def _nudged(out, line):
     return out
 
 
+def _spec_of(inp):
+    """A call's spec as a dict (a large nested argument may arrive as its JSON text)."""
+    spec = inp.get("spec")
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            return {}
+    return spec if isinstance(spec, dict) else {}
+
+
+# A request to MAKE a new design — "Design an Instagram post", "make me a 6-slide deck", "صمم بوستر" — and not a
+# question about one, a change to one ("make the headline bigger", a `.fig` named), or another tool's work (a reel,
+# an Excel report): its skills come with the message.
+_MAKE = re.compile(r"\b(?:design|make|create|build|draft|produce|prepare|put together)\s+(?:me\s+|us\s+|for\s+(?:me|us)\s+)?"
+                   r"(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|some|\d+)\b", re.I)
+_MAKE_AR = ("صمم", "صمّم", "سو لي", "سوّ لي", "سوي لي", "اعمل لي", "أنشئ", "انشئ", "جهز لي", "جهّز لي", "اصنع")
+_NOT_DESIGN = re.compile(r"\b(?:reels?|videos?|clips?|animat\w*|gifs?|mp4|excel|spreadsheets?|sheets?|xlsx|csv|word|docx|"
+                         r"google docs?|emails?|e-mails?|apps?|websites?|landing pages?|code|scripts?)\b|\w\.\w{2,4}\b", re.I)
+_NOT_DESIGN_AR = ("فيديو", "ريل", "إكسل", "اكسل", "وورد", "جدول بيانات", "تطبيق", "موقع")
+_DECK = re.compile(r"\b(slides?|deck|presentation|pitch|powerpoint|pptx|keynote)\b", re.I)
+_DECK_AR = ("عرض تقديمي", "شرائح", "شريحة", "بوربوينت", "باوربوينت")
+_DOC = re.compile(r"\b(report|proposal|white ?paper|newsletter|cv|resume|résumé|booklet|handbook|guide|document|e-?book)\b", re.I)
+_DOC_AR = ("تقرير", "مقترح", "سيرة ذاتية", "السيرة الذاتية", "كتيب", "دليل")
+
+
+async def design_preload(messages, text, root, subject=None):
+    """The person asks for a design and this chat has no Design skill yet → the skills it will load, given with their
+    message (with the list of what this workspace made lately, and — when the turn hasn't searched — the note to
+    search first), else None. The agent spent its first turn of every design asking for them."""
+    from .tool import _DESIGN_WORDS, _DESIGN_WORDS_AR, design_skills_loaded
+    text = str(text or "")
+    if design_skills_loaded(messages):
+        return None
+    wants = _DESIGN_WORDS.search(text) or any(w in text for w in _DESIGN_WORDS_AR)
+    if not wants or not (_MAKE.search(text) or any(w in text for w in _MAKE_AR)):
+        return None
+    if _NOT_DESIGN.search(text) or any(w in text for w in _NOT_DESIGN_AR):   # a file named, or another tool's work
+        return None
+    kind = ("deck-design" if _DECK.search(text) or any(w in text for w in _DECK_AR)
+            else "document-design" if _DOC.search(text) or any(w in text for w in _DOC_AR) else "graphic-design")
+    loaded = skill.load(["design-direction", kind])
+    if loaded.startswith("Error"):
+        return None
+    made = await asyncio.to_thread(recent.listing, root)
+    parts = [f"[The Design skills for this request, loaded for you — design-direction and {kind}; no `skill` call "
+             f"needed (load another only if the piece turns out to be another kind).]", loaded]
+    if made:
+        parts.append(made)
+    parts.append(_SEARCH_NOW)
+    return "\n\n".join(parts)
+
+
+_NOW_ACTIONS = ("render", "edit", "script", "import", "inspect", "update_slide", "add_slide")
+_NOW_MAX = 6_000
+
+
+def _chat_design(messages):
+    """The design this chat last made or changed — the `name` its latest Design call gave — else None."""
+    for m in reversed(messages or []):
+        content = m.get("content")
+        for b in reversed(content) if isinstance(content, list) else []:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"):
+                continue
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            if str(inp.get("action") or "render").lower() in _NOW_ACTIONS and isinstance(inp.get("name"), str) and inp["name"].strip():
+                return inp["name"]
+    return None
+
+
+async def design_now(messages, root, folder="", subject=None):
+    """The design this chat is working on, as it is NOW → a line for the person's message, or None. Read from its
+    file on every message, so the agent never works on a design it no longer remembers (old tool results are
+    cleared after a pause, and the render it saw went with them) or on one changed by hand since: it names the
+    parts as they are, and an edit needs no `inspect` first."""
+    name = _chat_design(messages)
+    if not name:
+        return None
+    stem = _find_design(root, name, folder)
+    fig = pathlib.Path(root) / f"{stem}.fig"
+    if not await asyncio.to_thread(fig.is_file):
+        return None
+    from cycls._agent import design
+    o = await asyncio.wait_for(design.outline(await asyncio.to_thread(fig.read_bytes), user_id=subject), 8)
+    text = _outline_text(f"{stem}.fig", o["frames"], o["pages"], o["page"])
+    if len(text) > _NOW_MAX:
+        text = text[:_NOW_MAX] + " …"
+    return ("[The design this chat is working on, as it is now (read from its file, with any change made by hand in "
+            f"the editor). Change it with ONE `edit` by these names; no `inspect` needed.\n{text}]")
+
+
 async def _exec_design(inp, workspace):
     """Run one Design call → `_model` (the ack the model reads) and `_ui` (what the canvas opens). The workspace's
     own fonts (brand/fonts) reach the service first, and the call that first gives them says their family; a
     render in a chat that hasn't loaded the tool's skills says which to load (DESIGN_SKILLED, set by the loop)."""
     from cycls._agent import design
+    action = str(inp.get("action") or "render").lower()
+    if action == "render" and DESIGN_LOADED.get():
+        # A new design starts from what is true of its subject. A design made again (its file is there: `replace`,
+        # or a variant beside it) was researched when it was first made: an edit's re-render was held as new and
+        # sent the agent to search for nothing, then render the same spec again.
+        remade = (pathlib.Path(workspace.root) / f"{_stem_of(inp.get('name') or 'design', DESIGN_FOLDER.get())}.fig").is_file()
+        if not DESIGN_RESEARCHED.get() and not remade:
+            return _RESEARCH_FIRST
+        if not DESIGN_CHECKED.get():                          # in their language, with their names as they wrote them
+            branded = bool(await asyncio.to_thread(_load_brand, workspace.root))
+            held = brief.check(_spec_of(inp), DESIGN_ASK.get(), DESIGN_HEARD.get(), branded)
+            if held:
+                return held
     said = await design.add_fonts(workspace.root, getattr(workspace, "subject", None))
     out = await _design_call(inp, workspace)
-    if str(inp.get("action") or "render").lower() == "render" and not DESIGN_SKILLED.get():
+    if action == "render" and not DESIGN_SKILLED.get():
         spec = inp.get("spec") if isinstance(inp.get("spec"), dict) else inp
         want = json.dumps(["design-direction", _skill_for(spec)])
         out = _nudged(out, f"No design skill is loaded in this chat: {{\"action\": \"skill\", \"skill\": {want}}} holds the "
@@ -93,10 +200,24 @@ async def _design_call(inp, workspace):
     # the model saw only the short form: this call loads the full one, and runs nothing made blind
     asked = str(inp.get("action") or "render").lower()
     if asked == "skill":                                    # text only: it runs on the short form too, and loads the whole
-        text = skill.load(inp.get("skill") if inp.get("skill") is not None else inp.get("name"))
-        return text if DESIGN_LOADED.get() or text.startswith("Error") else f"{text}\n\n{_GUIDE_LOADED}"
+        want = inp.get("skill") if inp.get("skill") is not None else inp.get("name")
+        names, given = skill.asked_names(want), DESIGN_GIVEN.get()
+        if names and all(n in given for n in names):        # came with the person's message: not their text again
+            return (f"Already loaded: {', '.join(names)} came with the person's message in this chat (\"[The Design "
+                    "skills for this request…]\") — read them there and go on. Nothing was made or changed.")
+        text = skill.load([n for n in names if n not in given] or want)
+        if text.startswith("Error"):
+            return text
+        made = await asyncio.to_thread(recent.listing, workspace.root)   # what's new is new against these
+        text = f"{text}\n\n{made}" if made else text
+        text = text if DESIGN_LOADED.get() else f"{text}\n\n{_GUIDE_LOADED}"
+        return text if DESIGN_RESEARCHED.get() else f"{text}\n\n{_SEARCH_NOW}"
     if not DESIGN_LOADED.get():
-        return _GUIDE_LOADED if asked == "guide" else _GUIDE_NOT_RUN
+        if asked == "guide":
+            made = await asyncio.to_thread(recent.listing, workspace.root)
+            text = f"{_GUIDE_LOADED}\n\n{made}" if made else _GUIDE_LOADED
+            return text if DESIGN_RESEARCHED.get() else f"{text}\n\n{_SEARCH_NOW}"
+        return _GUIDE_NOT_RUN
     if asked == "guide":
         return ("Design's instructions are already loaded — they are this tool's description. Call it with "
                 "what you want made (render, edit, inspect, …). Nothing was made or changed by this call.")
@@ -260,6 +381,8 @@ async def _design_call(inp, workspace):
         ack = (f"Edit applied and saved to {rel}{on}. If the design is open in the editor, the Super "
                f"cursor replays the change live there." + _edit_names(r) + _fixed_line(r.get("fixed"), "png")
                + _layout_check(r.get("lint"), "png"))
+        for line in r.get("notes") or []:   # what the service set instead (a style a font hasn't got), as a render says it
+            ack += f" Note — {line}."
         for credit in credits:
             ack += f" {credit}."
         # a deck or carousel: show the slides the edit changed, not slide 1 — more than two, small on one sheet
@@ -315,10 +438,12 @@ async def _design_call(inp, workspace):
             credits, err = await assets.named(inp["spec"], root, subject)
             if err:
                 return err
-            spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(inp["spec"], _load_brand(root), root))
+            # a new deck draws its theme's glow or circles only when it asks for them (an old one's slides keep theirs)
+            spec_in, quiet = _quiet_deck(inp["spec"])
+            spec, err, notes = await asyncio.to_thread(lambda: _prepare_spec(spec_in, _load_brand(root), root))
             if err:
                 return err
-            notes = [*mended, *notes, *(f"{c}." for c in credits)]
+            notes = [*mended, *notes, *([quiet] if quiet else []), *(f"{c}." for c in credits)]
             # what it is, kept in the .fig: a deck keeps the settings its added slides are laid out with
             if isinstance(spec.get("deck"), dict):
                 from cycls._agent.design.deck import settings_of
@@ -367,6 +492,8 @@ async def _design_call(inp, workspace):
             else f"Design {saved}{f' ({note[2:]})' if note else ''}")
     ack, ui = (f"{what}: {fig_rel}. Its earlier version is kept in its history.", again) if replacing else _opened(fig_rel, what)
     ack += " Change it with Design edit — or, slide by slide, add_slide / update_slide." if count > 1 or kind == "deck" else " Change it with Design edit."
+    if action == "render":                                    # what it looks like, against what this workspace made before
+        notes = [*notes, *await asyncio.to_thread(_remember, root, fig_rel, spec, kind)]
     for line in notes:
         ack += " " + line
     ack += _fixed_line(r.fixed, fmt if count == 1 else "pptx") + _layout_check(lint, fmt if count == 1 else "pptx")
@@ -399,7 +526,8 @@ async def _design_call(inp, workspace):
         ack += (f" {which} — QA EVERY slide before you present: its headline clearly dominant; "
                 "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
                 "nothing overlapping or cut off; copy exactly right; and the slides CONSISTENT with "
-                "each other (title position, margins, palette, fonts). If anything is off, fix it "
+                "each other (title position, margins, palette, fonts); the deck made for THIS content, not a "
+                "named theme as it stands or a stock look. If anything is off, fix it "
                 f"now with {fix} (ops take `frame`, the slide index from 0), then present.")
         return {"_model": [*blocks, {"type": "text", "text": ack}], "_ui": ui}
     look, media = (preview, "image/jpeg") if preview else (r.image, _DESIGN_QA_TYPES.get("png"))
@@ -409,11 +537,18 @@ async def _design_call(inp, workspace):
     ack += (f" {shown} — QA it before you present: headline clearly dominant; "
             "margins ~8–10%, nothing crammed at an edge; every text legible on what's behind it; "
             "aligned, nothing overlapping or cut off; copy exactly right (spelling, names, "
-            f"numbers); on-brand. If anything is off, fix it now with {fix}, then present.")
+            f"numbers); on-brand; made for THIS content, not a stock look or the last design again. "
+            f"If anything is off, fix it now with {fix}, then present.")
     return {"_model": [{"type": "image", "source": {"type": "base64", "media_type": media,
                                                     "data": base64.b64encode(look).decode()}},
                        {"type": "text", "text": ack}],
             "_ui": ui}
+
+
+def _remember(root, fig_rel, spec, kind):
+    """A new render's look, kept so the next design can be new against it → the notes it earns: what it shares
+    with a recent design, and the stock glow (recent.py). Remembering never stops a render."""
+    return recent.remember(root, fig_rel, spec, kind, brand=bool(_load_brand(root)))
 
 
 def _design_step(inp):

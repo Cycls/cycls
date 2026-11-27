@@ -2579,7 +2579,7 @@ def test_design_skills_reach_the_model_whole_and_are_never_cleared(agent_env, mo
     from cycls._agent.spill import SPILL_AT
     _design_env(monkeypatch, mode=None)
     ws, ctx = agent_env
-    _say(ctx, "make me a poster")
+    _say(ctx, "a poster for the launch?")   # not a request to make one: its skills don't come with it (first_task_test)
     want = ["design-direction", "graphic-design"]
     assert sum(len(skill.SKILLS[n][1]) for n in want) > SPILL_AT
     client, calls = _capturing_client([
@@ -2602,7 +2602,7 @@ def test_a_render_says_which_skill_to_load_until_the_chat_has_loaded_one(agent_e
     _design_env(monkeypatch, mode=None)
     _fake_design_render(monkeypatch)
     ws, ctx = agent_env
-    _say(ctx, "make me a poster")
+    _say(ctx, "a poster for the launch?")   # no ask to make one: its skills don't come with it (first_task_test)
     spec = {"size": [1080, 1080], "nodes": [{"type": "text", "text": "Launch", "x": 80, "y": 80}]}
     render = lambda i: _tool_use_block(f"r{i}", name="design", inp={"action": "render", "name": f"p{i}", "spec": spec})
     client, _ = _capturing_client([

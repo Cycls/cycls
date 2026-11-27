@@ -4,6 +4,15 @@ import contextvars, re
 from .skill import SKILLS, catalog
 
 _SKILLS_TEXT = (
+    "BEFORE THE FIRST RENDER: (1) What the person asked for is the design: a colour, font, theme, style, layout, size "
+    "or reference is used exactly, even against anything below, and the words are in the language they wrote in unless they ask for another; if it will hurt, do it and say so in one line, and write \"asked\":true on that text, its `style` op or the spec so "
+    "the layout check reports it and leaves it. A "
+    "brand kit sets what they left open; past that there is no house style. (2) When this chat has `web_search`, "
+    "research every new design, and any edit that adds new content or pictures: two or three searches in one message "
+    "(the subject's real facts and places; how this kind of piece is done well), then `web_fetch` the one or two "
+    "pages that matter. Search the public subject, never private names or figures. A company found by name may be "
+    "a different one: use only what clearly ties to this person. Pictures: theirs first, then licensed ones "
+    "(`stock`, `asset`), with queries written from what you found. The `design-direction` skill has the detail.\n\n"
     "SKILLS — this tool carries its own: how to choose a look that isn't the same every time, and how to lay out "
     "each kind of work well in few calls. Before the FIRST design of a kind in a chat, load what it needs in ONE "
     "call — the look and the kind: {\"action\": \"skill\", \"skill\": [\"design-direction\", \"graphic-design\"]} "
@@ -21,17 +30,18 @@ _DESIGN_TOOL = {
         "Two ways to call:\n"
         "- render {spec, name, format?} — the normal way. `spec` is a JSON design:\n"
         "    {\"size\": [W, H] | \"<preset>\", \"fill\": <paint>, \"nodes\": [ ... ]}\n"
-        "  Coordinates are pixels from the top-left. `size` takes a preset name instead of "
+        "  Place every block with a `pin` (below) — never work out an x / y. x / y are pixels from the top-left, "
+        "for a deliberate effect only (a word or photo cut by the edge, a full-bleed band). `size` takes a preset name instead of "
         "[W, H]: square 1080×1080, post-portrait 1080×1350, story / reel 1080×1920, "
         "slide / wide 1920×1080, x-post 1600×900, a4-poster 1240×1754 (print-ready at the "
         "default @2x).\n"
         "  A <paint> (any `fill`, or a text `color`) is a solid \"#4f46e5\" OR a "
         "gradient {\"gradient\":[\"#4f46e5\",\"#db2777\"], \"angle\":135} — even stops, "
         "angle 0=→ 45=↘ 90=↓ 135=↙ (or placed stops [[\"#a\",0],[\"#b\",0.6],[\"#c\",1]]). "
-        "A glow is a radial gradient: {\"gradient\":[\"#fde68a\",\"#b4530900\"],\"type\":\"radial\","
+        "A radial gradient: {\"gradient\":[\"#fde68a\",\"#b4530900\"],\"type\":\"radial\","
         "\"center\":[0.7,0.3],\"radius\":0.6} (centre and radius are fractions of the box). "
-        "A colour may carry alpha as #rrggbbaa. A gradient background reads far richer "
-        "than a flat colour.\n"
+        "A colour may carry alpha as #rrggbbaa. A flat ground in the right colour beats an effect: a "
+        "gradient only when asked for or when the concept is about light, sky, heat or motion.\n"
         "  Node types (every node needs its `type`):\n"
         "    text    {\"type\":\"text\",\"text\":\"…\",\"x\":,\"y\":,\"w\"?:,\"size\":,"
         "\"font\"?:\"Playfair Display Bold\"|{\"family\":,\"style\":},\"weight\"?:100-900,\"italic\"?:bool,"
@@ -40,13 +50,14 @@ _DESIGN_TOOL = {
         "\"h\"?:,\"fit\"?:\"shrink\",\"valign\"?:\"center|bottom\"}  (with `h`, fit:\"shrink\" steps the size down until it "
         "fits the box, and valign sets the text in that box — a label on a shape)\n"
         "    rect    {\"type\":\"rect\",\"x\":,\"y\":,\"w\":,\"h\":,\"radius\"?:,\"fill\":<paint>,"
-        "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"opacity\"?:,\"shadow\"?:}\n"
-        "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"shadow\"?:}  (a circle when w==h; "
+        "\"stroke\"?:\"#hex\",\"strokeWeight\"?:,\"dash\"?:[on,off],\"opacity\"?:,\"shadow\"?:}\n"
+        "    ellipse {\"type\":\"ellipse\",\"x\":,\"y\":,\"w\":,\"h\":,\"fill\":<paint>,\"stroke\"?:,\"dash\"?:[on,off],\"shadow\"?:}  (a circle when w==h; "
         "only a `stroke` and no `fill` = an outline ring)\n"
         "    line    {\"type\":\"line\",\"x\":,\"y\":,\"w\":,\"h\"?:2,\"fill\":\"#hex\"}  a thin divider\n"
         "    image   {\"type\":\"image\",\"src\":\"attachments/photo.jpg\",\"x\":,\"y\":,\"w\"?:,\"h\"?:,"
         "\"fit\"?:\"cover|contain\",\"radius\"?:,\"opacity\"?:,\"shadow\"?:}\n"
-        "    stack   {\"type\":\"stack\",\"x\":,\"y\":,\"w\"?:,\"gap\"?:24,\"direction\"?:\"vertical|horizontal\","
+        "    stack   {\"type\":\"stack\",\"pin\":\"top-left|top|top-right|left|center|right|bottom-left|bottom|bottom-right\" "
+        "(or \"x\":,\"y\":),\"in\"?:\"<card id>\",\"margin\"?:,\"w\"?:,\"gap\"?:24,\"direction\"?:\"vertical|horizontal\","
         "\"align\"?:\"start|center|end\",\"anchor\"?:\"top|center|bottom\",\"children\":[nodes without x/y]}\n"
         "    icon    {\"type\":\"icon\",\"name\":\"lucide:rocket\",\"x\":,\"y\":,\"size\":64,\"color\"?:}  any Iconify icon "
         "(sets: lucide, tabler, mdi, ph, heroicons, ri…)\n"
@@ -54,8 +65,8 @@ _DESIGN_TOOL = {
         "    pattern {\"type\":\"pattern\",\"asset\":\"moroccan\",\"color\"?:,\"opacity\"?:0.12,\"scale\"?:1,\"x\"?:,\"y\"?:,\"w\"?:,\"h\"?:}  "
         "one tile of the media library repeated over its box (no box: the whole frame) — FIRST in `nodes`, behind the text\n"
         "    qr      {\"type\":\"qr\",\"text\":\"https://…\",\"x\":,\"y\":,\"size\":240}\n"
-        "    line    {\"type\":\"line\",\"from\":[x,y],\"to\":[x,y],\"color\":,\"width\"?:4,\"end\"?:\"arrow\",\"start\"?:\"arrow\"}  "
-        "(a connector or pointer; the old x/y/w form is a divider)\n"
+        "    line    {\"type\":\"line\",\"from\":[x,y],\"to\":[x,y],\"color\":,\"width\"?:4,\"dash\"?:[on,off],\"end\"?:\"arrow\",\"start\"?:\"arrow\"}  "
+        "(a connector, a pointer, a dotted line to write on; the old x/y/w form is a divider)\n"
         "    list    {\"type\":\"list\",\"items\":[\"…\"],\"marker\"?:\"•|1.|—|none\",\"x\":,\"y\":,\"w\":,\"size\":,\"color\"?:}  "
         "bullets or steps with a hanging indent (right-to-left for Arabic)\n"
         "    chart   {\"type\":\"chart\",\"kind\":\"column|bar|stacked|line|area|pie|donut\",\"x\":,\"y\":,\"w\":,\"h\":,"
@@ -77,9 +88,21 @@ _DESIGN_TOOL = {
         "ONE block named by its `id`: `move` or `duplicate` it by that name, and a line edited "
         "longer pushes the rest down, in the editor too. Give any node an `id` (\"headline\") "
         "— it's the node's name in the file, for edits and the layout check.\n"
-        "  An image is a PNG / JPEG / WebP / GIF already IN the workspace (an upload, a stock "
-        "photo you saved, brand/logo.png) — `src` is its path; save a web image to the workspace "
-        "first. Or NAME a photo to find: \"stock\":\"coffee beans on wood\" in place of `src` "
+        "  PIN, don't place: `pin` sets a block where its words say, inside the margin (`margin`, default 8% of the "
+        "frame's short side), as wide as the frame less both margins unless it says `w`; left / center / right also "
+        "set its `align`. Any node takes a `pin` — a shape and its label pinned alike with the same `w`, `h` land on "
+        "each other (a button, a badge). A pinned part STAYS pinned: when an edit makes something in it bigger or "
+        "longer, a block pinned to the bottom grows upwards and stays on the margin, and nothing else moves. So "
+        "\"a bigger headline\" is the one op style {node:\"headline\", size:120} — never move the other parts to "
+        "make room. A pinned part you `move` is placed by hand from then on. `in` pins it inside a card, a panel "
+        "or a band instead of the frame (\"in\": \"card-1\", an `id` built before it), in that part's own margin "
+        "(8% of its short side) — a card's copy is pinned in the card, so nothing in it is placed by hand either.\n"
+        "  DECORATION that needs many positions — rings, rays, ticks, a circle or row of dots, a grid of marks — is ONE "
+        "`svg` node (circles, lines; ticks are one circle with a dashed stroke), pinned or placed as one piece, or a "
+        "`pattern`: never positions worked out one by one, in your head or with a script.\n"
+        "  An image is any photo IN the workspace (an upload, a file you made or saved, brand/logo.png): "
+        "JPEG, PNG, WebP, GIF, a phone's HEIC, AVIF, BMP or TIFF, at any size — `src` is its path. `src` may also be "
+        "a link the person gave you. Use the photos they bring, where they belong in the piece. Or NAME a photo to find: \"stock\":\"coffee beans on wood\" in place of `src` "
         "(a deck slide's image: {\"stock\":\"…\"}) — a stock photo is found, saved to "
         "attachments/stock/ and credited in the result; `pick`:1 takes the next one. `cover` (default) fills the w×h box and crops the overflow; `contain` fits the "
         "whole image inside it (logos). Give w, h or both — a missing one follows the image's "
@@ -106,13 +129,16 @@ _DESIGN_TOOL = {
         "not content: at most one texture or pattern and one or two objects in a design.\n"
         "  `shadow` is true or {\"blur\":40,\"y\":16,\"opacity\":0.25,\"color\"?,\"x\"?,\"spread\"?} "
         "— a drop shadow that lifts a card or button off the background.\n"
-        "  DESIGN — the floor, not a style (`design-direction` has real ones) — make it look intentional, not a wireframe: one clear idea, a strong "
-        "hierarchy (a big bold headline 72–120px, a small letter-spaced eyebrow ~24px "
-        "with letterSpacing 4–6, a muted subtitle ~32px), a tight palette (a gradient "
-        "or one background colour + white / near-white text + ONE accent), generous "
-        "margins (~8–10% of the width), and a touch of depth (a shadow on the button or "
-        "a card, or a big soft low-opacity ellipse bleeding off an edge for flair). "
-        "A pill button = a rect with radius = h/2, then a text with the SAME x, y, w, h and \"align\":\"center\", "
+        "  DESIGN — every piece is new (`design-direction` is how): a concept found in THIS content (its objects, "
+        "places, numbers, words), a direction taken as a starting point, a palette and type pair chosen for this "
+        "piece, a composition the concept suggests and ONE signature detail — never a recipe, never what this "
+        "workspace made last time (the skills and each render's reply list it). The floor under that: a strong "
+        "hierarchy (a big headline 72–120px, a small eyebrow ~24px — letterSpacing 4–6 on Latin capitals only — "
+        "a subtitle ~32px), a tight palette (a ground + a text colour + ONE accent), generous margins (~8–10% of "
+        "the width). Not the stock AI look unless the person asks for it or the concept needs it: a soft glow or big faint ellipse in a "
+        "corner, a dark field with one neon accent, a centred headline on a purple gradient, glass cards on a "
+        "dark field. "
+        "A pill button = a rect with radius = h/2, then a text with the SAME `pin` (or x, y), w, h and \"align\":\"center\", "
         "\"valign\":\"center\" — two nodes in one box, never a stack (a stack sets its children one after another, "
         "never on top of each other).\n"
         "  FONTS: any Google Font by its exact family name plus a style — \"Playfair Display "
@@ -136,11 +162,13 @@ _DESIGN_TOOL = {
         "block. Every render and change comes back with a LAYOUT CHECK (overlapping text, text off or "
         "crowding an edge, text too small, low contrast on what's behind it). Text too small, and a colour "
         "that doesn't read on a plain colour behind it, it puts right by itself and says so; fix what "
-        "else it lists before you present.\n"
-        "  RTL: for Arabic / Hebrew set text `align`:\"right\" and give it a `w`, then "
-        "ANCHOR it to the right margin — place the box so its right edge (`x`+`w`) sits "
-        "inside the frame (`x` ≈ frameW − margin − `w`), NOT at the small `x` you'd use "
-        "for left-aligned English (that runs the text off the right edge). Shaping, bidi "
+        "else it lists before you present. Don't work out positions, contrast or minimum text sizes in your "
+        "head — the check measures them after the render; fix what it reports, all in one edit. Look at a first "
+        "render ONCE: when the check reports nothing and you see no fault (cut, overlapping, unreadable, off its "
+        "margin, a typo), present it — no touch-up round for taste; \"could be better\" is not a fault.\n"
+        "  RTL: for Arabic / Hebrew pin the block to the right (`top-right`, `right`, `bottom-right`), which "
+        "sets its text `align` to the right edge — never the small `x` you'd use for left-aligned English (that "
+        "runs the text off the right edge). Shaping, bidi "
         "(mixed digits / Latin) and diacritics are automatic, so write the text naturally "
         "— but skip `letterSpacing` on Arabic.\n"
         "- A presentation DECK: pass a deck of LAYOUTS — the normal way. You fill each slide's "
@@ -159,8 +187,9 @@ _DESIGN_TOOL = {
         "team {title, people:[{name, role?, photo?}] (≤8)} · closing {title, subtitle?, cta?, contact?, "
         "qr?:\"https://…\"} · poll {question, options (2–6)} (a LIVE poll: when the deck is "
         "presented the audience votes from their phones — the presenter shows a join QR — and the bars "
-        "fill live; exports show the empty poll) · custom {nodes, fill?} (a hand-built slide, for what no "
-        "layout fits). Every "
+        "fill live; exports show the empty poll) · custom {nodes, fill?, footer?} (a hand-built slide, for what no "
+        "layout fits; `footer: true` gives it the deck's running head and page number, where every other slide has "
+        "them — keep that band free and never draw your own). Every "
         "slide also takes notes, transition, id. Images are workspace paths.\n"
         "  Themes: minimal-light, minimal-dark, bold-gradient, editorial, corporate, tech-dark, warm, mono, "
         "\"brand\" (the workspace brand kit — the default when one exists), or overrides on a base: "
@@ -203,10 +232,13 @@ _DESIGN_TOOL = {
         "asks for the same thing in several formats or versions — not separate renders, and not "
         "for a deck's slides (those are `frames` / a `deck`). Lay each page out for ITS size: "
         "never the same coordinates on another shape.\n"
+        "  A PDF COMPOSED PAGE BY PAGE (an activity book, a worksheet, a planner, a certificate, a menu, a programme) is `frames`, "
+        "one per page at [1240,1754]: one design file, editable, downloaded as a PDF. Never a script or HTML for it.\n"
         "  A DOCUMENT — a report, a proposal, a white paper, a guide, a brochure, a CV: anything that "
-        "is read on paper-sized pages and comes out as a PDF — is spec = {\"document\": {\"title\", "
+        "is read on paper-sized pages as text that flows and comes out as a PDF — is spec = {\"document\": {\"title\", "
         "\"subtitle\"?, \"author\"?, \"date\"?, \"organization\"?, \"size\"?: \"a4\"|\"letter\"|\"a5\" "
         "(\"landscape\": true), \"theme\"?, \"look\"?: \"editorial\"|\"swiss\"|\"bold\"|\"soft\"|\"minimal\"|\"classic\", "
+        "\"align\"?: \"start\"|\"justify\", \"measure\"?: \"full\"|\"set-in\"|\"hang\"|\"narrow\"|\"center\", \"paragraphs\"?: \"spaced\"|\"indent\", \"lines\"?: true|false, \"headings\"?: {\"weight\", \"size\": \"small\"|\"regular\"|\"large\", \"caps\", \"color\": \"ink\"|\"accent\"}, "
         "\"cover\"?: {\"style\": \"full\"|\"band\"|\"minimal\"|\"split\"|\"type\", "
         "\"eyebrow\"?, \"image\"?}, \"openers\"?: \"plain\"|\"band\"|\"page\", \"columns\"?: 1|2|3, "
         "\"sections\": [{\"title\", \"summary\"?, \"blocks\": […]}], \"back\"?: {\"title\", "
@@ -234,14 +266,12 @@ _DESIGN_TOOL = {
         "paragraphs. The LOOK is yours to choose unless the user says: a theme — the workspace brand kit when "
         "there is one (the default), else one that fits the subject, its accent or fonts "
         "overridden ({base, accent, heading, body}) when that fits better — and a \"look\", how the pages are "
-        "composed (none given: as a deck's — a proposal → bold, a report → editorial, a guide or CV → swiss, a letter "
-        "→ minimal, a brochure → soft): classic (the text set in beside a margin "
-        "for notes; callouts, stats and cards on the surface) · editorial (paragraphs set like a book's, indented "
-        "with no space between; sections open under a hairline; pull quotes; figures and cards under rules) · swiss "
-        "(headings hang in the margin beside their text, the section's number in the margin under a heavy rule, "
-        "nothing filled) · bold (the text the full width, sections open on a field of the accent, accent tiles, "
-        "filled callouts, dark cards) · soft (a centred column, centred openers, rounded panels with icons) · "
-        "minimal (wide margins, small-capital headings, outlined callouts, no running head). A callout, quote, "
+        "composed (choose it for this brief): classic (callouts, stats and cards on the surface) · editorial (numbers in small "
+        "capitals, large quotes, unfilled cards) · swiss (a large section number, nothing filled) · bold (sections open on a "
+        "field of the accent, accent tiles, filled callouts, dark cards) · soft (rounded panels with icons) · "
+        "minimal (wide margins, small-capital headings, outlined callouts, no running head). A new document's text runs the "
+        "page's full width from its normal edge with no indent: `align`, `measure` and `paragraphs` change that only when the "
+        "person asks. `lines` and `headings` are tools, like a look or a cover: use them or not, differently each time, as this brief calls for. A callout, quote, "
         "stats, cards or table block takes \"style\" to be drawn another way: callout box|rules|top|fill|soft|outline "
         "· quote bar|pull|big|card|plain · stats cards|ruled|tiles|plain · cards fill|ruled|dark|soft|outline · "
         "table band|rules|accent|zebra. The cover sets the tone (the look's when none is given): "
@@ -306,13 +336,16 @@ _DESIGN_TOOL = {
         "\"[Selected in <name>.fig › <frame>: <node> (<type>), …]\" is the person "
         "pointing: \"this\" / \"the selection\" means those nodes — edit them by those names "
         "(\"[… page \"Story\" › …]\" says which page they are on: pass it as `page`).\n"
-        "- export {name, format, page?} — a design you ALREADY have, as another file: pdf, pptx, png, jpg, "
+        "- export {name, format, page?, slide?} — a design you ALREADY have, as another file: pdf, pptx, png, jpg, "
         "webp or svg, made from its saved .fig as it is now — with everything changed since, by you or by "
         "hand in the editor. When the user wants the same design in another format (\"send me this as a "
         "PDF\", \"I need the slides as images\"), use this, NOT render: a render makes a second design from "
-        "the spec, without those changes. A deck as png / jpg is an image a slide; `page` exports one page. "
-        "Export only for a file to send or attach — never to deliver: the design is already open on the canvas, "
-        "and the person downloads every format from there. Exporting again replaces the earlier copy.\n"
+        "the spec, without those changes. A deck as png / jpg is an image a slide; `slide` (from 1) exports that slide "
+        "alone; `page` exports one page. "
+        "Export only when the person asks for a file (or you must attach or send one) — never to deliver, and never "
+        "\"so they have a PNG to post\": the design is already open on the canvas, and the person downloads every "
+        "format from there. Each export is a wait, again after every edit to keep it in step. Exporting again "
+        "replaces the earlier copy.\n"
         "- A design as a file (name = the design): rename {name, new_name} · duplicate {name, new_name?} — a "
         "copy to change freely (a variant in another language, a second direction) · delete {name} — to the "
         "trash, where the user can restore it · versions {name} — its earlier versions (every edit and save "
@@ -364,7 +397,10 @@ _DESIGN_TOOL = {
         "(`launch-2`). Another round of the SAME design (the user's feedback, a redo) is that design, not a new "
         "file: change it with `edit`, or render it again under its name with \"replace\": true. Every version of "
         "it is kept in its history, so never a `-2` or `-v2` copy to keep the old one; `duplicate` only when the "
-        "user wants both."
+        "user wants both. A CHANGE THE PERSON ASKS FOR is fast: ONE `edit` with every op it needs — the design as "
+        "it is now comes with their message, so no `inspect` first; colours are `recolor`, a bigger or longer part "
+        "is one `style` / `set_text` (pinned parts stay pinned: never move the others to make room); never render "
+        "it again for a change an edit can make. Then stop, unless the edit's layout check reports a fault."
     ),
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["render", "script", "edit", "inspect", "add_slide", "update_slide", "move_slide", "duplicate_slide", "delete_slide",
@@ -396,7 +432,7 @@ _DESIGN_TOOL = {
         "title": {"type": "string", "description": "For update_slide without `slide`: the slide's title (its name in the deck viewer)."},
         "transition": {"type": "string", "enum": ["fade", "slide", "none"], "description": "For update_slide without `slide`: how the slide enters when presented."},
         "ops": {"type": "array", "items": {"type": "object"},
-                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?}; delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src} (or `stock` / `asset` in place of `src`); add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect). `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
+                "description": "For `edit`: operations by node name (see `inspect`), applied in order — set_text {node,text}; style {node, color?, fill?, font?, size?, weight?, italic?, opacity?, radius?, align?, valign?, letterSpacing?, lineHeight?, stroke?, strokeWeight?}; move {node, x?, y?, dx?, dy?} (a stack's id moves the whole block; a node in a stack moved on its own leaves it); resize {node, w?, h?, valign?} (on a text, `h` with valign \"center\" or \"bottom\" is the box it is set in — a label on its band, given the band's y and h; without valign a text's height follows its words; a text set in a box keeps it through a resize); delete {node}; duplicate {node, dx?, dy?, id?} (in a stack, the copy is its next item); replace_image {node, src} (or `stock` / `asset` in place of `src`); add {node:<spec node>, frame?}; background {fill, frame?} — the slide's OWN fill: a colour, {\"gradient\": [...]} or \"none\" (never cover a slide with a full-size rect); recolor {from, to, frame?} — every use of one colour (fills, outlines, text and its runs, gradient stops, the slide's own fill) becomes another: a palette change (\"a deep green background\", an accent that reads on it) is a few recolor ops, never the design rendered again. `frame` (slide index from 0) narrows a name to one slide. Pages: page_add {name, spec}; page_duplicate {page?, name?}; page_rename {page?, name}; page_delete {page?}."},
         "spec": {"type": "object", "description": "For `render`: a single design {size, fill, nodes}; several variants of one design as pages {pages:[{name, size, fill, nodes}]}; a document (a report or any PDF that flows over pages) {document:{title, sections:[{title, blocks:[…]}]}}; a presentation as a deck of layouts {deck:{theme, look?, footer?, slides:[{layout, …slots, style?, notes}]}} (the normal way for decks); or hand-built frames {frames:[...]} (one per slide, all one size, each with optional id/title/notes/transition; export pptx or pdf, or png for a carousel); size is [W,H] or a preset (square, post-portrait, story, reel, slide, wide, x-post, a4-poster). Nodes are text/rect/ellipse/line/image/stack (image `src` = a workspace file; a stack lays out `children` from their measured sizes); a fill or text color is a solid \"#hex\" or a gradient {gradient:[...],angle}; nodes take opacity, shadow, and shapes take stroke/strokeWeight."},
         "script": {"type": "string",
                    "description": "For `script`: a Figma plugin-API script ending in console.log('__FRAME__'+id). For `edit`: a snippet mutating the open doc that also sets figma.currentPage.selection to the changed node(s). Scripts may use only `figma` (and `console`): no `this`, globals, network, eval/Function or `.constructor` — anything else is refused before it runs."},
@@ -421,13 +457,128 @@ DESIGN_SKILLED = contextvars.ContextVar("design_skilled", default=True)
 
 
 def design_skills_loaded(messages):
-    """Has this chat loaded any of the Design tool's skills?"""
+    """Has this chat loaded any of the Design tool's skills — by a `skill` call, or given with a message
+    (design.run.design_preload)?"""
     for m in messages:
-        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+        content = m.get("content")
+        if m.get("role") == "user":
+            texts = [content] if isinstance(content, str) else [
+                b.get("text") or "" for b in content or [] if isinstance(b, dict) and b.get("type") == "text"]
+            if any('<design-skill name="' in t for t in texts):
+                return True
+            continue
+        if m.get("role") != "assistant" or not isinstance(content, list):
             continue
         if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "design"
-               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in m["content"]):
+               and str((b.get("input") or {}).get("action") or "").lower() == "skill" for b in content):
             return True
+    return False
+
+
+# The skills given with a message in this chat (set by the loop): a `skill` call for them is answered in a line, not
+# with their whole text again. Only these: a skill a call returned may since have been cleared from an old result.
+DESIGN_GIVEN = contextvars.ContextVar("design_given", default=frozenset())
+_GIVEN_SKILL = re.compile(r'<design-skill name="([\w-]+)">')
+
+
+def design_skills_given(messages):
+    """The names of the Design skills given with the person's messages in this chat (design.run.design_preload)."""
+    names = set()
+    for m in messages:
+        content = m.get("content")
+        if m.get("role") != "user" or not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text" and str(b.get("text", "")).startswith("[The Design skills"):
+                names.update(_GIVEN_SKILL.findall(b["text"]))
+    return frozenset(names)
+
+
+# What the person wrote in this chat (set by the loop): a theme they name, or its glow, is theirs to keep.
+DESIGN_HEARD = contextvars.ContextVar("design_heard", default="")
+_ATTACHED = re.compile(r"\[(?:Attached:|The user attached)[^\]]*\]")
+
+
+def person_words(messages):
+    """The person's own messages, as text: not the tool results the loop hands back as user turns."""
+    out = []
+    for m in messages or []:
+        c = m.get("content")
+        if m.get("role") != "user":
+            continue
+        if isinstance(c, str):
+            out.append(c)
+        elif isinstance(c, list) and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            out += [str(b.get("text") or "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
+    return _ATTACHED.sub("", "\n".join(out)).strip()      # a file's name isn't something they said (an Arabic name, an English brief)
+
+
+# The person's latest message, what a new design is held against (brief.py).
+DESIGN_ASK = contextvars.ContextVar("design_ask", default="")
+DESIGN_CHECKED = contextvars.ContextVar("design_checked", default=True)
+
+
+def person_last(messages):
+    """The person's latest message, as text."""
+    for m in reversed(messages or []):
+        said = person_words([m]) if m.get("role") == "user" else ""
+        if said.strip():
+            return said
+    return ""
+
+
+def design_checked(messages):
+    """Nothing to hold: this turn was held once already (never twice: it is theirs to overrule), or the chat made a design
+    in an earlier turn, whose language and names are settled (a new size of an Arabic post asked for in English)."""
+    this_turn = True
+    for m in reversed(messages):
+        content = m.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if this_turn:
+            if m.get("role") == "user" and not any(b.get("type") == "tool_result" for b in blocks):
+                this_turn = False
+            elif any(b.get("type") == "tool_result" and "Not run: check it against the brief" in str(b.get("content")) for b in blocks):
+                return True
+        elif any(b.get("type") == "tool_use" and b.get("name") == "design"
+                 and str((b.get("input") or {}).get("action") or "render").lower() not in ("skill", "guide") for b in blocks):
+            return True
+    return False
+
+
+# Has this turn looked up what it is about to design? Set by the loop, read by `_exec_design`: a new design is
+# held once until it has, and a search that fails or finds nothing never stops the work.
+DESIGN_RESEARCHED = contextvars.ContextVar("design_researched", default=True)
+_RESEARCH_FIRST = (
+    "Not run: research first. Nothing was made. Make two or three `web_search` calls now, in one message: the "
+    "subject's real facts and places, how this kind of piece is done well, and what its audience expects. Then call "
+    "`design` again with this design made better by what you found. Search the public subject only, never private "
+    "names or figures, and keep everything the person asked for exactly as they asked: their names spelled as they "
+    "wrote them, even if a similar company turns up, and the words in their language. Put no figure, address, date or "
+    "result on it that neither they nor a source you read gave. If the search fails or finds nothing, render anyway: "
+    "this note comes once a turn.")
+
+# Said where the design instructions are loaded, in a turn that hasn't searched: the agent planned a whole post
+# (49 s, its coordinates and all) and only then searched, and planned it again from what it found.
+_SEARCH_NOW = (
+    "Search FIRST, before you plan this design: make your two or three `web_search` calls now, in one message (the "
+    "subject's real facts, how this kind of piece is done well), then plan it ONCE from what you found. A new design "
+    "rendered before a search is held anyway, so a plan made before the search is made twice.")
+
+
+def design_researched(messages, tools):
+    """Is a new design clear to render: no search tool here, or this turn has searched, or been told to once?"""
+    if not any(isinstance(t, dict) and t.get("name") == "web_search" for t in tools):
+        return True
+    for m in reversed(messages):
+        content = m.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if m.get("role") == "user" and not any(b.get("type") == "tool_result" for b in blocks):
+            return False                                      # the person's message: this turn starts here
+        for b in blocks:
+            if b.get("type") in ("tool_use", "server_tool_use") and b.get("name") in ("web_search", "web_fetch"):
+                return True
+            if b.get("type") == "tool_result" and "Not run: research first" in str(b.get("content")):
+                return True
     return False
 
 

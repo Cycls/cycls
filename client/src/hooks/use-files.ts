@@ -428,7 +428,8 @@ export function useFiles(baseUrl: string = "") {
 
   // Run on the deck's .fig by the server; slide numbers are 1-based.
   const deckOp = useCallback(async (deckPath: string, body: { op: string; number?: number; to?: number; title?: string; text?: string; notes?: string }) => {
-    await api(`/deck/${encPath(deckPath)}`, { method: "POST", json: body });
+    // → {ok, slides, added?}: an added slide's number (from 1)
+    return (await api(`/deck/${encPath(deckPath)}`, { method: "POST", json: body })).json() as Promise<{ ok?: boolean; slides?: number; added?: number }>;
   }, [api]);
 
   // Design comment threads (lib/comments.ts); `list` is polled quietly with the page's version.

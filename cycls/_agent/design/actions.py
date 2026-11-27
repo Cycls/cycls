@@ -4,7 +4,8 @@ import asyncio, base64, json, pathlib
 from .. import trash
 from .brand import _load_brand
 from .images import _DESIGN_QA_MAX, _DESIGN_QA_SLIDES
-from .prepare import _num, _prepare_document, _prepare_slide, _settle_look
+from .prepare import _num, _prepare_document, _prepare_slide, _quiet_decor, _quiet_note, _settle_look, _theme_base
+from . import recent
 from .report import _fixed_line, _layout_check, _page_changes
 from .files import (_DECK_EXTS, _DESIGN_EXTS, _designs_there, _free_design, _opened, _render_again, _rendered_copy,
     _replacing, _stem_of, _write_beside)
@@ -101,6 +102,8 @@ async def _exec_document(action, inp, workspace, name):
                 return "Error: `update_document` needs `document` — the keys that change, e.g. {title, theme, cover}."
             if "sections" in change:
                 return "Error: `update_document` changes the document's own keys — its `sections` have add_section / update_section / move_section / delete_section."
+            if "theme" in change:                   # a new theme is drawn whole: its glow or circles only when asked for
+                change = {**change, "theme": _quiet_decor(change["theme"])[0]}
             doc = {k: v for k, v in {**doc, **change}.items() if v is not None}
             intent = "change the document"
     except ValueError as e:
@@ -233,8 +236,11 @@ async def _exec_slides(action, inp, workspace, name):
                 slide[k] = inp[k]
         return slide
 
-    def slide_op(kind, extra, slide):
-        slide, resolved, err = _prepare_slide(dict(slide), settings, root)
+    from . import photos
+    photo_cap = photos.cap_for(many or [inp.get("slide")])  # several slides added at once all fit in one request
+
+    async def slide_op(kind, extra, slide):
+        slide, resolved, err = await asyncio.to_thread(_prepare_slide, dict(slide), settings, root, photo_cap)
         if err:
             raise ValueError(err.removeprefix("Error: "))
         return {"op": kind, **extra, "slide": slide, "deck": resolved}
@@ -242,7 +248,7 @@ async def _exec_slides(action, inp, workspace, name):
     try:
         if action == "add_slide":
             at = number("at") if inp.get("at") is not None else None
-            ops = [slide_op("slide_add", {} if at is None else {"at": at + i}, slide)
+            ops = [await slide_op("slide_add", {} if at is None else {"at": at + i}, slide)
                    for i, slide in enumerate(many or [given()])]
             n = len(ops)
             what = (("Slide added" if n == 1 else f"{n} slides added")
@@ -250,7 +256,7 @@ async def _exec_slides(action, inp, workspace, name):
         elif action == "update_slide":
             index = number("number")
             if inp.get("slide") is not None:
-                op, what = slide_op("slide_update", {"index": index}, given()), f"Slide {index + 1} rebuilt"
+                op, what = await slide_op("slide_update", {"index": index}, given()), f"Slide {index + 1} rebuilt"
             else:
                 meta = {k: inp[k] for k in ("notes", "title", "transition") if inp.get(k) is not None}
                 if not meta:
@@ -328,6 +334,20 @@ async def _exec_design_file(action, inp, workspace, name):
         fig = await asyncio.to_thread(fig_path.read_bytes)
         scale, page = inp.get("scale") or 2, str(inp.get("page") or "").strip() or None
         where, said = "", ""
+        # One slide of a deck as a picture, by its number from 1. "page 1" of a deck means its first slide: a deck is
+        # one page of slides, and that call failed, so all five were exported to look at the cover (2026-11-25).
+        slide = inp.get("slide")
+        if slide is None and page and page.isdigit() and fmt not in _DECK_EXTS:
+            pages = (await design.outline(fig, user_id=subject)).get("pages") or []
+            if page not in [p.get("name") if isinstance(p, dict) else str(p) for p in pages]:
+                slide, page = page, None
+        try:
+            slide = int(slide) if slide is not None and str(slide).strip() else None
+        except ValueError:
+            return f"Error: `slide` is a slide's number, from 1 — not {slide!r}."
+        if slide is not None and (slide < 1 or fmt in _DECK_EXTS):
+            return ("Error: `slide` exports one slide as a picture (png, jpg, webp or svg), numbered from 1; a pdf or pptx "
+                    "is the whole deck.")
         try:
             # A deck imported from PowerPoint goes back into the file it came from (powerpoint.py).
             from cycls._agent.design.powerpoint import original_for, written_said
@@ -335,6 +355,9 @@ async def _exec_design_file(action, inp, workspace, name):
             if original:
                 data, written = await design.export_back(fig, original, scale=scale, user_id=subject)
                 outs, said = [(f"{name}.{fmt}", data)], written_said(written)
+            elif slide:
+                outs = [(f"{name}-slide-{slide}.{fmt}", await design.export_slide(fig, slide, fmt=fmt, scale=scale, user_id=subject))]
+                where = f" (slide {slide})"
             elif page:
                 data, pages, page_name = await design.export_page(fig, page, fmt=fmt, scale=scale, user_id=subject)
                 outs = [(f"{name}-{page_name}.{fmt}", data)]
@@ -504,6 +527,20 @@ async def _render_document(inp, workspace, name, kept=False):
             doc_in["look"] = spec_in.pop("look")
         if err := _settle_look(doc_in, "document", looked):
             return err
+        # …and its text at the page's edge with no lines, unless it says (kept in the source, so a document made before
+        # this keeps the pages it had when one of its sections changes)
+        for key in ("measure", "paragraphs", "align", "lines", "headings"):
+            if doc_in.get(key) is None and spec_in.get(key) is not None:
+                doc_in[key] = spec_in.pop(key)
+        doc_in.setdefault("measure", "full")
+        doc_in.setdefault("lines", False)
+        # …and draws its theme's glow or circles on the cover only when it asks for them (kept in the source,
+        # so its section changes keep the same cover; a document made before keeps what it had)
+        doc_in["theme"], left = _quiet_decor(doc_in.get("theme"))
+        if left:
+            looked.append(_quiet_note("document", _theme_base(doc_in["theme"]), left))
+        elif doc_in.get("theme") is None:
+            doc_in.pop("theme", None)
         inp = {**inp, "spec": spec_in}
     source = json.loads(json.dumps(inp["spec"]["document"]))       # as written, stock photos and assets resolved
     spec, err, notes = await asyncio.to_thread(lambda: _prepare_document(inp["spec"], _load_brand(workspace.root), workspace.root))
@@ -550,6 +587,9 @@ async def _render_document(inp, workspace, name, kept=False):
             f"document: update_section {{name: \"{name}\", number, section}} (or add_section / move_section / delete_section / "
             f"update_document) sends only what changes and renders it again in place — or this render again with "
             f"\"replace\": true. A page edited by hand does not re-flow the pages after it.")
+    if not kept:                                                   # a new look, against what this workspace made before
+        notes = [*notes, *await asyncio.to_thread(lambda: recent.remember(root, fig_rel, spec, "document",
+                                                                         brand=bool(_load_brand(root))))]
     for line in notes:
         ack += " " + line
     ack += _fixed_line(r.fixed, "pptx") + _layout_check(r.lint, "pptx")
@@ -594,7 +634,8 @@ async def _render_document(inp, workspace, name, kept=False):
     else:
         which = (f"All {count} pages are attached" if shown >= count else
                  f"Pages 1–{shown} of {count} are attached (Design inspect lists the rest)")
-    ack += (f" {which} — QA them before you present: the cover reads at a glance; no page ends in a large "
+    ack += (f" {which} — QA them before you present: the cover reads at a glance, with an idea of its own (not a "
+            "named theme's cover as it stands); no page ends in a large "
             "hole that a shorter or reordered block would close; every chart and table has its caption and "
             "says something; nothing overlaps or is cut; names, numbers and dates are exactly right. If the "
             "content needs changing, render again with \"replace\": true; then present.")

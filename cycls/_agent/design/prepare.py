@@ -1,6 +1,8 @@
 """The model's specs, decks, documents, slides and edit ops made ready for the design service.
 Every `_prepare_*` returns what to send, or an error the model can act on."""
 import json, pathlib, re, zlib
+from .tool import DESIGN_HEARD
+from . import photos
 from ..paths import _resolve_path
 from .brand import _HEX, _contrast, _first_color, _load_brand, _norm_hex, _readable_on
 from .images import _BRAND_LOGOS, _DESIGN_IMAGES_MAX, _DESIGN_SVG_MAX, _image_slot, _place_image
@@ -50,7 +52,7 @@ def _frame_size(fr):
     raise ValueError(f"`size` {s!r} isn't a size — use [W, H] or a preset ({', '.join(_DESIGN_SIZES)})")
 
 
-def _prepare_spec(spec, brand, root=None):
+def _prepare_spec(spec, brand, root=None, photo_cap=None):
     """A spec made safe to render — sizes resolved, untyped nodes typed (the renderer drops them),
     images placed, brand defaults filled, never over a colour set — on a copy → (spec, error, notes)."""
     if isinstance(spec.get("deck"), dict):
@@ -61,6 +63,7 @@ def _prepare_spec(spec, brand, root=None):
     spec = json.loads(json.dumps(spec))
     frames = spec["frames"] if isinstance(spec.get("frames"), list) and spec["frames"] else [spec]
     filled, branded_fonts, image_bytes = 0, 0, 0
+    photo_cap = photo_cap or photos.cap_for(spec)         # however many photos there are, they all fit
     shapes = []                 # notes on nodes reinterpreted, once each
     first_size = None
     for i, fr in enumerate(frames, 1):
@@ -129,7 +132,7 @@ def _prepare_spec(spec, brand, root=None):
                     n["x"], n["y"] = n.get("x") or 0, n.get("y") or 0
                     n["w"], n["h"] = W - n["x"], H - n["y"]
                 try:
-                    image_bytes += _place_image(n, root)
+                    image_bytes += _place_image(n, root, photo_cap)
                 except ValueError as e:
                     return f"Error: {e}"
                 if image_bytes > _DESIGN_IMAGES_MAX:
@@ -281,6 +284,72 @@ def _theme_base(theme):
     return str(base or "").strip().lower().replace(" ", "-").replace("_", "-")
 
 
+# The decoration a base theme draws by itself (cycls-design themes.js): a soft glow, or circles, on every content
+# slide and on a document's cover and back — the look every AI deck has. A NEW deck or document draws it only when
+# its theme writes `decor`; one made before keeps what it has, so the slides added to it still match.
+_LOUD_DECOR = {"minimal-dark": "glow", "bold-gradient": "glow", "tech-dark": "glow", "warm": "circles"}
+
+
+def _asked_for_decor(base):
+    """Did the person ask for this theme by name, or for its glow or circles (and not to leave them out)?"""
+    said = DESIGN_HEARD.get().lower()
+    word = r"glow\b|توهج|توهّج|وهج" if _LOUD_DECOR[base] == "glow" else r"circles?\b|دوائر"   # (not "a glowing review")
+    if re.search(rf"(?:\b(?:no|without|remove|drop|not|don'?t\s+\w+)\s+(?:any\s+|the\s+|a\s+|its\s+)?|بدون\s+|من\s+غير\s+)(?:{word})", said):
+        return False
+    name = rf"\b{base.replace('-', '[ -]')}\b" + (r"\s+theme" if "-" not in base else "")
+    return bool(re.search(rf"\b(?:{word})|{name}", said))
+
+
+def _quiet_decor(theme):
+    """A new piece's theme without its base's glow or circles, unless it asks for them → (theme, what was left
+    out or None). A named theme becomes {base, decor}, which still gives the look its name gives (_look_for)."""
+    if theme is None or theme == "brand":
+        return theme, None
+    base = _theme_base(theme)
+    if base not in _LOUD_DECOR or (isinstance(theme, dict) and "decor" in theme):
+        return theme, None
+    if _asked_for_decor(base):                         # written in, so every look draws it (cycls-design themes.js)
+        return ({"base": base, "decor": _LOUD_DECOR[base]} if isinstance(theme, str) else {**theme, "decor": _LOUD_DECOR[base]}), None
+    if isinstance(theme, str):
+        return {"base": base, "decor": "none"}, _LOUD_DECOR[base]
+    if isinstance(theme, dict):
+        return {**theme, "decor": "none"}, _LOUD_DECOR[base]
+    return theme, None
+
+
+def _quiet_note(what, base, left):
+    one = left == "glow"
+    return (f"The {what}'s theme ({base}) draws {'a soft glow' if one else 'circles'} by itself; a new {what} leaves "
+            f"{'it' if one else 'them'} out (`\"decor\": \"none\"` in its theme): write `\"decor\": \"{left}\"` in the "
+            f"theme if the person asked for {'it' if one else 'them'}, or the concept needs {'it' if one else 'them'}.")
+
+
+def _quiet_deck(spec):
+    """A new deck's spec with its theme's glow or circles left out → (spec, note or None). The theme may stand
+    beside `deck` (_prepare_deck moves it in); the caller's spec is not changed."""
+    deck = spec.get("deck")
+    if not isinstance(deck, dict):
+        return spec, None
+    where = deck if deck.get("theme") is not None else spec if spec.get("theme") is not None else None
+    if where is None:
+        return spec, None
+    theme, left = _quiet_decor(where["theme"])
+    if not left:
+        return spec, None
+    out = dict(spec)
+    if where is deck:
+        out["deck"] = {**deck, "theme": theme}
+    else:
+        out["theme"] = theme
+    return out, _quiet_note("deck", _theme_base(theme), left)
+
+
+def _named(theme):
+    """A theme that is only a name: a string, or {base, decor: none} as _quiet_decor writes it."""
+    return isinstance(theme, str) or (isinstance(theme, dict) and set(theme) == {"base", "decor"}
+                                      and theme["decor"] == "none")
+
+
 def _look_for(spec, what="deck"):
     """The look a deck or a document gets when it names none → (look, why). A theme named for a look
     gives it; else what the piece says it is (its kind, eyebrow, title: a proposal → bold, a report →
@@ -288,7 +357,7 @@ def _look_for(spec, what="deck"):
     on a look's base gives that; else its shape (columns or chapter pages → editorial, no cover →
     swiss); else one chosen by its title. Never classic: that was every deck and every document, alike."""
     theme = spec.get("theme")
-    if isinstance(theme, str) and _theme_base(theme) in _THEME_LOOKS:
+    if _named(theme) and _theme_base(theme) in _THEME_LOOKS:
         return _THEME_LOOKS[_theme_base(theme)], "its theme's"
     if what == "deck":
         slides = spec.get("slides") if isinstance(spec.get("slides"), list) else []
@@ -359,7 +428,7 @@ def _brand_theme(brand):
     return theme
 
 
-def _prepare_deck(spec, brand, root):
+def _prepare_deck(spec, brand, root, photo_cap=None):
     """A deck of layouts made ready for the service (cycls-design layouts.js): size resolved, image
     slots read, the brand kit as theme when there is one → (spec, error, notes)."""
     spec = json.loads(json.dumps(spec))
@@ -384,17 +453,23 @@ def _prepare_deck(spec, brand, root):
         notes.append(f"A deck doesn't read {', '.join(f'`{k}`' for k in unread)} — it reads "
                      f"{', '.join(sorted(_DECK_KEYS))}; colours and fonts go in `theme`.")
     theme = deck.get("theme")
-    if isinstance(theme, dict):
+    if isinstance(theme, dict) and not _named(theme):
         own = [k for k in theme if k not in ("base", "name", "logo")]
         notes.append(f"The deck's theme: {theme.get('base') or 'minimal-light'}"
                      f"{' with your ' + ', '.join(own) if own else ''}.")
+    elif _named(theme) and theme != "brand":
+        notes.append(f"The deck's theme is {_theme_base(theme)} as it stands: a named theme looks like every deck made "
+                     f"from it — write it as {{\"base\": \"{_theme_base(theme)}\", \"bg\": …, \"accent\": …, \"heading\": …, "
+                     f"\"body\": …}} with this deck's own palette and faces (design-direction).")
     elif theme is None and not brand:
         notes.append("The deck has no `theme`, so it is minimal-light, the default — a theme of its own goes in the "
                      "deck: {\"deck\": {\"theme\": \"editorial\" or {\"base\": …, \"accent\": …, \"heading\": …}, \"slides\": […]}}.")
 
+    photo_cap = photo_cap or photos.cap_for(deck)
+
     def slot(value):
         nonlocal total
-        resolved, n = _image_slot(value, root)
+        resolved, n = _image_slot(value, root, photo_cap)
         total += n
         if total > _DESIGN_IMAGES_MAX:
             raise ValueError(f"the deck's images total over {_DESIGN_IMAGES_MAX >> 20} MB — use smaller copies "
@@ -444,7 +519,7 @@ _PAPER = {"a4": [1240, 1754], "letter": [1275, 1650], "a5": [874, 1240], "a3": [
 # a document's own keys (document.js), read as its own when written beside it
 _DOCUMENT_KEYS = ("title", "subtitle", "author", "date", "organization", "logo", "size", "landscape", "theme", "dir", "cover",
                   "columns", "openers", "toc", "numbered", "numbering", "figures", "header", "footer", "sections", "max_pages",
-                  "kind", "meta", "contact", "back", "footnotes", "lang", "look")
+                  "kind", "meta", "contact", "back", "footnotes", "lang", "look", "measure", "paragraphs", "align", "lines", "headings")
 
 
 _SHEET_ROWS = 2000      # max rows read from a spreadsheet
@@ -567,11 +642,13 @@ def _prepare_document(spec, brand, root):
                      f"read as the document's own — {'it goes' if len(moved) == 1 else 'they go'} inside it: "
                      f"{{\"document\": {{\"title\": …, \"sections\": […]}}}}.")
 
+    photo_cap = photos.cap_for(doc)
+
     def slot(value):
         nonlocal total
         if isinstance(value, dict) and (isinstance(value.get("image"), str) or isinstance(value.get("svg"), str)):
             return value                                      # resolved already
-        resolved, n = _image_slot(value, root)
+        resolved, n = _image_slot(value, root, photo_cap)
         total += n
         if total > _DESIGN_IMAGES_MAX:
             raise ValueError(f"the document's images total over {_DESIGN_IMAGES_MAX >> 20} MB — use smaller copies "
@@ -651,6 +728,7 @@ def _prepare_ops(ops, root):
     if not isinstance(ops, list):
         return None, "Error: `ops` must be a list of operations."
     ops = json.loads(json.dumps(ops))
+    photo_cap = photos.cap_for(ops)                       # one edit may bring many photos: they all fit in its request
     for k, op in enumerate(ops, 1):
         if not isinstance(op, dict) or not op.get("op"):
             return None, f"Error: op {k} must be an object with an `op` (set_text, style, move, …)."
@@ -662,14 +740,14 @@ def _prepare_ops(ops, root):
         if op["op"] == "replace_image":
             probe = {"src": op.pop("src", None), "w": 1, "h": 1}
             try:
-                _place_image(probe, root)
+                _place_image(probe, root, photo_cap)
             except ValueError as e:
                 return None, f"Error: op {k}: {e}"
             op["image"] = probe["image"]
         elif op["op"] == "add":
             if not isinstance(op.get("node"), dict):
                 return None, f"Error: op {k}: `add` needs a `node` (a spec node, e.g. a text or a stack)."
-            spec, err, _ = _prepare_spec({"size": [_NO_FRAME, _NO_FRAME], "nodes": [op["node"]]}, None, root)
+            spec, err, _ = _prepare_spec({"size": [_NO_FRAME, _NO_FRAME], "nodes": [op["node"]]}, None, root, photo_cap)
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["node"] = spec["nodes"][0]
@@ -677,7 +755,7 @@ def _prepare_ops(ops, root):
             if not isinstance(op.get("spec"), dict) or op["spec"].get("deck") or op["spec"].get("pages"):
                 return None, (f"Error: op {k}: `page_add` needs `spec` — the page's design, "
                               f"{{size, fill, nodes}} (or a carousel's {{frames}}).")
-            spec, err, _ = _prepare_spec(op["spec"], _load_brand(root) if root else None, root)
+            spec, err, _ = _prepare_spec(op["spec"], _load_brand(root) if root else None, root, photo_cap)
             if err:
                 return None, err.replace("Error: ", f"Error: op {k}: ", 1)
             op["spec"] = spec
@@ -717,12 +795,12 @@ def _mend_json_tail(text):
         return None
 
 
-def _prepare_slide(slide, settings, root):
+def _prepare_slide(slide, settings, root, photo_cap=None):
     """One slide prepared as a deck's are → (slide, deck settings with images resolved, error)."""
     if not isinstance(slide, dict) or not (slide.get("layout") or isinstance(slide.get("nodes"), list)):
         return None, None, ('Error: `slide` is a layout slide ({"layout": "bullets", "title": …, "bullets": […]}) '
                             'or a hand-built one ({"nodes": […], "fill"?}).')
-    spec, err, _ = _prepare_deck({"deck": {**settings, "slides": [slide]}}, None, root)
+    spec, err, _ = _prepare_deck({"deck": {**settings, "slides": [slide]}}, None, root, photo_cap)
     if err:
         return None, None, err
     deck = spec["deck"]

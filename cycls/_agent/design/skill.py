@@ -26,10 +26,17 @@ def catalog():
     return "\n".join(f"  · {name} — {description}" for name, (description, _) in SKILLS.items())
 
 
-def load(asked):
-    """The skills asked for — a name, a list of them, or names in one string — as the text the model reads."""
+def asked_names(asked):
+    """The skill names in a `skill` call — a name, a list of them, or names in one string — lower-cased, each once.
+    A list written out as text ('["design-direction", "graphic-design"]', as some models send it) is that list."""
     names = asked if isinstance(asked, list) else re.split(r"[\s,]+", str(asked or ""))
-    names = list(dict.fromkeys(str(n).strip().lower() for n in names if str(n).strip()))
+    names = [str(n).strip().strip("[]\"'`").strip().lower() for n in names]
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def load(asked):
+    """The skills asked for (`asked_names`) as the text the model reads."""
+    names = asked_names(asked)
     unknown = [n for n in names if n not in SKILLS]
     if not names or unknown:
         what = f"no skill named {', '.join(map(repr, unknown))}" if unknown else "`skill` names the skills to load"

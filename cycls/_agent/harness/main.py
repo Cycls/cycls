@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cycls._app.db import Conflict
-from .. import connectors, routines, spill, state
+from .. import connectors, prelude, routines, spill, state
 from ..state import Session
 from . import events
 from .events import Turn
@@ -21,8 +21,8 @@ from .prompts import DEFAULT_SYSTEM, workspace_instructions, fence_instructions
 from .providers import make_provider
 from ..tools import build_tools, dispatch, _exec_read, vendor_skips, tool_prompts, is_terminal, interrupted_note, register_labels, detailed, excerpt, app_catalog, ToolContext
 from ..design.powerpoint import DECK_SUFFIXES   # what the Design tool's `import` opens
-from ..design.tool import (DESIGN_FOLDER, DESIGN_LOADED, DESIGN_SKILLED, design_called, design_skills_loaded,
-                           design_tool, design_wanted)
+from ..design.tool import (DESIGN_ASK, DESIGN_CHECKED, DESIGN_FOLDER, DESIGN_HEARD, DESIGN_LOADED, DESIGN_RESEARCHED, DESIGN_SKILLED, design_called, design_checked, design_researched, design_skills_loaded, person_last, person_words,
+                           design_tool, design_wanted, DESIGN_GIVEN, design_skills_given)
 from ..tools import ondemand
 from ..video.client import offered as video_offered
 from ..office.client import offered as office_offered
@@ -182,6 +182,77 @@ def _with_line(content, line):
     """One more text block after what was typed, as a selection is added."""
     blocks = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
     return [*blocks, {"type": "text", "text": line}]
+
+
+_FIRST_MAX = 8_000     # the memory index given with a first task; a longer one is cut, the rest a `database get` away
+_TOP_MAX = 40          # entries of the workspace's top level
+
+
+def _first_given(messages):
+    """Has a turn of this chat already been given the person's memory (`_first_task_context`)?"""
+    for m in messages:
+        c = m.get("content")
+        if m.get("role") == "user" and isinstance(c, list) and any(
+                isinstance(b, dict) and str(b.get("text", "")).startswith("[Your memory of this person") for b in c):
+            return True
+    return False
+
+
+async def _first_task_context(workspace):
+    """What the system prompt's "first real task" step fetched with tool calls before any work could start: the
+    person's memory index (an organisation's `organization.md` too) and the workspace's top level, as lines."""
+    out = []
+    try:
+        index = await state.memory_db(workspace).get("memory/index") if getattr(workspace, "subject", None) else None
+    except Exception as e:   # not "empty": told so, the agent may write a new index over the one it couldn't read
+        log("warn", message=f"memory index not read for the first task: {type(e).__name__}: {e}")
+        index = False
+    if isinstance(index, str) and index.startswith('"'):   # a model that put its markdown as a JSON string
+        try:
+            index = json.loads(index)
+        except ValueError:
+            pass
+    if isinstance(index, (dict, list)):
+        index = json.dumps(index, ensure_ascii=False)
+    index = index if index is False else str(index or "").strip()
+    if index is False:
+        out.append("[Your memory of this person could not be read as this chat starts — `database get` "
+                   "`memory/index` once yourself before the task, and never write a new index in its place.]")
+    elif index:
+        cut = len(index) > _FIRST_MAX
+        out.append("[Your memory of this person — `memory/index`, read for you as this chat starts; it stays in your "
+                   "context, so don't fetch it again. Get a detail key only when the task needs it."
+                   + (" It is cut here: `database get` it for the rest." if cut else "") + "]\n" + index[:_FIRST_MAX])
+    else:
+        out.append("[Your memory of this person: `memory/index` is empty — nothing is saved about them yet, "
+                   "so there is nothing to fetch.]")
+    root = Path(workspace.root)
+
+    def top():
+        org = ""
+        ws = str(getattr(workspace, "ws", "") or "")
+        if ws and not ws.startswith("u-") and (f := root / "organization.md").is_file():
+            org = f.read_text(encoding="utf-8", errors="replace")[:4_000]
+        rows = []
+        for e in root.iterdir():
+            if e.name.startswith("."):
+                continue
+            try:
+                rows.append((e.stat().st_mtime, e.name + ("/" if e.is_dir() else "")))
+            except OSError:
+                continue
+        rows.sort(reverse=True)
+        return org, [n for _, n in rows]
+
+    org, names = await asyncio.to_thread(top)
+    if org:
+        out.append("[Your memory of this person — their organisation's `organization.md`, read for you (its top):]\n"
+                   + org)
+    more = f" … and {len(names) - _TOP_MAX} more" if len(names) > _TOP_MAX else ""
+    out.append("[This workspace's top level as this chat starts, newest first — no need to list it again; look "
+               "inside a folder only when the request needs it: "
+               + (", ".join(names[:_TOP_MAX]) + more if names else "empty") + "]")
+    return out
 
 
 def _with_selection(content, sel):
@@ -451,7 +522,8 @@ def _said(messages, most=3):
             continue
         c = m.get("content")
         text = c if isinstance(c, str) else " ".join(
-            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text"
+            and not b.get("text", "").startswith(state.GIVEN))   # memory or a design's outline: not what they said
         if text := " ".join(text.split()):
             out.append(text[:500])
         if len(out) == most:
@@ -494,17 +566,21 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                instructions="AGENT.md", skills=[], price=None, context_window=None,
                extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=(),
                team=None, me=None):
+    prelude.mark("agent function")   # the deployment's own code before it calls run (Super: its usage count)
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
                              headers=headers, vision=vision)
+    prelude.mark("provider")
     if max_tokens is None: max_tokens = DEFAULT_MAX_TOKENS
     workspace = context.workspace
     user = getattr(context, "user", None)
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
+    prelude.mark("chat history read")
     # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
     modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
+    prelude.mark("settings read")
     if off := {_SETTINGS_NAME[k] for k, v in modes.items() if v == "never" and k in _SETTINGS_NAME}:
         allowed_tools = [t for t in allowed_tools if t not in off]
     # The video service's URL alone does not switch Video on: an agent that admits anyone who signs
@@ -526,17 +602,54 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         content = await _ingest(incoming.get("content", ""), workspace.root, vision, video="Video" in allowed_tools,
                                 transcribe="Transcribe" in allowed_tools and transcribe_configured(),
                                 chat_id=session.chat_id, design="Design" in allowed_tools and design_configured())
+        prelude.mark("message prepared")
         if mentions:
             titles = {s._connector.name: connectors.copy_of(s._connector)[0] or s._connector.name
                       for s in mcp_servers or [] if s._connector}
             content = _with_mention(content, "[Using: " + ", ".join(titles.get(m, m) for m in mentions) + "]")
         if selection := getattr(context, "selection", None):
             content = _with_selection(content, selection)
+        working = None   # the design this chat already works on: a change to it needs no skills
+        if "Design" in allowed_tools and design_configured():
+            # The design this chat works on, read from its file now: what the agent saw of it may have been cleared.
+            try:
+                from ..design.run import design_now
+                if line := (working := await design_now(session.messages, workspace.root, getattr(context, "folder", "") or "",
+                                            getattr(workspace, "subject", None))):
+                    content = _with_line(content, line)
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"design outline not added: {type(e).__name__}: {e}")
+        prelude.mark("design outline")
+        # What every first task fetched with its own tool calls before it could start — the person's memory index
+        # and the workspace's top level, on a chat's first turn with a task; a design's skills, on a request to make
+        # one — given with the message, so the agent's first turn is the task (a design's first 2–3 turns fetched).
+        typed = state.user_text({"content": content})   # what they wrote: not a file's contents, nor a line added
+        block = None
+        if "Design" in allowed_tools and design_configured() and not working and not selection:
+            try:
+                from ..design.run import design_preload
+                block = await design_preload(session.messages, typed, workspace.root, getattr(workspace, "subject", None))
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"design skills not given: {type(e).__name__}: {e}")
+        prelude.mark("design skills")
+        # The person's chat only (an agent's brief is the parent's task), with the `database` tool the memory is
+        # read by. A greeting is answered with none ("Zero tools for conversation"): the first turn with a task gets it.
+        if (me is None and "DataBase" in allowed_tools and not _first_given(session.messages)
+                and (block or len(typed.split()) >= 3 or incoming.get("attachments"))):
+            try:
+                for given in await _first_task_context(workspace):
+                    content = _with_line(content, given)
+            except Exception as e:
+                log("warn", user=user, chat_id=session.chat_id, message=f"first-task context not added: {type(e).__name__}: {e}")
+        prelude.mark("memory and listing")
+        if block:
+            content = _with_line(content, block)
         app = getattr(context, "app", "")
         if app and isinstance(app, str) and (line := await asyncio.to_thread(_open_app_line, workspace.root, app)):
             content = _with_line(content, line)
         await session.add_user(content, attachments=incoming.get("attachments"), approvals=approvals, declined=declined,
                                selection=selection, connectors=mentions)
+        prelude.mark("message saved")
     messages = session.messages
     # A new chat is named from the person's words while the reply is made, so naming never holds the reply up;
     # a greeting alone waits for more to name it by.
@@ -550,6 +663,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                                                      session=session.chat_id))
             _NAMING.add(naming)
             naming.add_done_callback(_NAMING.discard)
+    prelude.mark("chat meta")
 
     system_text = DEFAULT_SYSTEM + ("\n\n" + system if system else "")
     if instructions:
@@ -560,6 +674,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             yield _user_warn(user, session.chat_id,
                              f"Couldn't load {instructions} — your instructions weren't applied this turn.",
                              f"couldn't load {instructions}: {e}")
+    prelude.mark("instructions")
     skill_catalog = None
     if skills is not None:
         try:
@@ -570,6 +685,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             log("warn", user=user, chat_id=billed, message=f"skills unavailable this turn: {e}")
         if skill_catalog: system_text += "\n\n" + skills_mod.catalog_text(skill_catalog)
         ctx = replace(ctx, skills=skill_catalog)
+    prelude.mark("skills")
     for _ in vendor_skips(allowed_tools, vendor, web_search):
         log("warn", user=user, chat_id=billed,
                  message=f"native web search unavailable on {vendor}/* — use .web_search('brave') or an anthropic model")
@@ -596,6 +712,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     DESIGN_FOLDER.set(getattr(context, "folder", "") or "")
     # Video is short in every request until the chat uses it; its contract joins it then (ondemand).
     demand = await ondemand.start(tools_list, messages)
+    prelude.mark("tools built")
     if skill_catalog is not None and not any(t.get("name") == "skill" for t in tools_list):   # even with none yet: it is how the first is made
         tools_list.append(skills_mod.SKILL_TOOL)
     owners = {}   # tool name -> the OAuth2 it acts with, for the audit line
@@ -619,6 +736,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if getattr(context, "routine", None):   # a routine's run gets the connectors it works with, and no others
         hidden |= ({s._connector.name for s in client_side if s._connector} | {o.name for o in api_connectors or ()}) \
             - set(getattr(context, "connectors", None) or ())
+    prelude.mark("connector settings")
     deferred, catalog, objs = {}, {}, {}   # a connector's schemas wait behind `find_tools`
     direct = {}   # a connected REST connector's one tool, there from the start
     unconnected = {}   # connectors the person has not connected, with nothing to list until they do: `find_tools` offers them
@@ -626,6 +744,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     # first model call; the results are taken in the order the servers were given.
     asked = [s for s in client_side if not (s._connector and s._connector.name in hidden)]
     found = await asyncio.gather(*(connectors.tools_for(s, workspace) for s in asked), return_exceptions=True)
+    prelude.mark("connector tools")
     for server, got in zip(asked, found):
         if isinstance(got, Exception):
             said, label = _server_said(got), server._name or server._url
@@ -698,6 +817,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         objs[o.name], direct[o.name] = o, [schema["name"]]
         catalog.setdefault(o.name, (*connectors.copy_of(o), []))[2].append(f'{schema["name"]} {schema.get("description") or ""}')
         register_labels({}, {schema["name"]: label}, {schema["name"]: o.name}, details=(schema["name"],))
+    prelude.mark("key connectors")
     if deferred or unconnected:
         tools_list.append(connectors.FIND_TOOLS)
         handlers["find_tools"] = _find_tools
@@ -725,6 +845,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                             "live, with the credential attached server-side:\n"
                             + "\n".join(f"- {o.name}: {o.api}" for o in apis))
 
+    prelude.mark("apps")
     for guidance in tool_prompts(tools_list):
         system_text += "\n\n" + guidance
     window = context_window or DEFAULT_WINDOW
@@ -792,6 +913,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     if (last.get("at") and (datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() > COLD_AFTER
             and read > window * CLEAR_COLD and await session.clear(keep, window * CLEAR_COLD)):
         yield compacted(1, "cold", read)
+    prelude.mark("history trimmed")
 
     repeats = {}   # (tool, input, result) → times this run
     idle = False   # the turn ended with agents still working
@@ -807,6 +929,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
             turn = None
             partial_text = ""
             turn_t0 = time.monotonic()
+            if me is None and (spent := prelude.take()):   # where the time before this first call went
+                log("prelude", user=user, chat_id=billed, ms=spent[1], steps=spent[0])
             try:
                 async for ev in _stream_with_retry(provider, messages=state.normalize(session.context()),
                                                    max_tokens=max_tokens, **request()):
@@ -901,6 +1025,11 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                 _discover(_owner_of(b.get("name") or ""))
             # One `seen` per batch; comprehensions run left to right, so the first call wins.
             seen = set()
+            DESIGN_RESEARCHED.set(design_researched(messages, tools_list))   # a search beside a render counts
+            DESIGN_HEARD.set(person_words(messages))
+            DESIGN_GIVEN.set(design_skills_given(messages))
+            DESIGN_ASK.set(person_last(messages))
+            DESIGN_CHECKED.set(design_checked(messages))
             DESIGN_SKILLED.set(design_skills_loaded(messages))   # this turn's calls count: a skill loaded beside a render
             pairs = [dispatch(b, workspace, bash_timeout, handlers, network=bash_network, seen=seen, ctx=ctx)
                      for b in blocks]

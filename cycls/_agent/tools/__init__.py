@@ -699,6 +699,14 @@ async def _exec_read(inp, workspace, catalog=None, chat_id=None):
         if not parsed: return f"Error: invalid pages '{pages_spec}'. Use '1-5' or '3'."
         return await pdf.extract(path, *parsed)
 
+    from ..design import photos                         # a phone's HEIC or a large photo is seen as a smaller copy
+    if (ext in photos.OTHER_EXTS or (ext in _IMAGE_EXTS and size > 3 * 1024 * 1024)) and size <= photos.MAX_FILE and photos.available():
+        try:
+            jpg, mt = await asyncio.to_thread(photos.preview, path.read_bytes(), inp["path"])
+        except ValueError as e:
+            return f"Error: {e}"
+        return [{"type": "image", "source": {"type": "base64", "media_type": mt, "data": base64.b64encode(jpg).decode()}}]
+
     if size > 3 * 1024 * 1024:
         return f"Error: file too large (>3 MB). Use bash (head/grep/jq) on `{inp['path']}`."
 

@@ -43,6 +43,7 @@ import { docsCommandDetail, flushAllSheetsEditors, sheetsCommandDetail, sheetsEd
 import { detachVideoEditorsUnder, flushAllVideoEditors, flushVideoEditorsUnder, refreshVideoEditors, reloadVideoEditors } from "./video-editor-view";
 import { t, getLang, setLang, useLang, stepText, langOf } from "../lib/i18n";
 import { track } from "../lib/analytics";
+import { useWarmService } from "../lib/warm";
 import { toggleDark, cn, followUpsEnabled, askEnabled, slide } from "../lib/utils";
 import { useToast } from "../lib/toast";
 import { useSpeechRecognition } from "../hooks/use-speech";
@@ -125,7 +126,7 @@ export interface FilesPanelProps {
   versionPreview?: (path: string, id: string) => Promise<Blob>;
   restoreVersion?: (path: string, id: string) => Promise<{ version: string }>;
   onNewDesign?: () => void;
-  deckOp?: (path: string, body: DeckOp) => Promise<void>;       // the deck viewer's slide moves / copies / deletes
+  deckOp?: (path: string, body: DeckOp) => Promise<unknown>;    // the deck viewer's slide moves / copies / deletes
   pollsFor?: (deck: string) => PollApi;                         // live polls when the owner presents a deck
   comments?: CommentsApi;
   fetchConnector?: (name: string, path: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; body: string; contentType: string }>;
@@ -715,6 +716,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     }
   }, []);
   const { listening, transcribing, analyser: micAnalyser, start: startMic, stop: stopMic, cancel: cancelMic } = useSpeechRecognition({ onEnd: onSpeechEnd, authHeaders, warm: !!config?.voice_warm });
+  useWarmService(config?.design_editor_url);   // the design editor's service, awake before a design opens (lib/warm.ts)
 
   const handleFilesAdded = useCallback(async (incoming: File[]) => {
     // Reject oversized files up front (server enforces the same cap).

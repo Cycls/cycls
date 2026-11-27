@@ -422,8 +422,11 @@ def _is_plain_user(msg):
 
 # What the harness adds to what was typed (`_ingest`, `_with_mention`, `_with_selection`, `_with_line`): an
 # attached file's name with its contents after it, and a line each for an @-mention, a selection, an open app and
-# a team chat's author.
-_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ", "[Open beside the chat: ", "[From: ")
+# a team chat's author; the design a chat works on (design.run.design_now), and what a first task fetched before it
+# could start (harness.main._first_task_context, design.run.design_preload).
+GIVEN = ("[The design this chat is working on", "[Your memory of this person", "[This workspace's top level",
+         "[The Design skills for this request")   # context the harness gives a turn: not what the person said
+_ATTACHED, _LINES = ("[Attached: ", "[The user attached "), ("[Using: ", "[Selected in ", "[Open beside the chat: ", "[From: ", *GIVEN)
 _MENTION = re.compile(r"(?:(?:\n\n)?\[(?:Using|From): [^\n]*\])+\Z")   # on a turn sent as a string
 
 

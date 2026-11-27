@@ -8,7 +8,7 @@ from typing import Optional, Any
 from cycls._app.auth import User, validator
 from cycls._app.db import Workspace, workspace
 from cycls._agent.logs import log
-from cycls._agent import activity, inbox, routines, state, webpush
+from cycls._agent import activity, inbox, prelude, routines, state, webpush
 from cycls._agent.harness.llm import warm_up
 from cycls._agent.web import voice
 
@@ -536,7 +536,10 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
     @app.post("/chat")
     @app.post("/chat/completions")
     async def back(request: Request, user: Optional[User] = auth):
-        return await _chat(request, user, await request.json())
+        prelude.start()   # sign-in is checked before this: its time is not counted
+        data = await request.json()
+        prelude.mark("request read")
+        return await _chat(request, user, data)
 
     async def _chat(request, user, data, routine=None):
         """A chat message: the person's, or a routine's run sent as its owner's (`routine`, from /routines/run alone)."""
@@ -546,6 +549,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
         api = request.url.path == "/chat/completions"   # read off the request while it exists
         ws_id = await resolve_ws_id(user, request.headers.get("x-workspace"), config.workspaces,
                                     volume, config.storage)
+        prelude.mark("workspace found")
         tz = data.get("tz") if isinstance(data.get("tz"), str) and len(data["tz"]) < 64 else ""
         if user is not None and routine is None:   # who they are, for a routine that runs while they are away
             await inbox.remember(user, volume, config.storage, tz)
@@ -559,6 +563,7 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                 first = await state.mark_first_use(user, volume, config.storage, config.workspaces)
             except Exception:
                 first = False
+        prelude.mark("first use")
 
         context = Context(messages=Messages(messages), user=user, chat_id=chat_id, prod=config.prod,
                           workspace_id=ws_id,
@@ -633,7 +638,9 @@ def web(func, config, extra_routers=None, auth=None, iap=None, on_run=None):
                         return JSONResponse(status_code=409, content={
                             "error": "chat_changed", "chat_id": chat_id,
                             "detail": "This chat changed since it was opened. Reload it to see the latest."})
+                prelude.mark("run record read")
                 await _record(run, "running")   # visible before the first heartbeat
+                prelude.mark("run record written")
                 if context.by and not context.replay:   # once, as it is taken: a replay says nothing new
                     await inbox.later(inbox.mentioned(run.workspace, chat_id, (messages or [{}])[-1], context.by, run.origin))
             stream = await func(context) if inspect.iscoroutinefunction(func) else func(context)

@@ -9,19 +9,56 @@ Load `design-direction` with this skill to choose the look. A document is writte
 content in order, and the pages make themselves. Your craft is choosing the settings for the kind of document,
 and the block for each kind of content.
 
-## Settings by kind
+## This PDF is theirs
 
-| kind | settings | looks that suit it |
-|---|---|---|
-| report, annual review | `cover` full (or split with a photo), `"openers": "band"`, contents (automatic past three sections), `"numbering": true` with several charts | editorial, bold, classic |
-| proposal, offer | `cover` split with a photo of the client's world; a `back` page with `title`, `text`, `contact`; pricing as a `table`; terms as `numbered` | bold, swiss |
-| white paper, research | `cover` type; `"openers": "page"` with each section's `summary`; `footnotes`; `"figures": true` when it has many charts | editorial, swiss |
-| user guide, manual, how-to | `cover` band or type; `"openers": "page"`; each section is one task; steps as `numbered`; screenshots as `image` with `"fit": "contain"`; warnings as `callout` tone `warning` | swiss, soft |
-| newsletter, bulletin | `"columns": 2` (3 for a dense bulletin), `cover` band; short sections that run on (`"break": "none"`) | editorial, soft |
-| brochure, company profile | `cover` full with a photo; `cards` and `stats`; `pairs` for facts; a `back` page with contact and a QR | bold, soft |
-| CV | `"cover": false`, `"max_pages": 1` (or 2), `kind`, `meta` (the contact line); experience as `h3` + `aside` (the dates) + `bullets`; skills as `pairs` | swiss, minimal, editorial |
-| letter, memo | `"cover": false`, `"theme": "mono"` or the brand, `kind` "Letter", the body as `p` | minimal |
-| invoice, quotation | `"cover": false`, `pairs` (to / from / number / date), a `table` of lines, a `callout` tone `key` for the total | swiss, classic |
+There is no house PDF. Read the brief the way you listen to a piece of music: its mood, its pace, who it is for, what it
+wants to feel like. Then invent the page for it. Their words come first: anything they name, you do exactly.
+
+One thing is settled, because people asked for it: the text sits at the page's normal edge, across its width, in plain
+alignment, unless they ask otherwise (`"align": "justify"`, `"measure": "set-in" | "hang" | "narrow" | "center"`,
+`"paragraphs": "indent"`).
+
+Everything else is a tool, and no tool is a default. `"lines": true`; `"headings": {"weight", "size": "small" | "regular" |
+"large", "caps": true, "color": "ink" | "accent"}`; a look; a cover or none; `openers`; a block's `style`; numbers or none;
+photos; `columns`; a hand-built area (`nodes`) or a hand-built page (`pages`). Use any of them or none, because this piece
+calls for it. Having no lines is as much a habit as having them, and so is a light title or a bold one. What the last PDF
+did is the reason not to do it again: the recent designs list what each one chose.
+
+## What each kind has to hold
+
+This is what the content needs. How it looks is yours to invent for this brief.
+
+| kind | what it holds |
+|---|---|
+| report, annual review | contents (automatic past three sections); `"numbering": true` with several charts |
+| proposal, offer | pricing as a `table`; terms as `numbered`; a way to answer (`contact`, a `back` page) |
+| white paper, research | `footnotes`; `"figures": true` when it has many charts |
+| user guide, manual, how-to | each section is one task; steps as `numbered`; screenshots as `image` with `"fit": "contain"`; warnings as `callout` tone `warning` |
+| newsletter, bulletin | short sections that run on (`"break": "none"`) |
+| brochure, company profile | `pairs` for facts; contact and a QR on a `back` page |
+| CV | `"max_pages": 1` (or 2), `kind`, `meta` (the contact line); experience as `h3` + `aside` (the dates) + `bullets` |
+| letter, memo | `"cover": false`, `kind` "Letter", the body as `p` |
+| invoice, quotation | `"cover": false`, `pairs` (to / from / number / date), a `table` of lines, the total where it can't be missed |
+
+## Pages you compose yourself
+
+Not every PDF is text that flows. An activity book, a worksheet, a planner, a certificate, a menu, a programme, an
+invitation or a poster is composed page by page: `{"frames": [{"size": [1240, 1754], "fill": …, "nodes": […]}, …]}`, one
+frame a page (A4 at 150 dpi; `[1275, 1650]` for US Letter). It is one Cycls Design file: it opens in the editor, stays
+editable, and downloads as a PDF. Never leave Design for a script or HTML to get a page like this. Nothing on it is out of reach:
+
+- a curve, a wave, a torn edge, any shape that runs off the page: `svg` with a `path`;
+- a large drawing, a wave or a border is its own `svg` path. An icon is a small symbol: stretched or repeated into a wave
+  or a frame, it looks broken;
+- a box to draw in, a sticker spot, a coupon edge: `rect` or `ellipse` with `"dash": [on, off]`;
+- a line to write on: `line` with `from`, `to` and `"dash"` (`[2, 7]` reads as dots);
+- things to count, match, colour or spot: `icon`, repeated, from any Iconify set;
+- a word search, crossword, calendar, bingo card or timetable: a grid of `rect` and `text`. Work a puzzle out with `bash`
+  first, so every word is really in it and the answer is right;
+- text meant to be faint, letters to trace or a watermark: `"asked": true` on it, so the layout check keeps its colour.
+
+Give a piece like this substance: real things to do or read, a different layout on each page, and the whole page used.
+These are materials. Which of them this piece uses, and what it looks like, comes from its subject and who it is for.
 
 Paper: `"size": "a4"` (default), `"letter"` for the US, `"a5"` for a booklet, `"landscape": true` for a
 dashboard-like report.
@@ -29,44 +66,34 @@ dashboard-like report.
 ## The theme
 
 Built-in themes: `editorial`, `corporate`, `minimal-light`, `minimal-dark`, `tech-dark`, `warm`, `mono`,
-`bold-gradient`, and the brand kit by default. A theme is also an object of overrides on a base, which is how
-the direction you chose becomes the document's: `{"base": "editorial", "accent": "#0f5257", "hero": "#10302f",
-"heroAccent": "#e9c46a", "heading": "Fraunces Bold", "body": "Source Serif 4", "arHeading": "Amiri Bold",
-"arBody": "IBM Plex Sans Arabic"}`.
+`bold-gradient`, and the brand kit by default. They are BASES: one used as it stands looks like every document made
+from it. A theme is an object of overrides on a base, which is how the palette and faces you chose
+(design-direction) become the document's. A new document's cover and back draw no `glow` or `circles` unless the
+theme writes `"decor"` in, and the concept should give the cover its own idea instead. Its keys: `{"base", "bg", "surface", "line", "accent",
+"hero", "heroAccent", "heading", "body", "arHeading", "arBody"}`, each one chosen for this piece.
 - `hero` paints the cover, the bands and the chapter pages.
 - `accent` paints the rules, numbers and links.
 - `surface` paints the callouts and table bands.
-
-A serif body (`"Source Serif 4"`, Newsreader) suits long reading; a sans body suits a manual or a CV.
 
 ## The look
 
 The theme is the colours and faces; the `look` is how the pages are composed. It is the larger half of what makes
 one PDF not look like the last: the measure and the margins, how a section opens, and what a heading, a callout,
 a quote, a figure, a card and a table look like.
-- `editorial`: the text at the left with a margin for notes at the right; paragraphs set like a book's, the
-  first line of each indented with no space between; a section opens under a hairline with its number in small
-  capitals; h2s under a rule; quotes as centred pull quotes; stats and cards under rules; callouts between
-  rules; tables with no header fill.
-- `swiss`: the text set in from the left, and the h2s hung in the margin beside the text they head; a section
-  opens under a heavy rule, its number hung in the margin; stats and cards under bars of the accent; nothing
-  filled.
-- `bold`: the text the full width of the page, a little larger; each section opens on a field of the accent
+- `editorial`: a section opens with its number in small capitals; quotes are large; stats and cards are unfilled;
+  tables have no header fill.
+- `swiss`: a large section number over its title; nothing filled.
+- `bold`: the text a little larger; each section opens on a field of the accent
   with its number large; h2s in the accent; stats on accent tiles, callouts filled, cards on the theme's dark
   colour, tables with an accent header.
-- `soft`: a centred column; centred openers, the number on a pill; callouts as rounded panels with an icon;
+- `soft`: the section's number on a pill; callouts as rounded panels with an icon;
   quotes and stats on rounded cards; cards with their icon in a tinted disc.
-- `minimal`: wide margins and a centred column; small-capital h2s; outlined callouts and cards; quotes in
+- `minimal`: wide margins; small-capital h2s; outlined callouts and cards; quotes in
   italic; no running head, the page number centred.
-- `classic`: the text set in beside a margin for notes; numbered openers over a short rule; callouts, stats
-  and cards on the surface.
+- `classic`: numbered openers; callouts, stats and cards on the surface.
 
-A look without a `cover` style gives its own (classic full, editorial and minimal minimal, swiss type, bold
-split, soft band); with no `look`, a theme named for one gives it (editorial → editorial, tech-dark → swiss, warm →
-soft, mono → minimal, bold-gradient → bold), else its `kind`, eyebrow or title decides (a proposal → bold, a report
-→ editorial, a guide, a CV or an invoice → swiss, a brochure → soft, a letter → minimal), then a custom theme's base,
-then its shape. That is a fallback: choose the look yourself, matching the direction and the kind (the table above),
-and don't give every document the same one. Classic only when the user wants the plain look.
+A look without a `cover` style gives its own. No kind of document has a look of its own: choose it for this brief, and
+give the cover, the openers and the blocks their own styles when that makes a better piece than the look's set.
 
 `"openers": "band"` and `"page"` open a section the same way in every look; the default, `"plain"`, is the one
 the look draws. With a look other than classic, leave `openers` out unless the document wants chapter pages.
@@ -92,7 +119,7 @@ two moments that should stand out:
 | facts as label / value | `pairs` |
 | a person's words | `quote` with `by` |
 | two things side by side | `columns` |
-| a definition, a date, a source next to a paragraph | `aside` on the `p` |
+| a definition, a date, a source next to a paragraph | `aside` on the `p` (small print under it; beside it with a `measure` that leaves a margin) |
 | where a number comes from | `note`, or a `[^key]` footnote |
 | a diagram the blocks can't make | `nodes` with `h`: a hand-built area in the flow |
 
@@ -115,7 +142,7 @@ still doesn't.
 ## Writing that reads
 
 - Each section opens with what it found: a `lead`, then the evidence.
-- Paragraphs run 2–4 sentences. Use **bold** for the phrase a skimmer needs, not for whole sentences.
+- Paragraphs run 2–4 sentences. Bold a phrase only where a reader truly needs it, never as a habit.
 - Use real numbers, with units and dates.
 - A heading says what the section says ("Costs fell in every region"), not its topic ("Costs").
 
@@ -134,15 +161,17 @@ still doesn't.
    - tell the user what can't be kept;
    - call again with `"discard_edits": true`.
    Never send the same call again unchanged, and never run several section changes in parallel on one document.
-4. **Another format** is `export`; a new render under a new name is never how to change a document.
+4. **The pages come back to you**: check what they say and how it is set out (the polish pass in
+   `design-direction`). What you find is a section change, not a page `edit`.
+5. **Another format** is `export`; a new render under a new name is never how to change a document.
 
 ## Example: a short report
 
 ```json
 {"document": {
-  "title": "Riyadh coffee market 2026", "subtitle": "Where specialty coffee grows next", "author": "Qahwa House strategy team",
-  "date": "October 2026", "organization": "Qahwa House",
-  "theme": {"base": "editorial", "accent": "#0f5257", "hero": "#10302f", "heroAccent": "#e9c46a",
+  "title": "City coffee market 2026", "subtitle": "Where specialty coffee grows next", "author": "Corner Roast strategy team",
+  "date": "October 2026", "organization": "Corner Roast",
+  "theme": {"base": "editorial", "bg": "#ffffff", "surface": "#eef3f2", "line": "#d5e0de", "accent": "#0f5257", "hero": "#10302f", "heroAccent": "#e9c46a",
             "heading": "Fraunces Bold", "body": "Source Serif 4"},
   "look": "editorial", "cover": {"style": "full", "eyebrow": "MARKET REVIEW"},
   "sections": [
@@ -159,5 +188,5 @@ still doesn't.
         "rows": [["Al Narjis", "41,000", "6", "1.5"], ["Al Arid", "28,000", "3", "1.1"], ["Qurtubah", "35,000", "7", "2.0"], ["Al Yasmin", "52,000", "14", "2.7"]]},
        "title": "Households and specialty cafés by district", "caption": "Under two cafés per 10,000 households marks a gap."},
       {"callout": {"title": "Recommendation", "text": "Open in Al Narjis and Al Arid first: the deepest gaps, and rents a third below Al Yasmin's.", "tone": "key"}, "style": "fill"},
-      {"note": "Sources: GASTAT household counts 2025; Qahwa House café census, September 2026."}]}]}}
+      {"note": "Sources: national household survey 2025; Corner Roast café census, September 2026."}]}]}}
 ```
