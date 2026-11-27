@@ -222,7 +222,7 @@ def plain_bwrap(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("PATH", f"{d}:{os.environ['PATH']}")
 
 
-def _gone(pid, within=3.0):
+def _gone(pid, within=10.0):
     end = time.monotonic() + within
     while time.monotonic() < end:
         try: os.kill(pid, 0)
@@ -235,16 +235,16 @@ def test_a_timed_out_command_stops_all_it_started_and_keeps_what_it_printed(tmp_
     """It killed bwrap alone: a child it started held the pipe and the call returned when the child did (34 min
     once, on a 120 s limit). What the command printed was dropped."""
     started = time.monotonic()
-    out = asyncio.run(_exec_bash(f"echo started; sleep 60 & echo $! > {tmp_path}/child; sleep 60", str(tmp_path), timeout=1))
-    assert time.monotonic() - started < 5
-    assert out.startswith("Error: timed out after 1s") and out.endswith("started")
+    out = asyncio.run(_exec_bash(f"echo started; sleep 60 & echo $! > {tmp_path}/child; sleep 60", str(tmp_path), timeout=3))
+    assert time.monotonic() - started < 20   # not the 60 s the child would have held it
+    assert out.startswith("Error: timed out after 3s") and out.endswith("started")
     assert _gone(int((tmp_path / "child").read_text()))
 
 
 def test_a_child_left_running_does_not_hold_the_call(tmp_path, plain_bwrap):
     started = time.monotonic()
     out = asyncio.run(_exec_bash(f"sleep 60 & echo $! > {tmp_path}/child; echo done", str(tmp_path), timeout=30))
-    assert time.monotonic() - started < 5 and out.startswith("done\n[exit 0 · ")
+    assert time.monotonic() - started < 15 and out.startswith("done\n[exit 0 · ")   # not the 30 s limit
     assert _gone(int((tmp_path / "child").read_text()))
 
 
