@@ -31,6 +31,7 @@ class LLM:
         self._model = None
         self._system = ""
         self._tools = []
+        self._deferred = {}
         self._allowed_tools = []
         self._max_tokens = None   # None = 8k default
         self._context = None      # None = 1M default
@@ -77,6 +78,11 @@ class LLM:
     def model(self, name):          return self._copy(_model=name)
     def system(self, text):         return self._copy(_system=text)
     def tools(self, tools):         return self._copy(_tools=list(tools))
+    def defer(self, name, tools, about=""):
+        """Custom tools kept out of every request until a chat needs them, as a connector's are: one line in the
+        system prompt, loaded by `find_tools` (matched on `name` and `about` alone, so `about` names the subject)
+        or by a first call. Their handlers are registered with `.on` as usual."""
+        return self._copy(_deferred={**getattr(self, "_deferred", {}), name: (about, list(tools))})
     def allowed_tools(self, names): return self._copy(_allowed_tools=list(names))
     def max_tokens(self, n):        return self._copy(_max_tokens=n)
     def context(self, n):
@@ -245,6 +251,7 @@ class LLM:
             context_window=self._context,
             extra_body=self._extra_body,
         )
+        deferred = getattr(self, "_deferred", {})   # only when set: a custom loop written before it still runs
         team = None
         if loop is _run and "Agent" in kw["allowed_tools"]:
             from types import SimpleNamespace
@@ -253,9 +260,10 @@ class LLM:
             # the developer's follows its own instructions, and with `loop=False` has no tools: it answers once.
             agent_kw = {**kw, "system": f"{kw['system']}\n\n{BRIEFED}" if kw["system"] else BRIEFED,
                         "allowed_tools": [t for t in kw["allowed_tools"] if t not in ("Agent", "Ask", "Suggest")],
-                        "mcp_servers": None, "api_connectors": (), "approvals": (), "declined": (), "mentions": ()}
+                        "mcp_servers": None, "api_connectors": (), "approvals": (), "declined": (), "mentions": (),
+                        **({"deferred_tools": deferred} if deferred else {})}
             setup = lambda k: {**agent_kw, "system": f"{k.instructions}\n\n{BRIEFED}",
-                               **({} if k.loop else {"allowed_tools": [], "tools": [], "skills": None})}
+                               **({} if k.loop else {"allowed_tools": [], "tools": [], "skills": None, "deferred_tools": None})}
             chat_id = getattr(context, "chat_id", None)
             spawn = lambda brief, call, kind=None: _run(context=SimpleNamespace(
                 workspace=context.workspace, user=getattr(context, "user", None), chat_id=None, bill=chat_id,
@@ -264,7 +272,8 @@ class LLM:
                 **(setup(team.kinds[kind]) if kind else agent_kw))
             team = Team(context.workspace, chat_id, spawn, getattr(self, "_at_once", None), getattr(self, "_subagents", ()))
         try:
-            async for ev in loop(context=context, **kw, **({"team": team} if team else {})):
+            async for ev in loop(context=context, **kw, **({"team": team} if team else {}),
+                                 **({"deferred_tools": deferred} if deferred else {})):
                 yield ev
         finally:
             if team: await team.close()

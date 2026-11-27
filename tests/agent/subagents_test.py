@@ -74,6 +74,22 @@ def test_an_agent_cannot_start_agents_or_ask_the_person(tmp_path):
     assert not {"agent", "ask"} & names["agent"] and "edit" in names["agent"]
 
 
+def test_an_agent_is_told_of_the_deferred_tools_unless_it_has_no_tools(tmp_path):
+    """`LLM.defer` groups reach an agent as they reach the parent; a Subagent with loop=False has nothing to load them with."""
+    seen = []
+    reviewer = Subagent("reviewer", "Checks a draft", "You are a strict editor.", loop=False)
+    review = _tool_use_block("a2", "agent", {"description": "Check the draft", "prompt": "Draft: hello", "agent": "reviewer"})
+    client = _client(parent=[_make_response([_agent("a1"), review], stop_reason="tool_use"),
+                             *[_make_response([_text_block("ok")]) for _ in range(3)]],
+                     child=[_make_response([_text_block("done")]) for _ in range(2)], seen=seen)
+    tenders = {"name": "tender_search", "description": "Search open tenders", "input_schema": {"type": "object"}}
+    llm = _llm().defer("tenders", [tenders], about="Government tenders").subagents(reviewer)
+    asyncio.run(_drain(llm.run(context=_make_context(tmp_path / "ws"), client=client)))
+    told = {"strict editor" in s: "- tenders: Government tenders (1 tools)" in s
+            for s in ("".join(b["text"] for b in kw["system"]) for who, kw in seen if who == "agent")}
+    assert told == {False: True, True: False}
+
+
 def test_at_most_four_work_at_once(tmp_path):
     ctx = _make_context(tmp_path / "ws")
     seen = []

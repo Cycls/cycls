@@ -2293,6 +2293,86 @@ def test_find_tools_matches_on_what_the_tools_do(agent_env):
     assert c.matches("list the orders and files in salla", catalog) == ["salla"]   # one named comes alone
 
 
+_TENDERS = {"tenders": ("Saudi government tenders on Etimad",
+                        [{"name": "tender_search", "description": "Search open government tenders",
+                          "input_schema": {"type": "object"}}])}
+
+
+def _all_system(call):
+    s = call["system"]
+    return " ".join(b["text"] for b in s) if isinstance(s, list) else s
+
+
+def test_the_agent_s_deferred_tools_wait_for_find_tools(agent_env):
+    """`LLM.defer`: the agent's own tools take the connectors' road — one index line, no schema,
+    until `find_tools` asks for them; then they are in the request and their handler answers."""
+    ws, ctx = agent_env
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "tenders"})], stop_reason="tool_use")
+    call = _make_response([_tool_use_block("t2", name="tender_search", inp={"q": "roads"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, call, _make_response([_text_block("ok")])])
+    search = AsyncMock(return_value="3 tenders")
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, deferred_tools=_TENDERS, handlers={"tender_search": search})))
+
+    first = [t["name"] for t in calls[0]["tools"]]
+    assert "tender_search" not in first and "find_tools" in first
+    assert "- tenders: Saudi government tenders on Etimad (1 tools)" in _all_system(calls[0])
+    assert "tender_search" in [t["name"] for t in calls[1]["tools"]]
+    search.assert_awaited_once()
+
+
+def test_a_deferred_tool_called_before_it_loads_loads_and_runs(agent_env):
+    """A skill can name the tool, so the model may call it straight away: it loads and runs, as a connector's does."""
+    ws, ctx = agent_env
+    call = _make_response([_tool_use_block("t1", name="tender_search", inp={"q": "roads"})], stop_reason="tool_use")
+    client, calls = _capturing_client([call, _make_response([_text_block("ok")])])
+    search = AsyncMock(return_value="3 tenders")
+
+    with _mock_anthropic(client):
+        asyncio.run(_drain(_run(context=ctx, deferred_tools=_TENDERS, handlers={"tender_search": search})))
+
+    search.assert_awaited_once()
+    assert "tender_search" in [t["name"] for t in calls[1]["tools"]]
+
+
+def test_a_connector_lookup_leaves_the_agent_s_deferred_tools_alone(agent_env):
+    """`tender_search` says "search" too: a group is found by its name and `about`, so looking for
+    Drive's files never loads it along."""
+    from cycls._agent import mcp as m
+    ws, ctx = agent_env
+    m._discovered.clear()
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "search my files"})], stop_reason="tool_use")
+    client, calls = _capturing_client([find, _make_response([_text_block("ok")])])
+
+    with _mock_anthropic(client), patch.object(m, "_list", AsyncMock(return_value=[_drive()])), \
+         patch.dict(os.environ, {"CYCLS_SECRET_KEY": "k"}):
+        _grant(ctx)
+        asyncio.run(_drain(_run(context=ctx, deferred_tools=_TENDERS, handlers={},
+                                mcp_servers=[m.MCP("https://d/mcp").name("drive").connector(_google())])))
+
+    names = [t["name"] for t in calls[1]["tools"]]
+    assert "drive_search_files" in names and "tender_search" not in names
+
+
+def test_deferred_tools_stay_loaded_for_the_rest_of_the_chat(agent_env):
+    """Read back from the transcript, like a connector: the next turn opens with them, and nothing left to find."""
+    ws, ctx = agent_env
+    find = _make_response([_tool_use_block("t1", name="find_tools", inp={"query": "tenders"})], stop_reason="tool_use")
+    first, _ = _capturing_client([find, _make_response([_text_block("ok")])])
+    second, later = _capturing_client([_make_response([_text_block("ok")])])
+
+    with _mock_anthropic(first):
+        asyncio.run(_drain(_run(context=ctx, deferred_tools=_TENDERS, handlers={})))
+    _providers._clients.clear()
+    with _mock_anthropic(second):
+        asyncio.run(_drain(_run(context=ctx, deferred_tools=_TENDERS, handlers={})))
+
+    names = [t["name"] for t in later[0]["tools"]]
+    assert "tender_search" in names and "find_tools" not in names
+    assert "- tenders:" not in _all_system(later[0])
+
+
 def test_tool_guidance_rides_with_the_enabled_tool(agent_env):
     """Opting into the tool is the only switch — no operator has to remember
     matching prompt copy, and a tool that isn't enabled contributes nothing."""

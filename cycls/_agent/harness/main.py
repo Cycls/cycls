@@ -104,10 +104,10 @@ def _server_said(e):
     return said[:300] or None
 
 
-def _seen_connectors(messages, prefixes, catalog):
-    """Which connectors this chat already discovered — read back from the transcript, so discovery
-    survives a new instance without storing anything. Either the lookup that loaded them is in the
-    history, or a call to one of their tools is."""
+def _seen_connectors(messages, owner, catalog):
+    """Which connectors (or groups of the agent's own deferred tools) this chat already discovered —
+    read back from the transcript, so discovery survives a new instance without storing anything.
+    Either the lookup that loaded them is in the history, or a call to one of their tools is."""
     seen = set()
     for m in messages:
         content = m.get("content")
@@ -120,8 +120,8 @@ def _seen_connectors(messages, prefixes, catalog):
             if name == "find_tools":
                 seen |= set(connectors.matches(str((b.get("input") or {}).get("query") or ""), catalog))
             else:
-                seen |= {n for p, n in prefixes.items() if name.startswith(p)}
-    return seen
+                seen.add(owner(name))
+    return seen - {None}
 
 
 def _user_warn(user, chat_id, public, detail):
@@ -583,7 +583,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
                thinking="adaptive", vision=True, web_search="brave",
                instructions="AGENT.md", skills=[], price=None, context_window=None,
                extra_body=None, approvals=(), declined=(), mentions=(), auto=True, api_connectors=(),
-               team=None, me=None):
+               team=None, me=None, deferred_tools=None):
     prelude.mark("agent function")   # the deployment's own code before it calls run (Super: its usage count)
     vendor, bare_model = model.split("/", 1)
     provider = make_provider(model, client=client, base_url=base_url, api_key=api_key,
@@ -752,6 +752,8 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     def _mount(server, schemas, fns, names):
         nonlocal system_text
         tools_list.extend(schemas)
+        if server is None:   # the agent's own: its handlers are already registered
+            return
         handlers.update(fns)
         mcp_names.update(fns)
         register_labels({}, names, dict.fromkeys(fns, server._connector.name) if server._connector else None, details=fns.keys())
@@ -797,6 +799,10 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         catalog.setdefault(o.name, (*connectors.copy_of(o), []))[2].extend(
             f'{s["name"]} {s.get("description") or ""}' for s in schemas)
     mcp_servers = [s for s in mcp_servers or [] if s._server_side] or None
+    for name, (about, schemas) in (deferred_tools or {}).items():   # the agent's own (`LLM.defer`), kept back the same way
+        schemas = build_tools([], schemas, vendor=vendor)
+        deferred.setdefault(name, []).append((None, schemas, {}, {}))
+        catalog[name] = (name, about, [])   # found by its name and `about`: its tools' text shares "search", "list"… with every connector's
 
     def _discover(name):
         """Its tools enter the turn and stay for the rest of the chat — the cache breakpoint sits on the
@@ -804,11 +810,12 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         got = []
         for entry in deferred.pop(name, ()):
             _mount(*entry)
-            got += list(entry[2])
+            got += [s["name"] for s in entry[1]]
         return got
 
     def _owner_of(tool):
-        return next((n for n, es in deferred.items() for s, *_ in es if tool.startswith(f"{s.label}_")), None)
+        return next((n for n, es in deferred.items() for s, schemas, *_ in es
+                     if (tool.startswith(f"{s.label}_") if s else any(t["name"] == tool for t in schemas))), None)
 
     async def _find_tools(inp, ctx):
         query = str(inp.get("query") or "")
@@ -824,8 +831,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         return ("Nothing matched. You can load: " + ", ".join(sorted(deferred))) if deferred else "No connectors left to load."
 
     if deferred:   # already discovered here, or just `@`-mentioned — either way, no round-trip
-        prefixes = {f"{s.label}_": n for n, es in deferred.items() for s, *_ in es}
-        for name in _seen_connectors(messages, prefixes, catalog) | set(mentions or []):
+        for name in _seen_connectors(messages, _owner_of, catalog) | set(mentions or []):
             _discover(name)
     # CONN-4: a connector with a REST base and no MCP server contributes one tool — otherwise a
     # stored key is unreachable, since everything above only walks servers.
@@ -853,11 +859,13 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
         handlers["find_tools"] = _find_tools
         register_labels({"find_tools": lambda i: str(i.get("query") or "")}, {"find_tools": "Finding tools"},
                         details=("find_tools",))   # the result is the model's; the step row carries it
-    if deferred:
+    if theirs := [connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()) if n in objs]:
         system_text += "\n\nConnectors this person has connected. Their tools are not loaded yet: call " \
-                       "`find_tools` once with what you need, then call the tools it returns.\n" + \
-                       "\n".join(connectors.index_line(objs[n], sum(len(e[2]) for e in es)) for n, es in sorted(deferred.items()))
-    if ready := sorted(set(catalog) - set(deferred)):
+                       "`find_tools` once with what you need, then call the tools it returns.\n" + "\n".join(theirs)
+    if ours := [f"- {n}: {catalog[n][1] or n} ({sum(len(e[1]) for e in es)} tools)" for n, es in sorted(deferred.items()) if n not in objs]:
+        system_text += "\n\nMore tools, not loaded yet: call `find_tools` with what you need, then call the " \
+                       "tools it returns.\n" + "\n".join(ours)   # the agent's own groups (`LLM.defer`)
+    if ready := sorted(n for n in set(catalog) - set(deferred) if n in objs):
         system_text += "\n\nConnected, their tools already here: " + \
                        ", ".join(f"{n} ({connectors.copy_of(objs[n])[0] or n})" for n in ready)
     if unconnected:   # seen, so offered when a request needs one: `find_tools` answers with the card to connect it

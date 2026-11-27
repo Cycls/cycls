@@ -418,10 +418,10 @@ async def relay(o, ws, path, *, method="GET", headers=None, body=None, timeout=3
 
 FIND_TOOLS = {
     "type": "custom", "name": "find_tools",
-    "description": "Load a connector's tools before you can call them. Search by what you want to do "
-                   "(\"list orders\", \"read a page\") or by connector name. Matching tools join the "
-                   "conversation and stay for the rest of it. The connectors you can search are listed "
-                   "in the system prompt.",
+    "description": "Load tools that are not loaded yet (a connector's, or a group the system prompt lists) "
+                   "before you can call them. Search by what you want to do (\"list orders\", \"read a page\") "
+                   "or by name. Matching tools join the conversation and stay for the rest of it. What you can "
+                   "search is listed in the system prompt.",
     "input_schema": {"type": "object", "required": ["query"],
                      "properties": {"query": {"type": "string", "description": "What you need to do, in a few words."}}},
 }
