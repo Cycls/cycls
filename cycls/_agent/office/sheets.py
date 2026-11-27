@@ -185,8 +185,10 @@ PRINT_SHEET_TOOL = {
         "coloured header, borders and banded rows (style clean; keep leaves fonts and colours as they are), shares the "
         "page's width over the columns and sizes the rows to their text, turns the paper and fits the sheet to one "
         "page, keeps every picture its size and every value as it is, then writes the PDF beside the workbook and opens "
-        "it. Call it straight away, with no read first, and once: its reply is final. Give it only the path and what "
-        "the person asked for (a font, a colour, a paper); it finds the rest itself."
+        "it. In a workbook of several sheets it lays out the one holding the table (not a guide or instructions sheet) "
+        "and prints that sheet; a form's rows still waiting for entries are left out. Call it straight away, with no read "
+        "first, and once: its reply is final, and the PDF is open (no canvas call). Give it only the path and what the "
+        "person asked for (a sheet, a font, a colour, a paper); it finds the rest itself."
     ),
     "input_schema": {
         "type": "object",
@@ -386,13 +388,15 @@ async def exec_sheets(inp, workspace, ctx=None):
                                         "intent": inp.get("intent") or "Made ready to print"}, workspace, ctx)
             if not isinstance(edited, dict):
                 return edited
-            printed = await export_pdf(workspace, path, rel, "workbook")
+            # The PDF of the sheet laid out, not every sheet's pages (a template's came to 296).
+            sheet = (edited.pop("_printed", None) or [None])[0]
+            printed = await export_pdf(workspace, path, rel, f"sheet '{sheet}'" if sheet else "workbook", sheet=sheet)
             if not isinstance(printed, dict):
                 return f"{edited['_model']}\n{printed}"
-            final = ("This is final; there is nothing to check or redo. The person prints the PDF, or the workbook "
-                     "itself (its page is set). To change the font or the colours they select the table in Cycls Sheets "
-                     "and pick a font, or the header rows and a fill colour: the table is in one font and the header in "
-                     "one colour, so one change is enough.")
+            final = ("This is final; there is nothing to check or redo, and the PDF is already open beside the chat "
+                     "(no canvas call). The person prints the PDF, or the workbook itself (its page is set). To change "
+                     "the font or the colours they select the table in Cycls Sheets and pick a font, or the header rows "
+                     "and a fill colour: the table is in one font and the header in one colour, so one change is enough.")
             return {"_model": f"{edited['_model']}\n{printed['_model']}\n{final}", "_ui": printed["_ui"]}
 
         if action == "export":
@@ -460,4 +464,7 @@ async def exec_sheets(inp, workspace, ctx=None):
         ui["intent"] = str(intent)[:80]
     if len(json.dumps(ui["mutations"], default=str)) > 2_000_000:   # too large to replay: the editor reopens the file
         ui["mutations"], ui["reload"] = [], True
-    return {"_model": f"Edited {rel}.\n{said}{result['report']}".strip(), "_ui": ui}
+    out = {"_model": f"Edited {rel}.\n{said}{result['report']}".strip(), "_ui": ui}
+    if result.get("printed"):   # the sheets print_ready laid out: what print's PDF prints (the harness reads only _model/_ui)
+        out["_printed"] = result["printed"]
+    return out

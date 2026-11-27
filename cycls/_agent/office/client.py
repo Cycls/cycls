@@ -108,10 +108,11 @@ async def _post_file(path, data, name, fields, user_id=None):
     return r
 
 
-async def convert(data, name, to="pdf", user_id=None):
+async def convert(data, name, to="pdf", user_id=None, sheet=None):
     """A file converted by LibreOffice on the service: a Word, Excel or PowerPoint file (named `name`, which
-    carries its type) → the bytes of its PDF, or of another Office format (`to`: docx, xlsx, pptx, …)."""
-    r = await _post_file("/v1/convert", data, name, {"to": to}, user_id)
+    carries its type) → the bytes of its PDF, or of another Office format (`to`: docx, xlsx, pptx, …). `sheet`: a
+    workbook's PDF of that sheet only."""
+    r = await _post_file("/v1/convert", data, name, {"to": to, **({"sheet": sheet} if sheet else {})}, user_id)
     return r.content
 
 
@@ -237,7 +238,8 @@ async def sheets_apply(data, name, edits, create=None):
     return {"unchanged": bool(body.get("unchanged")),
             "bytes": base64.b64decode(body["file"]) if body.get("file") else None,
             "mutations": body.get("mutations") or [], "ops": body.get("ops") or [],
-            "report": body.get("report") or ""}
+            "report": body.get("report") or "",
+            "printed": body.get("printed") or []}
 
 
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

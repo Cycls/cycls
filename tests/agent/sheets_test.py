@@ -503,3 +503,27 @@ def test_print_sheet_passes_no_guessed_header(monkeypatch, tmp_path):
                                         _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
     assert seen == [[{"op": "print_ready", "style": "clean", "paper": "A4"}]]
     assert "header" not in sheets.PRINT_SHEET_TOOL["input_schema"]["properties"]
+
+
+def test_print_sheet_prints_the_sheet_it_laid_out(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "t.xlsx").write_bytes(XLSX)
+    converted = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Form made ready to print",
+                                             "printed": ["Form"]})
+        converted.append({k: v for k, v in _form(request).items() if k != "file"})
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    out = asyncio.run(sheets.exec_print_sheet({"path": "t.xlsx"}, _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
+    assert converted == [{"to": b"pdf", "sheet": b"Form"}]
+    assert "sheet 'Form' as it prints" in out["_model"] and "no canvas call" in out["_model"]
+    assert "_printed" not in out
+    # An edit of the same op keeps the sheet for print, and the harness reads only _model and _ui.
+    edited = asyncio.run(sheets.exec_sheets({"action": "edit", "path": "t.xlsx", "ops": [{"op": "print_ready"}]},
+                                            _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
+    assert edited["_printed"] == ["Form"]

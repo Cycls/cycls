@@ -10,12 +10,13 @@ from ..design.store import load_fig, write_fig
 from . import client
 
 
-async def export_pdf(workspace, path, rel, what):
-    """`path` (at `rel` in the workspace) → `<name>.pdf` beside it; what the model and the canvas are told."""
+async def export_pdf(workspace, path, rel, what, sheet=None):
+    """`path` (at `rel` in the workspace) → `<name>.pdf` beside it; what the model and the canvas are told. `sheet`:
+    a workbook's PDF of that sheet only."""
     data, _ = await load_fig(workspace.root, rel)   # as the edits see it: the bucket in production
     if data is None:
         return f"Error: {rel} does not exist."
-    pdf = await client.convert(data, path.name, "pdf", user_id=getattr(workspace, "subject", None))
+    pdf = await client.convert(data, path.name, "pdf", user_id=getattr(workspace, "subject", None), sheet=sheet)
     out = path.with_suffix(".pdf")
     out_rel = out.relative_to(workspace.root).as_posix()
     existed = await asyncio.to_thread(out.exists)
