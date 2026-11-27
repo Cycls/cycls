@@ -489,3 +489,38 @@ def test_tracked_changes_open_in_review_and_are_taken_by_the_person(monkeypatch,
     stale = c.post("/office/docs/changes", params={"path": "r.docx"}, json={"base": opened["version"], "action": "accept"})
     assert stale.status_code == 412
     assert c.post("/office/docs/changes", params={"path": "r.docx"}, json={"action": "merge"}).status_code == 400
+
+
+# ---- LibreOffice on the service: convert and render -------------------------------------------
+
+def test_convert_and_render_post_the_file_with_the_key(monkeypatch):
+    monkeypatch.setenv("OFFICE_URL", "https://office.test/")
+    monkeypatch.setenv("OFFICE_SECRET", "k" * 40)
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("authorization"), request.headers.get("x-user-id")))
+        if request.url.path == "/v1/render":
+            return httpx.Response(200, json={"count": 3, "pages": [{"page": 2, "png_base64": "Yg=="},
+                                                                   {"page": 1, "png_base64": "YQ=="}]})
+        return httpx.Response(200, content=b"%PDF-bytes")
+
+    monkeypatch.setattr(office.httpx, "AsyncClient",
+                        lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(handler), **kw))
+    assert asyncio.run(office.convert(b"deck", "deck.pptx", user_id="org:u")) == b"%PDF-bytes"
+    pages = asyncio.run(office.render(b"deck", "deck.pptx", dpi=110, pages="1-2"))
+    assert [p["page"] for p in pages] == [1, 2]                    # in page order
+    assert seen[0] == ("/v1/convert", "Bearer " + "k" * 40, "org:u")
+    assert seen[1][0] == "/v1/render"
+
+
+def test_convert_maps_what_went_wrong(monkeypatch):
+    monkeypatch.setenv("OFFICE_URL", "https://office.test")
+    for status, kind in ((422, office.Refused), (415, office.Refused), (401, office.Unavailable),
+                         (504, office.Unavailable), (302, office.Unavailable)):
+        monkeypatch.setattr(office.httpx, "AsyncClient",
+                            lambda status=status, **kw: _REAL_CLIENT(transport=httpx.MockTransport(
+                                lambda request: httpx.Response(status, json={"error": "no"},
+                                                               headers={"location": "https://elsewhere"})), **kw))
+        with pytest.raises(kind):
+            asyncio.run(office.convert(b"x", "a.docx"))

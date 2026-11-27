@@ -13,11 +13,12 @@ from ..design.deck import lock
 from ..design.store import Stale, load_fig, write_fig
 from ..paths import _resolve_path
 from . import client, fill
+from .export import export_pdf
 
-ACTIONS = ("read", "edit", "create", "comments")
+ACTIONS = ("read", "edit", "create", "comments", "export", "print")
 OPS = ("set_values", "set_formulas", "format", "clear", "merge", "unmerge", "insert_rows", "delete_rows",
        "insert_cols", "delete_cols", "add_sheet", "rename_sheet", "delete_sheet", "freeze", "column_width",
-       "sort", "set_direction", "note", "define_name")
+       "row_height", "page_setup", "print_ready", "sort", "set_direction", "note", "define_name")
 _MAX_OPS = 200
 
 SHEETS_TOOL = {
@@ -32,13 +33,28 @@ SHEETS_TOOL = {
         "- create: a new workbook at `path` (`target` names the first sheet, `rtl` for Arabic; an Arabic name or "
         "Arabic values make it right to left unless rtl is false), then `ops`.\n"
         "- note puts a note on a cell (`text`; empty removes it); define_name names a range (`name`, `target`).\n"
+        "- Printing: every read, and every edit that changes the layout, says how the sheet prints (pages, scale, "
+        "how full) and which "
+        "cells' text does not fit as it prints (cut by its row, broken inside a word, ### numbers). Fix it here: "
+        "page_setup (target the sheet: paper, orientation, scale or fit_width / fit_height, margins, center, "
+        "print_area, repeat_rows), row_height and column_width (pixels, or auto: true to fit the text). Read the "
+        "reply, not a PDF.\n"
         "- comments: what people wrote on the workbook's cells, every thread; with `number` (the # in the list) "
         "answer it (`reply`) and close or reopen it (`resolve`). read lists the open ones too.\n"
+        "- print: the workbook made to print well, in one call, and its PDF written beside it: the title and header "
+        "rows found, the table in one font with a coloured header, borders and banded rows (style clean; keep leaves "
+        "fonts and colours as they are), columns shared over the page and rows sized to their text, the paper turned "
+        "and fitted to one page, pictures kept their size, values untouched. Options: target (the sheet), style, color "
+        "(the header, #RRGGBB), font, size, paper, orientation, header (rows such as 2:3, found when left out). The "
+        "reply says how it prints; that is the check.\n"
+        "- export: the workbook as a PDF beside it (budget.xlsx → budget.pdf), as it prints, for when the person "
+        "asks for a PDF to print or send. Once, when the work is done: it is not a way to look at an edit.\n"
         "Targets are A1 ranges (B3, B3:D9, 'Sheet 2'!A1:C4), rows (5 or 5:7), columns (C or C:D) or a "
         "sheet name. Values are rows of cells: [[\"Item\", \"Qty\"], [\"Tea\", 5]]; a value starting with = "
         "is a formula. Rows a query, a tool or a script produced are not typed: set_values `from` fills them from "
         "its .csv or .json file. One formula over a range fills it like Excel's fill handle (target F2:F93, "
-        "formulas [[\"=C2/D2\"]]). Read before editing a file you have not seen. `ops` is always sent: [] for read."
+        "formulas [[\"=C2/D2\"]]). Read before editing a file you have not seen. `ops` is always sent: [] for "
+        "read and export."
     ),
     "input_schema": {
         "type": "object",
@@ -75,6 +91,21 @@ SHEETS_TOOL = {
                         "rows": {"type": "integer", "description": "freeze: rows frozen at the top"},
                         "cols": {"type": "integer", "description": "freeze: columns frozen at the start"},
                         "width": {"type": "integer", "description": "column_width: pixels"},
+                        "height": {"type": "integer", "description": "row_height: pixels (20 is Excel's usual row)"},
+                        "auto": {"type": "boolean", "description": "row_height / column_width: fit each to its text instead of a size"},
+                        "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"],
+                                  "description": "page_setup"},
+                        "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "page_setup"},
+                        "scale": {"type": "integer", "description": "page_setup: percent, 10–400 (turns fitting off)"},
+                        "fit_width": {"type": "integer", "description": "page_setup: pages wide (0: as many as it takes); "
+                                                                         "with fit_height, fits the sheet to pages"},
+                        "fit_height": {"type": "integer", "description": "page_setup: pages tall (0: as many as it takes)"},
+                        "margins": {"type": "string", "description": "page_setup: narrow, normal, wide, or one length such as 1cm"},
+                        "center": {"type": "string", "enum": ["horizontal", "vertical", "both", "none"], "description": "page_setup"},
+                        "gridlines": {"type": "boolean", "description": "page_setup: print the gridlines"},
+                        "print_area": {"type": "string", "description": "page_setup: the range that prints, e.g. A1:R16 (\"\" for all)"},
+                        "repeat_rows": {"type": "string", "description": "page_setup: rows printed at the top of every page, e.g. 2:3 (\"\" for none)"},
+                        "repeat_columns": {"type": "string", "description": "page_setup: columns printed on every page, e.g. A:B"},
                         "column": {"type": "string", "description": "sort: the column to sort by, e.g. C"},
                         "ascending": {"type": "boolean", "description": "sort: false for largest first"},
                         "rtl": {"type": "boolean", "description": "set_direction: true right-to-left, false left-to-right"},
@@ -96,6 +127,13 @@ SHEETS_TOOL = {
             "resolve": {"type": "boolean", "description": "comments: true closes comment `number`, false reopens it"},
             "raw": {"type": "boolean", "description": "read: stored values instead of formatted ones"},
             "intent": {"type": "string", "description": "edit: a few words on what the change does, shown to the person"},
+            "style": {"type": "string", "enum": ["clean", "keep"], "description": "print: clean (one font, a coloured header, borders) or keep"},
+            "color": {"type": "string", "description": "print: the header's colour, #RRGGBB"},
+            "font": {"type": "string", "description": "print: the table's font (the workbook's when left out)"},
+            "size": {"type": "number", "description": "print: the text's size in points (10 when left out)"},
+            "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"], "description": "print"},
+            "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "print: left out, whichever prints larger"},
+            "header": {"type": "string", "description": "print: the header rows, e.g. 2:3 (found when left out)"},
         },
         # `ops` is required although read takes none: models that drop optional fields sent edits without it.
         "required": ["action", "path", "ops"],
@@ -109,7 +147,16 @@ SHEETS_PROMPT = (
     "cells' new values and any formula errors, so tell the person what it says, and `sheets` read to look "
     "again. Never change an existing .xlsx with Bash, a script, zip or XML edits, and don't unzip, render "
     "or convert one to check a `sheets` edit: that goes round the file's lock, its versions and the "
-    "person's open editor. Rows a query, a tool or a script produced go in with set_values `from` (their "
+    "person's open editor. A workbook to make print-ready (to print on one page, look professional, be ready to "
+    "print) is one `print_sheet` call, made straight away with no read first: it lays the table out, writes the PDF "
+    "and its reply is final. Do not inspect the file, open or render the PDF, or make other versions; tell the person "
+    "what the reply says, how to change the font and colours included. Only what they ask after that is an edit. "
+    "How a workbook prints is in every `sheets` read and layout edit's reply (pages, scale, the "
+    "text that does not fit): set it with page_setup, row_height and column_width (auto fits them to the text) "
+    "and trust that reply; never export or convert a copy to look at it. Change a layout only when the person asks "
+    "about printing or how the sheet looks. A PDF of the workbook, when the person "
+    "asks for one, is `sheets` export, once, when the work is done. "
+    "Rows a query, a tool or a script produced go in with set_values `from` (their "
     ".csv or .json file), never retyped into `values`: typing is for what exists nowhere else (the person's "
     "own figures, assumptions, labels) or a few cells, and a typed figure from a document or a page says "
     "where it came from beside it. A column of formulas is one formula over its range, not one per row."
@@ -125,6 +172,53 @@ def _arabic(text):
 
 def sheets_step(inp):
     return {"tool_name": "Sheets", "step": inp.get("intent") or inp.get("path") or ""}
+
+
+# print_sheet: the one call for "make this print well". A tool of its own, not only an action of `sheets`: a model
+# reaches for a tool named for the job, and one asked for a print-ready sheet otherwise formatted it by hand, a
+# hundred ops over seven edits checked against PDFs (2.5 minutes, where this is a few seconds).
+PRINT_SHEET_TOOL = {
+    "name": "print_sheet",
+    "description": (
+        "Make an Excel workbook (.xlsx) print well, in one call: for a sheet that should print on one page, look "
+        "professional or be ready to print. It finds the title and header rows, puts the table in one font with a "
+        "coloured header, borders and banded rows (style clean; keep leaves fonts and colours as they are), shares the "
+        "page's width over the columns and sizes the rows to their text, turns the paper and fits the sheet to one "
+        "page, keeps every picture its size and every value as it is, then writes the PDF beside the workbook and opens "
+        "it. In a workbook of several sheets it lays out the one holding the table (not a guide or instructions sheet) "
+        "and prints that sheet; a form's rows still waiting for entries are left out. Call it straight away, with no read "
+        "first, and once: its reply is final, and the PDF is open (no canvas call). Give it only the path and what the "
+        "person asked for (a sheet, a font, a colour, a paper); it finds the rest itself, the paper's orientation included."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "The .xlsx file in the workspace, e.g. attachments/register.xlsx"},
+            "sheet": {"type": "string", "description": "Only a sheet the person named (the first when left out)"},
+            "style": {"type": "string", "enum": ["clean", "keep"], "description": "clean (default), or keep when the person wants their fonts and colours kept"},
+            "color": {"type": "string", "description": "Only a colour the person asked for: the header's, #RRGGBB"},
+            "font": {"type": "string", "description": "Only a font the person asked for"},
+            "size": {"type": "number", "description": "Only a text size the person asked for, in points"},
+            "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"], "description": "Only a paper the person named"},
+        },
+        "required": ["path"],
+    },
+}
+
+# What print_sheet passes on. The header rows are not among them: the model has not read the workbook, so rows it
+# names are a guess, and one guessed rows 3-4 where the header was 2-3, painting the first data row as a header. Nor
+# the orientation: print_ready turns the paper whichever way prints larger, and a model that set landscape on a tall
+# form printed it on two pages where portrait fits one (one set by the person is page_setup's, after).
+_PRINT_SHEET_KEYS = ("path", "style", "color", "font", "size", "paper")
+
+
+def print_step(inp):
+    return {"tool_name": "Sheets", "step": "Making it ready to print"}
+
+
+async def exec_print_sheet(inp, workspace, ctx=None):
+    given = {k: inp[k] for k in _PRINT_SHEET_KEYS if inp.get(k) not in (None, "")}
+    return await exec_sheets({**given, "action": "print", "target": inp.get("sheet"), "ops": []}, workspace, ctx)
 
 
 def _err(message):
@@ -244,7 +338,7 @@ def _check_ops(ops):
             return f"op {i} needs an `op` ({', '.join(OPS)})"
         if op["op"] not in OPS:
             return f"op {i}: unknown op {str(op['op'])[:30]!r} (one of {', '.join(OPS)})"
-        if op["op"] != "add_sheet" and not op.get("target"):
+        if op["op"] not in ("add_sheet", "print_ready") and not op.get("target"):
             return f"op {i} ({op['op']}) needs a `target`"
     return None
 
@@ -284,6 +378,30 @@ async def exec_sheets(inp, workspace, ctx=None):
             if not path.is_file():
                 return _err(f"{rel} does not exist.")
             return await _exec_comments(inp, workspace, rel, getattr(ctx, "agent", None))
+
+        if action == "print":
+            # The layout in one edit (print_ready), then the PDF: one call where a dozen edits checked against PDFs were.
+            op = {"op": "print_ready"}
+            for k in ("target", "style", "color", "font", "size", "paper", "orientation", "header"):
+                if inp.get(k) not in (None, ""):
+                    op[k] = inp[k]
+            edited = await exec_sheets({"action": "edit", "path": raw_path, "ops": [op],
+                                        "intent": inp.get("intent") or "Made ready to print"}, workspace, ctx)
+            if not isinstance(edited, dict):
+                return edited
+            # The PDF of the sheet laid out, not every sheet's pages (a template's came to 296).
+            sheet = (edited.pop("_printed", None) or [None])[0]
+            printed = await export_pdf(workspace, path, rel, f"sheet '{sheet}'" if sheet else "workbook", sheet=sheet)
+            if not isinstance(printed, dict):
+                return f"{edited['_model']}\n{printed}"
+            final = ("This is final; there is nothing to check or redo, and the PDF is already open beside the chat "
+                     "(no canvas call). The person prints the PDF, or the workbook itself (its page is set). To change "
+                     "the font or the colours they select the table in Cycls Sheets and pick a font, or the header rows "
+                     "and a fill colour: the table is in one font and the header in one colour, so one change is enough.")
+            return {"_model": f"{edited['_model']}\n{printed['_model']}\n{final}", "_ui": printed["_ui"]}
+
+        if action == "export":
+            return await export_pdf(workspace, path, rel, "workbook")
 
         if bad := _check_ops(ops):
             return _err(bad)
@@ -347,4 +465,7 @@ async def exec_sheets(inp, workspace, ctx=None):
         ui["intent"] = str(intent)[:80]
     if len(json.dumps(ui["mutations"], default=str)) > 2_000_000:   # too large to replay: the editor reopens the file
         ui["mutations"], ui["reload"] = [], True
-    return {"_model": f"Edited {rel}.\n{said}{result['report']}".strip(), "_ui": ui}
+    out = {"_model": f"Edited {rel}.\n{said}{result['report']}".strip(), "_ui": ui}
+    if result.get("printed"):   # the sheets print_ready laid out: what print's PDF prints (the harness reads only _model/_ui)
+        out["_printed"] = result["printed"]
+    return out

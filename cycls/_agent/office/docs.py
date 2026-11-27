@@ -12,8 +12,9 @@ from ..design.deck import lock
 from ..design.store import Stale, load_fig, write_fig
 from ..paths import _resolve_path
 from . import client
+from .export import export_pdf
 
-ACTIONS = ("read", "edit", "create")
+ACTIONS = ("read", "edit", "create", "export")
 OPS = ("replace", "find_replace", "insert_after", "insert_before", "delete", "style", "list", "link", "cell",
        "insert_row", "delete_row", "insert_column", "delete_column", "insert_table", "picture", "comment", "reply",
        "resolve", "accept_changes", "reject_changes", "header", "footer", "section_break", "remove_section_break",
@@ -46,6 +47,8 @@ DOCS_TOOL = {
         "- create: a new document at `path` from `content` in markdown: # headings, one paragraph per line, "
         "- bullets and 1. numbers (indent two spaces to nest), | tables |, > quotes, **bold**, *italic*, "
         "[links](url), [page break]. Arabic paragraphs read right to left.\n"
+        "- export: the document as a PDF beside it (q3.docx → q3.pdf), as it prints, for when the person asks for a "
+        "PDF to print or send. Once, when the work is done: it is not a way to look at an edit.\n"
         "Ops: replace (para, words: the paragraph's new text); find_replace (find, replace, all?); insert_after / "
         "insert_before (para, words: lines — \"## Heading\", \"- item\", \"1. item\" or plain); delete (para, to?); "
         "style (para or find, to?; style like \"Heading 2\", align, rtl, bold, italic, underline, strike, color, "
@@ -67,7 +70,7 @@ DOCS_TOOL = {
         "ROMAN | letters | LETTERS | arabic_letters | abjad); accept_changes / reject_changes take a "
         "document's tracked changes (a read says when it has them; edits are refused until then). Rows and columns "
         "count from 1. Read before editing a document you have not seen. `ops` and `content` are always sent: "
-        "ops [] for read and create, content \"\" for read and edit.\n"
+        "ops [] for read, create and export, content \"\" for read, edit and export.\n"
         "When the person selects something in a document open in Cycls Docs and asks you, their message carries a "
         "line such as [Selected in reports/q3.docx: ¶12·h10 (words) \"15%\", T1 r2c3 (cell) \"1,500\"]: the "
         "references are a read's, so edit those paragraphs (words: with find in that paragraph) or cells straight "
@@ -156,7 +159,8 @@ DOCS_PROMPT = (
     "Trust what a `docs` edit replies: it is the file as it now is (the changed paragraphs; after a page change, the "
     "pages, sections, headers and footers), so tell the person what it says, and `docs` read to look again. Never "
     "change an existing .docx with Bash, a script, zip or XML edits, and don't unzip, render or convert one to check "
-    "a `docs` edit: that goes round the file's lock, its versions and the person's open editor, and takes minutes."
+    "a `docs` edit: that goes round the file's lock, its versions and the person's open editor, and takes minutes. "
+    "A PDF of the document, when the person asks for one, is `docs` export."
 )
 
 
@@ -273,6 +277,9 @@ async def exec_docs(inp, workspace, ctx=None):
             data = await asyncio.to_thread(path.read_bytes)
             start = inp.get("from")
             return await client.docs_read(data, path.name, start=start if isinstance(start, int) and start > 1 else None)
+
+        if action == "export":
+            return await export_pdf(workspace, path, rel, "document")
 
         if bad := _check_ops(ops):
             return _err(bad)

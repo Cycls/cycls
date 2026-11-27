@@ -61,7 +61,7 @@ def _run(inp, ws):
 def test_the_choices_that_matter_are_required():
     schema = sheets.SHEETS_TOOL["input_schema"]
     assert schema["required"] == ["action", "path", "ops"]     # ops too: models drop optional fields
-    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments"]
+    assert schema["properties"]["action"]["enum"] == ["read", "edit", "create", "comments", "export", "print"]
     op = schema["properties"]["ops"]["items"]
     assert op["required"] == ["op", "target"]
     assert set(op["properties"]["op"]["enum"]) == set(sheets.OPS)
@@ -71,7 +71,7 @@ def test_offered_only_with_the_service_and_the_organisation(monkeypatch, tmp_pat
     from cycls._agent.tools import _TOOLS, build_tools
     assert not [t for t in build_tools(["Sheets"], None) if t["name"] == "sheets"]
     monkeypatch.setenv("OFFICE_URL", "https://office.test")
-    assert [t["name"] for t in build_tools(["Sheets"], None)] == ["sheets"]
+    assert [t["name"] for t in build_tools(["Sheets"], None)] == ["sheets", "print_sheet"]
     assert "sheets" in _TOOLS and "openpyxl" in _TOOLS["sheets"].prompt
     # The tool is in the list but the organisation is not on SHEETS_ORGS: the call says so.
     out = _run({"action": "read", "path": "a.xlsx"}, _ws(tmp_path))
@@ -372,3 +372,159 @@ def test_a_selection_in_a_workbook_reaches_the_model_with_its_sheet():
         '[Selected in reports/ميزانية.xlsx sheet "الميزانية": B8:E8 (cells), B4 (cell) "47,000.00"]'
     assert _clean_selection({**raw, "path": "reports/x.csv"}) is None
     assert _clean_selection({**raw, "path": "../x.xlsx"}) is None
+
+
+# ---- export: the workbook as a PDF ----------------------------------------------------------
+
+def test_export_writes_the_pdf_beside_the_workbook_and_opens_it(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        form = _form(request)
+        seen.append((request.url.path, form, request.headers.get("x-user-id")))
+        return httpx.Response(200, content=b"%PDF-1.7 the workbook", headers={"content-type": "application/pdf"})
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "export", "path": "reports/b.xlsx", "ops": []}, _ws(tmp_path))
+    path, form, user = seen[0]
+    assert path == "/v1/convert" and form["file"] == XLSX and form["to"] == b"pdf" and user == "org1:user1"
+    assert (tmp_path / "reports" / "b.pdf").read_bytes() == b"%PDF-1.7 the workbook"
+    assert out["_model"].startswith("Saved reports/b.pdf (") and "as it prints" in out["_model"]
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "reports/b.pdf"}
+    assert (tmp_path / "reports" / "b.xlsx").read_bytes() == XLSX        # the workbook itself is untouched
+
+
+def test_export_says_why_it_cannot(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    assert _run({"action": "export", "path": "none.xlsx", "ops": []}, _ws(tmp_path)).startswith(
+        "Error: none.xlsx does not exist")
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    _mock(monkeypatch, lambda request: httpx.Response(422, json={"error": "LibreOffice could not convert this file to pdf"}))
+    out = _run({"action": "export", "path": "b.xlsx", "ops": []}, _ws(tmp_path))
+    assert "could not convert" in out and not (tmp_path / "b.pdf").exists()
+    _mock(monkeypatch, lambda request: httpx.Response(503, json={"error": "down"}))
+    assert "Sheets is unavailable" in _run({"action": "export", "path": "b.xlsx", "ops": []}, _ws(tmp_path))
+
+
+def test_export_keeps_a_pdf_that_was_already_there_as_a_version(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    (tmp_path / "b.pdf").write_bytes(b"%PDF the person's own")
+    _mock(monkeypatch, lambda request: httpx.Response(200, content=b"%PDF-1.7 exported"))
+    out = _run({"action": "export", "path": "b.xlsx", "ops": []}, _ws(tmp_path))
+    assert "kept in its versions" in out["_model"]
+    assert (tmp_path / "b.pdf").read_bytes() == b"%PDF-1.7 exported"
+    kept = versions.listing(tmp_path, "b.pdf")
+    assert kept and versions.read(tmp_path, "b.pdf", kept[0]["id"]) == b"%PDF the person's own"
+
+
+def test_read_and_edit_ask_for_the_print_report(monkeypatch):
+    """This SDK can change page setup and row heights, so it asks the service to say how a sheet prints."""
+    _on(monkeypatch)
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(_form(request)["request"]))
+        if request.url.path == "/v1/sheets/read":
+            return httpx.Response(200, json={"text": "ok"})
+        return httpx.Response(200, json={"unchanged": True, "file": None, "mutations": [], "ops": [], "report": ""})
+
+    _mock(monkeypatch, handler)
+    asyncio.run(office.sheets_read(XLSX, "b.xlsx"))
+    asyncio.run(office.sheets_apply(XLSX, "b.xlsx", [{"op": "page_setup", "target": "Sheet1", "orientation": "landscape"}]))
+    assert seen[0]["print"] is True and seen[1]["print"] is True
+    assert {"row_height", "page_setup"} <= set(sheets.OPS)
+    props = sheets.SHEETS_TOOL["input_schema"]["properties"]["ops"]["items"]["properties"]
+    assert {"height", "auto", "paper", "orientation", "fit_width", "fit_height", "margins", "print_area", "repeat_rows"} <= set(props)
+    assert "never export or convert a copy to look at it" in sheets.SHEETS_PROMPT
+
+
+def test_print_lays_the_workbook_out_and_writes_its_pdf_in_one_call(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            seen.append(json.loads(_form(request)["request"]))
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Sheet1 made ready to print\nPrint Sheet1: 1 page"})
+        assert request.url.path == "/v1/convert" and _form(request)["file"] == PATCHED   # the laid-out file
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    out = _run({"action": "print", "path": "b.xlsx", "ops": [], "style": "clean", "color": "#1F4E79", "paper": "A4"}, _ws(tmp_path))
+    assert seen[0]["edits"] == [{"op": "print_ready", "style": "clean", "color": "#1F4E79", "paper": "A4"}]
+    assert (tmp_path / "b.xlsx").read_bytes() == PATCHED and (tmp_path / "b.pdf").read_bytes() == b"%PDF-1.7 printed"
+    assert "made ready to print" in out["_model"] and "Saved b.pdf" in out["_model"]
+    assert out["_ui"] == {"type": "ui", "action": "open_canvas", "path": "b.pdf"}
+    assert "This is final" in out["_model"]
+
+
+def test_print_sheet_is_the_one_call_and_its_reply_is_final(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            seen.append(json.loads(_form(request)["request"])["edits"])
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Sheet1 made ready to print"})
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    out = asyncio.run(sheets.exec_print_sheet({"path": "b.xlsx", "sheet": "Sheet1", "color": "#0B5394"}, _ws(tmp_path),
+                                              types.SimpleNamespace(chat_id="c1")))
+    assert seen == [[{"op": "print_ready", "target": "Sheet1", "color": "#0B5394"}]]
+    assert "This is final" in out["_model"] and "one font" in out["_model"]
+    assert out["_ui"]["path"] == "b.pdf" and (tmp_path / "b.pdf").exists()
+    assert sheets.PRINT_SHEET_TOOL["input_schema"]["required"] == ["path"]
+    assert "`print_sheet` call" in sheets.SHEETS_PROMPT
+
+
+def test_print_sheet_passes_no_guessed_header(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            seen.append(json.loads(_form(request)["request"])["edits"])
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Sheet1 made ready to print"})
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    asyncio.run(sheets.exec_print_sheet({"path": "b.xlsx", "header": "3:4", "target": "A1", "paper": "A4", "style": "clean",
+                                         "orientation": "landscape"},
+                                        _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
+    assert seen == [[{"op": "print_ready", "style": "clean", "paper": "A4"}]]
+    assert not {"header", "orientation"} & set(sheets.PRINT_SHEET_TOOL["input_schema"]["properties"])
+
+
+def test_print_sheet_prints_the_sheet_it_laid_out(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "t.xlsx").write_bytes(XLSX)
+    converted = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Form made ready to print",
+                                             "printed": ["Form"]})
+        converted.append({k: v for k, v in _form(request).items() if k != "file"})
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    out = asyncio.run(sheets.exec_print_sheet({"path": "t.xlsx"}, _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
+    assert converted == [{"to": b"pdf", "sheet": b"Form"}]
+    assert "sheet 'Form' as it prints" in out["_model"] and "no canvas call" in out["_model"]
+    assert "_printed" not in out
+    # An edit of the same op keeps the sheet for print, and the harness reads only _model and _ui.
+    edited = asyncio.run(sheets.exec_sheets({"action": "edit", "path": "t.xlsx", "ops": [{"op": "print_ready"}]},
+                                            _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
+    assert edited["_printed"] == ["Form"]

@@ -539,7 +539,7 @@ _KINDS = (
     ("csv",      {"csv", "tsv"}),          # delimited text: any client can render it
     ("sheet",    {"numbers"}),             # binary spreadsheet a client parses in-browser
     # Office documents render by converting to PDF on demand (LibreOffice, via
-    # the office-render service) and showing them in the PDF viewer. The ext
+    # the office service) and showing them in the PDF viewer. The ext
     # set is single-sourced from the converter so labelling and conversion
     # can't disagree. Binary spreadsheets (xls/xlsx/ods) route here too.
     ("office",   set(office.CONVERTIBLE)),
@@ -573,6 +573,9 @@ def _public(entry):
 # catalog walk skips it, keyed by source path+mtime+size so a rewritten source
 # is a fresh entry and prior renders of the same file are swept on the miss.
 _OFFICE_CACHE = ".cache/office"
+# Which converter made a cached render: a new one (cycls-office, with the fonts Office files ask for) makes
+# the renders office-render left behind a miss, so they are made again instead of served in its fonts.
+_OFFICE_RENDERER = "co1"
 
 
 def _write_office_cache(cache_dir, stem, dst, pdf):
@@ -596,13 +599,13 @@ def _write_office_cache(cache_dir, stem, dst, pdf):
 
 async def _office_pdf(root, src, user_id):
     """A cached PDF render of one office file, converting on a miss via the
-    office-render service. Raises office.Unavailable so the caller can fall
+    office service (cycls-office). Raises office.Unavailable so the caller can fall
     back to the download card."""
     root = Path(root).resolve()   # src is already resolved (resolve_path), so match it
     st = src.stat()
     stem = hashlib.sha1(src.relative_to(root).as_posix().encode("utf-8")).hexdigest()[:16]
     cache_dir = root / _OFFICE_CACHE
-    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}.pdf"
+    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}-{_OFFICE_RENDERER}.pdf"
     if dst.exists():
         return dst
     data = await asyncio.to_thread(src.read_bytes)
@@ -631,13 +634,13 @@ def _write_office_slides(cache_dir, stem, dst, payload):
 async def _office_slides(root, src, user_id):
     """A cached slide render of one presentation — a JSON manifest of per-slide
     PNG data-URIs the canvas shows in the slide viewer. Renders on a miss via the
-    office-render service. Raises office.Unavailable so the caller can fall back
+    office service (cycls-office). Raises office.Unavailable so the caller can fall back
     to the download card."""
     root = Path(root).resolve()
     st = src.stat()
     stem = hashlib.sha1(src.relative_to(root).as_posix().encode("utf-8")).hexdigest()[:16]
     cache_dir = root / _OFFICE_CACHE
-    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}.slides.json"
+    dst = cache_dir / f"{stem}-{st.st_mtime_ns}-{st.st_size}-{_OFFICE_RENDERER}.slides.json"
     if dst.exists():
         return dst
     data = await asyncio.to_thread(src.read_bytes)
@@ -960,7 +963,7 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
             return JSONResponse(await _video_response(ws.root, file_path, ws.subject, getattr(ws, "ws", None)),
                                 headers=_NO_CACHE)
         # ?as=slides previews a presentation as a slide viewer — a JSON manifest
-        # of per-slide PNG data-URIs (office-render /v1/render). The canvas shows
+        # of per-slide PNG data-URIs (the office service's /v1/render). The canvas shows
         # the deck slide-by-slide rather than as a flat PDF.
         if request.query_params.get("as") == "slides" and office.presentation(file_path.name):
             try:

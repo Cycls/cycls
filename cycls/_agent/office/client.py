@@ -86,6 +86,46 @@ async def _call(method, path, headers_extra=None, **kw):
     return r
 
 
+_CONVERT_TIMEOUT = httpx.Timeout(300.0, connect=10.0)   # a long deck through LibreOffice takes a minute or more
+
+
+async def _post_file(path, data, name, fields, user_id=None):
+    """A file and form fields to a LibreOffice endpoint: the response, or Unavailable / Refused."""
+    headers = {**_headers(), "Accept": "*/*"}
+    if user_id:
+        headers["X-User-Id"] = str(user_id)   # attribution, not auth
+    try:
+        async with httpx.AsyncClient(timeout=_CONVERT_TIMEOUT, follow_redirects=False) as c:
+            r = await c.post(f"{_base()}{path}", files={"file": (name, bytes(data))}, data=fields, headers=headers)
+    except httpx.HTTPError as e:
+        raise Unavailable(f"the office service is unreachable ({type(e).__name__})") from e
+    if r.status_code in (401, 403):
+        raise Unavailable("the office service refused the key (OFFICE_SECRET)")
+    if r.status_code >= 500 or r.is_redirect:
+        raise Unavailable(f"the office service answered {r.status_code}")
+    if r.status_code != 200:
+        raise _refused(r)
+    return r
+
+
+async def convert(data, name, to="pdf", user_id=None, sheet=None):
+    """A file converted by LibreOffice on the service: a Word, Excel or PowerPoint file (named `name`, which
+    carries its type) → the bytes of its PDF, or of another Office format (`to`: docx, xlsx, pptx, …). `sheet`: a
+    workbook's PDF of that sheet only."""
+    r = await _post_file("/v1/convert", data, name, {"to": to, **({"sheet": sheet} if sheet else {})}, user_id)
+    return r.content
+
+
+async def render(data, name, dpi=110, pages="", user_id=None):
+    """A document's pages drawn as PNGs on the service, in page order: [{page, png_base64}] for the pages
+    asked for (`pages`: "1-5", "1,4-6"; every page, at most 100, when empty)."""
+    r = await _post_file("/v1/render", data, name, {"dpi": str(dpi), "pages": pages or ""}, user_id)
+    try:
+        return sorted(r.json().get("pages") or [], key=lambda p: p.get("page", 0))
+    except ValueError as e:
+        raise Unavailable("the office service sent pages that are not JSON") from e
+
+
 async def health():
     """What the service runs: its version, the engine release and patches, the editors it has."""
     r = await _call("GET", "/health")
@@ -166,7 +206,8 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 async def sheets_read(data, name, target=None, raw=False, max_chars=None):
     """The agent's read: the workbook outlined and a sheet or range as a grid (formulas → values)."""
     import json
-    request = {"name": name, "target": target, "raw": bool(raw)}
+    # print: say how the sheet prints (pages, scale, the text that does not fit); this SDK can act on it.
+    request = {"name": name, "target": target, "raw": bool(raw), "print": True}
     if max_chars:
         request["maxChars"] = int(max_chars)
     r = await _call("POST", "/v1/sheets/read", files={
@@ -184,7 +225,7 @@ async def sheets_apply(data, name, edits, create=None):
     and needs no `data`."""
     import base64
     import json
-    request = {"name": name, "edits": list(edits or [])}
+    request = {"name": name, "edits": list(edits or []), "print": True}
     if create is not None:
         request["create"] = create
     files = {"request": ("request.json", json.dumps(request, ensure_ascii=False).encode(), "application/json")}
@@ -197,7 +238,8 @@ async def sheets_apply(data, name, edits, create=None):
     return {"unchanged": bool(body.get("unchanged")),
             "bytes": base64.b64decode(body["file"]) if body.get("file") else None,
             "mutations": body.get("mutations") or [], "ops": body.get("ops") or [],
-            "report": body.get("report") or ""}
+            "report": body.get("report") or "",
+            "printed": body.get("printed") or []}
 
 
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

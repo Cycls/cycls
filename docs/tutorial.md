@@ -343,12 +343,13 @@ the form that fits it (read-only):
 - Everything else (`doc/rtf/odt/epub`) → a read-only PDF.
 
 Spreadsheets and `.docx` render in the browser from the raw bytes; presentations
-and the PDF fallback go through the shared `office-render` service, wired by env
-(unset → those two fall back to the download card, grid/docx still work):
+and the PDF fallback go through LibreOffice on `cycls-office`, the service behind
+Cycls Sheets and Cycls Docs, wired by the same env (unset → those two fall back to
+the download card, grid/docx still work):
 
 ```
-OFFICE_RENDER_URL=https://office-render.cycls.ai
-OFFICE_RENDER_SECRET=<the shared service secret>
+OFFICE_URL=https://cycls-office.cycls.ai
+OFFICE_SECRET=<the office service's key>
 ```
 
 A failed render always falls back to the download card, never a broken page.

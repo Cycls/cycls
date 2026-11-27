@@ -2,6 +2,7 @@ import pytest
 import base64
 import json
 import asyncio
+import httpx
 import os
 import time
 import importlib.resources
@@ -2071,7 +2072,7 @@ def test_office_preview_unavailable_returns_415(tmp_path, monkeypatch):
     from cycls._agent.web import office
     _seed(tmp_path, {"doc.docx": b"x"})
     async def boom(data, name, user_id=None):
-        raise office.Unavailable("office-render not configured")
+        raise office.Unavailable("the office service is not configured")
     monkeypatch.setattr(office, "to_pdf", boom)
     client = _ws_routers_client(tmp_path)
     assert client.get("/files/doc.docx", params={"as": "pdf"}).status_code == 415
@@ -2134,7 +2135,7 @@ def test_office_slides_unavailable_returns_415(tmp_path, monkeypatch):
     from cycls._agent.web import office
     _seed(tmp_path, {"deck.pptx": b"x"})
     async def boom(data, name, user_id=None):
-        raise office.Unavailable("office-render down")
+        raise office.Unavailable("the office service is down")
     monkeypatch.setattr(office, "to_slides", boom)
     client = _ws_routers_client(tmp_path)
     assert client.get("/files/deck.pptx", params={"as": "slides"}).status_code == 415
@@ -2548,83 +2549,76 @@ def test_the_editor_opening_gives_the_workspaces_own_fonts_first(tmp_path, monke
     assert sent == ["sha", "file"]   # once: its sha256, then the file the service never had
 
 
-# ---- office module: the office-render /v1/convert client ----
+# ---- office module: the canvas's converter, on the office service (cycls-office) ----
 
 def test_office_convertible_and_configured(monkeypatch):
     from cycls._agent.web import office
     assert office.convertible("a.docx") and office.convertible("B.PPTX") and office.convertible("c.xlsx")
     assert not office.convertible("d.pdf") and not office.convertible("e.csv") and not office.convertible("f")
-    monkeypatch.delenv("OFFICE_RENDER_URL", raising=False)
-    monkeypatch.delenv("OFFICE_RENDER_SECRET", raising=False)
+    for k in ("OFFICE_URL", "OFFICE_SECRET", "OFFICE_RENDER_URL", "OFFICE_RENDER_SECRET"):
+        monkeypatch.delenv(k, raising=False)
     assert office.configured() is False
-    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")
-    assert office.configured() is False          # needs both halves
+    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")          # the old service's settings do nothing now
     monkeypatch.setenv("OFFICE_RENDER_SECRET", "s")
+    assert office.configured() is False
+    monkeypatch.setenv("OFFICE_URL", "https://cycls-office.test")
     assert office.configured() is True
 
 
 def test_office_to_pdf_unavailable_paths(monkeypatch):
     from cycls._agent.web import office
-    monkeypatch.delenv("OFFICE_RENDER_URL", raising=False)
-    monkeypatch.delenv("OFFICE_RENDER_SECRET", raising=False)
+    monkeypatch.delenv("OFFICE_URL", raising=False)
     with pytest.raises(office.Unavailable):       # not configured
         asyncio.run(office.to_pdf(b"x", "a.docx"))
-    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")
-    monkeypatch.setenv("OFFICE_RENDER_SECRET", "s")
+    monkeypatch.setenv("OFFICE_URL", "https://cycls-office.test")
     with pytest.raises(office.Unavailable):       # not a convertible type
         asyncio.run(office.to_pdf(b"x", "a.pdf"))
+    with pytest.raises(office.Unavailable):       # not a presentation
+        asyncio.run(office.to_slides(b"x", "a.docx"))
 
 
-def test_office_to_pdf_posts_to_v1_convert(monkeypatch):
-    """to_pdf hits {URL}/v1/convert with the file, to=pdf, the service bearer,
-    and X-User-Id — matching the office-render contract."""
+_REAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _office_service(monkeypatch, handler):
+    from cycls._agent.office import client
+    monkeypatch.setattr(client.httpx, "AsyncClient",
+                        lambda **kw: _REAL_ASYNC_CLIENT(transport=httpx.MockTransport(handler), **kw))
+
+
+def test_office_to_pdf_and_slides_post_to_the_office_service(monkeypatch):
+    """to_pdf hits {OFFICE_URL}/v1/convert with the file, to=pdf, the office key and X-User-Id; to_slides
+    hits /v1/render and hands back the PNGs in slide order."""
     from cycls._agent.web import office
-    monkeypatch.setenv("OFFICE_RENDER_URL", "https://office-render.cycls.ai/")   # trailing slash
-    monkeypatch.setenv("OFFICE_RENDER_SECRET", "sekret")
-    seen = {}
+    monkeypatch.setenv("OFFICE_URL", "https://cycls-office.test/")   # trailing slash
+    monkeypatch.setenv("OFFICE_SECRET", "sekret")
+    seen = []
 
-    class FakeResp:
-        status_code = 200
-        content = b"%PDF-rendered"
-        text = ""
+    def handler(request):
+        body = request.read()
+        seen.append(dict(url=str(request.url), auth=request.headers.get("authorization"),
+                         user=request.headers.get("x-user-id"), body=body))
+        if request.url.path == "/v1/render":
+            return httpx.Response(200, json={"count": 2, "pages": [{"page": 2, "png_base64": "Mg=="},
+                                                                   {"page": 1, "png_base64": "MQ=="}]})
+        return httpx.Response(200, content=b"%PDF-rendered")
 
-    class FakeClient:
-        def __init__(self, *a, **k): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def post(self, url, files=None, data=None, headers=None):
-            seen.update(url=url, files=files, data=data, headers=headers)
-            return FakeResp()
-
-    monkeypatch.setattr(office.httpx, "AsyncClient", FakeClient)
-    out = asyncio.run(office.to_pdf(b"raw", "deck.pptx", user_id="org:u"))
-    assert out == b"%PDF-rendered"
-    assert seen["url"] == "https://office-render.cycls.ai/v1/convert"   # one slash, /v1/convert
-    assert seen["data"] == {"to": "pdf"}
-    assert seen["files"]["file"][0] == "deck.pptx"                      # filename carries the ext
-    assert seen["headers"]["Authorization"] == "Bearer sekret"
-    assert seen["headers"]["X-User-Id"] == "org:u"
+    _office_service(monkeypatch, handler)
+    assert asyncio.run(office.to_pdf(b"raw", "deck.pptx", user_id="org:u")) == b"%PDF-rendered"
+    assert seen[0]["url"] == "https://cycls-office.test/v1/convert"   # one slash, /v1/convert
+    assert seen[0]["auth"] == "Bearer sekret" and seen[0]["user"] == "org:u"
+    assert b'name="to"' in seen[0]["body"] and b'filename="deck.pptx"' in seen[0]["body"]
+    assert asyncio.run(office.to_slides(b"raw", "deck.pptx")) == [b"1", b"2"]
+    assert seen[1]["url"] == "https://cycls-office.test/v1/render" and b"1-100" in seen[1]["body"]
 
 
 def test_office_to_pdf_maps_service_error_to_unavailable(monkeypatch):
     from cycls._agent.web import office
-    monkeypatch.setenv("OFFICE_RENDER_URL", "https://x")
-    monkeypatch.setenv("OFFICE_RENDER_SECRET", "s")
-
-    class FakeResp:
-        status_code = 422
-        content = b""
-        text = "convert failed"
-
-    class FakeClient:
-        def __init__(self, *a, **k): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def post(self, *a, **k): return FakeResp()
-
-    monkeypatch.setattr(office.httpx, "AsyncClient", FakeClient)
-    with pytest.raises(office.Unavailable):
-        asyncio.run(office.to_pdf(b"x", "a.docx"))
+    monkeypatch.setenv("OFFICE_URL", "https://cycls-office.test")
+    for status in (422, 415, 500, 401):
+        _office_service(monkeypatch, lambda request, status=status: httpx.Response(status, json={"error": "no"}))
+        with pytest.raises(office.Unavailable):
+            asyncio.run(office.to_pdf(b"x", "a.docx"))
 
 
 def test_listing_sorts_folders_first_and_honours_sort_key(tmp_path):
