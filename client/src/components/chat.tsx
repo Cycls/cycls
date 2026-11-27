@@ -1668,7 +1668,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   </div>
                 )}
                 {(runStatus === "interrupted" || messages[messages.length - 1]?.parts?.some((p) => p.type === "callout" && p.code === "cut_off"))
-                  && !isStreaming && messages[messages.length - 1]?.role === "assistant" && (
+                  && !isStreaming && (
                   <ContinueLine onContinue={() => handleSubmit(t("continueRun"), "continue")} />
                 )}</ApprovalContext.Provider>
                 </RoutinesContext.Provider>

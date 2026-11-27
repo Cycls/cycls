@@ -385,6 +385,20 @@ async def _unwind(session, blocks, tasks, reason, handlers, mcp_names, workspace
     await asyncio.shield(session.checkpoint())
 
 
+async def _close_cut(session):
+    """Calls left open by a container that died while they ran, answered as a stop answers them: unanswered, the next
+    read strips the turn, and the model runs the step again — often the command that took the container down."""
+    last = session.messages[-1] if session.messages else {}
+    calls = [b for b in last.get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use"] \
+        if last.get("role") == "assistant" else []
+    if not calls: return
+    session.messages.append({"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": b["id"], "is_error": True,
+         "content": interrupted_note(b["name"], "cut off when its server stopped, as a command using too much memory can do")}
+        for b in calls]})
+    await session.checkpoint()
+
+
 CLIP_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm")   # what the Video tool's `footage` reads
 # What the Transcribe tool hears beyond those (cycls/_agent/transcribe/tool.py's AUDIO_TYPES).
 AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".amr", ".caf", ".aif",
@@ -595,6 +609,7 @@ async def _run(*, context, system="", tools=None, allowed_tools=[],
     Path(workspace.root).mkdir(parents=True, exist_ok=True)
 
     session = await Session.open(context)
+    await _close_cut(session)
     prelude.mark("chat history read")
     # the person's own allow / ask / never for the builtins, read once — no subject means no per-user store
     modes = await state.settings_db(workspace).get("tools", {}) if getattr(workspace, "subject", None) else {}
