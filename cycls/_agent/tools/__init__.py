@@ -45,7 +45,7 @@ from ..transcribe.tool import TRANSCRIBE_TOOL, transcribe_step
 from ..transcribe.run import exec_transcribe
 from ..video.run import _exec_video, _video_step
 from ..office.docs import DOCS_PROMPT, DOCS_TOOL, docs_step, exec_docs
-from ..office.sheets import SHEETS_PROMPT, SHEETS_TOOL, exec_sheets, sheets_step
+from ..office.sheets import PRINT_SHEET_TOOL, SHEETS_PROMPT, SHEETS_TOOL, exec_print_sheet, exec_sheets, print_step, sheets_step
 
 TRASH_MOUNT, SHIMS_MOUNT = "/workspace-trash", "/opt/cycls-bin"   # created by the image (Agent._base_run)
 
@@ -464,7 +464,7 @@ def build_tools(allowed_tools, custom, vendor=None, web_search="brave"):
             # (SHEETS_ORGS) is decided per run, where the organisation is known (harness/main.py)
             from cycls._agent.office import client as _office
             if _office.configured():
-                tools.append(SHEETS_TOOL)
+                tools += [SHEETS_TOOL, PRINT_SHEET_TOOL]
         elif name == "Docs":
             # the same for Cycls Docs: offered with the office service; who may use it is DOCS_ORGS
             from cycls._agent.office import client as _office
@@ -1279,6 +1279,9 @@ _TOOLS = {
     "transcribe": Tool(lambda inp, ws, ctx=None, **_: exec_transcribe(inp, ws, ctx), transcribe_step,
                        interrupted="A transcription that was started keeps running on the service: call "
                                    "transcribe again with the same path to collect it."),
+    "print_sheet": Tool(lambda inp, ws, ctx=None, **_: exec_print_sheet(inp, ws, ctx), print_step,
+                        interrupted="The workbook is as it was before this call, or has the whole layout: read it "
+                                    "before changing it again."),
     "sheets":     Tool(lambda inp, ws, ctx=None, **_: exec_sheets(inp, ws, ctx), sheets_step, prompt=SHEETS_PROMPT,
                        interrupted="The file is as it was before this call, or has the whole edit: read it "
                                    "before changing it again."),
