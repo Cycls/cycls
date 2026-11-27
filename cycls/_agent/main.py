@@ -44,9 +44,15 @@ class _Routes:
 
 
 class Agent(App):
-    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv", "mcp==2.1.1"]
-    _base_apt = [*App._base_apt, "fonts-noto-core", "fonts-inter",
-                 "poppler-utils", "ripgrep", "jq", "curl"]
+    _base_pip = [*App._base_pip, "resvg-py", "anthropic", "openai", "python-dotenv", "mcp==2.1.1",
+                 # what every agent's bash reaches for (746 chats read, 2026-11-26), pinned to the set tested together;
+                 # anything rarer installs on demand, under the pip stand-in's limit; SVG to PNG is resvg-py's
+                 "python-docx==1.2.0", "openpyxl==3.1.5", "python-pptx==1.0.2", "pymupdf==2.2", "pdfplumber==0.11.11",
+                 "pypdf==7.2.0", "weasyprint==70.0", "markdown==3.11.4", "pillow==13.0.0", "pillow-heif==1.9.0",
+                 "beautifulsoup4==4.15.0", "requests==2.34.2", "pyyaml==6.0.4", "pandas==3.1.1",
+                 "arabic-reshaper==3.1.0", "python-bidi==0.6.12", "hijridate==2.6.0", "hijri-converter==2.3.1"]
+    _base_apt = [*App._base_apt, "fonts-noto-core", "fonts-inter", "poppler-utils", "ripgrep", "jq", "curl",
+                 "file", "unzip", "zip", "procps", "libpango-1.0-0", "libpangoft2-1.0-0", "fontconfig"]
     _base_run = [f"mkdir -p {TRASH_MOUNT} {SHIMS_MOUNT}"]   # bwrap can't mkdir bind targets inside its ro root
 
     def __init__(self, func, name, web=None, image=None, memory="1Gi", volumes=None):
