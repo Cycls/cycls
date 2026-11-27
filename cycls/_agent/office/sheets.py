@@ -185,24 +185,28 @@ PRINT_SHEET_TOOL = {
         "coloured header, borders and banded rows (style clean; keep leaves fonts and colours as they are), shares the "
         "page's width over the columns and sizes the rows to their text, turns the paper and fits the sheet to one "
         "page, keeps every picture its size and every value as it is, then writes the PDF beside the workbook and opens "
-        "it. Call it straight away, with no read first, and once: its reply is final."
+        "it. Call it straight away, with no read first, and once: its reply is final. Give it only the path and what "
+        "the person asked for (a font, a colour, a paper); it finds the rest itself."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "The .xlsx file in the workspace, e.g. attachments/register.xlsx"},
-            "sheet": {"type": "string", "description": "The sheet (the first when left out)"},
-            "style": {"type": "string", "enum": ["clean", "keep"], "description": "clean (default) or keep"},
-            "color": {"type": "string", "description": "The header's colour, #RRGGBB (a deep blue when left out)"},
-            "font": {"type": "string", "description": "The table's font (the workbook's when left out)"},
-            "size": {"type": "number", "description": "The text's size in points (10 when left out)"},
-            "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"]},
-            "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "Left out: whichever prints larger"},
-            "header": {"type": "string", "description": "The header rows, e.g. 2:3 (found when left out)"},
+            "sheet": {"type": "string", "description": "Only a sheet the person named (the first when left out)"},
+            "style": {"type": "string", "enum": ["clean", "keep"], "description": "clean (default), or keep when the person wants their fonts and colours kept"},
+            "color": {"type": "string", "description": "Only a colour the person asked for: the header's, #RRGGBB"},
+            "font": {"type": "string", "description": "Only a font the person asked for"},
+            "size": {"type": "number", "description": "Only a text size the person asked for, in points"},
+            "paper": {"type": "string", "enum": ["A4", "Letter", "Legal", "A3", "A5", "Tabloid"], "description": "Only a paper the person named"},
+            "orientation": {"type": "string", "enum": ["portrait", "landscape"], "description": "Only when the person asked for one"},
         },
         "required": ["path"],
     },
 }
+
+# What print_sheet passes on. The header rows are not among them: the model has not read the workbook, so rows it
+# names are a guess, and one guessed rows 3-4 where the header was 2-3, painting the first data row as a header.
+_PRINT_SHEET_KEYS = ("path", "style", "color", "font", "size", "paper", "orientation")
 
 
 def print_step(inp):
@@ -210,8 +214,8 @@ def print_step(inp):
 
 
 async def exec_print_sheet(inp, workspace, ctx=None):
-    return await exec_sheets({**inp, "action": "print", "target": inp.get("sheet") or inp.get("target"), "ops": []},
-                             workspace, ctx)
+    given = {k: inp[k] for k in _PRINT_SHEET_KEYS if inp.get(k) not in (None, "")}
+    return await exec_sheets({**given, "action": "print", "target": inp.get("sheet"), "ops": []}, workspace, ctx)
 
 
 def _err(message):

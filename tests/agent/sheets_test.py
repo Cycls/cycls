@@ -484,3 +484,22 @@ def test_print_sheet_is_the_one_call_and_its_reply_is_final(monkeypatch, tmp_pat
     assert out["_ui"]["path"] == "b.pdf" and (tmp_path / "b.pdf").exists()
     assert sheets.PRINT_SHEET_TOOL["input_schema"]["required"] == ["path"]
     assert "`print_sheet` call" in sheets.SHEETS_PROMPT
+
+
+def test_print_sheet_passes_no_guessed_header(monkeypatch, tmp_path):
+    _on(monkeypatch)
+    (tmp_path / "b.xlsx").write_bytes(XLSX)
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/v1/sheets/apply":
+            seen.append(json.loads(_form(request)["request"])["edits"])
+            return httpx.Response(200, json={"unchanged": False, "file": base64.b64encode(PATCHED).decode(), "mutations": [],
+                                             "ops": [], "report": "1. print_ready: Sheet1 made ready to print"})
+        return httpx.Response(200, content=b"%PDF-1.7 printed")
+
+    _mock(monkeypatch, handler)
+    asyncio.run(sheets.exec_print_sheet({"path": "b.xlsx", "header": "3:4", "target": "A1", "paper": "A4", "style": "clean"},
+                                        _ws(tmp_path), types.SimpleNamespace(chat_id="c1")))
+    assert seen == [[{"op": "print_ready", "style": "clean", "paper": "A4"}]]
+    assert "header" not in sheets.PRINT_SHEET_TOOL["input_schema"]["properties"]
