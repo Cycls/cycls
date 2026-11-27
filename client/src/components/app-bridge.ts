@@ -215,6 +215,13 @@ export function attachBridge({
   if (document.body) themeWatch?.observe(document.body, { attributes: true, attributeFilter: ["class"] });
   // The workspace's look (lib/app-look), worn by an app on shadcn tokens: in init, and again when an admin changes it.
   const offLook = onLook(() => post({ type: MSG.theme, theme, tokens: currentLook() }));
+  // The chat's language, which an app reads once in init: a switch starts it again in the new one.
+  let lang = document.documentElement.lang;
+  const onLang = () => {
+    if (document.documentElement.lang === lang) return;
+    lang = document.documentElement.lang;
+    reloadSoon(true);
+  };
 
   function tell(source: ChangeSource, keys?: string[], files?: string[], who?: Record<string, unknown>) {
     if (listening) {
@@ -224,12 +231,12 @@ export function attachBridge({
     }
   }
 
-  function reloadSoon() {
+  function reloadSoon(always = false) {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(() => {
       if (closed) return;
-      if (listening) return tell("agent");   // it started listening meanwhile: tell it, keep its state
-      if (busy) return reloadSoon();         // a write of its own is still on its way
+      if (listening && !always) return tell("agent");   // it started listening meanwhile: tell it, keep its state
+      if (busy) return reloadSoon(always);              // a write of its own is still on its way
       reloadFrame();
     }, 800);
   }
@@ -452,7 +459,7 @@ export function attachBridge({
       port = ch.port1;
       port.onmessage = (ev) => void handle(ev.data);
       frame.contentWindow.postMessage(   // the mode now, not when the bridge attached: a reload after a switch
-        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context, theme, ...(currentLook() && { tokens: currentLook() }) }, "*", [ch.port2]);
+        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context, theme, locale: lang || context?.locale, ...(currentLook() && { tokens: currentLook() }) }, "*", [ch.port2]);
       return;
     }
     void handle(e.data);   // a shim that ignored the port still works
@@ -462,6 +469,7 @@ export function attachBridge({
   window.addEventListener(APP_DATA_EVENT, onAgent);
   window.addEventListener(TURN_END_EVENT, onTurnEnd);
   window.addEventListener("focus", onFocus);
+  window.addEventListener("langchange", onLang);
   document.addEventListener("visibilitychange", onVisibility);
   if (appData) void check("turn");   // the first look: what a later change is measured against
   return () => {
@@ -473,6 +481,7 @@ export function attachBridge({
     clearTimeout(reloadTimer);
     clearTimeout(laterTimer);
     window.removeEventListener("message", onWindow);
+    window.removeEventListener("langchange", onLang);
     window.removeEventListener(APP_DATA_EVENT, onAgent);
     window.removeEventListener(TURN_END_EVENT, onTurnEnd);
     window.removeEventListener("focus", onFocus);

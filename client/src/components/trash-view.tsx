@@ -9,7 +9,7 @@ import { FolderIcon } from "./files";
 export interface TrashRow {
   id: string;
   path: string;      // original path, or the chat title
-  kind: string;      // file | dir | app | chat
+  kind: string;      // file | dir | app | chat | row (an app's row the agent deleted)
   by: string;        // user | agent
   deleted_at: string;
   reason?: string;   // delete | overwrite
@@ -31,8 +31,8 @@ function Tile({ row, name }: { row: TrashRow; name: string }) {
       </span>
     );
   }
-  if (row.kind === "app") {
-    return <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-[10px] font-medium uppercase text-accent">app</span>;
+  if (row.kind === "app" || row.kind === "row") {
+    return <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-[10px] font-medium uppercase text-accent">{row.kind === "app" ? "app" : "data"}</span>;
   }
   return (
     <div className="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-lg" style={tintTile(name)}>

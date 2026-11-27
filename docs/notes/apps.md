@@ -560,8 +560,9 @@ volume lacks is not offered. Without a CMS, each bundle's `app.json` speaks for 
 
 **Installing** copies a bundle into `apps/<slug>/` as `build_app` lands an app (`catalog.py`): the bridge, the Apps
 panel, `app_catalog()`, the trash and sharing see an app like any other. Its `app.json` carries the stamp
-`catalog: {version, at}`, the version being its page's hash. A fresh install starts on an empty shelf; an update
-keeps the data, the name and the icon, and trashes the page it replaces. Removing one is deleting the app.
+`catalog: {version, at, shipped}`, the version being its page's hash and `shipped` the name and icon it came with. A
+fresh install starts on an empty shelf. A new page, name or icon in the gallery is an update, which keeps the data and
+any name or icon the person changed, and trashes the page it replaces. Removing one is deleting the app.
 
 **An app changed here is the workspace's.** When the agent rebuilds an installed app (`build_app` writes `built`
 into its `app.json`), it shows "Changed here" and is never updated, so nothing writes over that work. A folder at

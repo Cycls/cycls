@@ -478,6 +478,22 @@ describe("keeping an open app in step", () => {
     expect(changes(t.sent)).toEqual([]);
   });
 
+  it("starts an app again in the chat's new language, even one that listens", async () => {
+    const t = setup({ keys: {} });
+    await wait(0);
+    send(t.contentWindow, { type: MSG.listen });
+    window.dispatchEvent(new Event("langchange"));   // the same language: nothing to do
+    await wait(1000);
+    expect(t.reload).not.toHaveBeenCalled();
+    document.documentElement.lang = "ar";
+    window.dispatchEvent(new Event("langchange"));
+    await wait(1000);
+    expect(t.reload).toHaveBeenCalledTimes(1);
+    send(t.contentWindow, { type: MSG.ready, doc: "after" });
+    expect(t.sent.at(-1)).toMatchObject({ type: MSG.init, locale: "ar" });
+    document.documentElement.lang = "";
+  });
+
   it("reloads it when a turn changed a data file it reads", async () => {
     const t = setup({ files: { "data/rows.json": "1-a" } });
     await wait(0);

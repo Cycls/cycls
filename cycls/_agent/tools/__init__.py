@@ -1576,8 +1576,10 @@ def risk(name, inp):
     if name == "bash":
         cmd = str(inp.get("command") or "")
         return "destructive" if _DESTRUCTIVE_CMD.search(cmd) else None if _reads(cmd) else "write"
-    if name == "database":
-        return {"delete": "destructive", "put": "write"}.get(inp.get("command"))
+    if name == "database":   # one app row goes to the trash first (state._exec_database), so deleting it is a write
+        key = str(inp.get("key") or "")
+        one = key.startswith("apps/") and not key.endswith("/")
+        return {"delete": "write" if one else "destructive", "put": "write"}.get(inp.get("command"))
     return "write" if name in ("edit", "build_app") or (name == "skill" and inp.get("action") == "publish") else None
 
 

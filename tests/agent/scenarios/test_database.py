@@ -261,7 +261,7 @@ def test_an_app_delete_says_it_was_a_delete(tmp_path):
     ws = _ws_user(tmp_path)
     _run(_exec_database({"command": "put", "key": "apps/standup/entries/1", "value": "hi"}, ws))
     out = _run(_exec_database({"command": "delete", "key": "apps/standup/entries/1"}, ws))
-    assert out["_model"] == "Deleted 'apps/standup/entries/1'"
+    assert out["_model"] == "Deleted 'apps/standup/entries/1'; it is in the trash for 30 days"
     assert out["_ui"]["deleted"] is True and out["_ui"]["key"] == "entries/1"
 
 

@@ -62,6 +62,27 @@ def trash_path(ws, rel, by="user", reason="delete"):
     return meta
 
 
+def trash_row(ws, key, value, by="agent"):
+    """An app's row the agent deleted, kept as an entry of its own: `kind: "row"`, its key as `path`."""
+    tid = new_id()
+    entry = _root(ws) / tid
+    entry.mkdir(parents=True)
+    (entry / "row.json").write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    meta = {"id": tid, "path": key, "kind": "row", "by": by, "reason": "delete", "deleted_at": _now()}
+    (entry / "meta.json").write_text(json.dumps(meta))
+    sweep(ws)
+    return meta
+
+
+def take_row(ws, tid):
+    """(meta, value) of a row entry, or None when `tid` is not one."""
+    entry = _root(ws) / tid
+    meta = _read(entry) if entry.is_dir() else None
+    if not meta or meta.get("kind") != "row":
+        return None
+    return meta, json.loads((entry / "row.json").read_text(encoding="utf-8"))
+
+
 def _read(entry):
     try:
         return json.loads((entry / "meta.json").read_text())

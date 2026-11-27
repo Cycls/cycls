@@ -28,6 +28,7 @@ from pathlib import Path
 
 from cycls._app.db import DB, Conflict, workspace, _store
 from .logs import log
+from . import trash
 
 
 # ---- Chat metadata ----
@@ -1216,10 +1217,13 @@ async def _exec_database(inp, ws, user=None, chat=None):
                 if now and seen != now:
                     return (_MOVED if seen else _UNREAD).format(key=key, done="deleted")
                 _saw(ws, chat, key, None)
+                if (v := await db.get(k)) is not None:   # kept in the trash first, so this delete asks no one (tools.risk)
+                    await asyncio.to_thread(trash.trash_row, ws.root, key, v)
             await db.delete(k)
             if key.startswith(APPS_ROOT):
                 await _app_noted(ws, key, chat)
-            return _app_changed(key, f"Deleted {key!r}", None, deleted=True)
+            return _app_changed(key, f"Deleted {key!r}" + ("; it is in the trash for 30 days" if app_key else ""),
+                                None, deleted=True)
         if cmd == "scan":
             prefix = inp.get("prefix", "")
             db, p = _route(ws, prefix, prefix=True)

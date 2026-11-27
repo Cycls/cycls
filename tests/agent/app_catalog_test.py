@@ -94,6 +94,22 @@ def test_an_update_keeps_the_data_name_and_icon_and_trashes_the_page_it_replaces
     assert [e["reason"] for e in trash.list_trash(app.parent.parent) if e["path"] == "apps/tasks/index.html"] == ["update"]
 
 
+def test_a_new_name_in_the_gallery_is_an_update_that_spares_a_name_the_person_chose(tmp_path, shelf):
+    client, vol = _client(tmp_path, shelf)
+    for slug in ("tasks", "crm"):
+        client.post("/apps/install", json={"slug": slug})
+    crm = _app(vol, "crm") / "app.json"
+    crm.write_text(json.dumps({**json.loads(crm.read_text(encoding="utf-8")), "name": "Our clients"}), encoding="utf-8")
+    for slug, name in (("tasks", "Tasks & Follow-ups"), ("crm", "Customers")):
+        _bundle(shelf, slug, name=name)   # renamed in the gallery, the page as it was
+    assert _states(client) == {"crm": "update", "tasks": "update"}
+    for slug in ("tasks", "crm"):
+        client.post("/apps/install", json={"slug": slug})
+    names = {s: json.loads((_app(vol, s) / "app.json").read_text(encoding="utf-8"))["name"] for s in ("tasks", "crm")}
+    assert names == {"tasks": "Tasks & Follow-ups", "crm": "Our clients"}
+    assert _states(client) == {"crm": "installed", "tasks": "installed"}
+
+
 def test_an_app_changed_here_gets_no_update_and_a_persons_own_is_never_touched(tmp_path, shelf):
     client, vol = _client(tmp_path, shelf)
     client.post("/apps/install", json={"slug": "tasks"})

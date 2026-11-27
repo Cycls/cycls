@@ -1247,7 +1247,19 @@ def files_router(cycls_app, ws_dep, user_dep, volume, base):
         return rows
 
     @r.post("/trash/{tid}/restore")
-    async def restore_trash(tid: str, ws: Workspace = ws_dep):
+    async def restore_trash(tid: str, ws: Workspace = ws_dep, user: Any = user_dep):
+        if row := await asyncio.to_thread(trash.take_row, ws.root, tid):   # an app's row the agent deleted
+            meta, value = row
+            db, k = state._route(ws, meta["path"])
+            try:
+                await state._may_write_app(ws, user, meta["path"])
+                await db.put(k, value, meta=state.app_stamp(ws), create=True)   # never over a newer value
+            except ValueError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            except Conflict:
+                raise HTTPException(status_code=409, detail="Something new was saved there since, so this was not put back")
+            await asyncio.to_thread(trash.purge, ws.root, tid)
+            return {"ok": True, "path": meta["path"]}
         if tid.startswith("chat:"):
             cid = tid[5:]
             w = _chats(ws, cid)
@@ -1384,7 +1396,7 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
     @r.get("/apps/catalog")
     async def listing(ws: Workspace = ws_dep, user: Any = user_dep):
         found, rows = await offered()
-        states = await asyncio.to_thread(lambda: [catalog.state(ws.root, a["slug"], found[a["slug"]]) for a in rows])
+        states = await asyncio.to_thread(lambda: [catalog.state(ws.root, a["slug"], found[a["slug"]], a) for a in rows])
         return {"admin": await _admin(cycls_app, user, ws, volume, base), "apps": [{**a, "state": s} for a, s in zip(rows, states)]}
 
     @r.get("/apps/catalog/{slug}/preview")
@@ -1405,7 +1417,7 @@ def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
             raise HTTPException(status_code=404, detail="No such app")
         if not await _admin(cycls_app, user, ws, volume, base):
             raise HTTPException(status_code=403, detail="Only workspace admins can install apps")
-        st = await asyncio.to_thread(catalog.state, ws.root, slug, found[slug])
+        st = await asyncio.to_thread(catalog.state, ws.root, slug, found[slug], row)
         if st in ("taken", "changed"):
             raise HTTPException(status_code=409, detail="An app here already has that name" if st == "taken"
                                 else "This app was changed here, so an update would undo that")

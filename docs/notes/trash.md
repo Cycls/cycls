@@ -14,6 +14,10 @@ unrecoverable. Now nothing the product calls "delete" is.
 - **Chats** are DB rows, so their delete is a `deletedAt` tombstone on the
   chat's index row: listings skip it, restore clears it, purge wipes the
   subtree. `GET /trash` merges files and tombstoned chats into one list.
+- **An app's rows the agent deletes** (`database delete apps/<slug>/<key>`) wait as an entry of their own:
+  the value in `row.json`, `kind: "row"`, the key as `path`. So that delete is a write, not a destructive
+  one, and asks no one. Restore puts the value back at its key, or answers 409 when something new was saved
+  there since. The agent's own memory is not kept, and deleting it still asks.
 - **Restore** moves back; if the path was taken since, it lands as
   `name (restored).ext`.
 - **Roles**: anyone who can edit trashes and restores. **Delete-forever,

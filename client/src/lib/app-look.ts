@@ -59,6 +59,8 @@ function side(c: Choice, dark: boolean): Tokens {
     "--ring": focus, "--sidebar": dark ? card : basePrimaryFg, "--sidebar-foreground": fg, "--sidebar-primary": primary,
     "--sidebar-primary-foreground": primaryFg, "--sidebar-accent": secondary, "--sidebar-accent-foreground": onSecondary,
     "--sidebar-border": border, "--sidebar-ring": focus,
+    // the apps' kit's own two, after its theme.css: a soft primary and a strong border
+    "--primary-soft": `color-mix(in oklab, ${primary} 14%, ${card})`, "--border-strong": `color-mix(in oklab, ${fg} 45%, ${bg})`,
   };
 }
 

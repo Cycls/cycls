@@ -625,6 +625,27 @@ def test_file_delete_goes_to_trash_and_restores(tmp_path):
     assert client.get("/trash").json() == []
 
 
+def test_an_app_row_the_agent_deletes_waits_in_the_trash(tmp_path):
+    """So that delete asks no one: the row comes back from the trash, but never over something saved since."""
+    from cycls._agent.tools import _exec_database, risk
+    from cycls._app.db import workspace as _workspace
+    client = _client(tmp_path)
+    ws = _workspace("org_1:user_1", tmp_path, base=f"file://{tmp_path}", ws="u-user_1")
+    delete = lambda: [asyncio.run(_exec_database({"command": c, "key": "apps/tasks/t1"}, ws)) for c in ("get", "delete")][1]
+    client.put("/apps/tasks/data/t1", json={"title": "Call the supplier"})
+    assert delete()["_model"].endswith("it is in the trash for 30 days")
+    (row,) = client.get("/trash").json()
+    assert (row["kind"], row["path"], row["by"]) == ("row", "apps/tasks/t1", "agent")
+    assert client.post(f"/trash/{row['id']}/restore").json()["path"] == "apps/tasks/t1"
+    assert client.get("/apps/tasks/data/t1").json()["value"] == {"title": "Call the supplier"} and client.get("/trash").json() == []
+    delete()
+    client.put("/apps/tasks/data/t1", json={"title": "A new one"})
+    (row,) = client.get("/trash").json()
+    assert client.post(f"/trash/{row['id']}/restore").status_code == 409
+    assert [risk("database", {"command": "delete", "key": k}) for k in ("apps/tasks/t1", "apps/tasks/", "notes")] == \
+        ["write", "destructive", "destructive"]
+
+
 def test_app_delete_and_purge_are_admin_only(tmp_path):
     client = _client(tmp_path)
     ws_id = _mk_team(client)

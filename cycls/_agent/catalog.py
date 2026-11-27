@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-STAMP = "catalog"   # an installed app's app.json: the {version, at} of the bundle it came from
+STAMP = "catalog"   # an installed app's app.json: the {version, at, shipped} of the bundle it came from
 LOOKS = ("classic", "ocean", "palm", "sand", "rose", "custom")
 _versions = {}      # (path, mtime, size) -> hash: a bundle on a volume is read again only once it changed
 
@@ -45,10 +45,17 @@ def own_copy(slug, bundle):
             "icon": "", "picture": "", "featured": False}
 
 
-def state(root, slug, bundle):
-    """available | installed | update | changed | taken, for one bundle in one workspace. Changed: the agent rebuilt
-    it after it was installed (build_app's `built`), so it is the person's now and no update writes over it. Taken:
-    the slug is the person's own app."""
+def _shipped(slug, copy):
+    """The name and icon the gallery gives an app: an update brings them, unless the person changed theirs."""
+    svg = copy.get("icon") or ""
+    return {"name": copy["title"]["en"] or copy["title"]["ar"] or slug, "name_ar": copy["title"]["ar"],
+            **({"icon": f"data:image/svg+xml;utf8,{quote(svg)}"} if svg.startswith("<svg") else {})}
+
+
+def state(root, slug, bundle, copy):
+    """available | installed | update | changed | taken, for one bundle in one workspace. Update: its page, name or
+    icon is new in the gallery. Changed: the agent rebuilt it after it was installed (build_app's `built`), so it is
+    the person's now and no update writes over it. Taken: the slug is the person's own app."""
     app = Path(root) / "apps" / slug
     if not app.exists():
         return "available"
@@ -57,21 +64,22 @@ def state(root, slug, bundle):
         return "taken"
     if "built" in m:
         return "changed"
-    return "installed" if m[STAMP].get("version") == version(bundle) else "update"
+    now = _shipped(slug, copy)
+    return "installed" if (m[STAMP].get("version"), m[STAMP].get("shipped", now)) == (version(bundle), now) else "update"
 
 
 def install(root, slug, bundle, copy, trash):
     """Copy a bundle into apps/<slug>/, or over the copy there for an update: its data untouched, the page it replaces
-    kept by `trash(rel)`, the name and icon it has kept. `copy` is what the gallery says about it (own_copy's shape)."""
+    kept by `trash(rel)`, a name or icon the person changed kept. `copy` is what the gallery says about it (own_copy's
+    shape)."""
     app = Path(root) / "apps" / slug
     was = _manifest(app / "app.json")
-    svg = copy.get("icon") or ""
-    m = {**{k: v for k, v in _manifest(Path(bundle) / "app.json").items() if k not in ("built", STAMP)},
-         "name": copy["title"]["en"] or copy["title"]["ar"] or slug, "name_ar": copy["title"]["ar"],
+    shipped, before = _shipped(slug, copy), (was.get(STAMP) or {}).get("shipped") or {}
+    m = {**{k: v for k, v in _manifest(Path(bundle) / "app.json").items() if k not in ("built", STAMP)}, **shipped,
          "description": copy["description"]["en"], "description_ar": copy["description"]["ar"],
-         **({"icon": f"data:image/svg+xml;utf8,{quote(svg)}"} if svg.startswith("<svg") else {}),
-         **{k: was[k] for k in ("name", "name_ar", "icon") if was.get(k)},
-         STAMP: {"version": version(bundle), "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}}
+         **{k: was[k] for k in ("name", "name_ar", "icon") if was.get(k) and was[k] != before.get(k)},
+         STAMP: {"version": version(bundle), "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 "shipped": shipped}}
     app.mkdir(parents=True, exist_ok=True)
     (app / "data").mkdir(exist_ok=True)
     # The stamp first: a folder holding our page without it would read as the person's own.
