@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { AppTile } from "./app-icon";
 import { LoadingBar } from "./loading-bar";
 import { ContextMenu, InlineInput } from "./files";
@@ -7,7 +7,7 @@ import { Icon } from "./icon";
 import { t } from "../lib/i18n";
 import type { AppInfo } from "../hooks/use-apps";
 
-export function AppsPanel({ apps, loading, onOpen, onShare, onRename, onSetIcon, onUploadIcon, onDelete }: {
+export function AppsPanel({ apps, loading, onOpen, onShare, onRename, onSetIcon, onUploadIcon, onDelete, store, onMore, build }: {
   apps: AppInfo[];
   loading: boolean;
   onOpen: (app: AppInfo) => void;
@@ -16,6 +16,10 @@ export function AppsPanel({ apps, loading, onOpen, onShare, onRename, onSetIcon,
   onSetIcon?: (app: AppInfo, icon: string) => void;
   onUploadIcon?: (app: AppInfo, file: File) => void;
   onDelete?: (app: AppInfo) => void;   // admins only — the server enforces it too
+  // Ready-made apps (apps-store.tsx): the store while there is none here, the gallery and building one after
+  store?: ReactNode;
+  onMore?: () => void;
+  build?: ReactNode;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; app: AppInfo } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -43,14 +47,14 @@ export function AppsPanel({ apps, loading, onOpen, onShare, onRename, onSetIcon,
         }}
       />
       <div className="flex-1 overflow-y-auto pb-20">
-        {apps.length === 0 ? (
+        {apps.length === 0 && store ? store : apps.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-center">
             <Icon name="folder" className="size-8 text-muted-foreground" strokeWidth={1.5} />
             <p className="text-sm font-medium">{t("noApps")}</p>
             <p className="text-xs text-muted-foreground">{t("noAppsSub")}</p>
           </div>
-        ) : (
-          // A phone's home screen: an app opens on a click, its menu on a right-click, what it does on hover
+        ) : (<>
+          {/* A phone's home screen: an app opens on a click, its menu on a right-click, what it does on hover */}
           <div className="grid grid-cols-3 gap-x-2 gap-y-5 px-3 py-5">
             {apps.map((app, i) => (
               <div
@@ -92,8 +96,18 @@ export function AppsPanel({ apps, loading, onOpen, onShare, onRename, onSetIcon,
                 )}
               </div>
             ))}
+            {/* hollow beside the solid ones: the gallery */}
+            {onMore && (
+              <div role="button" onClick={onMore} className="group flex cursor-pointer flex-col items-center gap-1.5 px-1">
+                <span className="flex size-14 items-center justify-center rounded-[24%] border-[1.5px] border-foreground/20 text-muted-foreground transition-colors group-hover:border-foreground/60 group-hover:text-foreground">
+                  <Icon name="plus" className="size-6" strokeWidth={1.5} />
+                </span>
+                <span className="text-xs leading-4 text-muted-foreground group-hover:text-foreground">{t("appsMore")}</span>
+              </div>
+            )}
           </div>
-        )}
+          {build && <div className="px-3">{build}</div>}
+        </>)}
       </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={itemsFor(menu.app)} onClose={() => setMenu(null)} />}
     </div>

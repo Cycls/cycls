@@ -53,6 +53,7 @@ class Config(BaseModel):
     explore_enabled: bool = False     # FE shows the agents dropdown
     examples: Optional[list] = None   # [{label, label_ar, urls}] — resolved at GET /examples
     examples_enabled: bool = False    # FE shows the example gallery on the empty screen
+    apps_catalog: bool = False        # Web.apps(): the Apps panel offers ready-made apps, and the gallery has them
     colors: Optional[dict] = None     # {primary, secondary, primary_dark, secondary_dark}
     _og_image: Optional[bytes] = PrivateAttr(default=None)  # custom og card, served at /og.png
     _fonts: list = PrivateAttr(default_factory=list)        # .brand(fonts=)'s files, for the cards it draws

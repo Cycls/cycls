@@ -60,6 +60,7 @@ cycls/
     ├── main.py             # Agent class + @cycls.agent decorator
     ├── state.py            # all agent state — chat meta+log+Session, shares, agent KV tool
     ├── activity.py         # who made and changed each file (.files), people's faces, an org's audit log (docs/rfc-file-metadata.md)
+    ├── catalog.py          # ready-made apps (Web.apps): bundles on a volume or beside the agent, each one's state in a workspace, install/update never over a changed app, the look (docs/notes/apps.md "Ready-made apps")
     ├── inbox.py            # a person's notifications across their workspaces (.inbox): `notify`, a team message's mentions and replies, the bell's read, each person's browsers (docs/rfc-notifications.md)
     ├── webpush.py          # Web Push from our own server: RFC 8291 encryption, a VAPID signature, sent straight to each browser's push service
     ├── routines.py         # routines: the record (each person's, per workspace), the clock (.clock, a key per routine by its next run), a run as its owner's chat message, `routine` and `tell` (docs/rfc-routines.md)
@@ -174,6 +175,7 @@ tests/
 │   ├── transcribe_test.py       # Transcribe tool: client, executor (files beside the recording, kept, collected later), attachment hint, the mic + its fallback
 │   ├── skills_test.py           # skill discovery, catalog text, the `skill` tool
 │   ├── subagents_test.py        # agents in the background, reports waking the parent, four at once or the developer's number, their own agents with fixed instructions, file holds, cost
+│   ├── app_catalog_test.py      # ready-made apps: install as build_app lands one, an update keeping data/name/icon, a changed or a person's own app never touched, the CMS's list, admins only, the look
 │   ├── activity_test.py         # file records and their faces, the walk after a run, the audit log and its routes, a chat's files
 │   ├── team_chats_test.py       # a team workspace's chats: who sees them, a message to the team alone, moving a chat there, reactions, edits, typing, unread, paging, writes at the same moment, a look that finds nothing new
 │   ├── inbox_test.py            # the inbox: a mention, a reply and @all reach who they name, never the sender, whoever had the chat open, nor twice; push words and picks; a task ended while away; read, seen, a chat opened, the newest 30; Web Push (RFC 8291's example, a browser's push read back, one gone dropped, OneSignal to phones only)

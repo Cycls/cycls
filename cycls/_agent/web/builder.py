@@ -115,6 +115,7 @@ class Web:
         self._fonts: list = []
         self._colors: Optional[dict] = None
         self._connectors: list = []
+        self._apps: Optional[str] = None
 
     def _copy(self, **updates):
         new = Web.__new__(Web)
@@ -141,17 +142,20 @@ class Web:
         return self._copy(_theme=name)
 
     def cms(self, *, brand: Optional[str] = None, explore: Optional[str] = None,
-            connectors: Optional[str] = None, examples: Optional[str] = None, token: Optional[str] = None):
+            connectors: Optional[str] = None, examples: Optional[str] = None, apps: Optional[str] = None,
+            token: Optional[str] = None):
         """Pull branding, the explore menu, the connector directory copy and/or the example gallery from
         any CMS: plain GET URLs returning the contract JSON (title/title_ar/description/description_ar/
         icon_svg; {"agents": [...]} for explore; {"connectors": [...]} for connectors; {"pills": [{"label":
         {"en", "ar"}, "cards": [{"share"} | {"video", "title"}]}]} for examples, what
         cms.cycls.ai/site/examples/{agent} serves; a card may describe itself instead — {share, title, prompt, kind,
-        template, thumbnail}, what cms.cycls.ai/site/gallery/{agent} serves from its library), optional bearer `token`. What the code declares wins,
+        template, thumbnail}, what cms.cycls.ai/site/gallery/{agent} serves from its library; {"apps": [{slug, title,
+        description, category, icon, picture, featured}]} for `.apps()`'s gallery, what cms.cycls.ai/site/apps/{agent}
+        serves), optional bearer `token`. What the code declares wins,
         piece by piece — `.brand()`, `.explore()`, `.examples()`, and each field a cycls.OAuth2/cycls.Key
         sets for itself."""
         cms = {k: v for k, v in (("brand", brand), ("explore", explore), ("connectors", connectors),
-                                 ("examples", examples), ("token", token)) if v}
+                                 ("examples", examples), ("apps", apps), ("token", token)) if v}
         return self._copy(_cms=cms or None)
 
     def brand(self, locale="en", *, name=None, description=None, logo=None, brand=None, og=None, favicon=None,
@@ -270,6 +274,15 @@ class Web:
     def connectors(self, *oauths):
         """Connectors the directory offers and the connect routes serve (cycls.OAuth2)."""
         return self._copy(_connectors=[*self._connectors, *oauths])
+
+    def apps(self, folder: str):
+        """Ready-made apps a workspace admin installs from the Apps panel (docs/notes/apps.md, "Ready-made apps"): a
+        folder of built bundles, one per slug, as build_app writes them. A relative folder ships in the image; a
+        volume's mount path ("/apps") is read live, so an app put there needs no redeploy. What the gallery says
+        about each comes from `.cms(apps=…)`, else from its app.json."""
+        if not isinstance(folder, str) or not folder.strip() or ".." in Path(folder).parts:
+            raise ValueError(f'apps(folder) is a folder beside the agent or a volume\'s mount path, like "/apps": got {folder!r}')
+        return self._copy(_apps=Path(folder).as_posix())   # a str: the agent is pickled where it is deployed
 
     def analytics(self, *providers):
         """Analytics as plugins: one canonical event pipe in the client,

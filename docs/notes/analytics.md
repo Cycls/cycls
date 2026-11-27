@@ -160,6 +160,8 @@ its last value while the other is active. Paid is any plan but `u:free_user` / `
 | `trash_restored` | something comes back from the trash | `kind`, `method` (`toast` / `shortcut` / `trash_tab`) — which undo affordance people actually use |
 | `trash_purged` | delete-forever (admin) | `kind`, or `all: true` for empty-trash |
 | `app_updated` | an app renamed or re-iconed from its ⋯ menu (manifest edit) | `field` (`name` / `icon`) |
+| `app_installed` | a ready-made app installed from the Apps panel, the gallery or its preview (`Web().apps`) | `app` (its slug), `update` (true for an update) |
+| `app_look_saved` | an admin picked the look a workspace's apps wear | `look` (`classic`, `ocean`, `palm`, `sand`, `rose` or `custom`) |
 | `deck_opened` | a design of several slides opens in the deck viewer (its preview, from the canvas, Files or a share) | `slides` — are decks being made and looked at? |
 | `deck_presented` | Present on a deck (or on an office presentation, `source: office`) | `slides`, `from` (`start` / `current`) — presented ÷ opened says whether decks are for showing or just for files |
 | `poll_opened` | a poll slide comes up while its owner presents — its live poll opens | `options` — are decks used to ask the room, not just to show it? |

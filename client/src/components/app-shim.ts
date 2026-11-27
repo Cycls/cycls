@@ -53,11 +53,13 @@ const SHIM = `<script>(function(){
               user: m.user && typeof m.user === 'object' ? m.user : null };
       api.ctx = ctx;
       applyTheme(m.theme);
+      if (m.tokens) wear(m.tokens);
       resolveReady(ctx);
       return;
     }
     if (m.type === 'cycls:changed') { changed(m); return; }
     if (m.type === 'cycls:theme') {
+      if ('tokens' in m) wear(m.tokens);
       if (m.theme !== 'dark' && m.theme !== 'light') return;
       if (ctx) ctx.theme = m.theme;
       applyTheme(m.theme);
@@ -212,6 +214,21 @@ const SHIM = `<script>(function(){
   // The chat's light or dark mode: "dark" on <html> (what Tailwind and the kit read), at init and on every
   // switch; cycls.onTheme for an app that needs it in code.
   var themeListeners = [];
+  // The workspace's look: shadcn tokens for light and dark in one <style>, its selectors above an app's own :root and
+  // .dark wherever its CSS lands. Only a token name and a value that cannot close the rule get in; none: the app's own.
+  function wear(tokens){
+    try {
+      var el = document.getElementById('cycls-look'), bs = String.fromCharCode(92);
+      var rule = function(sel, set){
+        var out = [];
+        for (var k in set) if (/^--[a-z0-9-]{1,40}$/.test(k) && /^[^;{}<>]{1,120}$/.test(set[k]) && set[k].indexOf(bs) < 0) out.push(k + ':' + set[k]);
+        return out.length ? sel + '{' + out.join(';') + '}' : '';
+      };
+      if (!tokens || typeof tokens !== 'object') { if (el) el.remove(); return; }
+      if (!el) { el = document.createElement('style'); el.id = 'cycls-look'; (document.head || document.documentElement).appendChild(el); }
+      el.textContent = rule(':root:root', tokens.light || {}) + rule(':root:root.dark,:root:root[data-theme="dark"]', tokens.dark || {});
+    } catch (e) {}
+  }
   function applyTheme(t){
     if (t !== 'dark' && t !== 'light') return;
     try {

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useApi } from "./use-api";
 import { encPath } from "./use-files";
+import { getLang } from "../lib/i18n";
 
 // Apps live in `apps/<slug>/` at the workspace root, entry `index.html`.
 // A folder rather than a loose file so an app's data sits beside it — which is
@@ -25,8 +26,10 @@ export interface AppInfo {
 
 interface Manifest {
   name?: unknown;
+  name_ar?: unknown;
   icon?: unknown;
   description?: unknown;
+  description_ar?: unknown;
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|svg|webp|gif|avif)$/i;
@@ -52,13 +55,14 @@ export function parseManifest(slug: string, raw: string | null): AppInfo {
       // A broken manifest degrades to the folder name; it never hides the app.
     }
   }
-  const name = str(m.name, 60) ?? titleise(slug);
-  const icon = str(m.icon, 512);
+  const ar = getLang() === "ar";   // a ready-made app carries both (catalog.py)
+  const name = (ar && str(m.name_ar, 60)) || str(m.name, 60) || titleise(slug);
+  const icon = str(m.icon, 4096);   // a line icon is an SVG of a few KB
   const app: AppInfo = {
     slug,
     name,
     letter: firstLetter(name),
-    description: str(m.description, 200),
+    description: (ar && str(m.description_ar, 200)) || str(m.description, 200),
     entry: `${APPS_DIR}/${slug}/index.html`,
   };
   if (!icon) return app;

@@ -528,6 +528,16 @@ describe("following the chat's light or dark mode", () => {
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
   });
 
+  it("wears the workspace's look, never a value that would close its rule, and drops it when it goes", () => {
+    const { deliver } = install();
+    deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "light",
+              tokens: { light: { "--primary": "oklch(0.6 0.2 260)", "--ring": "red}body{display:none" }, dark: {} } });
+    const style = () => document.getElementById("cycls-look")?.textContent;
+    expect(style()).toBe(":root:root{--primary:oklch(0.6 0.2 260)}");
+    deliver({ type: "cycls:theme", theme: "light", tokens: null });
+    expect(style()).toBeUndefined();
+  });
+
   it("ignores a mode it does not know", () => {
     const { deliver } = install();
     deliver({ type: "cycls:init", path: "apps/x/index.html", scope: "apps/x", theme: "light" });

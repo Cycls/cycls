@@ -60,6 +60,8 @@ export interface CanvasFile {
   letter?: string;    // first letter of the app name
   writable?: boolean; // a document written here (the instructions): missing opens empty, Edit sits in the header
   live?: boolean;     // a design the agent is working on: in the editor while it does, then its preview
+  content?: string;   // given, not read: a ready-made app seen before it is installed (apps-store.tsx)
+  install?: () => void;
 }
 
 // Fetch a file's content for the canvas. pdf → blob URL (native viewer);
@@ -79,6 +81,7 @@ export function useFileContent(
 
   useEffect(() => {
     if (!file) { setContent(null); setError(false); shown.current = null; return; }
+    if (file.content !== undefined) { setContent(file.content); setError(false); shown.current = file.path; return; }
     const fresh = shown.current !== file.path;
     shown.current = file.path;
     let cancelled = false;
@@ -1198,6 +1201,8 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
         ) : (
           <>
             {saved && <span className="text-xs text-muted-foreground">{t("saved")}</span>}
+            {file.content !== undefined && <span className="hidden text-xs text-muted-foreground sm:inline">{t("appExample")}</span>}
+            {file.install && <button onClick={file.install} className="cursor-pointer rounded-full bg-foreground px-3.5 py-1.5 text-xs font-medium text-background hover:opacity-80">{t("appInstall")}</button>}
             {isText && content != null && (
               <button onClick={startEdit} className="text-xs font-medium text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-3 py-1.5 transition-colors cursor-pointer">
                 {t("edit")}
@@ -1219,7 +1224,7 @@ function CanvasFileView({ file, readFile, openFile, writeFile, uploadFile, deckO
                 </svg>
               </button>
             )}
-            {(() => {
+            {file.content === undefined && (() => {
               const items = [
                 ...(onShareFile ? [{ label: t("share"), onClick: () => setShareOpen(true) }] : []),
                 ...(isText && content != null ? [{ label: copied ? t("copied") : t("copy"), onClick: copy }] : []),

@@ -549,6 +549,39 @@ no record. A run that only wrote files under `apps/<slug>/data/` records those f
 
 In the kit: `useMe()`, `usePeople()` (`byId`), `useWho(key, value)`. The skill says to store ids, never names.
 
+## Ready-made apps
+
+`cycls.Web().apps("/apps")` offers apps an agent ships ready: a folder of bundles, one per slug, as `build_app` writes
+them (`index.html`, `app.json`, `README.md`, `src/`). Super keeps them on a volume of their own (`cycls-apps`, mounted
+read-only), so one put there shows within a minute and no agent redeploys. What people read about each (its name,
+line and category in both languages, its line icon, its picture, featured, its order, the agents that offer it) is
+content, so it lives in the CMS (`cms.cycls.ai/site/apps/{agent}`, `.cms(apps=…)`); an app the CMS names and the
+volume lacks is not offered. Without a CMS, each bundle's `app.json` speaks for it.
+
+**Installing** copies a bundle into `apps/<slug>/` as `build_app` lands an app (`catalog.py`): the bridge, the Apps
+panel, `app_catalog()`, the trash and sharing see an app like any other. Its `app.json` carries the stamp
+`catalog: {version, at}`, the version being its page's hash. A fresh install starts on an empty shelf; an update
+keeps the data, the name and the icon, and trashes the page it replaces. Removing one is deleting the app.
+
+**An app changed here is the workspace's.** When the agent rebuilds an installed app (`build_app` writes `built`
+into its `app.json`), it shows "Changed here" and is never updated, so nothing writes over that work. A folder at
+the slug without the stamp is a person's own app: installing there is refused.
+
+**Where it shows.** An Apps panel with no app is a store: one featured, a few picks with Install, and the gallery.
+With apps, the panel is the apps alone, a hollow tile that opens the gallery, and "Ask {agent} to build your app",
+which puts «سوّ لي تطبيق [فكرة التطبيق]» in the composer with its blank chosen. The gallery is the third part of the
+window that lists connectors and skills: search, categories, each app's picture tilted on a grey tile, Preview and
+Install, or Open and Remove once installed, Update when one ships. Preview runs the bundle in the canvas with no
+bridge, so it shows its own example data, with Install in the canvas header. Admins install, update and remove;
+everyone else sees and previews.
+
+**The look.** An admin picks how the workspace's apps look: a few named looks (Classic, Ocean, Palm, Sand, Rose),
+each shown on a small app, or the company's colour. The server keeps the choice (`.look` in the `.apps` slot, `GET/PUT
+/apps/look`); `lib/app-look.ts` turns it into shadcn tokens for light and dark. The bridge hands them over in
+`cycls:init` and again in `cycls:theme` when an admin changes them, and the shim puts them in one `<style>` whose
+selectors outrank an app's own `:root` and `.dark`. Only a token name and a value that cannot close the rule get in.
+With no look chosen, nothing is sent and every app keeps its own colours.
+
 ## Known limitations
 
 Current behaviour, not aspiration. Each is a real constraint someone will hit.

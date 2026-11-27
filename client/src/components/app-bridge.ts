@@ -1,6 +1,7 @@
 // Host side of the canvas <-> sandboxed-app channel. The app has an opaque
 // origin, so the host reads and writes for it, within its own folder only.
 import type { Person } from "../lib/people";
+import { currentLook, onLook } from "../lib/app-look";
 
 export const MSG = {
   ready: "cycls:ready",
@@ -212,6 +213,8 @@ export function attachBridge({
     post({ type: MSG.theme, theme });
   });
   if (document.body) themeWatch?.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  // The workspace's look (lib/app-look), worn by an app on shadcn tokens: in init, and again when an admin changes it.
+  const offLook = onLook(() => post({ type: MSG.theme, theme, tokens: currentLook() }));
 
   function tell(source: ChangeSource, keys?: string[], files?: string[], who?: Record<string, unknown>) {
     if (listening) {
@@ -449,7 +452,7 @@ export function attachBridge({
       port = ch.port1;
       port.onmessage = (ev) => void handle(ev.data);
       frame.contentWindow.postMessage(   // the mode now, not when the bridge attached: a reload after a switch
-        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context, theme }, "*", [ch.port2]);
+        { type: MSG.init, path: appPath, scope, canWrite: !!writeFile, ...context, theme, ...(currentLook() && { tokens: currentLook() }) }, "*", [ch.port2]);
       return;
     }
     void handle(e.data);   // a shim that ignored the port still works
@@ -464,6 +467,7 @@ export function attachBridge({
   return () => {
     closed = true;
     themeWatch?.disconnect();
+    offLook();
     clearInterval(tick);
     clearTimeout(agentTimer);
     clearTimeout(reloadTimer);

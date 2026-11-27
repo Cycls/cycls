@@ -14,7 +14,9 @@ import { TrashView, type TrashRow } from "./trash-view";
 import { SearchDialog, type Kind } from "./search-dialog";
 import { InboxBell } from "./inbox";
 import { useInbox } from "../hooks/use-inbox";
-import { useApps, type AppInfo } from "../hooks/use-apps";
+import { useApps, parseManifest, type AppInfo } from "../hooks/use-apps";
+import { AppsGallery, AppsStore, BuildButton, type Catalog, type Offered, type StoreActions } from "./apps-store";
+import { setLook, type Look } from "../lib/app-look";
 import { Popover } from "./popover";
 import { Icon, IconButton, Spinner, type IconName } from "./icon";
 import { ConnectContext } from "./connect-card";
@@ -276,7 +278,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
   const [ask, setAsk] = useState<{ questions: AskQuestion[] } | null>(null);
   // The directory: what the deployment offers, refreshed whenever a grant changes.
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
-  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" } | null>(null);
+  const [connectorsOpen, setConnectorsOpen] = useState<{ name?: string; tab?: "skills" | "apps" } | null>(null);
   // @-pills: connectors this message is about. They ride the request and clear on send.
   const [pills, setPills] = useState<Connector[]>([]);
   const pillsRef = useRef<Connector[]>([]);
@@ -299,7 +301,7 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
     if (account) api("/connectors", { silent: true }).then((r) => r.json()).then(setConnectors).catch(() => setConnectors([]));
   }, [account?.activeOrg?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadConnectors(); }, [loadConnectors]);
-  const openConnectors = (source: string, name?: string, tab?: "skills") => {
+  const openConnectors = (source: string, name?: string, tab?: "skills" | "apps") => {
     track("connector_directory_opened", { source, tab: tab ?? "connectors" });
     loadConnectors();
     setConnectorsOpen({ name, tab });
@@ -1085,6 +1087,53 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
       throw e;
     }
   }, [deleteWithUndo]);
+
+  // Ready-made apps (Web.apps, apps-store.tsx): what the agent offers here, the one being installed, the look they wear.
+  const offersApps = !!(config?.apps_catalog && account);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [look, setLookChoice] = useState<Look | null>(null);
+  const loadCatalog = useCallback(() => {
+    if (offersApps) api("/apps/catalog", { silent: true }).then((r) => r.json()).then(setCatalog).catch(() => {});
+  }, [offersApps]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (filesTab === "apps" || connectorsOpen?.tab === "apps") loadCatalog(); }, [filesTab, connectorsOpen?.tab, loadCatalog]);
+  useEffect(() => {   // every app the canvas opens wears it (lib/app-look); none set, each its own
+    if (!offersApps) { setLook(null); return; }
+    api("/apps/look", { silent: true }).then((r) => r.json()).then((d) => { setLookChoice(d.look); setLook(d.look); }).catch(() => setLook(null));
+  }, [offersApps]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const titleOf = (a: Offered) => (getLang() === "ar" ? a.title.ar || a.title.en : a.title.en || a.title.ar);
+  const installApp = async (a: Offered) => {
+    setInstalling(a.slug);
+    try {
+      const r = await (await api("/apps/install", { method: "POST", json: { slug: a.slug } })).json();
+      track("app_installed", { app: a.slug, update: a.state === "update" });
+      closeCanvasTab(`.preview/${a.slug}.html`);
+      setConnectorsOpen(null);
+      openApp(parseManifest(a.slug, JSON.stringify(r.app)));   // the install's own answer: a list read now may not see it yet
+      void refreshApps();
+      loadCatalog();
+    } catch { /* the api's own toast says what failed */ } finally { setInstalling(null); }
+  };
+  // Seen before it is installed: the bundle as it ships, with no bridge, so it shows its own example data.
+  const peekApp = async (a: Offered) => {
+    try {
+      const html = await (await api(`/apps/catalog/${a.slug}/preview`)).text();
+      setConnectorsOpen(null);
+      openFileInCanvas(`.preview/${a.slug}.html`, titleOf(a), {
+        content: html, letter: [...titleOf(a)][0],
+        install: catalog?.admin && (a.state === "available" || a.state === "update") ? () => void installApp(a) : undefined,
+      });
+      if (!isDesktop) setFilesOpen(false);
+    } catch { /* the api's own toast says what failed */ }
+  };
+  const buildApp = (idea?: string) => {   // the request in the composer, its blank chosen, as «Make one like this» does
+    setConnectorsOpen(null);
+    examples.makeLike(idea ? t("appsBuildFor").replace("{idea}", idea) : t("appsBuildPrompt"));
+    if (!isDesktop) setFilesOpen(false);
+  };
+  const storeActions: StoreActions = { agent: meta?.name || name || "", busy: installing, onPeek: (a) => void peekApp(a),
+    onInstall: (a) => void installApp(a), onBuild: buildApp };
+  const openGallery = () => openConnectors("apps_panel", undefined, "apps");
   const renameFromFiles = useCallback(async (from: string, to: string) => {
     await Promise.all([flushDesignEditorsUnder(from, 3000), flushVideoEditorsUnder(from, 3000)]);
     await files!.onRename(from, to);
@@ -1301,6 +1350,17 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
           onClose={() => setConnectorsOpen(null)}
           onUsePrompt={(text, c) => { setInput(text); addPill(c, "prompt"); textareaRef.current?.focus(); }}
           onAsk={(text) => { setInput(text); textareaRef.current?.focus(); }}
+          apps={offersApps ? (catalog ? (
+            <AppsGallery catalog={catalog} actions={storeActions} look={look}
+              onOpen={(a) => { setConnectorsOpen(null); const app = apps.find((x) => x.slug === a.slug); if (app) openApp(app); }}
+              onRemove={(a) => { if (confirm(t("deleteAppConfirm").replace("{name}", titleOf(a)))) void deleteWithUndo(`apps/${a.slug}`).then(() => { void refreshApps(); loadCatalog(); }); }}
+              onLook={async (l) => {
+                try {
+                  const d = await (await api("/apps/look", { method: "PUT", json: l })).json();
+                  setLookChoice(d.look); setLook(d.look); track("app_look_saved", { look: d.look.look });
+                } catch { /* the api's own toast says what failed */ }
+              }} />
+          ) : <></>) : undefined}
         />
       )}
       <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -1907,6 +1967,9 @@ export function Chat({ chat, onShare, files, account, config, view = "" }: {
                   onSetIcon={files ? (a, icon) => { void updateApp(a, { icon }); } : undefined}
                   onUploadIcon={files ? (a, f) => { uploadAppIcon(a, f).catch(() => toastError(t("uploadFailed"))); } : undefined}
                   onDelete={canPurge && files ? (a) => { void deleteWithUndo(`apps/${a.slug}`).then(() => refreshApps()); } : undefined}
+                  store={catalog?.apps.some((a) => a.state === "available") ? <AppsStore catalog={catalog} actions={storeActions} onGallery={openGallery} /> : undefined}
+                  onMore={offersApps ? openGallery : undefined}
+                  build={offersApps ? <BuildButton agent={storeActions.agent} onBuild={() => buildApp()} /> : undefined}
                 />
               ) : filesTab === "routines" ? (
                 <RoutinesContext.Provider value={routinesCtx}>

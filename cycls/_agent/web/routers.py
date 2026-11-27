@@ -14,7 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from cycls._app.db import DB, Conflict, Workspace, workspace
-from cycls._agent import connectors as oauth, credentials, spill, state, trash
+from cycls._agent import catalog, connectors as oauth, credentials, spill, state, trash
 from cycls._agent.web import office
 from cycls._agent import activity, inbox, routines
 from cycls._agent.design import refresh as design_refresh
@@ -1354,6 +1354,85 @@ APP_LIST_MAX = 10_000      # a backstop, not a policy: apps below it are never c
 APP_FILES_MAX = 500        # data/ files an app's change check looks at: a stat each, on gcsfuse
 
 
+def app_catalog_router(cycls_app, ws_dep, user_dep, volume, base):
+    """Ready-made apps (`Web().apps(folder)`, docs/notes/apps.md "Ready-made apps"): what a workspace may install, one
+    seen before it is, the install, and the look the workspace's apps wear. Removing one is deleting the app. What
+    the gallery says about each comes from `.cms(apps=…)`, as last read well, else from each bundle's app.json."""
+    r = APIRouter()
+    folder = getattr(cycls_app, "apps_folder", None)
+    if not folder:
+        return r
+    cms = getattr(getattr(cycls_app, "config", None), "cms", None) or {}
+    read = {"at": 0.0, "rows": []}
+
+    async def offered():
+        found = await asyncio.to_thread(catalog.bundles, folder)
+        if not cms.get("apps"):
+            return found, [catalog.own_copy(s, b) for s, b in found.items()]
+        if time.monotonic() - read["at"] > EXAMPLES_TTL:
+            read["at"] = time.monotonic()
+            try:
+                read["rows"] = (await _cms_get(cms["apps"], cms.get("token"))).get("apps") or []
+            except Exception as e:
+                log("warn", chat_id=None, message=f"apps: the CMS read failed: {type(e).__name__}: {e}")
+        return found, [{**a, "picture": urljoin(cms["apps"], a["picture"]) if a.get("picture") else ""}
+                       for a in read["rows"] if a.get("slug") in found]
+
+    @r.get("/apps/catalog")
+    async def listing(ws: Workspace = ws_dep, user: Any = user_dep):
+        found, rows = await offered()
+        states = await asyncio.to_thread(lambda: [catalog.state(ws.root, a["slug"], found[a["slug"]]) for a in rows])
+        return {"admin": await _admin(cycls_app, user, ws, volume, base), "apps": [{**a, "state": s} for a, s in zip(rows, states)]}
+
+    @r.get("/apps/catalog/{slug}/preview")
+    async def preview(slug: str, ws: Workspace = ws_dep):
+        """The bundle as it ships, which the canvas runs with no bridge: it shows its own example data."""
+        found = await asyncio.to_thread(catalog.bundles, folder)
+        if slug not in found:
+            raise HTTPException(status_code=404, detail="No such app")
+        return FileResponse(found[slug] / "index.html", media_type="text/html", headers={"Cache-Control": "no-store"})
+
+    @r.post("/apps/install")
+    async def install(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        """Install one, or update one the catalog installed that nobody has changed since."""
+        slug = str((await request.json() or {}).get("slug") or "")
+        found, rows = await offered()
+        row = next((a for a in rows if a["slug"] == slug), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such app")
+        if not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail="Only workspace admins can install apps")
+        st = await asyncio.to_thread(catalog.state, ws.root, slug, found[slug])
+        if st in ("taken", "changed"):
+            raise HTTPException(status_code=409, detail="An app here already has that name" if st == "taken"
+                                else "This app was changed here, so an update would undo that")
+        if st == "available":   # a reused slug must not inherit a dead app's rows, as build_app does
+            await state.apps_db(ws).delete(state.app_shelf(slug))
+        m = await asyncio.to_thread(catalog.install, ws.root, slug, found[slug], row,
+                                    lambda rel: trash.trash_path(ws.root, rel, by="user", reason="update"))
+        _catalog_drop(ws.root)
+        log("app", user=user, action="installed" if st == "available" else "updated", app=slug)
+        return {"slug": slug, "entry": f"apps/{slug}/index.html", "app": m}
+
+    @r.get("/apps/look")
+    async def get_look(ws: Workspace = ws_dep, user: Any = user_dep):
+        look = await state.apps_db(ws).get(".look")   # no slug has a dot: build_app's alphabet. None: each app's own
+        return {"look": look if isinstance(look, dict) else None, "admin": await _admin(cycls_app, user, ws, volume, base)}
+
+    @r.put("/apps/look")
+    async def put_look(request: Request, ws: Workspace = ws_dep, user: Any = user_dep):
+        if not await _admin(cycls_app, user, ws, volume, base):
+            raise HTTPException(status_code=403, detail="Only workspace admins can change how its apps look")
+        try:
+            look = catalog.clean_look(await request.json())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        await state.apps_db(ws).put(".look", look)
+        return {"look": look}
+
+    return r
+
+
 def apps_router(cycls_app, ws_dep, user_dep, volume, base):
     """App data: the workspace's shelf, the viewer's own, and — for admins — everyone's."""
     r = APIRouter()
@@ -1552,13 +1631,13 @@ async def _poll_tally(ws, deck, session, n, fresh=False):
 EXAMPLES_TTL = 300   # seconds the gallery's resolved cards are served before the pills are read again
 
 
-async def _cms_pills(url, token=None):
-    """An agent's example gallery as the CMS serves it (`.cms(examples=…)`): its pills."""
+async def _cms_get(url, token=None):
+    """One of the CMS's reads an agent names in `.cms(…)`: its example gallery, its apps."""
     import httpx
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(url, headers={"Authorization": f"Bearer {token}"} if token else {})
     r.raise_for_status()
-    return r.json().get("pills") or []
+    return r.json()
 
 
 async def find_share(user, token, ws_q, mode, volume, base):
@@ -1852,7 +1931,7 @@ def share_router(cycls_app, ws_dep, user_dep, volume, base):
                     {"label": (p.get("label") or {}).get("en", ""), "label_ar": (p.get("label") or {}).get("ar") or None,
                      "urls": [{**c, "thumbnail": urljoin(cms["examples"], c["thumbnail"])} if c.get("thumbnail") else c
                               for c in p.get("cards") or []]}   # a CMS upload is its /files/…: the CMS's own address
-                    for p in await _cms_pills(cms["examples"], cms.get("token"))]
+                    for p in (await _cms_get(cms["examples"], cms.get("token"))).get("pills") or []]
             except Exception as e:
                 log("warn", chat_id=None, message=f"examples: the CMS read failed: {type(e).__name__}: {e}")
         return _examples_cache["cms"]
@@ -2902,6 +2981,7 @@ def install_routers(cycls_app, app, required_auth, volume, base):
     app.include_router(design_router(ws_dep, required_auth, _catalog_drop))
     app.include_router(video_router(ws_dep, _catalog_drop))
     app.include_router(office_router(ws_dep, required_auth, _catalog_drop))
+    app.include_router(app_catalog_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(apps_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(share_router(cycls_app, ws_dep, required_auth, volume, base))
     app.include_router(inbox_router(required_auth, volume, base))

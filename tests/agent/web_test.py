@@ -955,8 +955,8 @@ def test_examples_come_from_the_cms(tmp_path, monkeypatch):
         reads.append((url, token))
         if len(reads) > 1:
             raise RuntimeError("down")
-        return pills
-    monkeypatch.setattr(routers, "_cms_pills", cms)
+        return {"pills": pills}
+    monkeypatch.setattr(routers, "_cms_get", cms)
     monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)   # every request reads again
     svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/examples/a", "token": "t"})
 
@@ -984,8 +984,8 @@ def test_examples_from_a_cms_library_describe_themselves(tmp_path, monkeypatch):
             "template": {"en": "A deck for [business]", "ar": "عرض لـ [المشروع]"}}
 
     async def cms(url, token=None):
-        return [{"label": {"en": "", "ar": ""}, "cards": [card, {**card, "share": "https://super.test/shared/u/t2", "template": {}}]}]
-    monkeypatch.setattr(routers, "_cms_pills", cms)
+        return {"pills": [{"label": {"en": "", "ar": ""}, "cards": [card, {**card, "share": "https://super.test/shared/u/t2", "template": {}}]}]}
+    monkeypatch.setattr(routers, "_cms_get", cms)
     monkeypatch.setattr(routers, "EXAMPLES_TTL", -1)
     svc.config = SimpleNamespace(examples=None, cms={"examples": "https://cms.test/site/gallery/super"})
 

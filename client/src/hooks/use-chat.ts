@@ -200,6 +200,7 @@ export interface AppConfig {
   explore_enabled?: boolean;
   explore?: { slug: string; title: string; title_ar?: string; description: string; description_ar?: string; icon_svg?: string; link: string }[] | null;
   examples_enabled?: boolean;   // curated example gallery on the empty screen (cards from GET /examples)
+  apps_catalog?: boolean;       // Web.apps(): the Apps panel offers ready-made apps, and the window has their gallery
   workspaces?: string | null;   // multi-workspace mode: null off, else team-create policy ("member"|"admin")
   video_editor?: boolean;      // the video editor is configured (VIDEO_EDITOR_URL); POST /video/editor says if it is offered
   sheets_editor?: boolean;     // Cycls Sheets is configured (OFFICE_URL); GET /office/sheets says if it is offered

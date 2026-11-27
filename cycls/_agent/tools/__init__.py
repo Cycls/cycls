@@ -816,7 +816,7 @@ def _app_identity(path, fallback):
     icon = manifest.get("icon")
     out = {"name": (name if isinstance(name, str) and name.strip() else
                     path.parent.name.replace("-", " ").replace("_", " ").title())[:60]}
-    if isinstance(icon, str) and icon.strip():
+    if isinstance(icon, str) and icon.strip() and not icon.startswith("data:"):   # a picture is no label
         out["icon"] = icon.strip()[:8]
     return out
 
